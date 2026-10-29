@@ -164,12 +164,14 @@ integration.
   `src/media/` retains pipeline admission, stages, input selection, shard
   lifecycle and thread-affine transport integration.
 
-Selected root modules, including `media::packet`, `media::ring_buffer`,
-`media::byte_queue` and `media::mpegts`, re-export extracted implementations.
-The codec and protocol facades also keep root callers, fuzz targets,
-benchmarks and retained root consumer tests on the canonical implementation.
-They do not imply that every root media module moved or that every test now
-lives in the corresponding library package. [Testing](testing.md#rust-test-suite)
+Application callers, benchmarks and fuzz targets import shared types and
+protocol helpers directly from their owning crates. There are no forwarding
+`media::packet`, `media::ring_buffer`, `media::byte_queue` or `media::mpegts`
+modules. `src/media/codec/` retains application TS conversion and caption
+adapters; the RTMP, SRT and MoQ application modules retain endpoint admission,
+transport ownership and lifecycle integration.
+Implementation tests live with their owning crates; application and live
+consumer tests remain in the root. [Testing](testing.md#rust-test-suite)
 lists the package and consumer-suite distinction.
 
 The frontend remains React/TypeScript under `web/ts/`, built with Node/Vite
@@ -283,7 +285,7 @@ handoffs.
 
 ## Packets, rings and containers
 
-`MediaPacket` (`crates/restream-core/src/lib.rs`, re-exported by `src/media/packet.rs`) carries media type, track, PTS, DTS,
+`MediaPacket` (`crates/restream-core/src/lib.rs`) carries media type, track, PTS, DTS,
 keyframe flag, payload format and reference-counted bytes. Producers set
 `PayloadFormat` explicitly:
 
@@ -581,7 +583,7 @@ describes where their callers execute.
 | `crates/restream-rtmp/src/` | RTMP session/encoding state, FLV helpers, payload caches and URL parsing |
 | `crates/restream-srt/src/` | SRT call/connect specifications, address-family helpers, send outcomes and statistics |
 | `crates/restream-moq/src/` | MoQ media/catalog helpers, budgets, tokens, URLs and TLS/QUIC configuration builders |
-| `src/media/rtmp.rs`, `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration, protocol facades and engine adapters |
+| `src/media/rtmp.rs`, `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
 | `src/media/hls_ingest/`, `src/media/hls_pull/`, `src/media/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
 | `src/media/moq/` | MoQ endpoints, Compio transport/session drivers, ingest, origin and egress lifecycle |
 | `src/media/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |

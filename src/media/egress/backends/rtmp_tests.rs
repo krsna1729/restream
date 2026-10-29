@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 fn test_parts() -> RtmpUrlParts {
-    crate::media::rtmp::parse_rtmp_url("rtmp://127.0.0.1:1935/live/stream-key").unwrap()
+    restream_rtmp::parse_rtmp_url("rtmp://127.0.0.1:1935/live/stream-key").unwrap()
 }
 
 /// Real, synchronous `rml_rtmp` server-side peer that performs only the
@@ -322,7 +322,7 @@ fn run_full_server_peer_reporting_bytes_read(
 
 fn dummy_feed() -> RingFeed {
     RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
+        Arc::new(restream_sync::RingBuffer::new(4)),
         Arc::new(FeedEpoch::new()),
     )
 }
@@ -547,14 +547,14 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let payload = Bytes::from_static(&[
         0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
         0xe2, 0, 0, 0, 1, 0x65, 0x88,
     ]);
-    ring.push(crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Raw,
+    ring.push(restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Raw,
         is_keyframe: true,
         track_index: 0,
         pts: 100,
@@ -820,7 +820,7 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let ring = Arc::new(restream_sync::RingBuffer::new(8));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -835,9 +835,9 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
     assert_eq!(engine.publisher_pending_units_len(), Some(0));
 
     for i in 0..5u8 {
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Raw,
+        ring.push(restream_core::MediaPacket {
+            media_type: restream_core::MediaType::Video,
+            format: restream_core::PayloadFormat::Raw,
             is_keyframe: true,
             track_index: 0,
             pts: 100 + i as i64,

@@ -9,12 +9,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::VideoMeta;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lease::StageLease;
 use crate::media::stage_runtime::StageRuntimeManager;
 use crate::planner::plan_hls_preview_graph;
 use crate::runtime::graph::StageGraphPlan;
+use restream_core::metadata::VideoMeta;
+use restream_sync::RingBuffer;
 
 /// Resolved HLS preview graph.
 pub struct HlsPreviewGraph {

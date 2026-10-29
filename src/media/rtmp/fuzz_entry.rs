@@ -3,12 +3,15 @@
 //! bytes exactly as the ingest or egress path calls them; the parsers stay
 //! private to `media::rtmp`.
 
-use super::egress_connection::{RtmpSessionCore, RtmpSessionEvent};
-use super::egress_transport::RtmpUrlParts;
-use super::flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_config_annexb_parameter_sets,
-    flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
-};
+use restream_rtmp::egress_connection::RtmpSessionCore;
+use restream_rtmp::egress_connection::RtmpSessionEvent;
+use restream_rtmp::egress_transport::RtmpUrlParts;
+use restream_rtmp::flv::FlvVideoPacketKind;
+use restream_rtmp::flv::classify_flv_video_packet;
+use restream_rtmp::flv::flv_config_annexb_parameter_sets;
+use restream_rtmp::flv::flv_video_composition_time_ms;
+use restream_rtmp::flv::parse_flv_audio_meta;
+use restream_rtmp::flv::parse_flv_video_meta;
 
 /// One FLV video tag body as `RtmpPublisherMedia::on_video` probes it.
 pub fn flv_video_tag(data: &[u8]) {

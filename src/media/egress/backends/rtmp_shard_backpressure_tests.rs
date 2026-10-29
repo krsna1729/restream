@@ -23,7 +23,7 @@ fn resync_count_increments_on_a_real_feed_overrun() {
         run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
         CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
@@ -72,9 +72,9 @@ fn resync_count_increments_on_a_real_feed_overrun() {
     // producer that publishes them.
     ring.set_video_parameter_sets(payload[..21].to_vec());
     for i in 0..8 {
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Raw,
+        ring.push(restream_core::MediaPacket {
+            media_type: restream_core::MediaType::Video,
+            format: restream_core::PayloadFormat::Raw,
             is_keyframe: true,
             track_index: 0,
             pts: 100 + i,
@@ -126,7 +126,7 @@ fn sweep_stalled_leaves_reports_feed_lag_and_backpressure_state_for_a_healthy_le
         run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
         CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
@@ -199,9 +199,9 @@ fn sweep_stalled_leaves_reports_feed_lag_and_backpressure_state_for_a_healthy_le
     // The producer contract: in-band parameter sets are recorded by the
     // producer that publishes them.
     ring.set_video_parameter_sets(payload[..21].to_vec());
-    ring.push(crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Raw,
+    ring.push(restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Raw,
         is_keyframe: true,
         track_index: 0,
         pts: 100,

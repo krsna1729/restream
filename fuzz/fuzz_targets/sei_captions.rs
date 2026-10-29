@@ -3,7 +3,7 @@
 #![no_main]
 
 use restream::media::codec::frame_captions;
-use restream::media::packet::PayloadFormat;
+use restream_core::PayloadFormat;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let hevc = data.first().is_some_and(|byte| byte & 1 == 1);

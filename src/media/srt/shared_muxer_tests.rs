@@ -3,7 +3,7 @@ use super::*;
 fn test_packet(media_type: MediaType, payload_len: usize) -> MediaPacket {
     MediaPacket {
         media_type,
-        format: crate::media::packet::PayloadFormat::Raw,
+        format: restream_core::PayloadFormat::Raw,
         is_keyframe: false,
         track_index: 0,
         pts: 0,
@@ -82,7 +82,7 @@ async fn shared_muxer_packages_media_while_control_thread_is_blocked() {
         .unwrap();
     cancel.cancel();
     observer.await.unwrap();
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut remuxed = Vec::new();
     for chunk in chunks {
         demuxer.feed(&chunk.payload);

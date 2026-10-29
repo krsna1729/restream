@@ -38,7 +38,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -159,7 +159,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -274,7 +274,7 @@ async fn external_1080p_stage_remuxes_marker_fixture_with_monotone_dts() {
     source_ring.set_audio_tracks(audio_tracks.clone());
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);

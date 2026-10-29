@@ -1,8 +1,8 @@
 use super::*;
-use crate::media::metadata::AudioMeta;
-use crate::media::packet::PayloadFormat;
-use crate::media::ring_buffer::Reader;
 use proptest::prelude::*;
+use restream_core::PayloadFormat;
+use restream_core::metadata::AudioMeta;
+use restream_sync::Reader;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -652,7 +652,7 @@ async fn audio_router_propagates_late_arriving_audio_tracks() {
         dts: 0,
         is_keyframe: false,
         payload: bytes::Bytes::from_static(&[0x01]),
-        format: crate::media::packet::PayloadFormat::Raw,
+        format: restream_core::PayloadFormat::Raw,
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

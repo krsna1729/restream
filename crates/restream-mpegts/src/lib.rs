@@ -7,9 +7,9 @@
 use bytes::Bytes;
 use restream_core::{AudioMeta, MediaType, VideoMeta};
 
-pub mod demux;
-pub mod mux;
-pub mod probe;
+mod demux;
+mod mux;
+mod probe;
 pub mod wire;
 
 pub use demux::{DemuxProbe, StreamKind, TopologyChanges, TsDemuxer};
@@ -79,3 +79,12 @@ pub fn remux_segment_view(
 
     wrote_media.then(|| Bytes::from(output))
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../src/test_fixtures/paths.rs"]
+mod test_fixtures;
+
+#[cfg(test)]
+#[path = "mpegts_tests.rs"]
+mod tests;

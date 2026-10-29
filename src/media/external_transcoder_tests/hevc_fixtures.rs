@@ -26,7 +26,7 @@ async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() 
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -123,7 +123,7 @@ async fn external_h264_stage_emits_live_packets_for_single_audio_hevc_fixture() 
     source_ring.set_audio_tracks(audio_tracks);
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -225,7 +225,7 @@ async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixtu
     source_ring.set_audio_tracks(audio_tracks.clone());
     if let Some(parameter_sets) = packets.iter().find_map(|packet| {
         (packet.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(parameter_sets);
@@ -307,7 +307,7 @@ async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
     // metadata wait loop can find them (required for HEVC).
     if let Some(ps) = packets.iter().find_map(|p| {
         (p.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
+            .then(|| restream_core::codec::annexb_parameter_sets(&p.payload))
             .flatten()
     }) {
         source_ring.set_video_parameter_sets(ps);

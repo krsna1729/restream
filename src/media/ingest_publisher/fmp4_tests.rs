@@ -23,7 +23,7 @@ use shiguredo_mp4::bitstream::h265::{
 use shiguredo_mp4::mux::{Fmp4SegmentMuxer, Sample};
 
 use super::*;
-use crate::media::codec::build_adts_header_for;
+use restream_core::codec::build_adts_header_for;
 
 const VIDEO_TIMESCALE: u32 = 90_000;
 const AUDIO_TIMESCALE: u32 = 48_000;

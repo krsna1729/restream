@@ -11,6 +11,9 @@ cargo-fuzz = true
 bytes = "1"
 libfuzzer-sys = "0.4"
 restream = { path = ".." }
+restream-core = { path = "../crates/restream-core" }
+restream-mpegts = { path = "../crates/restream-mpegts" }
+restream-rtmp = { path = "../crates/restream-rtmp" }
 moq-net = { path = "../vendor/moq-net", features = ["fuzz"] }
 
 # Not part of the root workspace: cargo-fuzz builds it with nightly and

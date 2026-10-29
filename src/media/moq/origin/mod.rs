@@ -13,7 +13,7 @@
 //! ring by one local pump task: the ring producer's publication wake reaches
 //! it over a one-slot channel, so it reads each unit once whatever the
 //! audience. moq-net fans the frames out as shared `Bytes`, and the origin
-//! keeps about two GOPs ([`super::budget`]).
+//! keeps about two GOPs ([`restream_moq::budget`]).
 //!
 //! A generation's track set is fixed. A watcher on the listener runtime
 //! re-resolves the pipeline's current track set when the ring's track
@@ -29,7 +29,7 @@
 //! track metadata in the same session, so removals and reappearance also
 //! revalidate generations without a later viewer attach.
 
-pub(crate) use restream_moq::token;
+use restream_moq::token;
 #[cfg(test)]
 mod token_tests;
 
@@ -49,14 +49,14 @@ use tokio_util::sync::CancellationToken;
 use crate::media::egress::feed::ReadBudget;
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::engine::MediaEngine;
-use crate::media::metadata::AudioMeta;
-use crate::media::ring_buffer::{PublishSubscribers, PublishWake};
+use restream_core::metadata::AudioMeta;
+use restream_sync::{PublishSubscribers, PublishWake};
 
 use super::egress::media::MediaConverter;
 use super::egress::publish::{HangBroadcast, Pump, RingPublisher, live_start};
 use super::egress::{MoqPublishStartup, publish_startup};
-use super::media::VideoCodec;
 use super::transport::{self, Accepted};
+use restream_moq::media::VideoCodec;
 
 pub(crate) use token::TokenError;
 
@@ -510,7 +510,7 @@ impl Origin {
     fn install(
         self: &Rc<Self>,
         pipeline_id: &str,
-        ring: Arc<crate::media::ring_buffer::RingBuffer>,
+        ring: Arc<restream_sync::RingBuffer>,
         startup: &MoqPublishStartup,
         track_set: TrackSet,
         viewers: usize,
@@ -584,10 +584,7 @@ impl Origin {
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,
-) -> Option<(
-    Arc<crate::media::ring_buffer::RingBuffer>,
-    MoqPublishStartup,
-)> {
+) -> Option<(Arc<restream_sync::RingBuffer>, MoqPublishStartup)> {
     let _selection = engine.ingests.selection_lock.lock().await;
     let ring = engine
         .ingests
@@ -652,7 +649,7 @@ impl Drop for Viewer {
 /// so a trackless one would never play.
 fn start(
     pipeline_id: &str,
-    ring: Arc<crate::media::ring_buffer::RingBuffer>,
+    ring: Arc<restream_sync::RingBuffer>,
     startup: &MoqPublishStartup,
     track_set: TrackSet,
     generation: u64,
@@ -663,7 +660,7 @@ fn start(
     if !converter.has_video() && !converter.has_audio() {
         return Err("the pipeline has no media yet".to_string());
     }
-    let (origin_producer, driver, budget) = super::budget::origin();
+    let (origin_producer, driver, budget) = restream_moq::budget::origin();
     let broadcast = HangBroadcast::create(
         &origin_producer,
         budget,

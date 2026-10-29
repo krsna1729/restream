@@ -7,13 +7,13 @@ use super::*;
 
 pub(super) struct PendingRtmpConnect {
     pub(super) common: LeafCommon,
-    pub(super) parts: crate::media::rtmp::RtmpUrlParts,
+    pub(super) parts: restream_rtmp::RtmpUrlParts,
     pub(super) connect_timeout: Duration,
 }
 
 pub(super) struct ConnectingRtmpConnect {
     pub(super) common: LeafCommon,
-    pub(super) parts: crate::media::rtmp::RtmpUrlParts,
+    pub(super) parts: restream_rtmp::RtmpUrlParts,
     pub(super) stream: super::super::compio_tcp::CompioTcpStream,
     pub(super) deadline: Instant,
     /// Bound on handshake + negotiation once connected (the policy's

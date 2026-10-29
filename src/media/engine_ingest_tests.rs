@@ -95,7 +95,7 @@ async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
 
 #[tokio::test]
 async fn q098_authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
-    use crate::media::metadata::{AudioMeta, VideoMeta};
+    use restream_core::metadata::{AudioMeta, VideoMeta};
 
     let engine = MediaEngine::new();
     let ring = engine.get_or_create_pipeline("pipe").await;
@@ -177,7 +177,7 @@ async fn q098_authoritative_snapshot_clears_an_obsolete_sequence_header() {
         .try_register_pipeline_input_attempt("pipe", "input", "key", "srt", true)
         .await
         .unwrap();
-    let video = |codec: &str| crate::media::metadata::VideoMeta {
+    let video = |codec: &str| restream_core::metadata::VideoMeta {
         codec: codec.to_string(),
         ..Default::default()
     };

@@ -389,9 +389,9 @@ mod tests {
     }
     use crate::domain::stage::{StageKey, StageKind};
     use crate::media::pipe_metrics::PipeMetrics;
-    use crate::media::ring_buffer::RingBuffer;
     use crate::media::stage_lifecycle::StagePhase;
     use crate::media::stage_runtime::StageRuntimeManager;
+    use restream_sync::RingBuffer;
     use std::sync::Arc;
 
     #[tokio::test]

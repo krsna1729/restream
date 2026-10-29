@@ -81,7 +81,7 @@ fn feed_wake_enqueues_the_leaf_without_any_poller_call() {
         run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let register_calls = Arc::new(Mutex::new(Vec::new()));
     let poller = CountingPoller {
         inner: CompioTcpPoller::new(4).unwrap(),
@@ -130,9 +130,9 @@ fn feed_wake_enqueues_the_leaf_without_any_poller_call() {
     // The producer contract: in-band parameter sets are recorded by the
     // producer that publishes them.
     ring.set_video_parameter_sets(payload[..21].to_vec());
-    ring.push(crate::media::packet::MediaPacket {
-        media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Raw,
+    ring.push(restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Raw,
         is_keyframe: true,
         track_index: 0,
         pts: 100,
@@ -186,7 +186,7 @@ fn feed_wake_never_enqueues_a_handshaking_leaf() {
         thread::sleep(Duration::from_secs(5));
     });
 
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
         CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring, Arc::new(FeedEpoch::new())),

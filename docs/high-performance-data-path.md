@@ -49,18 +49,16 @@ flowchart LR
 - `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
 - Egress shards read rings directly by cursor
   ([Egress architecture](egress-architecture.md)).
-- Recording uses `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`,
-  re-exported by `src/media/byte_queue.rs`) between its media-runtime TS
-  producer and dedicated blocking file writer (`src/media/recording/mod.rs`).
-  It is not an egress transport queue.
+- Recording uses `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`)
+  between its media-runtime TS producer and dedicated blocking file writer
+  (`src/media/recording/mod.rs`). It is not an egress transport queue.
 
 `restream-core` owns `MediaPacket`, metadata, frame-unit vocabulary and shared
 codec helpers. `MediaPacket` is pinned at 56 bytes by a size assertion in
-`crates/restream-core/src/lib.rs`; `src/media/packet.rs` and
-`src/media/metadata.rs` are root facades. Ring, reader, frame-unit tracking,
-standby GOP and byte-queue implementations live in `restream-sync`;
-`src/media/ring_buffer.rs`, `src/media/standby_gop.rs` and
-`src/media/byte_queue.rs` re-export them for application callers.
+`crates/restream-core/src/lib.rs`. Ring, reader, frame-unit tracking, standby
+GOP and byte-queue implementations live in `restream-sync`. Application
+callers use those owning crates directly; changing an import does not add a
+runtime hop or alter packet ownership.
 
 Per-frame configuration metadata stays out of `MediaPacket`. Each
 preallocated ring slot carries an atomic word with the packet's track

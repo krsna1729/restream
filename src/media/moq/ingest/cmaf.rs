@@ -15,9 +15,9 @@ use bytes::Bytes;
 
 use crate::media::ingest_publisher::fmp4::Fmp4Demux;
 use crate::media::ingest_publisher::{MediaRejection, SegmentDemux};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::mpegts::DemuxProbe;
-use crate::media::packet::{MediaPacket, MediaType};
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType};
+use restream_mpegts::DemuxProbe;
 
 /// The largest init segment a catalog may carry.
 pub(crate) const MAX_CMAF_INIT_BYTES: usize = 1 << 20;

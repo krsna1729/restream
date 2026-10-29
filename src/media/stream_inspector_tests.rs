@@ -6,7 +6,7 @@ use bytes::Bytes;
 use proptest::prelude::*;
 
 use super::*;
-use crate::media::packet::{MediaPacket, PayloadFormat};
+use restream_core::{MediaPacket, PayloadFormat};
 
 /// A clean stream: video every 33 ms and audio every 21 ms, each arriving
 /// exactly when its DTS says (plus `audio_late_ms` for audio), for

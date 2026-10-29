@@ -8,7 +8,6 @@ use crate::media::engine_hls::input_id_from_hls_preview_resource_id;
 use crate::media::engine_registries::StageRuntime;
 use crate::media::engine_registries::TsMuxerStage;
 use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lease::StageLease;
 use crate::media::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
@@ -16,6 +15,7 @@ use crate::media::stage_lifecycle::{
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
 use crate::runtime::stage::StageRuntimeSnapshot;
+use restream_sync::RingBuffer;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 

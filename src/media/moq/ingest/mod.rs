@@ -18,8 +18,8 @@ use tracing::warn;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
+use restream_sync::RingBuffer;
 
 pub(crate) mod cmaf;
 pub(crate) mod listener;

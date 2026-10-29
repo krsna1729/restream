@@ -4,8 +4,8 @@
 
 use super::super::*;
 use super::support::*;
-use crate::media::srt::SrtSendResult;
 use bytes::Bytes;
+use restream_srt::egress_engine::SrtSendResult;
 use std::time::Duration;
 
 fn allocations_in(work: impl FnOnce()) -> usize {

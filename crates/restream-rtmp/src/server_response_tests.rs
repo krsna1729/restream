@@ -1,3 +1,6 @@
+use crate::{egress_connection, egress_transport};
+use proptest::prelude::*;
+
 // RTMP server responses to the egress client (`RtmpSessionCore`): the bytes
 // a destination server sends after the handshake arrive in arbitrary TCP
 // segments, so negotiation must not depend on where they are split.

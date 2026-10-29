@@ -24,8 +24,8 @@ use super::picture::{THUMB_HEIGHT, THUMB_WIDTH};
 use super::{QaTracker, StreamQa};
 use crate::media::engine::MediaEngine;
 use crate::media::ffmpeg::stage_input::StageInputPump;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
+use restream_sync::RingBuffer;
 
 /// The audio FFmpeg hands back: 48 kHz, two channels per track, f32.
 pub const SOUND_RATE: u32 = 48_000;
@@ -626,9 +626,9 @@ mod tests {
     /// arguments.
     #[test]
     fn an_enhanced_rtmp_hevc_source_yields_pictures() {
-        use crate::media::codec;
         use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-        use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+        use restream_core::codec;
+        use restream_core::{MediaPacket, MediaType, PayloadFormat};
         use std::io::Write;
 
         let (video, _, packets) =

@@ -279,7 +279,7 @@ fn observed_rate_probe_transcodes_h264_aac_bitrate_fixture_before_pipe_closes() 
     // Exercise the production estimator rather than duplicating its math
     // in the regression. Otherwise the stage wiring could fall back to a
     // fixed probe size while this test continued to pass independently.
-    let observed_ring = crate::media::ring_buffer::RingBuffer::new(packets.len().max(2));
+    let observed_ring = restream_sync::RingBuffer::new(packets.len().max(2));
     for packet in &packets {
         observed_ring.push(packet.clone());
     }
@@ -411,8 +411,8 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     let packets: Vec<_> = all_packets
         .into_iter()
         .filter_map(|mut packet| match packet.media_type {
-            crate::media::packet::MediaType::Video => Some(packet),
-            crate::media::packet::MediaType::Audio
+            restream_core::MediaType::Video => Some(packet),
+            restream_core::MediaType::Audio
                 if packet.track_index == source_audio_track =>
             {
                 packet.track_index = 0;
@@ -429,8 +429,8 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     let parameter_sets = packets
         .iter()
         .find_map(|packet| {
-            (packet.media_type == crate::media::packet::MediaType::Video)
-                .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            (packet.media_type == restream_core::MediaType::Video)
+                .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
                 .flatten()
         })
         .expect("HEVC fixture parameter sets");

@@ -11,8 +11,8 @@ use super::{
     Accepted, MOQ_ALPNS, MoqSession, SERVER_ALPNS, TransportError, accept, client_endpoint,
     connect, server_endpoint,
 };
-use crate::media::moq::tls;
-use crate::media::srt::AddressFamily;
+use restream_moq::tls;
+use restream_srt::address_family::AddressFamily;
 
 /// The server name the loopback certificate is issued for.
 pub(crate) const LOOPBACK_SERVER_NAME: &str = "localhost";

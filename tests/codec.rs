@@ -5,13 +5,19 @@
 //! called in SRT/HLS egress and the transcoder feeder), not a hand-rolled copy.
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
-use restream::media::codec::{
-    audio_for_rtmp, audio_for_ts, avcc_to_annexb, build_aac_sequence_header, build_adts_header,
-    build_avcc_sequence_header, parse_avcc_config, strip_adts, video_for_rtmp, video_for_ts,
-};
-use restream::media::metadata::{AudioMeta, VideoMeta};
-use restream::media::mpegts::TsMuxer;
-use restream::media::packet::{MediaType, PayloadFormat};
+use restream::media::codec::audio_for_rtmp;
+use restream::media::codec::audio_for_ts;
+use restream::media::codec::video_for_ts;
+use restream_core::codec::avcc_to_annexb;
+use restream_core::codec::build_aac_sequence_header;
+use restream_core::codec::build_adts_header;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_core::codec::parse_avcc_config;
+use restream_core::codec::strip_adts;
+use restream_core::codec::video_for_rtmp;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaType, PayloadFormat};
+use restream_mpegts::TsMuxer;
 
 // ---------------------------------------------------------------------------
 // Minimal test fixtures

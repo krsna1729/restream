@@ -1,7 +1,7 @@
 use super::*;
-use crate::media::byte_queue::MemoryQueue;
-use crate::media::mpegts::TsDemuxer;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_mpegts::TsDemuxer;
+use restream_sync::byte_queue::MemoryQueue;
 use std::sync::Arc;
 use tokio::process::Command as TokioCommand;
 use tokio_util::sync::CancellationToken;

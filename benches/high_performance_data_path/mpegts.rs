@@ -2,8 +2,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput};
 use memchr::memchr;
-use restream::media::metadata::{AudioMeta, VideoMeta};
-use restream::media::mpegts::{TsDemuxer, TsMuxer};
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_mpegts::{TsDemuxer, TsMuxer};
 
 fn bench_mpegts_demux_drain(c: &mut Criterion) {
     let fixture_path =

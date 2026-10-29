@@ -9,11 +9,11 @@ use crate::domain::stage::{StageKey, StageKind};
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::packet::MediaType;
-use crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS;
-use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::MediaType;
+use restream_sync::MEDIA_PULL_BURST_PACKETS;
+use restream_sync::{Reader, RingBuffer};
 
 pub async fn start_hls_segmenter(
     pipeline_id: String,
@@ -287,7 +287,7 @@ mod tests {
     use crate::media::hls::fmp4::{
         Fmp4HlsStore, parse_fmp4_segment_name, start_hls_fmp4_segmenter,
     };
-    use crate::media::packet::MediaPacket;
+    use restream_core::MediaPacket;
 
     async fn package_with_blocked_control<F, P>(
         ring: Arc<RingBuffer>,
@@ -401,7 +401,7 @@ mod tests {
         })
         .await;
 
-        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut demuxer = restream_mpegts::TsDemuxer::new();
         demuxer.feed(&segment);
         demuxer.flush();
         assert!(
@@ -587,7 +587,7 @@ mod tests {
         )
         .await;
         let segment = store.get_segment(0).expect("final TS segment");
-        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut demuxer = restream_mpegts::TsDemuxer::new();
         demuxer.feed(&segment);
         demuxer.flush();
         assert!(

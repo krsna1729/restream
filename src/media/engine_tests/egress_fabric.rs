@@ -124,7 +124,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
     let engine = MediaEngine::new();
     let id = FeedId::new("fixed-pool-recovery");
     let feed = RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(restream_sync::RingBuffer::new(8)),
         Arc::new(FeedEpoch::new()),
     );
     let ts_ring = TsChunkRing::new(8, CancellationToken::new());
@@ -347,7 +347,7 @@ async fn rtmp_fabric_registry_retains_native_runtime_once_per_feed() {
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-native-rtmp");
     let feed = RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(restream_sync::RingBuffer::new(8)),
         Arc::new(FeedEpoch::new()),
     );
 
@@ -385,7 +385,7 @@ async fn rtmp_fabric_publish_startup_is_readable_by_the_shard_backend() {
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-rtmp-startup");
     let feed = RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(restream_sync::RingBuffer::new(8)),
         Arc::new(FeedEpoch::new()),
     );
 
@@ -423,7 +423,7 @@ async fn sink_fabric_registry_retains_runtime_once_per_feed() {
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-sink");
     let feed = RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(restream_sync::RingBuffer::new(8)),
         Arc::new(FeedEpoch::new()),
     );
 
@@ -464,12 +464,12 @@ async fn sink_fabric_registry_retains_runtime_once_per_feed() {
 async fn sink_fabric_registry_dispatches_add_and_the_shard_discards_published_units() {
     use crate::media::egress::journal::RingFeed;
     use crate::media::egress::leaf::EgressProgressSink;
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-sink-dispatch");
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let ring = Arc::new(restream_sync::RingBuffer::new(8));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
 
     engine
@@ -527,12 +527,12 @@ async fn reconciler_recovery_replaces_a_panicked_sink_shard() {
     use crate::media::egress::backends::sink_shard::INJECTED_SHARD_PANIC_OUTPUT;
     use crate::media::egress::journal::RingFeed;
     use crate::media::egress::leaf::EgressProgressSink;
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-sink-recover");
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let ring = Arc::new(restream_sync::RingBuffer::new(8));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
     engine
         .retain_sink_fabric_runtime(feed_id.clone(), &feed)
@@ -618,7 +618,7 @@ async fn pipeline_fabric_registry_retains_runtime_once_per_feed() {
     let engine = MediaEngine::new();
     let feed_id = FeedId::new("feed-engine-pipeline");
     let feed = RingFeed::new(
-        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(restream_sync::RingBuffer::new(8)),
         Arc::new(FeedEpoch::new()),
     );
 
@@ -662,7 +662,7 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     use crate::media::egress::leaf::EgressProgressSink;
     use crate::media::engine::IngestRegistration;
     use crate::media::input_gate::InputPacketGate;
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     use tokio_util::sync::CancellationToken;
 
@@ -683,9 +683,9 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
         ..crate::AppConfig::default()
     }));
     let feed_id = FeedId::new("feed-engine-pipeline-dispatch");
-    let source_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let source_ring = Arc::new(restream_sync::RingBuffer::new(8));
     let feed = RingFeed::new(source_ring.clone(), Arc::new(FeedEpoch::new()));
-    let target_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let target_ring = Arc::new(restream_sync::RingBuffer::new(8));
 
     engine
         .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)

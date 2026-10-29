@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use restream::domain::stage::{StageKey, StageKind};
 use restream::media::engine::MediaEngine;
-use restream::media::packet::{MediaType, PayloadFormat};
-use restream::media::ring_buffer::Reader;
+use restream_core::{MediaType, PayloadFormat};
+use restream_sync::Reader;
 
 use crate::support::{collect_packets_with_deadline, load_primary_transport_packets};
 

@@ -1,4 +1,7 @@
 use super::*;
+use crate::demux::*;
+use crate::probe::*;
+use crate::wire::*;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

@@ -10,7 +10,7 @@ use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessError, PipelineAccessFuture, PipelineAccessMode,
 };
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 const STREAM_KEY: &str = "moq-key";
 const PIPELINE_ID: &str = "pipe-moq";

@@ -122,7 +122,7 @@ pub struct PublisherQuality {
     pub delivery_ratio: Option<f64>,
 }
 
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 #[derive(Debug, Clone)]
 pub struct IngestDiagSnapshot {
@@ -153,7 +153,7 @@ pub struct EgressDiagSnapshot {
 pub struct RingBufferDiagSnapshot {
     pub fill_slots: usize,
     pub capacity_slots: usize,
-    pub readers: Vec<crate::media::ring_buffer::ReaderSnapshot>,
+    pub readers: Vec<restream_sync::ReaderSnapshot>,
 }
 
 #[derive(Debug, Clone)]

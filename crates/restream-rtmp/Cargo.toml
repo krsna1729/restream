@@ -16,3 +16,6 @@ bytes = "1.12"
 rml_rtmp = "0.8.0"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+proptest = "1"

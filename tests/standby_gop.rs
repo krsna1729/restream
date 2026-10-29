@@ -2,8 +2,8 @@
 use bytes::Bytes;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::standby_gop::StandbyGopCache;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::standby_gop::StandbyGopCache;
 
 fn packet(media_type: MediaType, dts: i64, keyframe: bool, bytes: usize) -> MediaPacket {
     MediaPacket {

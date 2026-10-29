@@ -4,9 +4,10 @@
 //! from.
 #![no_main]
 
-use restream::media::codec::{
-    annexb_to_avcc, avcc_to_annexb, build_avcc_sequence_header, parse_avcc_config,
-};
+use restream_core::codec::annexb_to_avcc;
+use restream_core::codec::avcc_to_annexb;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_core::codec::parse_avcc_config;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let (nalu_len_size, _) = parse_avcc_config(data);

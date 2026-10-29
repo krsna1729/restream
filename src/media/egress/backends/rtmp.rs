@@ -6,14 +6,15 @@
 //! media publication: the RTMP handshake (via
 //! [`rtmp_handshake::NonBlockingRtmpHandshake`]), connect/publish session
 //! negotiation and media encoding (both reusing
-//! [`crate::media::rtmp::RtmpSessionCore`]/[`crate::media::rtmp::RtmpMediaEncoder`]
+//! [`restream_rtmp::RtmpSessionCore`]/[`restream_rtmp::RtmpMediaEncoder`]
 //! — the same pure, socket-independent state the existing Tokio-adapted
 //! egress path uses in `src/media/rtmp/egress_connection.rs` and
 //! `src/media/rtmp/egress_engine.rs`), here driven from non-blocking
 //! readiness instead of `.await`, with shard registration and application
 //! startup handoff supplied by the surrounding RTMP backend.
 
-use crate::media::rtmp::egress_payload_cache::{RtmpPayloadCache, SharedRtmpPayloadCache};
+use restream_rtmp::egress_payload_cache::RtmpPayloadCache;
+use restream_rtmp::egress_payload_cache::SharedRtmpPayloadCache;
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
 use std::sync::Arc;
@@ -29,13 +30,16 @@ use crate::media::egress::backend::{
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::policy::WorkBudget;
-use crate::media::metadata::AudioMeta;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::{NotRetained, TrackConfig};
-use crate::media::rtmp::{
-    RtmpMediaAction, RtmpMediaEncoder, RtmpSessionCore, RtmpUrlParts,
-    resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
-};
+use restream_core::NotRetained;
+use restream_core::TrackConfig;
+use restream_core::metadata::AudioMeta;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_rtmp::RtmpMediaAction;
+use restream_rtmp::RtmpMediaEncoder;
+use restream_rtmp::RtmpSessionCore;
+use restream_rtmp::RtmpUrlParts;
+use restream_rtmp::resolve_deferred_audio_sequence_header;
+use restream_rtmp::validate_rtmp_output_audio_packet_track;
 
 use super::compio_tcp::TxPart;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};

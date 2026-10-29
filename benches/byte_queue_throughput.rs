@@ -1,5 +1,5 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::byte_queue::MemoryQueue;
+use restream_sync::byte_queue::MemoryQueue;
 use std::hint::black_box;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

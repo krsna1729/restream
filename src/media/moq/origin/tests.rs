@@ -3,10 +3,12 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use super::*;
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::moq::media::{AUDIO_TRACK, VIDEO_TRACK, parse_loc_frame};
 use crate::media::moq::transport::test_support::{Loopback, run};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_moq::media::AUDIO_TRACK;
+use restream_moq::media::VIDEO_TRACK;
+use restream_moq::media::parse_loc_frame;
 
 /// An origin with a Tokio runtime for its pipeline lookups (kept alive by
 /// the caller).
@@ -216,8 +218,8 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
         let mut group = catalog.recv_group().await.unwrap().unwrap();
         let frame = group.read_frame().await.unwrap().unwrap();
         let catalog: hang::Catalog = hang::Catalog::from_slice(&frame.payload).unwrap();
-        let expected = crate::media::moq::media::VideoConfig::from_parameter_sets(
-            crate::media::moq::media::VideoCodec::H264,
+        let expected = restream_moq::media::VideoConfig::from_parameter_sets(
+            restream_moq::media::VideoCodec::H264,
             PARAMETER_SETS,
         )
         .unwrap();
@@ -659,7 +661,7 @@ async fn attach_viewer(
     (broadcast, session)
 }
 
-fn push_audio(ring: &crate::media::ring_buffer::RingBuffer, pts: i64) {
+fn push_audio(ring: &restream_sync::RingBuffer, pts: i64) {
     ring.push(MediaPacket {
         media_type: MediaType::Audio,
         track_index: 0,
@@ -671,7 +673,7 @@ fn push_audio(ring: &crate::media::ring_buffer::RingBuffer, pts: i64) {
     });
 }
 
-fn push_video_keyframe(ring: &crate::media::ring_buffer::RingBuffer) {
+fn push_video_keyframe(ring: &restream_sync::RingBuffer) {
     ring.push(MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,

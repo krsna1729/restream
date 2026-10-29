@@ -25,8 +25,9 @@ use moq_net::Timestamp;
 use moq_net::origin;
 use serde::Serialize;
 
-use crate::media::moq::{tls, transport};
-use crate::media::srt::AddressFamily;
+use crate::media::moq::transport;
+use restream_moq::tls;
+use restream_srt::address_family::AddressFamily;
 
 use restream_moq::media::{AUDIO_TRACK, CATALOG_TRACK, VIDEO_TRACK};
 /// Frames whose media timestamps are within this tolerance carry the same

@@ -5,8 +5,9 @@
 
 use memchr::memmem;
 
-use super::{EX_CODED_FRAMES, EX_CODED_FRAMES_X, ex_video_tag, rbsp};
-use crate::media::packet::PayloadFormat;
+use restream_core::PayloadFormat;
+use restream_core::codec::rbsp;
+use restream_rtmp::enhanced_rtmp_hevc::{EX_CODED_FRAMES, EX_CODED_FRAMES_X, ex_video_tag};
 
 /// What one frame's SEI carries.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

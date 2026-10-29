@@ -10,9 +10,9 @@ use crate::media::engine::{
     ActiveIngest, IngestMetadata, IngestRegistration, MediaEngine, RecentIngestOutcome,
 };
 use crate::media::input_gate::InputForwardState;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingBuffer;
 
 impl MediaEngine {
     pub async fn try_register_ingest_attempt(

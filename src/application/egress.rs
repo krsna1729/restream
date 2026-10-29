@@ -10,9 +10,9 @@ use crate::media::egress::journal::{FeedEpoch, RingFeed, TsFeed};
 use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lease::StageLease;
 use crate::planner::PlannedOutput;
+use restream_sync::RingBuffer;
 use std::sync::Arc;
 
 /// Prepared runtime attachment point for an output.
@@ -283,7 +283,7 @@ mod tests {
     use crate::domain::stage::StageKind;
     use crate::domain::state::DesiredOutputState;
     use crate::media::egress::EgressFeed;
-    use crate::media::metadata::VideoMeta;
+    use restream_core::metadata::VideoMeta;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
         Output {
@@ -708,10 +708,10 @@ mod tests {
 
     #[tokio::test]
     async fn hevc_rtmp_selected_audio_terminal_ring_makes_progress() {
-        use crate::media::mpegts::TsDemuxer;
-        use crate::media::packet::MediaType;
-        use crate::media::ring_buffer::Reader;
         use crate::test_fixtures::bench_transport_fixture;
+        use restream_core::MediaType;
+        use restream_mpegts::TsDemuxer;
+        use restream_sync::Reader;
 
         let path = bench_transport_fixture("h265", "1_5m", true)
             .expect("multi-audio HEVC benchmark fixture");
@@ -762,7 +762,7 @@ mod tests {
             .collect::<Vec<_>>();
         if let Some(parameter_sets) = selected_packets.iter().find_map(|packet| {
             (packet.media_type == MediaType::Video)
-                .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+                .then(|| restream_core::codec::annexb_parameter_sets(&packet.payload))
                 .flatten()
         }) {
             source.set_video_parameter_sets(parameter_sets);

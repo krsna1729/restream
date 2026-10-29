@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::media::engine::IngestRegistration;
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::RingBuffer;
-use crate::media::standby_gop::StandbyGopCache;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::RingBuffer;
+use restream_sync::standby_gop::StandbyGopCache;
 
 /// Publish one batch of an input's packets the way every Owner-thread ingest
 /// does after its container: preview first, then the input gate (standby GOP
@@ -98,7 +98,7 @@ mod tests {
 
     use super::*;
     use crate::media::input_gate::InputPacketGate;
-    use crate::media::packet::PayloadFormat;
+    use restream_core::PayloadFormat;
 
     fn packet(media_type: MediaType, dts: i64, is_keyframe: bool) -> MediaPacket {
         MediaPacket {

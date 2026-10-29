@@ -110,7 +110,7 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
                 .moq_ingest
                 .config()
                 .and_then(|moq| std::fs::read(&moq.tls_cert_path).ok())
-                .and_then(|pem| crate::media::moq::tls::leaf_sha256_hex(&pem)),
+                .and_then(|pem| restream_moq::tls::leaf_sha256_hex(&pem)),
         }
     }
 }

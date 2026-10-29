@@ -25,13 +25,16 @@ use shiguredo_mp4::boxes::{HdlrBox, MoovBox, SampleEntry};
 use shiguredo_mp4::demux::Fmp4SegmentDemuxer;
 
 use super::{MediaRejection, SegmentDemux};
-use crate::media::codec::{
-    AAC_SAMPLE_RATES, build_adts_header_for, build_avcc_sequence_header, for_each_length_prefixed,
-    level_name, parse_h264_sps, profile_name,
-};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::mpegts::DemuxProbe;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::codec::AAC_SAMPLE_RATES;
+use restream_core::codec::build_adts_header_for;
+use restream_core::codec::build_avcc_sequence_header;
+use restream_core::codec::for_each_length_prefixed;
+use restream_core::codec::level_name;
+use restream_core::codec::parse_h264_sps;
+use restream_core::codec::profile_name;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_mpegts::DemuxProbe;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
@@ -89,7 +92,7 @@ impl AdtsConfig {
     }
 
     /// The 7-byte ADTS header for a raw frame of `frame_len` bytes; `None`
-    /// above [`crate::media::codec::MAX_ADTS_PAYLOAD`].
+    /// above [`restream_core::codec::MAX_ADTS_PAYLOAD`].
     pub(crate) fn adts_header(self, frame_len: usize) -> Option<[u8; 7]> {
         build_adts_header_for(
             frame_len,
@@ -623,7 +626,7 @@ fn hevc_track(
     if !has_sps {
         return Err(malformed(format!("fMP4 track {track_id}: hvcC has no SPS")));
     }
-    let mut meta = crate::media::mpegts::hevc_video_meta(&parameter_sets);
+    let mut meta = restream_mpegts::hevc_video_meta(&parameter_sets);
     if meta.width == 0 || meta.height == 0 {
         meta.width = u32::from(visual.width);
         meta.height = u32::from(visual.height);

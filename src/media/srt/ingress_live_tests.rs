@@ -288,7 +288,7 @@ async fn bonded_ingest(mode: GroupType) {
     let pipeline = format!("pipeline-{key}");
     // The same bytes demuxed once give the packet count a single logical
     // input produces; a duplicated application stream would double it.
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut once = Vec::new();
     for chunk in ts_chunks(120) {
         demuxer.feed(chunk.as_ref());
@@ -561,8 +561,8 @@ async fn q098_stale_control_probe_cannot_modify_a_replacement_publisher() {
 async fn q098_review_superseded_resize_ack_keeps_current_ring_through_deselection() {
     use super::ingress_media::IngressMedia;
     use crate::media::engine::MediaEngine;
-    use crate::media::metadata::VideoMeta;
     use crate::media::snapshots::SrtIngressOwnerStats;
+    use restream_core::metadata::VideoMeta;
     use std::sync::Arc;
 
     const PIPELINE: &str = "pipeline-review-handoff";
@@ -715,17 +715,18 @@ async fn an_srt_call_input_dials_a_remote_listener_and_publishes() {
         .spawn()
         .expect("ffmpeg runs");
 
-    let started = server
-        .engine
-        .ingests
-        .srt_calls
-        .converge(vec![crate::media::srt::SrtCallSpec {
-            pipeline_id: "pipeline-call".to_string(),
-            input_id: "input-call".to_string(),
-            stream_key: "call-key".to_string(),
-            selected: true,
-            url: format!("srt://127.0.0.1:{port}?streamid=camera-1"),
-        }]);
+    let started =
+        server
+            .engine
+            .ingests
+            .srt_calls
+            .converge(vec![restream_srt::calls::SrtCallSpec {
+                pipeline_id: "pipeline-call".to_string(),
+                input_id: "input-call".to_string(),
+                stream_key: "call-key".to_string(),
+                selected: true,
+                url: format!("srt://127.0.0.1:{port}?streamid=camera-1"),
+            }]);
     assert_eq!(started, ["input-call"]);
     // The listener may not be up for the first dial: the call redials.
     server

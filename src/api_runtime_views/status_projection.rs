@@ -360,7 +360,7 @@ mod tests {
         let ingest = active_ingest("srt", 0, 0, 0);
         {
             let mut metadata = crate::sync::write(&ingest.metadata);
-            metadata.video = Some(crate::media::metadata::VideoMeta {
+            metadata.video = Some(restream_core::metadata::VideoMeta {
                 codec: "h264".to_string(),
                 ..Default::default()
             });

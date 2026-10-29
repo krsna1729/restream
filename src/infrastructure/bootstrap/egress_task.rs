@@ -35,7 +35,7 @@ pub(super) struct SrtFabricTask {
     pub(super) feed_id: FeedId,
     pub(super) feed: Arc<TsFeed>,
     /// The ring the feed's muxer reads (`retain_srt_fabric_runtime`).
-    pub(super) source: Arc<crate::media::ring_buffer::RingBuffer>,
+    pub(super) source: Arc<restream_sync::RingBuffer>,
     pub(super) spec: OutputSpec,
     /// Set by the shard when the fabric closes this leaf for a reason the
     /// application did not request (peer closed, protocol failure, or
@@ -100,7 +100,7 @@ pub(super) struct EgressTask {
     pub(super) output_id: String,
     pub(super) pipeline_id: String,
     pub(super) url: String,
-    pub(super) ring: Arc<crate::media::ring_buffer::RingBuffer>,
+    pub(super) ring: Arc<restream_sync::RingBuffer>,
     pub(super) terminal_stage_key: crate::domain::stage::StageKey,
     pub(super) registration: crate::media::engine::EgressRegistration,
     pub(super) engine: Arc<MediaEngine>,

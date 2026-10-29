@@ -4,12 +4,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS;
-use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::MEDIA_PULL_BURST_PACKETS;
+use restream_sync::{Reader, RingBuffer};
 
 /// Input pump for FFmpeg-backed stages: the stage runtime builds it, and the
 /// external transcoder's stdin writer thread drains it through
@@ -149,7 +149,7 @@ impl StageInputPump {
                     self.feeder
                         .set_raw_video_parameter_sets_if_empty(&parameter_sets);
                 } else if let Some(parameter_sets) =
-                    crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                    restream_core::codec::annexb_parameter_sets(&pkt.payload)
                 {
                     self.feeder
                         .set_raw_video_parameter_sets_if_empty(&parameter_sets);
@@ -243,9 +243,9 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::packet::{MediaPacket, PayloadFormat};
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
     use bytes::Bytes;
+    use restream_core::{MediaPacket, PayloadFormat};
     use std::sync::atomic::Ordering;
 
     /// Drain a refill-driven pump the way its reading thread would, until

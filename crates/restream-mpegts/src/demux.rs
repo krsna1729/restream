@@ -26,13 +26,13 @@ use super::probe::{
 use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, crc32_mpeg2, parse_timestamp, ts_to_ms};
 use restream_core::{AudioMeta, MediaPacket, MediaType, PayloadFormat, VideoMeta};
 
-pub const MAX_PES_BUFFER: usize = 512 * 1024;
+pub(crate) const MAX_PES_BUFFER: usize = 512 * 1024;
 const PID_COUNT: usize = 1 << 13;
 const NO_STREAM: u16 = u16::MAX;
 /// Sentinel meaning "continuity counter not yet observed". Valid CC values are 0–15.
-pub const CC_UNSET: u8 = u8::MAX;
+pub(crate) const CC_UNSET: u8 = u8::MAX;
 /// Sentinel meaning "no PMT version parsed yet". Valid PMT version_number values are 0–31.
-pub const PMT_VER_UNSET: u8 = u8::MAX;
+pub(crate) const PMT_VER_UNSET: u8 = u8::MAX;
 
 const STREAM_TYPE_H264: u8 = 0x1B;
 const STREAM_TYPE_H265: u8 = 0x24;
@@ -82,15 +82,15 @@ impl StreamKind {
 }
 
 #[derive(Debug)]
-pub struct PesAccumulator {
-    pub buf: Vec<u8>,
-    pub expected_payload_len: Option<usize>,
-    pub pts: i64,
-    pub dts: i64,
-    pub has_timestamp: bool,
-    pub random_access: bool,
+pub(crate) struct PesAccumulator {
+    pub(crate) buf: Vec<u8>,
+    expected_payload_len: Option<usize>,
+    pts: i64,
+    dts: i64,
+    pub(crate) has_timestamp: bool,
+    random_access: bool,
     /// An AAC stream's framing across its PES packets; `reset` keeps it.
-    pub adts: AdtsFraming,
+    adts: AdtsFraming,
 }
 
 impl Default for PesAccumulator {
@@ -100,7 +100,7 @@ impl Default for PesAccumulator {
 }
 
 impl PesAccumulator {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             buf: Vec::with_capacity(16384),
             expected_payload_len: None,
@@ -131,14 +131,14 @@ impl PesAccumulator {
 }
 
 #[derive(Debug)]
-pub struct StreamInfo {
-    pub pid: u16,
-    pub kind: StreamKind,
-    pub track_index: u32,
-    pub language: Option<String>,
-    pub title: Option<String>,
-    pub continuity: u8,
-    pub pes: PesAccumulator,
+pub(crate) struct StreamInfo {
+    pub(crate) pid: u16,
+    pub(crate) kind: StreamKind,
+    pub(crate) track_index: u32,
+    pub(crate) language: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) continuity: u8,
+    pub(crate) pes: PesAccumulator,
 }
 
 /// Probe result matching the existing FFmpeg-based DemuxProbe.
@@ -256,14 +256,14 @@ fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
 
 /// Streaming MPEG-TS demuxer. Feed it chunks of TS data and drain packets.
 pub struct TsDemuxer {
-    pub streams: Vec<StreamInfo>,
-    pub pid_to_stream: Box<[u16; PID_COUNT]>,
+    pub(crate) streams: Vec<StreamInfo>,
+    pub(crate) pid_to_stream: Box<[u16; PID_COUNT]>,
     pmt_pid: Option<u16>,
     probed: bool,
     initial_probe_done: bool,
     probe_result: Option<DemuxProbe>,
     topology_changes: TopologyChanges,
-    pub remainder: Vec<u8>,
+    pub(crate) remainder: Vec<u8>,
     /// Staging for feeds that join a partial packet with a new chunk.
     /// Retains the largest joined feed allocation until this demuxer is
     /// replaced or dropped; callers bound their input chunks.
@@ -278,7 +278,7 @@ pub struct TsDemuxer {
     pmt_expected: usize,
     /// Last seen PMT version_number (bits 5–1 of the version/indicator byte).
     /// PMT_VER_UNSET (u8::MAX) means no PMT seen yet; valid values are 0–31.
-    pub pmt_version: u8,
+    pub(crate) pmt_version: u8,
 }
 
 impl Default for TsDemuxer {
@@ -403,7 +403,7 @@ impl TsDemuxer {
         !self.streams.is_empty()
     }
 
-    pub fn process_ts_packet(&mut self, pkt: &[u8; TS_PACKET_SIZE]) {
+    pub(crate) fn process_ts_packet(&mut self, pkt: &[u8; TS_PACKET_SIZE]) {
         let [_, flags, pid_low, control, ref after_header @ ..] = *pkt;
         let pid = pid_13(flags, pid_low);
         let payload_unit_start = flags & 0x40 != 0;
@@ -800,7 +800,7 @@ impl TsDemuxer {
         }
     }
 
-    pub fn try_build_probe(&mut self, stream_idx: usize, payload: &[u8]) {
+    pub(crate) fn try_build_probe(&mut self, stream_idx: usize, payload: &[u8]) {
         if self.stream_probes.len() < self.streams.len() {
             self.stream_probes.resize_with(self.streams.len(), || None);
         }
@@ -902,7 +902,7 @@ impl TsDemuxer {
 const FRAME_TICKS_90K: i64 = 1024 * 90_000;
 
 #[inline]
-pub fn find_ts_sync(data: &[u8]) -> usize {
+pub(crate) fn find_ts_sync(data: &[u8]) -> usize {
     if ts_sync_candidate_is_valid(data, 0) {
         return 0;
     }
@@ -929,7 +929,7 @@ fn section_after_pointer(payload: &[u8]) -> Option<&[u8]> {
         .filter(|section| !section.is_empty())
 }
 
-pub fn ts_sync_candidate_is_valid(data: &[u8], candidate: usize) -> bool {
+pub(crate) fn ts_sync_candidate_is_valid(data: &[u8], candidate: usize) -> bool {
     if data.get(candidate) != Some(&TS_SYNC_BYTE) {
         return false;
     }

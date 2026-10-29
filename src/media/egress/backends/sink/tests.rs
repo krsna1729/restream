@@ -4,8 +4,8 @@ use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::leaf::ProgressState;
 use crate::media::egress::metrics::LeafMetrics;
 use crate::media::egress::test_driver::FakeFeed;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::RingBuffer;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingBuffer;
 use std::time::Duration;
 
 fn budget(max_units: usize, max_bytes: usize) -> WorkBudget {

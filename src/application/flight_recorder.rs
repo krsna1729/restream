@@ -652,7 +652,7 @@ async fn collect_probes(
     let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
     let mut watched = Vec::new();
     // Copied, so no engine lock is held while the next one is taken.
-    let source_rings: HashMap<String, Arc<crate::media::ring_buffer::RingBuffer>> =
+    let source_rings: HashMap<String, Arc<restream_sync::RingBuffer>> =
         engine.ingests.pipelines.read().await.clone();
     // An FFmpeg stage's reader on its source ring is named by its key.
     for (key, runtime) in engine.stages.runtimes.read().await.iter() {

@@ -7,7 +7,7 @@
 )]
 use std::borrow::Cow;
 
-use crate::media::packet::PayloadFormat;
+use restream_core::PayloadFormat;
 
 /// Prepare an audio payload for MPEG-TS muxing (ADTS-wrapped output).
 ///
@@ -92,15 +92,5 @@ pub fn audio_for_rtmp(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Zero-allocation variant of [`audio_for_rtmp`].
-///
-/// Clears `out` and writes the FLV-wrapped raw AAC into it in-place.
-pub use restream_rtmp::flv::audio_for_rtmp_into;
-
-use restream_core::codec::prepend_adts_into;
-pub use restream_core::codec::{
-    AAC_SAMPLE_RATES, MAX_ADTS_PAYLOAD, aac_frequency_index, adts_frame_count, adts_frame_ranges,
-    adts_sample_rate, build_aac_sequence_header, build_adts_header, build_adts_header_for,
-    strip_adts,
-};
-pub(super) use restream_core::codec::{has_adts_sync, prepend_adts};
+use restream_core::codec::audio_for_rtmp_into;
+use restream_core::codec::{has_adts_sync, prepend_adts, prepend_adts_into};

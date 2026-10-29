@@ -5,11 +5,9 @@ use tracing::info;
 
 use crate::domain::audio_routing::AudioRouting;
 use crate::domain::stage::StageKey;
-use crate::media::metadata::AudioMeta;
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{
-    MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower,
-};
+use restream_core::metadata::AudioMeta;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower};
 
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.
 ///

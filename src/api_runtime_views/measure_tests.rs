@@ -1,8 +1,8 @@
 use super::*;
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_runtime::StageRuntimeManager;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingBuffer;
 use std::sync::Arc;
 
 fn packet(bytes: usize) -> MediaPacket {

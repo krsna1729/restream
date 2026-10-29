@@ -7,7 +7,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
         .unwrap();
 
     let ingest_audio = vec![
-        crate::media::metadata::AudioMeta {
+        restream_core::metadata::AudioMeta {
             codec: "aac".to_string(),
             sample_rate: 48000,
             channels: 2,
@@ -18,7 +18,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
             title: None,
             profile: None,
         },
-        crate::media::metadata::AudioMeta {
+        restream_core::metadata::AudioMeta {
             codec: "aac".to_string(),
             sample_rate: 48000,
             channels: 2,
@@ -33,7 +33,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
     engine
         .update_ingest_meta(
             "pipe-stage-meta",
-            Some(crate::media::metadata::VideoMeta {
+            Some(restream_core::metadata::VideoMeta {
                 codec: "hevc".to_string(),
                 width: 1920,
                 height: 1080,
@@ -60,7 +60,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
         0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
         0x38, 0x80,
     ]);
-    upstream_ring.set_audio_tracks(vec![crate::media::metadata::AudioMeta {
+    upstream_ring.set_audio_tracks(vec![restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48000,
         channels: 2,
@@ -102,7 +102,7 @@ async fn stage_metadata_waits_for_complete_audio_tracks() {
     engine
         .update_ingest_meta(
             "pipe-stage-audio-ready",
-            Some(crate::media::metadata::VideoMeta {
+            Some(restream_core::metadata::VideoMeta {
                 codec: "hevc".to_string(),
                 width: 1920,
                 height: 1080,
@@ -115,7 +115,7 @@ async fn stage_metadata_waits_for_complete_audio_tracks() {
                 level: None,
                 pixel_format: None,
             }),
-            Some(crate::media::metadata::AudioMeta {
+            Some(restream_core::metadata::AudioMeta {
                 codec: "aac".to_string(),
                 sample_rate: 0,
                 channels: 0,
@@ -158,7 +158,7 @@ async fn stage_metadata_waits_for_complete_audio_tracks() {
         "stage metadata should wait until audio sample rate and channels are known"
     );
 
-    let ready_audio = crate::media::metadata::AudioMeta {
+    let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48000,
         channels: 2,
@@ -199,7 +199,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_srt_inputs() {
         .await
         .unwrap();
 
-    let ready_audio = crate::media::metadata::AudioMeta {
+    let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48_000,
         channels: 2,
@@ -213,7 +213,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_srt_inputs() {
     engine
         .update_ingest_meta(
             "pipe-stage-params",
-            Some(crate::media::metadata::VideoMeta {
+            Some(restream_core::metadata::VideoMeta {
                 codec: "hevc".to_string(),
                 width: 1920,
                 height: 1080,
@@ -281,7 +281,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
         .await
         .unwrap();
 
-    let ready_audio = crate::media::metadata::AudioMeta {
+    let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48_000,
         channels: 2,
@@ -295,7 +295,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
     engine
         .update_ingest_meta(
             "pipe-stage-file-params",
-            Some(crate::media::metadata::VideoMeta {
+            Some(restream_core::metadata::VideoMeta {
                 codec: "h264".to_string(),
                 width: 1920,
                 height: 1080,
@@ -365,7 +365,7 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
         .await
         .unwrap();
 
-    let ready_audio = crate::media::metadata::AudioMeta {
+    let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48_000,
         channels: 2,
@@ -379,7 +379,7 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
     engine
         .update_ingest_meta(
             "pipe-stage-codec-edge",
-            Some(crate::media::metadata::VideoMeta {
+            Some(restream_core::metadata::VideoMeta {
                 codec: "hevc".to_string(),
                 width: 1280,
                 height: 720,
@@ -426,7 +426,7 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
     );
 
     assert!(
-        crate::media::codec::annexb_parameter_sets(&[
+        restream_core::codec::annexb_parameter_sets(&[
             0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
         ])
         .is_none(),

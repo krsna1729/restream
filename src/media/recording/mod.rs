@@ -11,14 +11,14 @@
 use crate::domain::recording::RecordingSettings;
 use crate::domain::stage::StageKey;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
-use crate::media::byte_queue::MemoryQueue;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::mpegts::TsServiceMetadata;
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::startup_policy;
+use restream_core::MediaPacket;
+use restream_mpegts::TsServiceMetadata;
+use restream_sync::byte_queue::MemoryQueue;
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -557,7 +557,7 @@ pub async fn start_recording(
             encoding: "recording".to_string(),
         });
 
-    let queue = Arc::new(crate::media::byte_queue::MemoryQueue::new_with_capacity(
+    let queue = Arc::new(restream_sync::byte_queue::MemoryQueue::new_with_capacity(
         engine.config.recording_queue_capacity,
     ));
 
@@ -668,7 +668,7 @@ pub async fn start_recording(
 }
 
 fn run_ts_writer(
-    queue: Arc<crate::media::byte_queue::MemoryQueue>,
+    queue: Arc<restream_sync::byte_queue::MemoryQueue>,
     file_path: &str,
     // Cancellation propagates via queue.close() called by QueueCloseGuard on
     // the async side. The token is threaded through for future use (e.g., if

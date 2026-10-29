@@ -2,8 +2,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use restream::media::external_transcoder::build_stage_ffmpeg_args;
-use restream::media::mpegts::TsDemuxer;
-use restream::media::packet::{MediaPacket, MediaType};
+use restream_core::{MediaPacket, MediaType};
+use restream_mpegts::TsDemuxer;
 
 use super::support::load_fixture;
 

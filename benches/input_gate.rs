@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use restream::media::input_gate::{InputPacketBoundary, InputPacketGate};
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::standby_gop::StandbyGopCache;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::standby_gop::StandbyGopCache;
 use std::hint::black_box;
 
 fn packet(dts: i64, keyframe: bool) -> MediaPacket {

@@ -6,11 +6,9 @@ use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::engine::IngestRegistration;
 use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{
-    MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower,
-};
-use crate::media::standby_gop::StandbyGopCache;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::standby_gop::StandbyGopCache;
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecirculationPublishOutcome {
@@ -255,7 +253,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use crate::media::input_gate::InputPacketGate;
-    use crate::media::packet::PayloadFormat;
+    use restream_core::PayloadFormat;
 
     fn packet(media_type: MediaType, dts: i64, is_keyframe: bool) -> Arc<MediaPacket> {
         packet_with_payload(

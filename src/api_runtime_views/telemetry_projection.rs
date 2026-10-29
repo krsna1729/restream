@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crate::domain::stage::StageKey;
 use crate::media::engine::ActiveIngest;
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 pub(super) use super::common::{
     egress_runtime_json, reader_snapshot_json, ring_payload_stats_json,

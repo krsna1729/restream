@@ -15,7 +15,7 @@ use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use crate::media::hls_ingest::test_support::{
     INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, test_ingest,
 };
-use crate::media::packet::MediaType;
+use restream_core::MediaType;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 // ---- the credential guards against a real origin -------------------------

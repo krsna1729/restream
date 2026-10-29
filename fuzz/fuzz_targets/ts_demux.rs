@@ -5,7 +5,7 @@
 //! the bytes raw to exercise sync search and resync.
 #![no_main]
 
-use restream::media::mpegts::TsDemuxer;
+use restream_mpegts::TsDemuxer;
 
 const TS_PACKET: usize = 188;
 

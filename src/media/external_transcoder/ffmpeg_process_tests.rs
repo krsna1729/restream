@@ -1,8 +1,8 @@
 use super::*;
 use crate::domain::transcode_profile::TranscodeProfile;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::mpegts::TsDemuxer;
 use proptest::prelude::*;
+use restream_mpegts::TsDemuxer;
 use std::sync::{Mutex, MutexGuard};
 
 static PROFILE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());

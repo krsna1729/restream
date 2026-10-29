@@ -84,12 +84,11 @@ payload format (`Flv` or `Raw`) and reference-counted bytes
 (`crates/restream-core/src/lib.rs`). Readers pull in bursts of up to 32 packets
 (`MEDIA_PULL_BURST_PACKETS`). A reader that falls behind the producer resyncs.
 
-The implementation lives in `restream-sync`; `src/media/ring_buffer.rs`
-is the root application's re-export facade. `restream-core` owns the packet,
-metadata, frame-unit vocabulary and shared codec helpers;
-`src/media/packet.rs` and `src/media/metadata.rs` expose that vocabulary to
-application media code. These package boundaries do not select a runtime:
-the producer, stage or protocol owner that calls them determines execution.
+The implementation lives in `restream-sync`. `restream-core` owns the packet,
+metadata, frame-unit vocabulary and shared codec helpers. Application
+callers import this vocabulary directly from its owning crates. These package
+boundaries do not select a runtime: the producer, stage or protocol owner
+that calls them determines execution.
 
 | Ring | Default capacity | Setting |
 |---|---|---|
@@ -154,8 +153,7 @@ The diagram shows the gate states during a promotion.
    publications drain (`src/media/engine_ingest.rs`).
 2. It arms the target gate (`AwaitingKeyframe`).
 3. RTMP, SRT, MoQ and recirculation standbys keep the newest compressed GOP in
-   a `StandbyGopCache` (`crates/restream-sync/src/standby_gop.rs`, re-exported
-   by `src/media/standby_gop.rs`): 16 MiB of payload and
+   a `StandbyGopCache` (`crates/restream-sync/src/standby_gop.rs`): 16 MiB of payload and
    2,048 packets per input by default. Crossing either limit drops the cache
    until the next keyframe.
 4. On the target's next packet, a cache that starts with a video keyframe is
@@ -1200,7 +1198,7 @@ independent of the output count.
 | Buffer | Default | Source |
 |---|---|---|
 | Standby GOP cache | 16 MiB or 2,048 packets per input | `crates/restream-sync/src/standby_gop.rs` |
-| Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `crates/restream-sync/src/byte_queue.rs`, re-exported by `src/media/byte_queue.rs` |
+| Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `crates/restream-sync/src/byte_queue.rs` |
 | HLS MPEG-TS window | `RESTREAM_HLS_MAX_SEGMENTS` (20); target duration starts at 6 s and never decreases | `src/media/hls/store.rs` |
 | HLS fMP4 window | 20 advertised, 26 kept | `src/media/hls/fmp4/store.rs` |
 

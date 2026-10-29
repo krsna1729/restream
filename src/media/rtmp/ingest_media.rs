@@ -24,16 +24,18 @@ use bytes::Bytes;
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
-use crate::media::standby_gop::StandbyGopCache;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingBuffer;
+use restream_sync::standby_gop::StandbyGopCache;
 
-use super::flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_config_annexb_parameter_sets,
-    flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
-};
+use restream_rtmp::flv::FlvVideoPacketKind;
+use restream_rtmp::flv::classify_flv_video_packet;
+use restream_rtmp::flv::flv_config_annexb_parameter_sets;
+use restream_rtmp::flv::flv_video_composition_time_ms;
+use restream_rtmp::flv::parse_flv_audio_meta;
+use restream_rtmp::flv::parse_flv_video_meta;
 
 /// A one-time stream probe the owner reports to Tokio (ingest metadata).
 pub(super) enum RtmpMediaEvent {

@@ -6,9 +6,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::media::engine::MediaEngine;
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::ts_chunk_ring::TsChunkRing;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
 pub(crate) fn start_shared_ts_muxer(
     pipeline_id: &str,
@@ -94,10 +94,9 @@ pub(crate) fn start_shared_ts_muxer(
                 }
             };
 
-            let mut muxer =
-                crate::media::mpegts::TsMuxer::new(muxer_video_meta.as_ref(), &audio_tracks);
+            let mut muxer = restream_mpegts::TsMuxer::new(muxer_video_meta.as_ref(), &audio_tracks);
             let num_streams = (video_meta.is_some() as usize) + audio_tracks.len();
-            let mut dts_enforcer = crate::media::ring_buffer::DtsEnforcer::new(num_streams);
+            let mut dts_enforcer = restream_sync::DtsEnforcer::new(num_streams);
             let mut nalu_len_size: usize = 4;
             // source_ring's own cache always wins: for a preset/transcoded egress
             // muxer, source_ring is the transcoder's output ring, which describes
@@ -114,7 +113,7 @@ pub(crate) fn start_shared_ts_muxer(
                 let (vsh, _) = engine.get_sequence_headers(&pipeline_id_str).await;
                 if let Some(ref flv_sh) = vsh {
                     if flv_sh.len() > 5 {
-                        let (nls, annexb) = crate::media::codec::parse_avcc_config(&flv_sh[5..]);
+                        let (nls, annexb) = restream_core::codec::parse_avcc_config(&flv_sh[5..]);
                         nalu_len_size = nls;
                         annexb
                     } else {
@@ -220,7 +219,7 @@ pub(crate) fn start_shared_ts_muxer(
                                     muxer.mux_packet_into(
                                         pkt.media_type,
                                         pkt.track_index,
-                                        crate::media::mpegts::PacketMeta {
+                                        restream_mpegts::PacketMeta {
                                             pts_ms: pts,
                                             dts_ms: dts,
                                             is_keyframe: pkt.is_keyframe,

@@ -1,7 +1,7 @@
 //! The RTMP leaf announces the ring's per-sequence video configuration.
 
 use super::*;
-use crate::media::ring_buffer::RingBuffer;
+use restream_sync::RingBuffer;
 
 const SPS: &[u8] = &[0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80];
 const PPS_A: &[u8] = &[0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2];
@@ -104,7 +104,7 @@ fn connected_client() -> (
 }
 
 fn header(parameter_sets: &[&[u8]]) -> Bytes {
-    crate::media::codec::build_avcc_sequence_header(&parameter_sets.concat())
+    restream_core::codec::build_avcc_sequence_header(&parameter_sets.concat())
         .expect("valid parameter sets")
 }
 
@@ -190,7 +190,7 @@ fn leaf_does_not_repeat_the_startup_configuration() {
     let ring = Arc::new(RingBuffer::new(16));
     ring.push_drained_batch_recording_config(&mut vec![raw_video(&[SPS, PPS_A, IDR], true, 0)]);
     let (startup_header, generation) =
-        crate::media::rtmp::startup_video_sequence_header(&ring, None, false)
+        restream_rtmp::startup_video_sequence_header(&ring, None, false)
             .expect("ring configuration builds a startup header");
     let startup = RtmpPublishStartup {
         startup_video_sequence_header: Some(startup_header),

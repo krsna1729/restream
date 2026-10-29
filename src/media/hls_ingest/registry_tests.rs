@@ -155,7 +155,7 @@ pub(super) async fn wait_for_ring(
     engine: &MediaEngine,
     secs: u64,
     what: &str,
-    mut predicate: impl FnMut(&crate::media::ring_buffer::RingBuffer) -> bool,
+    mut predicate: impl FnMut(&restream_sync::RingBuffer) -> bool,
 ) {
     tokio::time::timeout(std::time::Duration::from_secs(secs), async {
         loop {

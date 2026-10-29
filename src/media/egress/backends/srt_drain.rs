@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::media::egress::policy::LeafStallClass;
-use crate::media::srt::egress_stats::send_backlog;
+use restream_srt::egress_stats::send_backlog;
 
 impl SrtShardBackend {
     /// Ask a leaf to close, gracefully if it still has send-path bytes

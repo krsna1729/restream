@@ -9,8 +9,6 @@ use srt_transport::advanced::caller::LogicalCallerStats;
 
 use crate::media::snapshots::PublisherQuality;
 
-pub(crate) use restream_srt::egress_stats::{SrtSendBacklog, send_backlog};
-
 /// Bytes per second as megabits per second (the unit `mbps_*` fields carry).
 fn megabits_per_second(bytes_per_second: f64) -> f64 {
     bytes_per_second * 8.0 / 1_000_000.0

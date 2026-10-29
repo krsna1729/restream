@@ -6,15 +6,15 @@ use tokio::sync::oneshot;
 
 #[tokio::test(flavor = "current_thread")]
 async fn media_service_progresses_while_control_thread_is_blocked() {
-    let ring = std::sync::Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
-    let mut reader = crate::media::ring_buffer::Reader::new("media-isolation".into(), ring.clone());
+    let ring = std::sync::Arc::new(restream_sync::RingBuffer::new(8));
+    let mut reader = restream_sync::Reader::new("media-isolation".into(), ring.clone());
     let cancel = CancellationToken::new();
     let (done, observed) = std::sync::mpsc::channel();
     let task = spawn(cancel.clone(), async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Raw,
+        ring.push(restream_core::MediaPacket {
+            media_type: restream_core::MediaType::Video,
+            format: restream_core::PayloadFormat::Raw,
             is_keyframe: true,
             track_index: 0,
             pts: 33,

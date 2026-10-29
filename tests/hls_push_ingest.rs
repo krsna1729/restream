@@ -15,9 +15,9 @@ use restream::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
     PipelineAccessMode,
 };
-use restream::media::packet::MediaType;
-use restream::media::ring_buffer::RingBuffer;
 use restream::media::security::IngestSecurityService;
+use restream_core::MediaType;
+use restream_sync::RingBuffer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const STREAM_KEY: &str = "hls-key";

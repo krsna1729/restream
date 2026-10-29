@@ -3,8 +3,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use super::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::metadata::VideoMeta;
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream_core::metadata::VideoMeta;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
 
 fn h264_video_meta() -> VideoMeta {
     VideoMeta {
@@ -66,7 +66,7 @@ fn feeder_seeds_raw_h265_parameter_sets_for_late_joining_keyframes() {
     let mut output = Vec::new();
     assert!(feeder.extend_ts_for_packet(&packet, &mut output));
 
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut remuxed_packets = Vec::new();
     for chunk in output.chunks(188) {
         demuxer.feed(chunk);
@@ -170,7 +170,7 @@ fn set_raw_video_parameter_sets_if_empty_sets_once_then_becomes_idempotent() {
     let mut output = Vec::new();
     assert!(feeder.extend_ts_for_packet(&keyframe, &mut output));
 
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut remuxed_packets = Vec::new();
     for chunk in output.chunks(188) {
         demuxer.feed(chunk);
@@ -269,7 +269,7 @@ fn set_video_sequence_header_from_avcc_parses_valid_header_and_primes_cache() {
     let mut output = Vec::new();
     assert!(feeder.extend_ts_for_packet(&keyframe, &mut output));
 
-    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
     let mut remuxed_packets = Vec::new();
     for chunk in output.chunks(188) {
         demuxer.feed(chunk);

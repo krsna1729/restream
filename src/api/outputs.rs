@@ -396,15 +396,14 @@ pub(super) fn validate_output_url_for_config(
 ) -> Result<(), String> {
     let scheme = OutputUrlScheme::from_url(url);
     // The leaf connects only to `app/stream-key`.
-    if scheme.is_rtmp_family() && crate::media::rtmp::parse_rtmp_url(url).is_none() {
+    if scheme.is_rtmp_family() && restream_rtmp::parse_rtmp_url(url).is_none() {
         return Err(RTMP_OUTPUT_URL_ERROR.to_string());
     }
     if scheme == OutputUrlScheme::Moqt {
-        crate::media::moq::egress::parse_moq_url(url)
-            .map_err(|error| error.message().to_string())?;
+        restream_moq::url::parse_moq_url(url).map_err(|error| error.message().to_string())?;
     }
     if scheme == OutputUrlScheme::Srt {
-        crate::media::srt::validate_srt_egress_url(url)?;
+        restream_srt::egress_connect::validate_srt_egress_url(url)?;
     }
     if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
         && !scheme.is_rtmp_family()

@@ -10,7 +10,7 @@ use bytes::Bytes;
 
 use crate::media::engine::MediaEngine;
 use crate::media::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 #[derive(Debug)]
 pub enum HlsPreviewError {

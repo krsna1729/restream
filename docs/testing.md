@@ -64,7 +64,7 @@ flowchart LR
 | `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
 | `miri` (Miri) | selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
 | `kani` (Kani) | `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
-| `asan` (AddressSanitizer) | selected root FFI/syscall tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
+| `asan` (AddressSanitizer) | selected root FFI/syscall and MPEG-TS allocation tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
 | `integration-build` (Transport live-harness build) | `cargo xtask build-bench`; uploads `restream` and `test_harness` | after `test` |
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
@@ -95,9 +95,10 @@ Passing runs stay quiet. Do not land compiler warnings, panic text, FFmpeg
 probe chatter or other "expected noise". Fix or suppress it in the helper.
 
 Canonical codec implementations live in `crates/restream-core`; RTMP framing
-and session helpers live in `crates/restream-rtmp`. Root facades import these
-implementations, so retained parser proptests, fuzz entrypoints and conversion
-benchmarks exercise the shipped functions rather than a second copy.
+and session helpers live in `crates/restream-rtmp`. Their parser, property and
+pure helper tests live with those implementations. Application adapter and
+fixture/network consumer tests remain in the root. Benchmarks and fuzz
+entrypoints import their implementation owners directly.
 
 Implementation ownership and test-package selection are not identical:
 
@@ -107,16 +108,17 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
 | `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
-| `crates/restream-mpegts/src/` | `cargo test -p restream --lib media::mpegts::tests`; the extracted package has no unit suite of its own |
-| `crates/restream-rtmp/src/` | `cargo test -p restream --lib media::rtmp::tests`; codec consumer tests also cover the shared framing helpers |
+| `crates/restream-mpegts/src/` | `cargo test -p restream-mpegts --lib`; also `cargo test -p restream --lib media::mpegts_allocation_tests` for the allocation/ordered-output consumer guard |
+| `crates/restream-rtmp/src/` | `cargo test -p restream-rtmp --lib`; also `cargo test -p restream --lib media::rtmp::tests` for retained application/network consumers |
 | `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream --lib media::srt::` for retained consumers |
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
 
 For extracted-library source and manifest changes, `cargo xtask gates`
 recommends the owning unit suite plus its retained root consumer suite.
-MPEG-TS selects only its root suite because its extracted package has no unit
-tests. Owner suites run unfiltered rather than deriving a possibly empty
-filter from the implementation file name.
+MPEG-TS implementation tests run in `restream-mpegts`; its allocation guard
+stays in the application test binary so the leaf library can continue to
+forbid unsafe code without a custom test allocator. Owner suites run unfiltered
+rather than deriving a possibly empty filter from the implementation file name.
 
 Every recommended focused test command first runs
 `scripts/ci/require-test-filters.sh` and chains the actual test run with `&&`.
@@ -124,6 +126,11 @@ An empty selection fails instead of reporting a successful zero-test run.
 `cargo test --workspace` remains the CI-wide coverage gate.
 The package graph and runtime seams are in
 [Workspace layout](architecture.md#workspace-layout).
+
+Fixture paths and the required checked-in registry are single-sourced in
+`src/test_fixtures/paths.rs`, shared by leaf tests and the root
+`test_fixtures` API. Packet/feeder fixture helpers remain application-owned;
+leaf crates do not depend on the application to find fixtures.
 
 
 ### Parser fuzz targets
@@ -175,13 +182,13 @@ touch raw syscall and FFI memory.
 | CI job | Modules | Why |
 |---|---|---|
 | `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
-| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts::tests`, `runtime_info`; separately the `restream-sync` library target | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS consumers and synchronization; leak detection off |
+| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts_allocation_tests`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
 
-The named root filters and core bit-reader filter first pass
-`scripts/ci/require-test-filters.sh`. It fails when a filter selects no test.
-The root MPEG-TS filter exercises the retained consumer suite against the
-extracted mux/demux implementation under ASan; it is guarded like every other
-named root filter. The synchronization package's unit suite runs separately.
+The named root filters, core bit-reader filter and each extracted sanitizer
+suite first pass `scripts/ci/require-test-filters.sh`. It fails when a selection
+contains no test. The root MPEG-TS filter retains the allocation and ordered
+packet-output guard; the complete mux/demux behavior suite runs separately
+in `restream-mpegts`, alongside the `restream-sync` unit suite.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
@@ -733,5 +740,5 @@ brings an equal or stronger proof in the same change.
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 
 New failure evidence takes a durable form: a fixture registered in
-`src/test_fixtures.rs`, a focused test, a harness mode writing
+`src/test_fixtures/paths.rs`, a focused test, a harness mode writing
 `manifest.json` and `results.jsonl`, or a baseline with its replay command.

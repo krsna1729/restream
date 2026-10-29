@@ -1,6 +1,6 @@
 use bytes::Bytes;
-use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use restream::media::ring_buffer::RingSlot;
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_sync::RingSlot;
 use std::mem::{align_of, size_of};
 
 pub(super) const PACKET_BYTES: usize = 1316;

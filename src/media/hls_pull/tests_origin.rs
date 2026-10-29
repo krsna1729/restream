@@ -21,7 +21,7 @@ use super::fetch::{
 use super::*;
 use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, STREAM_KEY, test_ingest};
-use crate::media::packet::MediaType;
+use restream_core::MediaType;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 /// A tiny origin: exact paths on `/live`, recording every request's path (with
@@ -251,7 +251,7 @@ pub(super) async fn wait_for_request(origin: &Origin, path: &str) {
 pub(super) async fn wait_for_media(
     engine: &MediaEngine,
     start: usize,
-) -> Vec<Arc<crate::media::packet::MediaPacket>> {
+) -> Vec<Arc<restream_core::MediaPacket>> {
     let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
     tokio::time::timeout(Duration::from_secs(15), async {
         while ring.get_write_idx() == start {

@@ -35,17 +35,10 @@ pub(crate) mod srt_egress_engine;
 mod srt_policy;
 mod tokio_ingress;
 
-pub(crate) use calls::validate_srt_call_url;
-pub use calls::{SrtCallInputs, SrtCallSpec};
-pub(crate) use egress_connect::{
-    AddressFamily, SrtConnectKind, SrtConnectRequest, SrtFabricEgressConnectSpec,
-    validate_srt_egress_url,
-};
-pub(crate) use egress_stats::SrtSendBacklog;
 pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;
 pub(crate) use knobs::desired_udp_buf;
 pub(crate) use shared_muxer::start_shared_ts_muxer;
-pub(crate) use srt_egress_engine::{SrtEgressEngine, SrtSendResult};
+pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 pub(crate) use tokio_ingress::*;
 

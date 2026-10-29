@@ -26,11 +26,11 @@ use crate::media::engine_hls::HlsConsumers;
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::{ListenerSocketStats, RtmpListenerStats};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
+use restream_sync::RingBuffer;
 
 pub struct IngestRegistry {
     pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
@@ -45,7 +45,7 @@ pub struct IngestRegistry {
     pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
     /// The `srt_call` inputs the SRT server dials.
-    pub srt_calls: crate::media::srt::SrtCallInputs,
+    pub srt_calls: restream_srt::calls::SrtCallInputs,
 }
 
 impl Default for IngestRegistry {

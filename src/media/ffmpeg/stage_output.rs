@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::media::codec::AnnexbParameterSetAccumulator;
-use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
+use restream_core::codec::AnnexbParameterSetAccumulator;
+use restream_core::{MediaPacket, MediaType};
+use restream_sync::RingBuffer;
 
 use super::timeline::{NormalizedTs, StageTimeline};
 
@@ -63,7 +63,7 @@ impl StageOutputNormalizer {
 
         if packet.media_type == MediaType::Video
             && !packet.is_keyframe
-            && crate::media::codec::raw_annexb_is_keyframe(&packet.payload)
+            && restream_core::codec::raw_annexb_is_keyframe(&packet.payload)
         {
             packet.is_keyframe = true;
         }
@@ -122,10 +122,10 @@ impl StageOutputNormalizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::packet::PayloadFormat;
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
     use bytes::Bytes;
     use proptest::prelude::*;
+    use restream_core::PayloadFormat;
     use std::collections::HashMap;
     use std::sync::atomic::Ordering;
 
@@ -205,8 +205,7 @@ mod tests {
             payload: Bytes::from_static(&[0, 0, 0, 1, 0x65]),
         });
 
-        let mut reader =
-            crate::media::ring_buffer::Reader::new("normalizer-keyframe-reader".to_string(), ring);
+        let mut reader = restream_sync::Reader::new("normalizer-keyframe-reader".to_string(), ring);
         let packet = reader
             .pull()
             .expect("reader should not overflow")
@@ -246,8 +245,7 @@ mod tests {
             )
         );
 
-        let mut reader =
-            crate::media::ring_buffer::Reader::new("split-hevc-param-reader".to_string(), ring);
+        let mut reader = restream_sync::Reader::new("split-hevc-param-reader".to_string(), ring);
         let packet = reader
             .pull()
             .expect("reader should not overflow")
@@ -276,7 +274,7 @@ mod tests {
                 StageOutputNormalizer::new(ring.clone(), 4, metrics.clone())
                     .with_video_track_count(2);
             let mut reader =
-                crate::media::ring_buffer::Reader::new("normalizer-boundary-proptest".to_string(), ring);
+                restream_sync::Reader::new("normalizer-boundary-proptest".to_string(), ring);
 
             normalizer.push(video_packet(0));
             for (is_video, track, pts, dts, payload_len) in &packets {

@@ -10,9 +10,9 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::policy::WorkBudget;
 use crate::media::engine::{EgressRegistration, MediaEngine};
-use crate::media::packet::MediaPacket;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use bytes::Bytes;
+use restream_core::MediaPacket;
+use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
 const SINK_VISIT_BUDGET: Duration = Duration::from_millis(1);
 

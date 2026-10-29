@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::media::input_gate::InputPacketGate;
-use crate::media::packet::{MediaType, PayloadFormat};
+use restream_core::{MediaType, PayloadFormat};
 
 fn counters() -> PublisherCounters {
     PublisherCounters {

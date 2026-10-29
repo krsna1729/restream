@@ -1,42 +1,14 @@
-//! Payload format conversions for the 2×3×2 ingest/egress matrix.
+//! Application payload adapters for MPEG-TS muxing and caption inspection.
 //!
-//! Four entry points cover every path:
-//!   - `video_for_ts` / `audio_for_ts` — prepare payloads for MPEG-TS muxing
-//!   - `video_for_rtmp` / `audio_for_rtmp` — prepare payloads for RTMP publishing
-//!
-//! Lower-level AVCC, Annex B, AAC, and ADTS helpers remain available through
-//! this façade for sequence-header synthesis and tests.
+//! Codec parsing and RTMP framing live in `restream-core` and `restream-rtmp`.
 
 mod aac;
 mod captions;
-mod enhanced_rtmp_hevc;
 mod video;
 
-pub use aac::{
-    AAC_SAMPLE_RATES, MAX_ADTS_PAYLOAD, aac_frequency_index, adts_frame_count, adts_frame_ranges,
-    adts_sample_rate, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts, audio_for_ts_into,
-    build_aac_sequence_header, build_adts_header, build_adts_header_for, strip_adts,
-};
+pub use aac::{audio_for_rtmp, audio_for_ts, audio_for_ts_into};
 pub use captions::{FrameCaptions, frame_captions};
-pub(crate) use enhanced_rtmp_hevc::{
-    EX_CODED_FRAMES, EX_CODED_FRAMES_X, EX_SEQUENCE_START, ex_video_tag,
-    h265_annexb_to_length_prefixed_into,
-};
-pub use enhanced_rtmp_hevc::{
-    build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
-};
-pub(crate) use restream_core::codec::rbsp;
-pub(crate) use restream_core::codec::{level_name, parse_h264_sps, profile_name};
-pub(crate) use video::{
-    AnnexbParameterSetAccumulator, annexb_parameter_sets, avcc_record, flv_video_config,
-    for_each_annexb_nalu, for_each_length_prefixed, raw_annexb_is_keyframe,
-};
-pub use video::{
-    annexb_to_avcc, annexb_to_avcc_into, annexb_to_avcc_with_scratch, avcc_to_annexb,
-    avcc_to_annexb_into, build_avcc_sequence_header, find_annexb_start_codes, parse_avcc_config,
-    split_annexb_nalus, video_for_rtmp, video_for_rtmp_into, video_for_rtmp_with_composition_into,
-    video_for_ts, video_for_ts_into,
-};
+pub use video::{video_for_ts, video_for_ts_into};
 
 #[cfg(test)]
 #[path = "codec_tests.rs"]

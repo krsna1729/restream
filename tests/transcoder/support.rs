@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use restream::media::packet::MediaPacket;
-use restream::media::ring_buffer::Reader;
+use restream_core::MediaPacket;
+use restream_sync::Reader;
 
 pub(super) fn load_fixture() -> Vec<u8> {
     let path =
@@ -13,8 +13,8 @@ pub(super) fn load_fixture() -> Vec<u8> {
 pub(super) fn load_primary_transport_packets(
     codec: &str,
 ) -> (
-    restream::media::metadata::VideoMeta,
-    Vec<restream::media::metadata::AudioMeta>,
+    restream_core::metadata::VideoMeta,
+    Vec<restream_core::metadata::AudioMeta>,
     Vec<MediaPacket>,
 ) {
     restream::test_fixtures::primary_av_packets_for_codec(codec).unwrap_or_else(|e| panic!("{e}"))

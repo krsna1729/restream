@@ -112,7 +112,7 @@ async fn get_or_create_pipeline_preserves_adapted_ring_across_calls() {
         "adapted ring must persist across calls"
     );
 
-    let _reader = crate::media::ring_buffer::Reader::new("hold".to_string(), ring2.clone());
+    let _reader = restream_sync::Reader::new("hold".to_string(), ring2.clone());
     let ring3 = engine.get_or_create_pipeline("p").await;
     assert_eq!(
         ring3.capacity(),

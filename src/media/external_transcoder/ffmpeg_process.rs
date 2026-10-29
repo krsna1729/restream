@@ -76,8 +76,8 @@ pub(super) fn spawn_external_stdout_reader(
     cancel: CancellationToken,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
-    use crate::media::mpegts::TsDemuxer;
-    use crate::media::ring_buffer::MEDIA_PRODUCER_BATCH_PACKETS;
+    use restream_mpegts::TsDemuxer;
+    use restream_sync::MEDIA_PRODUCER_BATCH_PACKETS;
     use std::io::Read;
 
     let mut stdout = blocking_pipe(stdout.into_owned_fd()?)?;

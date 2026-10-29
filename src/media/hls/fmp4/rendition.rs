@@ -9,9 +9,11 @@ use super::codec::{
     flv_sequence_header_codec, is_flv_video_sequence_header, rescale_ms, sample_entry_codec_string,
 };
 use super::store::Fmp4HlsStore;
-use crate::media::codec::{annexb_to_avcc_into, h265_annexb_to_length_prefixed_into, strip_adts};
-use crate::media::metadata::{AudioMeta, VideoMeta};
-use crate::media::packet::{MediaPacket, PayloadFormat};
+use restream_core::codec::annexb_to_avcc_into;
+use restream_core::codec::strip_adts;
+use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, PayloadFormat};
+use restream_rtmp::enhanced_rtmp_hevc::h265_annexb_to_length_prefixed_into;
 
 pub(super) struct BufferedSample {
     pub(super) pts: i64,
@@ -332,9 +334,9 @@ impl AudioRenditionState {
 mod tests {
     use super::*;
     use crate::media::hls::HlsConfig;
-    use crate::media::metadata::VideoMeta;
-    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
     use bytes::Bytes;
+    use restream_core::metadata::VideoMeta;
+    use restream_core::{MediaPacket, MediaType, PayloadFormat};
 
     fn test_video_meta() -> VideoMeta {
         VideoMeta {

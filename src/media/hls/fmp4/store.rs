@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use bytes::Bytes;
 
 use super::super::HlsConfig;
-use crate::media::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, VideoMeta};
 
 // Keep a small cushion behind the advertised live window so a browser that
 // fetches the oldest listed segment during a playlist refresh does not race
