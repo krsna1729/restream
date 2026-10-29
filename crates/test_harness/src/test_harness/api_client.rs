@@ -425,7 +425,8 @@ mod tests {
         });
 
         let mut api = super::RampApi::new(engine_port);
-        let error = timeout(Duration::from_secs(5), api.login_with_password("secret"))
+        let password = generate_harness_admin_password();
+        let error = timeout(Duration::from_secs(5), api.login_with_password(&password))
             .await
             .expect("login hung: the client followed the redirect")
             .unwrap_err();
