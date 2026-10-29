@@ -57,9 +57,9 @@ flowchart LR
 ## Workloads and peers
 
 The source of truth for egress scenarios is
-[`resource_egress_scenarios.json`](../src/bin/test_harness/resource_egress_scenarios.json).
+[`resource_egress_scenarios.json`](../crates/test_harness/src/test_harness/resource_egress_scenarios.json).
 Output kinds and their encoding/transport choices are defined in
-[`catalog.rs`](../src/bin/test_harness/resource_sweep/catalog.rs).
+[`catalog.rs`](../crates/test_harness/src/test_harness/resource_sweep/catalog.rs).
 
 | Workload family | Question |
 |---|---|
@@ -87,15 +87,15 @@ For remote SRT receivers, set `RESOURCE_SWEEP_SRT_PEER_HOSTS` to a
 comma-separated host list and run `srt-sink` on each host. The remote
 state endpoints supply same-window drop counters. Configure
 `SRT_SINK_PORTS` and `SRT_SINK_STATE_PORT` using
-[`srt_sink.rs`](../src/bin/test_harness/srt_sink.rs), and check
-[`peer_state_config`](../src/bin/test_harness/resource_sweep/config.rs)
+[`srt_sink.rs`](../crates/test_harness/src/test_harness/srt_sink.rs), and check
+[`peer_state_config`](../crates/test_harness/src/test_harness/resource_sweep/config.rs)
 for endpoint overrides. Remote counters must be reachable to grade the
 workload's validity.
 
 ## Controls
 
 Configuration is parsed by
-[`resource_sweep/config.rs`](../src/bin/test_harness/resource_sweep/config.rs).
+[`resource_sweep/config.rs`](../crates/test_harness/src/test_harness/resource_sweep/config.rs).
 
 | Variable | Default or use |
 |---|---|
@@ -192,7 +192,7 @@ topology. It is not automatically production capacity certification.
 | Server executors and storage bounds | `src/config.rs` and `src/media/` implementations |
 | RTMP/SRT admission and owner threads | Protocol listeners and runtime configuration |
 | FFmpeg child admission and thread hints | `src/config.rs`, `src/media/external_transcoder.rs` |
-| Fixtures, peer processes, artifacts and cleanup | `src/bin/test_harness/`, `test/harness/` |
+| Fixtures, peer processes, artifacts and cleanup | `crates/test_harness/`, `test/harness/` |
 | CPU affinity, NUMA, cgroups and host memory | Launch environment |
 
 A semaphore that bounds a server resource does not cap the whole process

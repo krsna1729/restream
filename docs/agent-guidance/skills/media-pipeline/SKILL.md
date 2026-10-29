@@ -1,11 +1,11 @@
 ---
 name: media-pipeline
-description: Use before changing restream src/media/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, per-packet hot paths, or thread/runtime placement (Tokio, Compio Owner, OS threads, blocking calls) anywhere in src/.
+description: Use before changing restream src/media/, crates/restream-*/src/, RTMP/SRT/HLS protocol paths, transcoder stages, ring buffers, mux/demux, egress fabrics, per-packet hot paths, or thread/runtime placement.
 ---
 
 # Media Pipeline
 
-Read before changing `src/media/`:
+Read before changing `src/media/` or `crates/restream-*/src/`:
 
 - [architecture](../../../architecture.md)
 - [media pipeline](../../../media-pipeline.md)
@@ -51,14 +51,14 @@ Read before changing `src/media/`:
 
 ## Hot paths
 
-Hot paths include `src/media/`, ring buffers, mux/demux loops, the recording byte queue,
-SRT/RTMP packet loops, HLS segmenting, and transcoder data paths.
+Hot paths include `src/media/`, `crates/restream-*/src/`, ring buffers, mux/demux
+loops, the recording byte queue, SRT/RTMP packet loops, HLS segmenting, and transcoder data paths.
 
 - Follow the hot-path contract in
   [high-performance data path](../../../high-performance-data-path.md#hot-path-contracts):
-  no per-packet allocation, logging, serialization, locks, async channel
-  sends or syscalls; burst APIs, hoisted buffers and `Bytes` ownership
-  transfer instead of copies.
+  no avoidable per-packet allocation or payload copies; no per-packet logging,
+  serialization, locks, async channel sends or syscalls. Use burst APIs,
+  hoisted buffers and `Bytes` ownership transfer.
 - Benchmark before and after with the relevant `benches/` suite.
 - For SIMD, benchmark scalar first, keep a scalar fallback, use runtime
   feature detection, and minimize `unsafe`.

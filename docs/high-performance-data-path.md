@@ -5,6 +5,10 @@ what a hot path must not do, how each buffer is bounded, what is shared, and
 how to measure a change. Benchmark code and production source own the
 executable detail; measured numbers belong in the commit that changes them.
 
+For package boundaries and local crate dependencies, see the central
+[workspace/dependency map](architecture.md#workspace-layout). Execution
+contexts below describe runtime ownership, not a consequence of crate edges.
+
 ## Contents
 
 - [Data-path shape](#data-path-shape)
@@ -35,7 +39,8 @@ flowchart LR
     Source --> Shards["Egress shards"]
     Output --> Shards
     Ts --> Shards
-    Source --> Queue["MemoryQueue"]
+    Source --> RecordingMux["Recording TS muxer"]
+    RecordingMux --> Queue["MemoryQueue"]
     Queue --> File["Recording file"]
 ```
 
@@ -44,17 +49,30 @@ flowchart LR
 - `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
 - Egress shards read rings directly by cursor
   ([Egress architecture](egress-architecture.md)).
-- `MemoryQueue` (`src/media/byte_queue.rs`) is the bounded byte queue between a
-  media producer and blocking native or file I/O.
+- Recording uses `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`,
+  re-exported by `src/media/byte_queue.rs`) between its media-runtime TS
+  producer and dedicated blocking file writer (`src/media/recording/mod.rs`).
+  It is not an egress transport queue.
 
-`MediaPacket` is pinned at 56 bytes by a size assertion in
-`src/media/packet.rs`. Per-frame metadata stays out of it. Each ring slot
-carries one atomic word with the packet's track configuration generation,
-written by the producer with the slot and read by sequence without a lock
-([frame units](media-pipeline.md#frame-units)). Publication costs one relaxed
-load and one release store per packet and never parses payloads.
+`restream-core` owns `MediaPacket`, metadata, frame-unit vocabulary and shared
+codec helpers. `MediaPacket` is pinned at 56 bytes by a size assertion in
+`crates/restream-core/src/lib.rs`; `src/media/packet.rs` and
+`src/media/metadata.rs` are root facades. Ring, reader, frame-unit tracking,
+standby GOP and byte-queue implementations live in `restream-sync`;
+`src/media/ring_buffer.rs`, `src/media/standby_gop.rs` and
+`src/media/byte_queue.rs` re-export them for application callers.
+
+Per-frame configuration metadata stays out of `MediaPacket`. Each
+preallocated ring slot carries an atomic word with the packet's track
+configuration generation, written by the producer and read by sequence
+without a lock ([frame units](media-pipeline.md#frame-units)). Recording
+this side-band word adds a relaxed generation load for tracked packets and
+a release store, with no per-packet allocation or payload parsing.
 Configuration bytes are compared and stored only when a producer records
-them.
+them. This is not the full publication cost: `RingBuffer::push` and
+`push_batch` allocate a new `Arc<MediaPacket>` for each packet. The packet's
+`Bytes` payload remains shared without a payload copy; ring publication is
+not allocation-free.
 
 ## Hot-path contracts
 
@@ -91,7 +109,7 @@ purpose:
 | `StandbyGopCache` | Keeps one GOP; clears it entirely past 16 MiB or 2048 packets (defaults) |
 | `TsChunkRing` reader | Detects overwrite and advances to a container boundary |
 | Egress leaf cursor | Overrun resynchronizes at the latest sync point; the feed never grows |
-| `MemoryQueue` | Blocks or wakes producer and consumer through its cancellation contract |
+| Recording `MemoryQueue` | Async producer waits for space; blocking file reader waits for data; closure wakes both sides. Capacity is a soft limit and one write/batch can overshoot it |
 | Connection and child-process admission | Rejects or defers new work |
 
 Do not copy capacities or derived seconds-of-buffer estimates into planning
@@ -135,7 +153,7 @@ in addition to the selected pipeline.
 | API, database, control and lifecycle | Tokio CONTROL |
 | RTMP and SRT ingest: parse or demux, sequence headers, timestamps, standby GOP, gate, publish | Compio ingress owners |
 | MoQ ingest and local origin | `moq-ingest` Compio thread |
-| Shared SRT TS muxing, audio routers, HLS segmenting (TS and fMP4), recording feed, file-ingest demux, HLS push and pull assembly | Media executor (`restream-media`) |
+| Shared SRT TS muxing, audio routers, HLS segmenting (TS and fMP4), recording feed, file-ingest demux, HLS push and pull assembly | Separate Tokio MEDIA runtime (`restream-media`) |
 | RTMP, RTMPS, SRT, HLS PUT and MoQ egress sockets and connection state | Egress shards (Compio io_uring) |
 | Codec work | FFmpeg child; `restream-ffin` and `restream-ffout` move its pipes |
 | Blocking calls (DNS, file writes) | Guarded OS threads or blocking pools |
@@ -144,6 +162,14 @@ Diagnostic direct RTMP play still reads the ring on CONTROL. The HLS PUT
 fallback uploader (Reqwest) also runs on CONTROL. Every crossing between
 these contexts is listed with its bound in
 [Runtime crossings](runtime-crossings.md).
+
+MEDIA is the multi-thread Tokio runtime built by `src/media/executor.rs`;
+it is distinct from CONTROL and from dedicated blocking I/O threads.
+Moving helpers into workspace crates does not move their callers between
+these contexts. In particular, `restream-moq` contains media/catalog,
+budget, token, URL and TLS configuration helpers, while live endpoints and
+session drivers remain under `src/media/moq/{transport,ingest,origin,egress}/`.
+The root listener and egress-fabric code still own their Compio runtimes.
 
 The process boundary costs a process start and pipe traffic. In return it
 isolates codec failure and keeps blocking work off the async schedulers.

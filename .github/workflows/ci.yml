@@ -61,25 +61,30 @@ jobs:
             -- -D warnings
       - name: Prove MCP feature matrix
         run: |
+          # Select the product package explicitly: workspace members such as
+          # the harness otherwise re-enable its dependency's default features.
           # Lower-layer isolation: agent-plane/agent-execution stay disabled.
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-core
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-server
-          cargo check \
+          cargo check -p restream \
             --bin restream-mcp --no-default-features \
             --features mcp-server,mcp-http-backend
           # Compatibility combo: mcp-embedded = mcp-core + agent-plane.
           # Must compile; must not invent an in-process MCP backend.
-          cargo check \
+          cargo check -p restream \
             --lib --no-default-features --features mcp-embedded
           # Agent tool list (discovery, MCP catalog, dispatch) and agent output mutations.
-          cargo test --lib --no-default-features \
+          cargo test -p restream --lib --no-default-features \
             --features mcp-embedded,agent-execution -- agent_mcp agent_service
-          # The agent plane is a default feature; the opt-out build still
-          # answers its routes with 404 compiledIn:false. Lint and test it.
-          cargo clippy --lib --test api --no-default-features -- -D warnings
-          cargo test --no-default-features --test api -- agent::
+          # Require both compiled-out tests, not merely a passing test binary:
+          # a feature-unified build must fail this proof instead of testing enabled routes.
+          scripts/ci/require-test-filters.sh cargo test -p restream --no-default-features --test api -- \
+            agent::agent_plane_returns_404_when_feature_is_compiled_out \
+            agent::agent_context_returns_404_when_feature_is_compiled_out
+          cargo clippy -p restream --lib --test api --no-default-features -- -D warnings
+          cargo test -p restream --no-default-features --test api -- agent::
 
   architecture-guardrails:
     name: Source architecture audit
@@ -121,16 +126,17 @@ jobs:
 
           git fetch --no-tags origin "$base" --depth=1 || true
           # `distribution/` covers the shipped seccomp profile and its deployment
-          # documentation. RTMP/RTMPS transport sources also run the real media
-          # container proof; that profile is part of the runtime contract.
-          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|scripts/build/app-native\.sh|scripts/release/package-binaries\.sh|scripts/release/package-runtime-image\.sh|scripts/check/container-smoke\.sh|scripts/check/container-restream-shim\.sh|scripts/check/release-evidence\.sh|scripts/release/prepare-build-tree\.sh|distribution/|tests/seccomp_profile\.rs|src/media/rtmp[^/]*\.rs|src/media/rtmp/.*|src/media/srt[^/]*\.rs|src/media/srt/.*|src/media/egress/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
+          # documentation. Extracted restream crates and the test harness also
+          # qualify, alongside RTMP/RTMPS and SRT transport sources: they can
+          # change the real media container proof and its runtime contract.
+          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|scripts/build/app-native\.sh|scripts/release/package-binaries\.sh|scripts/release/package-runtime-image\.sh|scripts/check/container-smoke\.sh|scripts/check/container-restream-shim\.sh|scripts/check/release-evidence\.sh|scripts/release/prepare-build-tree\.sh|distribution/|tests/seccomp_profile\.rs|crates/restream-[^/]+/.*|crates/test_harness/.*|src/media/rtmp[^/]*\.rs|src/media/rtmp/.*|src/media/srt[^/]*\.rs|src/media/srt/.*|src/media/egress/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.scope.outputs.run == 'false' }}
         name: Runtime path unchanged; skip Docker smoke
-        run: echo "Docker runtime source-build path unchanged; skipping smoke."
+        run: echo "Docker runtime source-build paths, including extracted crates and harness, unchanged; skipping smoke."
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Runtime path changed; continue Docker smoke
         run: echo "Docker runtime source-build path changed; continuing."
@@ -327,22 +333,22 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # Every fuzz target drives code under src/media (or the vendored
-          # crates it links); a diff that touches none of it cannot change
-          # what the targets reach. master pushes always fuzz.
+          # Fuzz targets reach src/media, the extracted restream crates, and
+          # their harness/vendor dependencies. Shared manifests and toolchain
+          # changes also qualify; master pushes always fuzz.
           if [[ "$EVENT_NAME" != "pull_request" || -z "$BASE_SHA" ]]; then
             echo "run=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/media/|src/lib\.rs$|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/media/|src/lib\.rs$|crates/restream-[^/]+/|crates/test_harness/|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.scope.outputs.run == 'false' }}
         name: Parser paths unchanged; skip fuzzing
-        run: echo "No change under src/media, fuzz, vendor or the manifests."
+        run: echo "No parser, extracted crate, harness, vendor, manifest or toolchain path changed; skipping fuzzing."
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: ./.github/actions/ci-bootstrap
         with:
@@ -375,7 +381,7 @@ jobs:
     env:
       MIRI_FILTERS: >-
         media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
-        media::egress::scheduler media::codec::bits
+        media::egress::scheduler
     steps:
       - uses: actions/checkout@v7
       # No shared Rust cache: target/miri must not land in the cache every
@@ -395,14 +401,24 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           RUSTFLAGS: ''
-        run: scripts/ci/require-test-filters.sh cargo +nightly miri test --lib -- $MIRI_FILTERS
+        run: scripts/ci/require-test-filters.sh cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
       - name: Run Miri over the selected modules
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           PROPTEST_CASES: '8'
           # Nightly lints must not fail the gate without a code change.
           RUSTFLAGS: ''
-        run: cargo +nightly miri test --lib -- $MIRI_FILTERS
+        run: cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
+      - name: Canonical codec bit reader selects tests
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+          RUSTFLAGS: ''
+        run: scripts/ci/require-test-filters.sh cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
+      - name: Run canonical codec bit reader under Miri
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+          RUSTFLAGS: ''
+        run: cargo +nightly miri test -p restream-core --lib codec::bits::tests
 
   kani:
     name: Kani (bounded proofs of egress primitives)
@@ -446,10 +462,9 @@ jobs:
     timeout-minutes: 60
     env:
       ASAN_FILTERS: >-
-        media::byte_queue
         media::egress::tls media::egress::backends::compio_tcp
         media::external_transcoder media::timing media::rtmp::listener
-        media::rtmp::tests media::tcp_stats runtime_info
+        media::rtmp::tests media::tcp_stats runtime_info media::mpegts::tests
       RUSTFLAGS: -Zsanitizer=address
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=0
@@ -475,11 +490,15 @@ jobs:
       - name: Every filter selects tests
         run: >
           scripts/ci/require-test-filters.sh cargo +nightly test -Zbuild-std
-          --target x86_64-unknown-linux-gnu --lib -- $ASAN_FILTERS
+          --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
       - name: Run the FFI-heavy tests under ASan
         run: >
-          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib --
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream --lib --
           $ASAN_FILTERS
+      - name: Run extracted synchronization tests under ASan
+        run: >
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p restream-sync --lib
 
   integration-build:
     name: Transport live-harness build
@@ -571,20 +590,21 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # Pushes to master and manual runs always qualify; a pull request
-          # runs it when it touches MoQ, the egress fabric, or this check.
+          # runs it for MoQ, shared core/sync dependencies, the egress fabric,
+          # or this check.
           if [[ "$EVENT_NAME" != "pull_request" || -z "$BASE_SHA" ]]; then
             echo "run=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|src/media/egress/.*|scripts/dev/moq/.*|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.scope.outputs.run == 'false' }}
         name: MoQ paths unchanged; skip MoQ interop
-        run: echo "No MoQ, egress or MoQ-interop path changed; skipping."
+        run: echo "No MoQ, shared core/sync, egress or MoQ-interop path changed; skipping."
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: actions/download-artifact@v8
         with:

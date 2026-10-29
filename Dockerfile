@@ -98,10 +98,25 @@ COPY vendor/ vendor/
 # Path workspace members: stage each manifest with a dummy lib so the warm
 # layer's workspace loads (tests/docker_build_recipe.rs enforces this).
 COPY crates/xtask/Cargo.toml crates/xtask/Cargo.toml
-RUN mkdir -p benches src crates/xtask/src \
+COPY crates/restream-core/Cargo.toml crates/restream-core/Cargo.toml
+COPY crates/restream-sync/Cargo.toml crates/restream-sync/Cargo.toml
+COPY crates/restream-mpegts/Cargo.toml crates/restream-mpegts/Cargo.toml
+COPY crates/restream-rtmp/Cargo.toml crates/restream-rtmp/Cargo.toml
+COPY crates/restream-moq/Cargo.toml crates/restream-moq/Cargo.toml
+COPY crates/restream-srt/Cargo.toml crates/restream-srt/Cargo.toml
+COPY crates/test_harness/Cargo.toml crates/test_harness/Cargo.toml
+RUN mkdir -p benches src crates/xtask/src crates/restream-core/src crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs \
-    && : > crates/xtask/src/lib.rs
+    && : > crates/xtask/src/lib.rs \
+    && : > crates/restream-core/src/lib.rs \
+    && : > crates/restream-sync/src/lib.rs \
+    && : > crates/restream-mpegts/src/lib.rs \
+    && : > crates/restream-rtmp/src/lib.rs \
+    && : > crates/restream-moq/src/lib.rs \
+    && : > crates/restream-srt/src/lib.rs \
+    && : > crates/test_harness/src/lib.rs \
+    && printf 'fn main() {}\n' > crates/test_harness/src/main.rs
 RUN RESTREAM_BUILD_PROFILE=release ./scripts/build/app-native.sh
 
 # Return to the application build stage for its runtime filesystem assembly.
@@ -113,6 +128,13 @@ FROM rust-build AS runtime-tree
 # target directory above.
 COPY src/ src/
 COPY crates/xtask/ crates/xtask/
+COPY crates/restream-core/ crates/restream-core/
+COPY crates/restream-sync/ crates/restream-sync/
+COPY crates/restream-mpegts/ crates/restream-mpegts/
+COPY crates/restream-rtmp/ crates/restream-rtmp/
+COPY crates/restream-moq/ crates/restream-moq/
+COPY crates/restream-srt/ crates/restream-srt/
+COPY crates/test_harness/ crates/test_harness/
 COPY --from=frontend-build /workspace/public public
 # COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
 # dummy sources the warm layer compiled, so Cargo would treat the warmed dummy

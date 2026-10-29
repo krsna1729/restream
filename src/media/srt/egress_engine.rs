@@ -7,37 +7,8 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-/// Maximum bytes per logical-caller message send: the SRT message payload
-/// ceiling is seven 188-byte MPEG-TS packets. Muxed TS feed units can exceed
-/// that limit, so the engine fragments each retained unit into bounded
-/// messages and sends only as many fragments as the visit budget allows.
-pub(super) const MAX_SRT_MESSAGE_PAYLOAD: usize = 1316;
-
-/// Feed units pulled per `feed.read_from` refill once `pending_units` is
-/// empty and no unit is currently being fragmented. Matches the RTMP fabric
-/// engine's `FEED_READ_BURST` (`src/media/egress/backends/rtmp.rs`): reduces
-/// how often `feed.read_from` runs (each call allocates a `Vec` and touches
-/// ring atomics) without changing the existing one-unit-fragmented-per-visit
-/// behavior below.
+pub(crate) use restream_srt::egress_engine::{MAX_SRT_MESSAGE_PAYLOAD, SrtSendResult};
 const FEED_READ_BURST: usize = 32;
-
-/// What one logical-caller send did. Produced by the shard's Owner adapter
-/// (`SrtOwners::send`) from the caller's logical state and `can_send`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SrtSendResult {
-    Accepted {
-        bytes: usize,
-    },
-    /// The caller cannot take payload right now (still connecting, or its
-    /// send window is full). Never retried in a loop: the leaf parks.
-    WouldBlock,
-    PeerClosed,
-    Failed {
-        reason: &'static str,
-        detail: String,
-        retryable: bool,
-    },
-}
 
 #[derive(Debug)]
 struct PendingSrtMessage {

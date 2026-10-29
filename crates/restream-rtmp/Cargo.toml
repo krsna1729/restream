@@ -1,0 +1,18 @@
+[package]
+name = "restream-rtmp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+restream-core = { path = "../restream-core" }
+restream-sync = { path = "../restream-sync" }
+bytes = "1.12"
+rml_rtmp = "0.8.0"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false }

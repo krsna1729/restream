@@ -20,9 +20,9 @@ page is one `git log -- <path>` away.
    launch.
 2. [Developer guide](development.md): prerequisites, first build, daily
    loop, worktrees, shared-host rules.
-3. [Architecture](architecture.md): the system at a glance, thread
-   placement, input selection, stages, recovery, dataplane invariants,
-   layering rules.
+3. [Architecture](architecture.md): the system at a glance, the
+   [workspace layout and direct package dependencies](architecture.md#workspace-layout),
+   thread placement, input selection, stages, recovery and layering rules.
 4. [Testing](testing.md): the narrowest gate for a change, proof maps,
    regression artifacts.
 5. [Backlog](backlog.md): the one list of open work.

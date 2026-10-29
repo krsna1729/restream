@@ -1,33 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VideoCodecKind {
-    H264,
-    Hevc,
-    Unknown,
-}
-
-impl VideoCodecKind {
-    pub fn from_codec_name(codec: &str) -> Self {
-        if codec.eq_ignore_ascii_case("h264") || codec.eq_ignore_ascii_case("avc") {
-            Self::H264
-        } else if codec.eq_ignore_ascii_case("h265") || codec.eq_ignore_ascii_case("hevc") {
-            Self::Hevc
-        } else {
-            Self::Unknown
-        }
-    }
-
-    pub fn is_hevc(self) -> bool {
-        matches!(self, Self::Hevc)
-    }
-
-    pub const fn as_stage_codec(self) -> Option<&'static str> {
-        match self {
-            Self::H264 => Some("h264"),
-            Self::Hevc => Some("hevc"),
-            Self::Unknown => None,
-        }
-    }
-}
+pub use restream_core::VideoCodecKind;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

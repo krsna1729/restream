@@ -594,7 +594,7 @@ other scheme is `400`:
   `20..=8000` or non-integers are `400`; see
   [SRT egress URL parameters](configuration.md#recognized-srt-egress-url-parameters).
 - `moqt://host[:port][/path][?broadcast=&ca=&insecure=&version=]` (`parse_moq_url`
-  in `src/media/moq/egress/url.rs`): the port defaults to 443. `broadcast`
+  in `crates/restream-moq/src/url.rs`): the port defaults to 443. `broadcast`
   names the broadcast (default: pipeline id), `ca` names a PEM file of extra
   trusted CAs, and `insecure=1|true|0|false` skips certificate checks.
   `version=moqt-19` or another supported MoQ ALPN offers only that version;

@@ -75,6 +75,13 @@ cargo fmt --all
 [Testing](testing.md) owns gate choice, harness modes, fixtures and
 artifacts.
 
+The [workspace map](architecture.md#workspace-layout) locates implementation
+owners and distinguishes package dependencies from runtime threads. Select
+the package that owns the relevant test, not just the changed source file:
+some protocol consumer suites still run under the root `restream` package.
+[Testing](testing.md#rust-test-suite) lists focused commands and explains
+feature-isolated `-p restream --no-default-features` invocations.
+
 ## Frontend work
 
 Edit `web/ts/` and `web/styles/input.css`. Never edit the generated

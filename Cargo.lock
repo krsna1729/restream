@@ -3197,6 +3197,12 @@ dependencies = [
  "rand 0.10.2",
  "rcgen",
  "reqwest",
+ "restream-core",
+ "restream-moq",
+ "restream-mpegts",
+ "restream-rtmp",
+ "restream-srt",
+ "restream-sync",
  "ring",
  "rml_rtmp",
  "rtrb",
@@ -3226,6 +3232,81 @@ dependencies = [
  "web-transport-proto",
  "web-transport-trait",
  "webpki-roots",
+]
+
+[[package]]
+name = "restream-core"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "memchr",
+ "serde",
+]
+
+[[package]]
+name = "restream-moq"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "compio",
+ "hang",
+ "moq-loc",
+ "moq-net",
+ "percent-encoding",
+ "rand 0.10.2",
+ "reqwest",
+ "restream-core",
+ "sha2 0.11.1",
+ "tokio-rustls",
+ "webpki-roots",
+]
+
+[[package]]
+name = "restream-mpegts"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "memchr",
+ "proptest",
+ "restream-core",
+ "tracing",
+]
+
+[[package]]
+name = "restream-rtmp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "percent-encoding",
+ "reqwest",
+ "restream-core",
+ "restream-sync",
+ "rml_rtmp",
+]
+
+[[package]]
+name = "restream-srt"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "percent-encoding",
+ "restream-sync",
+ "srt-proto",
+ "srt-transport",
+]
+
+[[package]]
+name = "restream-sync"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "proptest",
+ "restream-core",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4126,6 +4207,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_harness"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "compio",
+ "flume",
+ "futures-util",
+ "hang",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "moq-msf",
+ "moq-net",
+ "percent-encoding",
+ "proptest",
+ "rand 0.10.2",
+ "rcgen",
+ "reqwest",
+ "restream",
+ "rml_rtmp",
+ "rtrb",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "srt-proto",
+ "srt-transport",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "thin-cell"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4257,6 +4376,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

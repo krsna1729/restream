@@ -9,22 +9,36 @@ repository = "https://github.com/krsna1729/restream"
 
 [workspace]
 resolver = "3"
-members = ["crates/xtask"]
+members = [
+    "crates/xtask",
+    "crates/restream-core",
+    "crates/restream-sync",
+    "crates/restream-mpegts",
+    "crates/restream-rtmp",
+    "crates/restream-moq",
+    "crates/restream-srt",
+    "crates/test_harness",
+]
+default-members = [".", "crates/*"]
 
-[lints.rust]
+[workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
 unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+result_large_err = "allow"
+chunks_exact_to_as_chunks = "allow"
 
+[lints]
+workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
 # The agent plane and its approval-gated execution back the control room's
-# Change Studio, so every build carries them; `--no-default-features` removes
-# them (the lower MCP layers are proven to compile without them).
+# Change Studio. `-p restream --no-default-features` removes them without
+# workspace consumers re-enabling defaults through feature unification.
 default = ["agent-execution"]
 agent-plane = []
 agent-execution = ["agent-plane"]
@@ -44,6 +58,12 @@ wi3-owner-bench = ["srt-transport/bench-internals"]
 wi37-shard-bench = []
 
 [dependencies]
+restream-core = { path = "crates/restream-core" }
+restream-sync = { path = "crates/restream-sync" }
+restream-mpegts = { path = "crates/restream-mpegts" }
+restream-rtmp = { path = "crates/restream-rtmp" }
+restream-moq = { path = "crates/restream-moq" }
+restream-srt = { path = "crates/restream-srt" }
 httparse = "1.10"
 tokio = { version = "1.39", features = [
     "fs", "io-util", "macros", "net", "process",

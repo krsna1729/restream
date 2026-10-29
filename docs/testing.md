@@ -61,15 +61,15 @@ flowchart LR
 | `frontend-e2e` (Frontend app E2E) | `npm run test:e2e` in Chromium | after `frontend` |
 | `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast`, `cargo test --test egress_scheduler_shape` | every run, in parallel |
 | `concurrency-contract` (Concurrency live lifecycle proof) | `cargo xtask concurrency contract` with `--no-netns` | `master` only |
-| `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; on pull requests only when the diff touches `src/media/`, `src/lib.rs`, `fuzz/`, `vendor/`, the Cargo manifests, the toolchain or `ci.yml` |
-| `miri` (Miri) | `cargo +nightly miri test --lib` over `MIRI_FILTERS` | after `test` |
+| `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
+| `miri` (Miri) | selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
 | `kani` (Kani) | `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
-| `asan` (AddressSanitizer) | `cargo +nightly test -Zbuild-std` over `ASAN_FILTERS` | after `test` |
+| `asan` (AddressSanitizer) | selected root FFI/syscall tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
 | `integration-build` (Transport live-harness build) | `cargo xtask build-bench`; uploads `restream` and `test_harness` | after `test` |
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
-| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests that touch `src/**moq**`, `src/media/egress/`, `scripts/dev/moq/`, `test/e2e/moq/` or `ci.yml` |
-| `docker-runtime-smoke` | `scripts/check/container-smoke.sh` on a source-built image | when the diff touches the Dockerfile, release/build scripts, `distribution/`, `tests/seccomp_profile.rs`, RTMP, SRT or egress sources |
+| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress, `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
+| `docker-runtime-smoke` | `scripts/check/container-smoke.sh` on a source-built image | Dockerfile, release/build scripts, `distribution/`, seccomp tests, RTMP/SRT/egress, production `crates/restream-*/` or harness changes |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
 a nightly container smoke and the full harness shard matrix. Nightly and
@@ -81,11 +81,50 @@ release both read that matrix from `scripts/lib/release-shards.sh`; the PR and
 ```sh
 cargo xtask test-hygiene        # the CI gate: full suite plus noise scan
 cargo xtask fixture-discipline  # fixture-first media discipline
-cargo test                      # full suite without the noise scan
+cargo test                      # all workspace default members, including extracted crates
 ```
+
+Feature-isolation commands must select the product explicitly, for example
+`cargo test -p restream --no-default-features --test api -- agent::`.
+Selecting all default workspace members also selects the harness, whose
+dependency enables the product's default features through Cargo feature
+unification. CI requires both compiled-out agent API tests to be discoverable
+before running the opt-out tests; enabled-agent tests are not equivalent proof.
 
 Passing runs stay quiet. Do not land compiler warnings, panic text, FFmpeg
 probe chatter or other "expected noise". Fix or suppress it in the helper.
+
+Canonical codec implementations live in `crates/restream-core`; RTMP framing
+and session helpers live in `crates/restream-rtmp`. Root facades import these
+implementations, so retained parser proptests, fuzz entrypoints and conversion
+benchmarks exercise the shipped functions rather than a second copy.
+
+Implementation ownership and test-package selection are not identical:
+
+| Changed implementation | Focused owner or consumer suite |
+|---|---|
+| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
+| `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
+| `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
+| `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
+| `crates/restream-mpegts/src/` | `cargo test -p restream --lib media::mpegts::tests`; the extracted package has no unit suite of its own |
+| `crates/restream-rtmp/src/` | `cargo test -p restream --lib media::rtmp::tests`; codec consumer tests also cover the shared framing helpers |
+| `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream --lib media::srt::` for retained consumers |
+| `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
+
+For extracted-library source and manifest changes, `cargo xtask gates`
+recommends the owning unit suite plus its retained root consumer suite.
+MPEG-TS selects only its root suite because its extracted package has no unit
+tests. Owner suites run unfiltered rather than deriving a possibly empty
+filter from the implementation file name.
+
+Every recommended focused test command first runs
+`scripts/ci/require-test-filters.sh` and chains the actual test run with `&&`.
+An empty selection fails instead of reporting a successful zero-test run.
+`cargo test --workspace` remains the CI-wide coverage gate.
+The package graph and runtime seams are in
+[Workspace layout](architecture.md#workspace-layout).
+
 
 ### Parser fuzz targets
 
@@ -135,17 +174,22 @@ touch raw syscall and FFI memory.
 
 | CI job | Modules | Why |
 |---|---|---|
-| `miri` | `media::egress::tls::ktls::tests::ancillary`, `egress::leaf_arena`, `egress::scheduler`, `codec::bits` | the kTLS cmsg parser is project `unsafe`; the rest run fast under Miri and check std and dependency use |
-| `asan` | `media::byte_queue`, `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests`, `tcp_stats`, `runtime_info` | kTLS, socket, SQLite/glibc FFI and child-pipe memory; leak detection off |
+| `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
+| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts::tests`, `runtime_info`; separately the `restream-sync` library target | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS consumers and synchronization; leak detection off |
 
-Both jobs first run `scripts/ci/require-test-filters.sh`. It fails when a
-filter selects no test, so a renamed module cannot drop out silently.
+The named root filters and core bit-reader filter first pass
+`scripts/ci/require-test-filters.sh`. It fails when a filter selects no test.
+The root MPEG-TS filter exercises the retained consumer suite against the
+extracted mux/demux implementation under ASan; it is guarded like every other
+named root filter. The synchronization package's unit suite runs separately.
 
 ```sh
 MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
-  cargo +nightly miri test --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
+  cargo +nightly miri test -p restream --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
+MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
+  cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
 RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
-  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --lib -- media::byte_queue
+  cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream-sync --lib -- byte_queue::tests
 ```
 
 `ring_buffer` and `egress::journal` are not in Miri: they are too slow there

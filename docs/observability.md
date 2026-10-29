@@ -790,7 +790,7 @@ history by those fields, not by message text.
   counters do not prove what a receiver got.
 - `RingBuffer::fill_and_capacity()` reports occupancy from the slowest live
   reader, capped at capacity.
-- `MemoryQueue` (`src/media/byte_queue.rs`) tracks high-water bytes and blocked
+- `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`) tracks high-water bytes and blocked
   writes internally, but no API or graph snapshot exposes them.
 - HLS and recording share the TS packet feeder. An active task or token does
   not prove those mux paths are healthy.

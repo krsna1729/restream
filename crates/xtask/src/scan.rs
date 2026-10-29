@@ -93,35 +93,7 @@ pub(crate) fn fixture_discipline() -> StepResult {
     cargo(&["test", "--test", "fixtures", "--", "--nocapture"])?;
 
     eprintln!("[fixture-discipline] scanning test and benchmark code for inline media generators");
-    let listed = Command::new("git")
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-        ])
-        .args(["src", "tests", "test", "benches"])
-        .output()
-        .map_err(|error| format!("cannot run git ls-files: {error}"))?;
-    if !listed.status.success() {
-        return Err(format!("git ls-files failed ({})", listed.status));
-    }
-    let files: Vec<PathBuf> = listed
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|raw| !raw.is_empty())
-        .map(|raw| PathBuf::from(String::from_utf8_lossy(raw).into_owned()))
-        .filter(|path| scanned_for_generators(path))
-        .filter(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
-        .collect();
-    let hits = grep_files(&files, |line| {
-        let line = line.to_ascii_lowercase();
-        INLINE_GENERATORS
-            .iter()
-            .any(|pattern| line.contains(pattern))
-    });
+    let hits = inline_generator_hits(Path::new("."))?;
     if !hits.is_empty() {
         for hit in &hits {
             println!("{hit}");
@@ -138,11 +110,54 @@ generation workflow and document why the committed fixture set is insufficient."
     Ok(())
 }
 
+/// Discover tracked and untracked test-facing files through Git, then scan them.
+fn inline_generator_hits(repo_root: &Path) -> Result<Vec<Hit>, String> {
+    let listed = Command::new("git")
+        .current_dir(repo_root)
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+        ])
+        .args(["src", "tests", "test", "benches", "crates"])
+        .output()
+        .map_err(|error| format!("cannot run git ls-files: {error}"))?;
+    if !listed.status.success() {
+        return Err(format!("git ls-files failed ({})", listed.status));
+    }
+    let files: Vec<PathBuf> = listed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| PathBuf::from(String::from_utf8_lossy(raw).into_owned()))
+        .filter(|path| scanned_for_generators(path))
+        .map(|path| repo_root.join(path))
+        .filter(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+        .collect();
+    let mut hits = grep_files(&files, |line| {
+        let line = line.to_ascii_lowercase();
+        INLINE_GENERATORS
+            .iter()
+            .any(|pattern| line.contains(pattern))
+    });
+    for hit in &mut hits {
+        hit.path = hit
+            .path
+            .strip_prefix(repo_root)
+            .expect("scanned paths are under the repository root")
+            .to_path_buf();
+    }
+    Ok(hits)
+}
+
 /// Code is scanned; the committed assets under `test/fixtures/` are not. They
 /// are the media the rule asks for, and some are text that names generators
 /// without running them (an FFmpeg `-filters` listing includes `testsrc`).
 fn scanned_for_generators(path: &Path) -> bool {
-    !path.starts_with("test/fixtures")
+    !path.starts_with("test/fixtures") && !path.starts_with("crates/xtask")
 }
 
 /// Output that must not appear in a passing test run.
@@ -248,6 +263,91 @@ mod tests {
         assert!(!scanned_for_generators(Path::new(
             "test/fixtures/ffmpeg/btbn-n8.1.3/filters.txt"
         )));
+    }
+
+    #[test]
+    fn generator_scan_covers_test_harness_and_detects_inline_generators() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct TempRepo(PathBuf);
+        impl Drop for TempRepo {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).expect("remove temporary Git repository");
+            }
+        }
+
+        static NEXT_REPO: AtomicU64 = AtomicU64::new(0);
+        let repo = loop {
+            let path = std::env::temp_dir().join(format!(
+                "restream-generator-scan-{}-{}",
+                std::process::id(),
+                NEXT_REPO.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => break TempRepo(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create temporary Git repository: {error}"),
+            }
+        };
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&repo.0)
+                .args(args)
+                .output()
+                .expect("run Git in temporary repository");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+
+        let forbidden_line = "let _ = \"-f lavfi -i testsrc\";";
+        for path in [
+            "test/fixtures/ffmpeg/filters.txt",
+            "crates/xtask/src/scan.rs",
+        ] {
+            let path = repo.0.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, forbidden_line).unwrap();
+        }
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=Fixture Scan Test",
+            "-c",
+            "user.email=fixture-scan@example.invalid",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "Commit permitted fixture and scanner text",
+        ]);
+        assert!(inline_generator_hits(&repo.0).unwrap().is_empty());
+
+        let forbidden_paths = [
+            "crates/test_harness/src/test_harness/suite.rs",
+            "crates/restream-rtmp/src/flv.rs",
+        ];
+        for path in forbidden_paths {
+            let path = repo.0.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, format!("// test input\n{forbidden_line}\n")).unwrap();
+        }
+        let hits = inline_generator_hits(&repo.0).unwrap();
+        assert_eq!(hits.len(), forbidden_paths.len());
+        for path in forbidden_paths {
+            let hit = hits
+                .iter()
+                .find(|hit| hit.path == Path::new(path))
+                .unwrap_or_else(|| panic!("Git discovery missed {path}"));
+            assert_eq!(hit.line, 2);
+            assert_eq!(hit.text, forbidden_line);
+        }
     }
 
     #[test]

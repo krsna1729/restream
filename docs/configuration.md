@@ -633,5 +633,5 @@ None of these change a production server.
 | `RESTREAM_WI37_SRT_SHARDS` | `src/config.rs`, only with the `wi37-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
 | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `src/media/srt/knobs.rs` | Harness SRT sink receive budget |
 | `RESTREAM_BUILD_GIT_COMMIT` (else `GITHUB_SHA`), `RESTREAM_BUILD_TIMESTAMP` (else `SOURCE_DATE_EPOCH`) | `build.rs` | Commit and timestamp stamped into the binary |
-| `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `src/bin/test_harness/` | Harness runs; see [testing](testing.md) |
+| `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `crates/test_harness/` | Harness runs; see [testing](testing.md) |
 | Release and container variables (`RESTREAM_BUILD_*`, `RESTREAM_RELEASE_*`, `RESTREAM_CONTAINER_*`, `RESTREAM_SBOM_PATH`, ...) | `scripts/` | Build and release scripts; documented in each script's usage text |

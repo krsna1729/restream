@@ -1,8 +1,9 @@
 //! Binary entry point — delegates to `restream::run_app()`.
-//! Tokio owns application and control async work (API, database, pipeline
-//! lifecycle, telemetry). Production SRT and RTMP/RTMPS transport I/O runs on
-//! dedicated Compio/io_uring owner threads; blocking FFmpeg/codec work runs on
-//! dedicated OS threads or subprocesses (see `src/lib.rs` docs).
+//! CONTROL Tokio owns the API, database and lifecycle; a separate MEDIA Tokio
+//! runtime runs container and shared-stage work. Production RTMP, SRT and MoQ
+//! transport stays on Compio owners. Blocking pipes and files use dedicated OS
+//! threads; codecs run in FFmpeg children. See `docs/architecture.md` and
+//! `docs/runtime-crossings.md` for ownership and bounded crossings.
 
 const TOKIO_THREAD_NAME: &str = "restream-tokio";
 

@@ -155,7 +155,17 @@ fn api_contract() -> StepResult {
     )?;
     run("npm", &["run", "build:frontend"], &[])?;
     cargo(&["test", "--test", "api", "--", "--nocapture"])?;
-    cargo(&["build", "--bin", "restream", "--bin", "test_harness"])?;
+    cargo(&[
+        "build",
+        "-p",
+        "restream",
+        "--bin",
+        "restream",
+        "-p",
+        "test_harness",
+        "--bin",
+        "test_harness",
+    ])?;
     run(
         "target/debug/test_harness",
         &["api-smoke", "--no-netns"],

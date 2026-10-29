@@ -47,7 +47,7 @@ fn a_faulted_family_is_disposed_once_and_stays_closed() {
         "a disposed family reports no runnable work"
     );
 
-    let request = SrtFabricEgressConnectSpec::from_url(&url_for(sink.addr), Duration::from_secs(5))
+    let request = egress_connect_spec(&url_for(sink.addr), Duration::from_secs(5))
         .connect_request(&[sink.addr])
         .expect("a single peer builds a direct request");
     let refused = harness
@@ -100,7 +100,7 @@ fn a_pending_disposal_keeps_the_shard_driving_and_is_collected() {
         "a pending disposal bounds the shard's park by its retry deadline"
     );
 
-    let request = SrtFabricEgressConnectSpec::from_url(&url_for(sink.addr), Duration::from_secs(5))
+    let request = egress_connect_spec(&url_for(sink.addr), Duration::from_secs(5))
         .connect_request(&[sink.addr])
         .expect("a single peer builds a direct request");
     let refused = harness
@@ -125,7 +125,7 @@ fn a_pending_disposal_keeps_the_shard_driving_and_is_collected() {
         "a collected disposal leaves nothing for the shard to drive"
     );
 
-    let request = SrtFabricEgressConnectSpec::from_url(&url_for(sink.addr), Duration::from_secs(5))
+    let request = egress_connect_spec(&url_for(sink.addr), Duration::from_secs(5))
         .connect_request(&[sink.addr])
         .expect("a single peer builds a direct request");
     let refused = harness

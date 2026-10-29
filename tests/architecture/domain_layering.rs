@@ -16,6 +16,10 @@ fn production_domain_dependencies_are_contract_only() {
         }
         let source = std::fs::read_to_string(&path).expect("domain source should be UTF-8");
         let production = source.split("#[cfg(test)]").next().unwrap_or(&source);
+        // This neutral value descriptor is shared by domain output selection
+        // and the wire codecs. Only its re-export is a contract dependency;
+        // other core parser/runtime imports remain forbidden below.
+        let dependencies_source = production.replace("pub use restream_core::VideoCodecKind;", "");
         let relative = path
             .strip_prefix(manifest_dir)
             .expect("domain source should be inside the crate");
@@ -39,7 +43,7 @@ fn production_domain_dependencies_are_contract_only() {
             if matches!(dependency.as_str(), "serde" | "url") {
                 continue;
             }
-            if uses_dependency(production, dependency) {
+            if uses_dependency(&dependencies_source, dependency) {
                 offenders.push(format!(
                     "{} uses non-contract dependency {dependency}",
                     relative.display()
@@ -50,7 +54,7 @@ fn production_domain_dependencies_are_contract_only() {
 
     assert!(
         offenders.is_empty(),
-        "production domain code may depend only on domain-owned contracts, std, serde, and URL parsing: {offenders:#?}"
+        "production domain code may depend only on domain-owned contracts, the shared VideoCodecKind descriptor, std, serde, and URL parsing: {offenders:#?}"
     );
 }
 

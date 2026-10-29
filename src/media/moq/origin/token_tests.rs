@@ -1,17 +1,7 @@
-use super::*;
+use restream_moq::token::*;
 
 const KEY: TokenKey = [7; 32];
 const NOW: u64 = 1_800_000_000;
-
-#[test]
-fn hmac_matches_rfc_4231_case_2() {
-    let mac = hmac_sha256(b"Jefe", &[b"what do ya ", b"want for nothing?"]);
-    let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
-    assert_eq!(
-        hex,
-        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-    );
-}
 
 #[test]
 fn a_minted_token_admits_its_pipeline_until_it_expires() {

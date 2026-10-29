@@ -1,10 +1,13 @@
 #[test]
 fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
     for (name, source) in [
-        ("media/packet.rs", include_str!("../../src/media/packet.rs")),
         (
-            "media/metadata.rs",
-            include_str!("../../src/media/metadata.rs"),
+            "restream-core/lib.rs",
+            include_str!("../../crates/restream-core/src/lib.rs"),
+        ),
+        (
+            "restream-core/metadata.rs",
+            include_str!("../../crates/restream-core/src/metadata.rs"),
         ),
     ] {
         for forbidden in [
@@ -26,7 +29,9 @@ fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
 
 #[test]
 fn ring_metadata_depends_on_metadata_owner_instead_of_engine() {
-    let ring_buffer = include_str!("../../src/media/ring_buffer.rs");
+    let ring_buffer = include_str!("../../crates/restream-sync/src/ring_buffer.rs");
+    assert!(!ring_buffer.contains("crate::media::engine"));
     assert!(!ring_buffer.contains("crate::media::engine::AudioMeta"));
-    assert!(ring_buffer.contains("crate::media::metadata::AudioMeta"));
+    assert!(ring_buffer.contains("restream_core"));
+    assert!(ring_buffer.contains("AudioMeta"));
 }

@@ -26,17 +26,17 @@ const RUST_CLASSES: [&str; 7] = [
 /// including `/`, as in a shell `case` pattern.
 const CLASSIFICATION: &[(&str, &[&str])] = &[
     ("build-script", &["build.rs"]),
-    ("tooling", &["crates/*.rs"]),
-    ("benchmark", &["benches/*.rs"]),
-    ("integration-test", &["tests/*.rs"]),
     (
         "harness",
         &[
-            "src/bin/test_harness.rs",
-            "src/bin/test_harness/*.rs",
+            "crates/test_harness/src/main.rs",
+            "crates/test_harness/src/test_harness/*.rs",
             "test/harness/*.rs",
         ],
     ),
+    ("tooling", &["crates/xtask/*.rs"]),
+    ("benchmark", &["benches/*.rs"]),
+    ("integration-test", &["tests/*.rs"]),
     (
         "dedicated-test",
         &[
@@ -47,9 +47,16 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
             "src/*/tests.rs",
             "src/*_test.rs",
             "src/*_tests.rs",
+            "crates/*/tests/*.rs",
+            "crates/*_test/*.rs",
+            "crates/*_tests/*.rs",
+            "crates/*/test.rs",
+            "crates/*/tests.rs",
+            "crates/*_test.rs",
+            "crates/*_tests.rs",
         ],
     ),
-    ("production", &["src/*.rs"]),
+    ("production", &["src/*.rs", "crates/restream-*/*.rs"]),
     ("frontend-test", &["test/*"]),
     ("frontend-production", &["web/ts/*"]),
 ];
@@ -63,7 +70,7 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "src/lib.rs",
     "src/ffmpeg_binary.rs",
     "src/planner/",
-    "src/bin/test_harness",
+    "crates/test_harness",
     "src/bin/restream-mcp.rs",
     "tests/",
     "benches/",
@@ -80,30 +87,42 @@ const API_STAGE_STARTS: &[&str] = &[
     "external_transcoder",
 ];
 
+const PRODUCTION_ROOTS: &[&str] = &[
+    "src",
+    "crates/restream-core",
+    "crates/restream-sync",
+    "crates/restream-mpegts",
+    "crates/restream-rtmp",
+    "crates/restream-moq",
+    "crates/restream-srt",
+];
+
 pub(crate) fn run() -> StepResult {
     println!("=== Restream Source Audit ===");
     let mut failed = false;
+    let production_files = files_under(PRODUCTION_ROOTS)?;
+    let media_files: Vec<_> = production_files
+        .iter()
+        .filter(|path| path.starts_with("src/media") || path.starts_with("crates"))
+        .cloned()
+        .collect();
 
     failed |= report(
-        "forbidden imports in src/media/",
-        "Media modules must not import api types",
+        "forbidden imports in src/media/ and production crates",
+        "Media and production modules must not import api types",
         "No forbidden imports found.",
-        grep_files(&files_under(&["src/media"])?, |line| {
-            line.contains("use crate::api")
-        }),
+        grep_files(&media_files, |line| line.contains("use crate::api")),
     );
 
     failed |= audit_file_sizes()?;
 
-    let env_hits = grep_files(&files_under(&["src"])?, |line| {
-        line.contains("std::env::var")
-    })
-    .into_iter()
-    .filter(|hit| {
-        let row = hit.to_string();
-        !ENV_VAR_OWNERS.iter().any(|owner| row.contains(owner))
-    })
-    .collect();
+    let env_hits = grep_files(&production_files, |line| line.contains("std::env::var"))
+        .into_iter()
+        .filter(|hit| {
+            let row = hit.to_string();
+            !ENV_VAR_OWNERS.iter().any(|owner| row.contains(owner))
+        })
+        .collect();
     failed |= report(
         "inline std::env::var usage outside src/config.rs",
         "Found raw std::env::var usage outside approved config/test harness owners",
@@ -124,8 +143,8 @@ pub(crate) fn run() -> StepResult {
     failed |= report(
         "module-level dead-code suppression",
         "module-level #![allow(dead_code)] hides unused and duplicated code; annotate the specific item instead",
-        "No module-level dead-code suppression in src/.",
-        grep_files(&files_under(&["src"])?, |line| {
+        "No module-level dead-code suppression in src/ or production crates.",
+        grep_files(&production_files, |line| {
             line.starts_with("#![allow(dead_code)]")
         }),
     );
@@ -135,7 +154,10 @@ pub(crate) fn run() -> StepResult {
         "Harness reads a non-schema output status field named state",
         "Harness does not read the removed output status state field.",
         grep_files(
-            &files_under(&["src/bin/test_harness", "src/bin/test_harness.rs"])?,
+            &files_under(&[
+                "crates/test_harness/src/main.rs",
+                "crates/test_harness/src/test_harness",
+            ])?,
             |line| line.contains("[\"state\"]"),
         ),
     );
@@ -286,8 +308,11 @@ mod tests {
             ("build.rs", "build-script"),
             ("benches/api_health.rs", "benchmark"),
             ("tests/api/health.rs", "integration-test"),
-            ("src/bin/test_harness.rs", "harness"),
-            ("src/bin/test_harness/modes/fault.rs", "harness"),
+            ("crates/test_harness/src/main.rs", "harness"),
+            (
+                "crates/test_harness/src/test_harness/modes/fault.rs",
+                "harness",
+            ),
             ("src/media/engine_tests.rs", "dedicated-test"),
             ("src/media/engine_tests/egress_fabric.rs", "dedicated-test"),
             ("src/api/tests.rs", "dedicated-test"),
@@ -295,6 +320,8 @@ mod tests {
             ("test/frontend/x.test.mjs", "frontend-test"),
             ("web/ts/core/api.ts", "frontend-production"),
             ("crates/xtask/src/main.rs", "tooling"),
+            ("crates/restream-core/src/lib.rs", "production"),
+            ("crates/restream-sync/src/byte_queue.rs", "production"),
         ] {
             assert_eq!(classify(path), class, "{path}");
         }

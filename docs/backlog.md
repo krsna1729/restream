@@ -26,6 +26,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
+- [Q-105 shell scripts to xtask](#q-105-tooling-opus-consolidate-43-of-46-shell-scripts-into-cratesxtask)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -38,7 +39,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - Goal: explain the historical ~70 MB RSS growth of `fault.srt-output-stall`'s
   frozen-destination case (then a plateau), then remove the cause or
   recalibrate the 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from that attribution.
-- Files: `src/bin/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
+- Files: `crates/test_harness/src/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
   in `src/media/egress/backends/srt*.rs`.
 - Context: current runs pass well under the gate and the opt-in attribution
   census does not reproduce the old growth. Closing needs allocation stacks,
@@ -50,7 +51,7 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
 - Goal: SRT capacity rungs measure Restream, not the receiver.
 - Context: with the two-Owner `SO_REUSEPORT` harness sink
-  (`src/bin/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
+  (`crates/test_harness/src/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
   repeats. The failing repeat had 14 destinations at zero delivery and 5 leaves
   closed by the plain stall sweep (not shard saturation); kernel drops
   concentrated on one reuseport member per port. Hypothesis, unproven: one
@@ -201,7 +202,7 @@ the [assurance roadmap](assurance-roadmap.md).
   - the catalog emits `channels`/`clockrate` (MSF: `timescale`,
     `channelConfig`) and `ToStream` accepts only `avc3`/`hev1`, not
     Restream's `avc1`/`hvc1`.
-- Files: `src/bin/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
+- Files: `crates/test_harness/src/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
   diagnostic-only; `moq-dev-interop --ietf` is the IETF gate.
 - Gates: real egress and forwarded-ingest read-back with H.264/AAC, monotonic
   timestamps and frame counts against an unmodified upstream release; then
@@ -241,3 +242,68 @@ the [assurance roadmap](assurance-roadmap.md).
   `-a53cc` fix) still keeps every cue; the transport harness and the HEVC
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
+
+### Q-105 [tooling] [opus] Consolidate 43 of 46 shell scripts into crates/xtask
+- Scope: **a separate PR after #436**. Keep the existing TypeScript dashboard,
+  Node/npm build and browser tests; no frontend rewrite or repository split.
+  Replace the 43 non-bootstrap `.sh` files in the current 46-file inventory
+  with Rust-owned workflows. Delete a script only after migrating its behavior,
+  callers and regression coverage, not because it looks like a wrapper.
+- Retain exactly these pre-Rust entrypoints:
+  `scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh`, and
+  `scripts/ci/install-system-deps.sh`. Make them usable without a compiler or
+  dependencies on removed shell libraries; preserve the runtime-only installer.
+- Implementation checklist (module names are ownership suggestions, not a
+  requirement to build a new framework):
+  - [ ] `harness`: migrate `scripts/harness/{run,media-validation,parallel-fast-breadth,
+    restream-pinned,restream-segregated,frontend-e2e}.sh`. Reuse existing bench
+    builds and the harness catalog. Preserve stale-binary checks, argument/env
+    forwarding, CPU affinity, three independent parallel port ranges, per-group
+    artifacts, waits, failure aggregation and merged reports.
+  - [ ] `release` and `qualify`: migrate all eight `scripts/release/*.sh`
+    workflows and `scripts/build/{app-native,emit-sbom}.sh`. Preserve version
+    validation, clean-tree/provenance checks, role-specific archives, checksums,
+    SBOM/compliance payloads, image builds/publishing, shard selection, dry-run
+    behavior and failure exits. Reuse `build-bench`/`build-release`, not a second
+    build convention.
+  - [ ] Shared helpers: absorb `scripts/lib/{common,release-common,
+    release-shards,debian-packages}.sh` into the owners above and setup code.
+    Keep package and shard definitions single-sourced for retained bootstrap
+    entrypoints, CI and Docker; do not require Cargo to install Cargo.
+  - [ ] `worktree`: migrate `scripts/agent/worktree.sh` and port
+    `scripts/check/agent-worktree-frontend-deps.sh` into Rust regression tests.
+    Preserve destination-owned cache copies, subset/incremental selection,
+    stale/corrupted frontend cache rejection, environment exports, dry runs,
+    safe cleanup and unrelated worktree/process protection.
+  - [ ] `container`: migrate `scripts/check/{container-smoke,
+    container-restream-shim}.sh` and `scripts/ci/{run-in-harness-runtime,
+    run-harness-shard-in-runtime}.sh`. Preserve testing of the shipped image,
+    non-root/host-network options, forwarded environment, TERM/INT forwarding,
+    exit status, label-based cleanup and the SIGKILL cleanup backstop. If a
+    harness requires an executable path, use the built Rust executable rather
+    than assuming `RESTREAM_BIN` accepts a command plus arguments.
+  - [ ] Qualification: migrate `scripts/check/{release-artifact-smoke,
+    release-evidence}.sh` and `scripts/ci/require-test-filters.sh`, retaining their
+    validation semantics and regression cases.
+  - [ ] Setup/fetch: migrate `scripts/dev/{install-git-hooks,
+    refresh-docker-seccomp,harness-host-prereqs,prepare}.sh`,
+    `scripts/dev/moq/{fetch-mediamtx,fetch-moq-dev,build-moxygen}.sh`, and
+    `scripts/dev/frontend/{compile-for-node,node-tests}.sh`. Preserve pinned
+    downloads/verification, explicit privilege boundaries, host check versus
+    mutation modes, and frontend command behavior. Keep Git's executable hook
+    entrypoint minimal (or install a Rust hook executable); `gates.rs` alone is
+    not a Git hook.
+  - [ ] Fixtures/deployment: migrate `scripts/fixtures/{generate-bench-fixtures,
+    generate-msr-1080p-fixture}.sh`, `scripts/deploy/install-systemd-service.sh`,
+    `scripts/native/cgroup-wrap.sh`, and `fuzz/seed-corpus.sh`. Keep generation
+    explicit and checked-in-fixture consumers unchanged. Preserve resource
+    limits, service permissions and fuzz corpus layout.
+  - [ ] Update every caller in workflows, Dockerfile, npm commands, Rust
+    tooling/harness, docs and agent guidance; remove obsolete shell paths with
+    no permanent compatibility shims.
+- Gates: focused behavior tests and executable smoke of each migrated command,
+  including error exits and child cleanup; equivalent artifact/catalog outputs;
+  clean-checkout CI/container preparation; worktree cache regression tests;
+  retained bootstrap works without Rust. Run broad qualification in CI, not as
+  an unbounded local matrix. No claim that invoking FFmpeg, Docker, npm, Git,
+  CMake or OS package managers from Rust removes those external dependencies.

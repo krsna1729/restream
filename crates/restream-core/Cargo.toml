@@ -1,0 +1,15 @@
+[package]
+name = "restream-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+memchr = "2.7"

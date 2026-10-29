@@ -1,0 +1,25 @@
+[package]
+name = "restream-moq"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+restream-core = { path = "../restream-core" }
+bytes = "1.12"
+base64 = "0.23"
+sha2 = "0.11"
+hang = "=0.21.16"
+moq-net = { version = "=0.3.15", features = ["unsend"] }
+compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "ring", "io-compat"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rand = "0.10"
+webpki-roots = "1.0"
+moq-loc = "=0.2.24"

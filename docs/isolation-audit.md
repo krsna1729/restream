@@ -71,16 +71,16 @@ the RTMP admission deadline, lock poisoning, the `ts_demux` fuzz target).
 - **F6 (open). Untrusted-byte parsers must not index, overflow or unwrap.**
   Fix: convert module by module to checked forms and deny the lints there
   (see [compile-time guards](#compile-time-guards)). Converted modules carry
-  the `deny` attribute: `rtmp/flv.rs`, `rtmp/ingest.rs`,
-  `rtmp/ingest_media.rs`, `rtmp/timestamps.rs`,
-  `rtmp/ingest/parser_budget.rs`, `rtmp/egress_packets.rs`,
-  `rtmp/egress_payload_cache.rs`, `rtmp/egress_engine.rs`,
-  `mpegts/demux.rs`, `mpegts_probe.rs`,
-  `codec/{bits, h264_sps, video, aac, enhanced_rtmp_hevc}`,
-  `hls/fmp4/codec.rs`, `egress/http1.rs`, `ingest_publisher/fmp4`,
-  `hls_ingest/playlist.rs`, `moq/media.rs` and
-  `moq/ingest/{media,cmaf}.rs`. The latter HLS and MoQ paths are also fuzzed
-  by `hls_playlist` and `moq_ingest`.
+  the `deny` attribute. Extracted implementation owners are
+  `crates/restream-rtmp/src/{flv,timestamps,parser_budget,egress_packets,egress_payload_cache,egress_engine}.rs`,
+  `crates/restream-mpegts/src/{demux,probe}.rs`,
+  `crates/restream-core/src/codec/` and `crates/restream-moq/src/media.rs`.
+  Remaining application implementations include
+  `src/media/rtmp/{ingest,ingest_media}.rs`,
+  `src/media/hls/fmp4/codec.rs`, `src/media/egress/http1.rs`,
+  `src/media/ingest_publisher/fmp4/`, `src/media/hls_ingest/playlist.rs` and
+  `src/media/moq/ingest/{media,cmaf}.rs`. The HLS playlist and MoQ ingest paths
+  are also fuzzed by `hls_playlist` and `moq_ingest`.
 - **F7 (decided: off). Release builds wrap on integer overflow.** Global
   `overflow-checks` cost measurable CPU on the SRT ingest hot path and gained
   no isolation. Parsers of untrusted bytes deny

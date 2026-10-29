@@ -88,7 +88,7 @@ the ownership model was broken.
 | `fault.egress-retry` | RTMP and SRT dead sinks show `retrying`, then `failed` when the retry budget runs out | `contract` |
 | `fault.output-stall` | a connected RTMP sink that stops draining shows `stalled` in output status and health | `contract` |
 | `recovery` | hung HLS PUT destinations time out and recover; rapid SRT publisher replacement; repeated RTMP/SRT sink flaps show as recovered but unstable; a killed transcoder FFmpeg is retried from a new stage process | `contract` |
-| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `src/bin/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
+| `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `crates/test_harness/src/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
 
 srt-rs exposes no hook for an application-unread receive buffer, so
 `fault.srt-output-stall` does not claim that backpressure shape.
@@ -102,7 +102,7 @@ cargo xtask concurrency contract   # CI: concurrency-contract, master only
 
 | Step | `fast` | `contract` |
 |---|---|---|
-| Process-lifecycle guard over `src/bin/test_harness.rs` (every spawn armed for kill-and-wait) | — | yes |
+| Process-lifecycle guard over `crates/test_harness/src/main.rs` (every spawn armed for kill-and-wait) | — | yes |
 | All loom models | yes | yes |
 | `COMMON_TESTS`: focused API, db, lib, proptest and transcoder tests | yes | yes |
 | `FAST_ONLY_TESTS`: RTMP feed-wake, two SRT ingress Owners, health view, `test_harness` unit tests | yes | — |
@@ -142,7 +142,7 @@ equal or stronger replacement in the same change. Names marked *gate* run in
 | Egress cursor priming (`src/media/egress/visit_tests.rs`, *gate*) | `first_visit_primes_the_cursor_to_the_latest_sync_point`, `first_visit_primes_to_the_live_edge_without_a_sync_point`, `first_visit_primes_the_cursor_epoch_from_the_feed` |
 | SRT egress Owners (`src/media/egress/backends/srt/owner_set.rs`) | `runtime_and_owners_live_and_die_on_the_shard_thread`, `many_ipv4_outputs_share_one_owner_and_one_caller_socket`, `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`, `mixed_family_bond_is_rejected_without_partial_admission` |
 | SRT egress scheduling (`src/media/egress/backends/srt/tests/`) | `stale_queued_admission_never_attaches_to_a_replacement_generation`, `late_dns_for_an_old_generation_is_ignored`, `one_ready_batch_is_one_owner_service_pass`, `a_wake_examines_a_bounded_slice_of_parked_leaves`, `command_wakes_a_parked_compio_wait_promptly`, `owner_protocol_deadline_bounds_the_park`, `shutdown_under_active_tx_reaches_owner_quiescence` |
-| Recording byte queue (`src/media/byte_queue.rs`, *gate*) | `byte_queue_loom`, `media::byte_queue::tests`, `write_batch_round_trips_random_chunks` |
+| Recording byte queue (`crates/restream-sync/src/byte_queue.rs`, *gate*) | `byte_queue_loom`; `cargo test -p restream-sync --lib byte_queue::tests` (includes `write_batch_round_trips_random_chunks`) |
 | Transcoder (*gate*) | `replacement_video_stage_preserves_codec_hint_and_audio_tracks` (`tests/transcoder.rs`); `external_output_stream_idx_routes_known_tracks_without_aliasing`, `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`, `external_720p_stage_emits_live_packets_for_h264_marker_fixture`, `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts` |
 | HLS (*gate*) | `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
 | SRT ingress Owner (`src/media/srt/ingress_*`, *gate* via `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |
@@ -151,7 +151,7 @@ equal or stronger replacement in the same change. Names marked *gate* run in
 | Egress shard recovery (*gate*: `lib-egress-resize`, `lib-egress-panic-recovery`) | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
 | SRT stream id (*gate*) | `media::srt_stream_id::tests` |
 | TS chunk ring | `live_reader_starts_after_existing_chunks` |
-| Harness (`src/bin/test_harness.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
+| Harness (`crates/test_harness/src/main.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
 
 ## Open gaps
 

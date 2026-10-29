@@ -35,6 +35,7 @@ use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
 use crate::media::egress::visit::EngineVisitResult;
+use crate::media::srt::egress_connect::egress_connect_spec;
 use crate::media::srt::{AddressFamily, SrtFabricEgressConnectSpec, SrtSendBacklog};
 
 pub(crate) mod owner_set;
@@ -490,8 +491,7 @@ impl SrtShardBackend {
             LeafLimits::from_policy(&spec.policy),
         )
         .with_progress_sink(spec.progress.clone());
-        let connect_spec =
-            SrtFabricEgressConnectSpec::from_url(target_url, spec.policy.connect_timeout);
+        let connect_spec = egress_connect_spec(target_url, spec.policy.connect_timeout);
         if connect_spec.peer_hosts().is_empty() {
             return;
         }

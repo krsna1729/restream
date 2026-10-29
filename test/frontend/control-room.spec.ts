@@ -2692,8 +2692,13 @@ test("pipeline picker: search every pipeline, Enter opens the top match in the s
     await expect(picker).toContainText(`cr-pick-bravo-${stamp}`);
     // Escape closes it without moving.
     await picker.click();
+    await expect(search).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(search).toBeHidden();
+    await expect(picker).toBeFocused();
+    await expect(page).toHaveURL(
+      new RegExp(`w=health.*p=${ids[1]}|p=${ids[1]}.*w=health`),
+    );
   } finally {
     for (const id of ids) await page.request.delete(`/api/v1/pipelines/${id}`);
   }

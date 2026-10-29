@@ -7,28 +7,12 @@
 //! `if let Ok(..) = lock()` would silently skip its work forever. These
 //! helpers recover the guard instead. Raw `Mutex::lock`,
 //! `RwLock::{read, write}` are disallowed by `clippy.toml`.
-
-use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-#[allow(clippy::disallowed_methods)]
-pub fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-#[allow(clippy::disallowed_methods)]
-pub fn read<T: ?Sized>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-#[allow(clippy::disallowed_methods)]
-pub fn write<T: ?Sized>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(PoisonError::into_inner)
-}
+pub use restream_sync::lock::{lock, read, write};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use std::sync::{Mutex, RwLock};
     /// A lock poisoned by a panicking holder still serves later callers,
     /// with the state the holder left.
     #[test]

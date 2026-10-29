@@ -163,6 +163,13 @@ export function MenuButton(props: {
         onToggle={(event) => {
           if ((event.nativeEvent as ToggleEvent).newState === "open") props.onOpen?.();
         }}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || event.defaultPrevented) return;
+          // Search inputs consume Escape to clear their value; dismiss the
+          // menu before that native default instead of leaving it open.
+          event.preventDefault();
+          panel.current?.hidePopover();
+        }}
         className={`menu-pop rounded-box border border-base-content/10 bg-base-200 p-4 text-base-content shadow-xl ${props.width ?? "w-72"}`}
       >
         {props.children(() => panel.current?.hidePopover())}

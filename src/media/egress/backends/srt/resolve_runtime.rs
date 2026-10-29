@@ -11,7 +11,7 @@ use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
-use crate::media::srt::SrtFabricEgressConnectSpec;
+use crate::media::srt::egress_connect::egress_connect_spec;
 use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
@@ -233,7 +233,7 @@ fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<SrtResolveReque
     let ProtocolSpec::Srt { url } = &spec.protocol else {
         return None;
     };
-    let connect_spec = SrtFabricEgressConnectSpec::from_url(url, spec.policy.connect_timeout);
+    let connect_spec = egress_connect_spec(url, spec.policy.connect_timeout);
     let peer_hosts = connect_spec.peer_hosts().to_vec();
     if peer_hosts.is_empty() {
         return None;
