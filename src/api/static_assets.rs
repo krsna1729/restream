@@ -18,7 +18,7 @@ use super::state::{AppState, get_session_token_from_headers, request_is_authenti
 #[folder = "public/"]
 // Jobs and builds without generated frontend output compile with no embedded
 // assets (served from disk first in development); releases verify the
-// assets exist in `scripts/release/prepare-build-tree.sh`.
+// assets exist in `cargo xtask release prepare-build-tree`.
 #[allow_missing = true]
 pub struct EmbeddedAssets;
 

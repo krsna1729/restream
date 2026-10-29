@@ -21,18 +21,18 @@ from a clean branch to published artifacts.
 
 ```mermaid
 flowchart TD
-  ldd["scripts/release/local-due-diligence.sh vX.Y.Z"] --> push["git push release branch"]
-  push --> dry["scripts/release/dispatch-dry-run.sh"]
+  ldd["cargo xtask qualify local-due-diligence vX.Y.Z"] --> push["git push release branch"]
+  push --> dry["cargo xtask qualify dispatch-dry-run"]
   dry --> wf["release.yml (workflow_dispatch): package-build, full-live-harness, package-evidence, certify"]
   wf --> arm["package-build-aarch64: arm64 archives + artifact smoke"]
   arm --> ok
   wf --> ok{"dry-run succeeded for HEAD?"}
   ok -- no --> fix["fix, push, dispatch again"]
   fix --> dry
-  ok -- yes --> tag["scripts/release/tag-and-publish.sh vX.Y.Z run-id"]
+  ok -- yes --> tag["cargo xtask release tag-and-publish vX.Y.Z run-id"]
   tag --> tagwf["release.yml (tag v*): same jobs plus publish"]
   tagwf --> gh["GitHub Release assets, SHA256SUMS, provenance and SBOM attestations"]
-  tagwf --> img["scripts/release/publish-image.sh: GHCR vX.Y.Z and latest"]
+  tagwf --> img["cargo xtask release publish-image: GHCR vX.Y.Z and latest"]
 ```
 
 ## Preflight
@@ -44,7 +44,7 @@ flowchart TD
 
 ## Run local due diligence
 
-[scripts/release/local-due-diligence.sh](../scripts/release/local-due-diligence.sh)
+`cargo xtask qualify local-due-diligence` ([source](../crates/xtask/src/qualify.rs))
 runs, in order:
 
 1. format, frontend, API contract, test hygiene and fixture discipline;
@@ -56,7 +56,7 @@ The evidence step needs `cargo-audit`, `cargo-deny`, `grype`, `trivy` and
 Docker.
 
 ```sh
-scripts/release/local-due-diligence.sh <vX.Y.Z>
+cargo xtask qualify local-due-diligence <vX.Y.Z>
 ```
 
 Use `--skip-harness` only when the same commit already has complete
@@ -65,27 +65,27 @@ for the failing owner instead of rerunning a copied subsequence.
 
 ## Dispatch the GitHub dry-run
 
-[scripts/release/dispatch-dry-run.sh](../scripts/release/dispatch-dry-run.sh)
+`cargo xtask qualify dispatch-dry-run` ([source](../crates/xtask/src/qualify.rs))
 starts the non-publishing Release workflow for the current branch or a given
 ref. It certifies the exact pushed SHA without creating a GitHub Release or
 pushing images.
 
 ```sh
-scripts/release/dispatch-dry-run.sh [ref]
+cargo xtask qualify dispatch-dry-run [ref]
 ```
 
 Keep the run ID it reports. If the branch moves, dispatch again: a run for
 an older SHA cannot authorize publication. The workflow and
-`scripts/lib/release-shards.sh` own matrix, runtime image, retries and
+`crates/xtask/src/qualify/shards.rs` own matrix, runtime image, retries and
 timeouts.
 
 ## Publish the certified commit
 
-[scripts/release/tag-and-publish.sh](../scripts/release/tag-and-publish.sh)
+`cargo xtask release tag-and-publish` ([source](../crates/xtask/src/release/publish.rs))
 runs from the unchanged clean checkout:
 
 ```sh
-scripts/release/tag-and-publish.sh <vX.Y.Z> <successful-dry-run-id>
+cargo xtask release tag-and-publish <vX.Y.Z> <successful-dry-run-id>
 ```
 
 It checks the run's workflow, event, jobs, status, conclusion and head SHA
@@ -114,9 +114,9 @@ sha256sum -c SHA256SUMS
 ```
 
 Check the assets against their owners:
-[scripts/release/package-binaries.sh](../scripts/release/package-binaries.sh)
+`cargo xtask release package-binaries` ([source](../crates/xtask/src/release/package.rs))
 (names and contents) and
-[scripts/check/release-evidence.sh](../scripts/check/release-evidence.sh)
+`cargo xtask qualify release-evidence` ([source](../crates/xtask/src/qualify/evidence.rs))
 (evidence). See [Release compliance](release-compliance.md) for the legal
 and provenance properties.
 

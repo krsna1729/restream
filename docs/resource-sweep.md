@@ -28,7 +28,7 @@ RESOURCE_SWEEP_SCENARIOS=egress-growth-source-same \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
 RESOURCE_SWEEP_SAMPLE_SECS=20 RESOURCE_SWEEP_SETTLE_SECS=6 \
   flock -x /tmp/restream-host.lock \
-  scripts/harness/run.sh resource-sweep -- --no-netns
+  cargo xtask harness resource-sweep -- --no-netns
 ```
 
 Verify `target/qual-release/COMMIT` against the revision under test. Setting

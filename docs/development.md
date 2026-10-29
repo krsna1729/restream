@@ -30,7 +30,7 @@ MediaMTX and the Git pre-commit hook. It also checks the host for the live
 harness.
 
 - The package list lives in
-  [`scripts/lib/debian-packages.sh`](../scripts/lib/debian-packages.sh). Do
+  [`scripts/data/debian-packages.tsv`](../scripts/data/debian-packages.tsv). Do
   not copy it into docs.
 - `--configure-harness-host` makes the user-namespace and SRT UDP-buffer
   settings persistent. Use it only on a machine you want changed.
@@ -38,8 +38,8 @@ harness.
 ## First build
 
 ```sh
-scripts/dev/prepare.sh
-scripts/build/app-native.sh
+cargo xtask setup prepare
+cargo xtask release app-native
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 
@@ -53,7 +53,7 @@ RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ## Daily loop
 
 ```sh
-scripts/build/app-native.sh
+cargo xtask release app-native
 cargo test <name>
 cargo clippy
 cargo fmt --all
@@ -64,7 +64,7 @@ cargo fmt --all
   change to its CI job.
 - The pre-commit hook runs `cargo xtask gates --staged`. It routes changed
   files to their cheap checks; Markdown changes run
-  `node scripts/check/docs.mjs`.
+  `cargo xtask docs-audit`.
 - Use `--profile bench` instead of `--release` for local builds. Harness
   modes need `cargo xtask build-bench`, which fills `target/bench/`.
 - Benchmarks are declared in `Cargo.toml` and live in `benches/`. A measured
@@ -95,7 +95,7 @@ npm run test:e2e
 
 - `test:frontend` runs the Node unit tests and a built-module smoke test.
   `test:frontend:coverage` adds coverage.
-- `test:e2e` (`scripts/harness/frontend-e2e.sh`) builds the app, starts it in
+- `test:e2e` (`cargo xtask frontend e2e`) builds the app, starts it in
   `.local/e2e` and runs Playwright. Use `npx playwright test` only against an
   app you already run on port 3030.
 - [package.json](../package.json) owns the command definitions.
@@ -106,7 +106,7 @@ npm run test:e2e
 Use one worktree per task or agent. The helper creates it with warm caches:
 
 ```sh
-scripts/agent/worktree.sh <id>
+cargo xtask worktree <id>
 source .local/worktrees/<id>/.agent-state/setup.env
 ```
 
@@ -114,10 +114,10 @@ This diagram shows the life of a worktree.
 
 ```mermaid
 flowchart TD
-    Create["scripts/agent/worktree.sh id"] --> Env["source .agent-state/setup.env"]
+    Create["cargo xtask worktree id"] --> Env["source .agent-state/setup.env"]
     Env --> Work["Edit, build, run targeted tests"]
     Work --> Push["Commit and push the branch"]
-    Push --> Cleanup["scripts/agent/worktree.sh --cleanup id"]
+    Push --> Cleanup["cargo xtask worktree --cleanup id"]
 ```
 
 - Defaults: path `.local/worktrees/<id>`, branch `codex/<id>`, based on
@@ -139,7 +139,7 @@ ports or CPU.
 | Work | Rule |
 |---|---|
 | Builds | Never build while a live pipeline runs, and check for other builds first ([AGENTS.md](../AGENTS.md#build-and-worktree-safety)) |
-| Live correctness runs | Run modes through `scripts/harness/run.sh`; it rebuilds stale bench binaries. Overlap runs only when each has its own network, ports and artifacts, as `scripts/harness/parallel-fast-breadth.sh` provides |
+| Live correctness runs | Run modes through `cargo xtask harness`; it rebuilds stale bench binaries. Overlap runs only when each has its own network, ports and artifacts, as `cargo xtask parallel-fast-breadth` provides |
 | Measurements | Benchmarks, sweeps and capacity ramps run serially on an idle host. A competing build or pipeline makes the result invalid |
 | Long-lived sessions | Give each dashboard or debug session an owner, its own runtime directory and a cleanup step. Prefer the harness or demo tooling that already owns ports |
 

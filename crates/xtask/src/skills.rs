@@ -2,7 +2,7 @@
 //! canonical, agent-neutral skills in `docs/agent-guidance/skills/`.
 //!
 //! `.claude/` is gitignored; run once per clone or worktree
-//! (`scripts/agent/worktree.sh` runs it). Idempotent: re-run after adding a
+//! (`cargo xtask worktree` runs it). Idempotent: re-run after adding a
 //! skill or editing skill frontmatter. The default writes one small shim per
 //! skill; `--symlink` links `.claude/skills` at the canonical directory
 //! instead (no drift, but relies on the loader following symlinks).

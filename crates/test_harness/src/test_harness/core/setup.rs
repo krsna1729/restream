@@ -101,8 +101,12 @@ pub(crate) fn command_with_optional_cgroup(program: impl AsRef<OsStr>, scope: &s
     if !env_flag("HARNESS_USE_CGROUP_WRAPPER") {
         return Command::new(program);
     }
-    let mut command = Command::new("scripts/native/cgroup-wrap.sh");
-    command.arg("--scope").arg(scope).arg("--").arg(program);
+    let mut command = Command::new("cargo");
+    command
+        .args(["xtask", "native", "cgroup-wrap", "--scope"])
+        .arg(scope)
+        .arg("--")
+        .arg(program);
     command
 }
 

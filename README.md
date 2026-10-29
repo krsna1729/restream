@@ -82,8 +82,8 @@ On Debian or Ubuntu:
 
 ```sh
 scripts/dev/bootstrap.sh
-scripts/dev/prepare.sh
-scripts/build/app-native.sh
+cargo xtask setup prepare
+cargo xtask release app-native
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 

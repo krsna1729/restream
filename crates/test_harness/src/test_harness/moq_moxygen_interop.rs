@@ -2,7 +2,7 @@
 //! independent C++ MOQT implementation, on each IETF draft both speak.
 //!
 //! The peer is moxygen's `moqrelayserver` from a pinned commit, built by
-//! `scripts/dev/moq/build-moxygen.sh` into
+//! `cargo xtask fetch moxygen` into
 //! `.local/bin/moxygen-<commit>/moqrelayserver` (`MOQ_MOXYGEN_RELAY_BIN`
 //! overrides the path; the `.commit` stamp beside it must name the pin).
 //! For every draft in [`DRAFTS`] one relay runs offering only that draft:
@@ -23,9 +23,9 @@
 //! out of it.
 //!
 //! ```text
-//! scripts/dev/moq/fetch-moq-dev.sh
-//! scripts/dev/moq/build-moxygen.sh
-//! scripts/harness/run.sh moq-moxygen-interop -- --no-netns
+//! cargo xtask fetch moq-dev
+//! cargo xtask fetch moxygen
+//! cargo xtask harness moq-moxygen-interop -- --no-netns
 //! ```
 
 use crate::moq_dev_interop::{CliTarget, MOQ_CLI, capture_export, pinned_bin};
@@ -40,7 +40,7 @@ const MODE: &str = "moq-moxygen-interop";
 /// strict), 30 fps H.264 High with stereo AAC.
 const FIXTURE: &str = "test/fixtures/transport/av-marker-h264-bf0.ts";
 const STREAM_KEY: &str = "sk-moq-moxygen";
-/// The commit `scripts/dev/moq/build-moxygen.sh` builds.
+/// The commit `cargo xtask fetch moxygen` builds.
 const MOXYGEN_COMMIT: &str = "c392ebfc4d1dc39220fac3087b503416d06c47b9";
 const MOXYGEN_RELAY_ENV: &str = "MOQ_MOXYGEN_RELAY_BIN";
 /// The relay's raw-QUIC and WebTransport endpoint path.
@@ -197,7 +197,7 @@ fn moxygen_relay_bin() -> Result<PathBuf, String> {
             ))
         });
     let bin = absolute_path(&bin)?;
-    let hint = "run scripts/dev/moq/build-moxygen.sh";
+    let hint = "run cargo xtask fetch moxygen";
     if !bin.is_file() {
         return Err(format!(
             "moxygen relay not found at {}; {hint}",

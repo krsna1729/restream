@@ -41,7 +41,7 @@ profile:
   fallback driver, runtime or backend.
 
 `/healthz` therefore does not prove the deployment works. The repository's
-container smoke (`scripts/check/container-smoke.sh`) proves real SRT egress and
+container smoke (`cargo xtask container smoke`) proves real SRT egress and
 RTMP-ingest to RTMPS-egress media under this profile, then records what the
 engine's default profile does.
 
@@ -78,12 +78,12 @@ present, and no other syscall granted.
 
 ## Refreshing the baseline
 
-Run `scripts/dev/refresh-docker-seccomp.sh <moby-tag>` (for example
+Run `cargo xtask setup refresh-docker-seccomp <moby-tag>` (for example
 `docker-v29.9.0`). It downloads that tag's default profile, records its SHA-256,
 regenerates `restream-seccomp.json` as baseline + delta, and updates the
 versioned baseline copy. Then update the provenance table above, review the
 diff of the baseline against the previous copy, and run
-`scripts/check/container-smoke.sh` and `cargo test --test seccomp_profile`.
+`cargo xtask container smoke` and `cargo test --test seccomp_profile`.
 If a newer Docker default already allows `io_uring`, drop the delta (and its
 test) instead of carrying a redundant rule.
 

@@ -130,7 +130,7 @@ commit that recorded it.
   ceiling in `src/media/egress/sizing.rs`. Cross-host qualification is open.
 - **M7** Pinning CONTROL, MEDIA and hot threads to separate CPUs doubled
   shard run-queue wait for about 10% less process CPU, so threads keep
-  shared affinity (`scripts/harness/restream-segregated.sh` reproduces the
+  shared affinity (`cargo xtask harness-segregated` reproduces the
   split arm).
 - **M8** Each extra SRT feed adds about 5% shard CPU, 2.4 threads and 15 MB,
   against about 0.7% shard CPU per extra output on one feed. A host-level

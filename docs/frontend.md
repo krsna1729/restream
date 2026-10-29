@@ -48,7 +48,7 @@ flowchart LR
   Node treats files under `node_modules` as CommonJS. hls.js loads from
   there when a preview starts (`preview.tsx`), and the public `/watch` page
   imports the same module.
-- `scripts/release/prepare-build-tree.sh` checks that the key outputs exist
+- `cargo xtask release prepare-build-tree` checks that the key outputs exist
   before a release build (`public/index.html`, `public/output.css`,
   `public/js/control-room/main.js`, and others).
 
@@ -158,7 +158,7 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 | `Icon` | `icons.tsx` | Inline stroke icons |
 
 Pages are built from these, not from raw DaisyUI markup:
-`scripts/check/frontend-style.mjs` (CI, Source architecture audit) fails on
+`cargo xtask frontend-style` (CI, Source architecture audit) fails on
 legacy cards (`card bg-base-200`, `card-body`, `card-title`), DaisyUI 4
 `*-bordered` classes, DaisyUI 4 `form-control`/`label-text` (a labelled
 control is a `Field`), a status drawn as a bare toned `badge`, hand-rolled

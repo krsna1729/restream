@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use crate::bins::{self, git, utc_timestamp};
 
 mod summary;
+use crate::workflow::env_or;
 use crate::{StepResult, capture_into};
 use summary::{csv_rows, number, summarize};
 
@@ -96,13 +97,6 @@ const PROTOCOLS: &[(&str, &str, &str, &str)] = &[
 ];
 
 const MIN_NOFILE: u64 = 65_536;
-
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.into())
-}
 
 fn env_number(key: &str, default: u64) -> Result<u64, String> {
     env_or(key, &default.to_string())

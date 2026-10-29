@@ -60,7 +60,7 @@ pub(crate) fn build_bench() -> StepResult {
     println!("  target/bench/test_harness");
     println!("  target/bench/moq_subscriber");
     println!();
-    println!("Use scripts/harness/run.sh for measurement modes so bench binaries stay");
+    println!("Use cargo xtask harness for measurement modes so bench binaries stay");
     println!("fresh and launches remain comparable.");
     Ok(())
 }

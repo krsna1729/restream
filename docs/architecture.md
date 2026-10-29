@@ -175,9 +175,12 @@ consumer tests remain in the root. [Testing](testing.md#rust-test-suite)
 lists the package and consumer-suite distinction.
 
 The frontend remains React/TypeScript under `web/ts/`, built with Node/Vite
-into generated `public/` assets. Shell tools under `scripts/` and the Git
-hooks also remain; their separate xtask consolidation is Q-105 in
-[Backlog](backlog.md).
+into generated `public/` assets. Repository workflows (harness, release,
+qualification, containers, setup, fetches, fixtures, worktrees, Git hooks)
+are `cargo xtask` commands in `crates/xtask`. Three shell entrypoints remain
+because they run before Rust exists or in the compilerless runtime image:
+`scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh` and
+`scripts/ci/install-system-deps.sh`.
 
 ## Runtime ownership
 

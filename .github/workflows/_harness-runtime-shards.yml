@@ -82,6 +82,7 @@ jobs:
           mkdir -p "${{ inputs.install_dir }}"
           cp "${{ inputs.artifact_path }}/restream" "${{ inputs.restream_bin }}"
           cp "${{ inputs.artifact_path }}/test_harness" "${{ inputs.harness_bin }}"
+          install -D -m 0755 "${{ inputs.artifact_path }}/xtask" .local/bin/xtask
           chmod 0755 "${{ inputs.restream_bin }}" "${{ inputs.harness_bin }}"
       - name: Run harness shard
         env:
@@ -89,7 +90,7 @@ jobs:
           HARNESS_BIN: ${{ inputs.harness_bin }}
           RESTREAM_BIN: ${{ inputs.restream_bin }}
           GH_TOKEN: ${{ secrets.gh_token }}
-        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
+        run: .local/bin/xtask container run-harness-shard-in-runtime "${{ matrix.shard }}"
       - uses: actions/upload-artifact@v7
         if: ${{ inputs.upload_artifacts_mode == 'always' || failure() || cancelled() }}
         with:

@@ -111,5 +111,5 @@ page is one `git log -- <path>` away.
   instead of copying it.
 - Link every page from this index.
 - When a source or command rename lands, update the owning page in the same
-  change and run `node scripts/check/docs.mjs` (`cargo xtask gates` selects it
+  change and run `cargo xtask docs-audit` (`cargo xtask gates` selects it
   for Markdown changes).

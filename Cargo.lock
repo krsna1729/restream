@@ -5256,6 +5256,8 @@ dependencies = [
 name = "xtask"
 version = "0.0.0"
 dependencies = [
+ "libc",
+ "regex",
  "serde_json",
 ]
 

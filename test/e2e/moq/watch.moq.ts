@@ -53,7 +53,7 @@ const MIN_LUMA_RANGE = 100;
 const MIN_AUDIO_ADVANCE_MS = 5_000;
 const FIRST_FIREFOX_WITH_PROTOCOLS = 155;
 
-test.skip(targets.length === 0, 'run through `scripts/harness/run.sh moq-dev-interop -- --browsers`');
+test.skip(targets.length === 0, 'run through `cargo xtask harness moq-dev-interop -- --browsers`');
 
 async function state(page: Page): Promise<PageState> {
     return page.evaluate(() => window.moqWatch.state());
