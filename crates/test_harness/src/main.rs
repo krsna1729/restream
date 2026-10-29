@@ -431,9 +431,15 @@ const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 /// log lines, well past any of the scenario's own per-pipeline deadlines).
 pub(crate) const HARNESS_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Every peer this client talks to is a loopback process the harness started,
+/// and requests carry the admin password and session cookie in cleartext HTTP.
+/// Environment proxies (`HTTP_PROXY`, `ALL_PROXY`) and redirects are therefore
+/// disabled so no request or body can leave the host.
 pub(crate) fn harness_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(HARNESS_HTTP_REQUEST_TIMEOUT)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("harness reqwest client")
 }
