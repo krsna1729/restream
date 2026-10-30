@@ -88,7 +88,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let relay_bin = pinned_bin(&MOQ_RELAY).await?;
     let fixture = restream::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
-    let ffmpeg = restream::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;
     let ports = TestPorts::from_env();
     let dev_ports = DevPorts::allocate();

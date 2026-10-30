@@ -247,7 +247,7 @@ least 5, then capped by the max children value.
 #### FFmpeg
 
 FFmpeg is not bundled. The executable resolves in this order
-(`src/ffmpeg_binary.rs`): `FFMPEG_BIN_PATH`; the copy installed by
+(`src/media/ffmpeg_binary.rs`): `FFMPEG_BIN_PATH`; the copy installed by
 `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/`; `ffmpeg` on `PATH`.
 If none is found, the server still starts; only FFmpeg-backed features fail.
 
@@ -258,7 +258,7 @@ At startup the engine lists what the resolved build provides (encoders,
 decoders, muxers, demuxers, filters, protocols, bitstream filters) and checks
 it against what each feature uses: transcoding, file ingest, recording remux,
 posters, picture and sound checks, media analysis. The lists live in
-`Feature::needs` (`src/ffmpeg_capabilities.rs`). A feature whose needs are
+`Feature::needs` (`src/media/ffmpeg_capabilities.rs`). A feature whose needs are
 missing is logged at startup with what it lacks, reported in
 `externalTools` on `GET /api/v1/engine`, and fails when used; the rest work.
 
@@ -283,7 +283,7 @@ pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 | `MALLOC_ARENA_MAX` | unset | glibc | Applied by glibc itself; wins over `RESTREAM_MALLOC_ARENA_MAX` |
 
 "CPUs" means the effective count from the CPU mask and cgroup quota
-(`HostCapacity`, `src/capacity.rs`). The effective arena setting is logged as
+(`HostCapacity`, `src/media/host_capacity.rs`). The effective arena setting is logged as
 `restream.malloc.arenas`. Qualify the arena value per host
 ([capacity ramp](capacity-ramp.md)) before you treat `2` as final.
 

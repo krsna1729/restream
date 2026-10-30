@@ -463,7 +463,7 @@ async fn first_catalog<E: Display>(
             "no hang or MSF catalog arrived",
         )),
         Ok(Err(payload)) => {
-            let panic = crate::panic_boundary::record_contained(payload.as_ref());
+            let panic = crate::media::panic_boundary::record_contained(payload.as_ref());
             Err(SessionEnd::new(
                 Error::ProtocolViolation,
                 format!("catalog.json/MSF catalog: the parser panicked: {panic}"),

@@ -19,7 +19,7 @@ pub(super) fn spawn_child(
     index: usize,
     seek: bool,
 ) -> Result<SpawnedExternalFileIngest, String> {
-    let ffmpeg_bin = crate::ffmpeg_binary::ffmpeg_bin_path();
+    let ffmpeg_bin = crate::media::ffmpeg_binary::ffmpeg_bin_path();
     let args = build_ffmpeg_args(source, index, seek);
     let mut child = Command::new(ffmpeg_bin)
         .args(&args)

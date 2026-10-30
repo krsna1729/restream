@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::alerts;
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 use crate::diag;
-use crate::events;
+use crate::media::events;
 
 use super::health::{build_health_snapshot_for_pipeline_ids, list_dashboard_runtime_pipeline_ids};
 use super::state::{

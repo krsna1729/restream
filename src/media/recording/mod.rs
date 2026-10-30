@@ -178,12 +178,14 @@ async fn remux_recording_to_mp4(
     ffmpeg_threads: u32,
     metadata: Option<RecordingMetadataReporter>,
 ) {
-    let capabilities = crate::ffmpeg_capabilities::report().await;
-    if !capabilities.available(crate::ffmpeg_capabilities::Feature::RecordingRemux) {
+    let capabilities = crate::media::ffmpeg_capabilities::report().await;
+    if !capabilities.available(crate::media::ffmpeg_capabilities::Feature::RecordingRemux) {
         let missing = capabilities
             .features
             .iter()
-            .find(|status| status.feature == crate::ffmpeg_capabilities::Feature::RecordingRemux)
+            .find(|status| {
+                status.feature == crate::media::ffmpeg_capabilities::Feature::RecordingRemux
+            })
             .map(|status| status.missing.join(", "))
             .unwrap_or_default();
         let error = format!("FFmpeg cannot remux recordings to MP4: it lacks {missing}");
@@ -208,7 +210,7 @@ async fn remux_recording_to_mp4(
 
     let mp4_path = build_mp4_path(&ts_path);
     let temp_path = build_mp4_temp_path(&mp4_path);
-    let ffmpeg_path = crate::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg_path = crate::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let args = build_recording_remux_args(&ts_path, &temp_path, ffmpeg_threads);
     let _ = tokio::fs::remove_file(&temp_path).await;
 
@@ -552,7 +554,7 @@ pub async fn start_recording(
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageRegistered {
+        .emit(crate::media::events::EventKind::StageRegistered {
             pipeline_id: pipeline_id.clone(),
             encoding: "recording".to_string(),
         });
@@ -661,7 +663,7 @@ pub async fn start_recording(
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageStopped {
+        .emit(crate::media::events::EventKind::StageStopped {
             pipeline_id: pipeline_id.clone(),
             encoding: "recording".to_string(),
         });

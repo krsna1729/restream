@@ -15,13 +15,13 @@ use std::sync::atomic::{AtomicI64, AtomicU64};
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::events::EventLog;
 use crate::media::egress::FeedId;
 use crate::media::egress::runtime::{EgressFabricRuntime, FeedWakeSubscription};
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
 use crate::media::engine_hls::HlsConsumers;
+use crate::media::events::EventLog;
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::pipe_metrics::PipeMetrics;

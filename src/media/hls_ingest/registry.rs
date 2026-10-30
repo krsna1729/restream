@@ -22,8 +22,8 @@ use crate::media::hls_pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
+use crate::media::secret_display::redact_secret;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
-use crate::secret_display::redact_secret;
 
 /// Objects queued for one session; encoders upload sequentially, and the
 /// per-key upload slots bound what can wait here anyway.

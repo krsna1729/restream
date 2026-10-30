@@ -18,7 +18,7 @@ fn main() {
     embed_rust_dependency_inventory();
 
     // SRT is pure Rust (srt-rs); no native media libraries are linked. FFmpeg
-    // runs only as an external process (src/ffmpeg_binary.rs).
+    // runs only as an external process (src/media/ffmpeg_binary.rs).
     println!("cargo:rustc-env=RESTREAM_BUILD_SRT_VERSION=srt-rs");
 }
 

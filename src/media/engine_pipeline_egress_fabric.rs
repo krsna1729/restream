@@ -174,7 +174,7 @@ impl MediaEngine {
         let budget = config.work_budget();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity::get(),
+            crate::media::host_capacity::HostCapacity::get(),
             crate::media::egress::runtime::ResizeReason::Remove,
             shard_config,
             |_shard_id| {

@@ -452,7 +452,7 @@ pub(crate) fn snapshot(services: bool) -> MediaExecutorSnapshot {
 /// Returns the worker thread count configured for restream-media.
 pub(crate) fn configured_workers() -> usize {
     crate::config::media_executor_workers_env()
-        .unwrap_or_else(|| crate::capacity::HostCapacity::get().media_workers())
+        .unwrap_or_else(|| crate::media::host_capacity::HostCapacity::get().media_workers())
 }
 
 /// Whether each poll also reads `getrusage(RUSAGE_THREAD)`

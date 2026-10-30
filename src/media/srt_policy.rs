@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 use tracing::warn;
 
-use crate::secret_display::redact_secret;
+use crate::media::secret_display::redact_secret;
 use restream_domain::domain::srt_ingest::{
     ResolvedSrtIngestConfig, SrtGlobalIngestConfig, SrtPipelineIngestConfig,
 };

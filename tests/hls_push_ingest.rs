@@ -228,7 +228,7 @@ async fn ffmpeg_push_reaches_the_ring(
         "http://{}/ingest/hls/{STREAM_KEY}/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
+    let status = tokio::process::Command::new(restream::media::ffmpeg_binary::ffmpeg_bin_path())
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
         .arg(codec.fixture())
         .args([
@@ -309,7 +309,7 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
         "http://{}/ingest/hls/{STREAM_KEY}/stream_%v/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new(restream::ffmpeg_binary::ffmpeg_bin_path())
+    let status = tokio::process::Command::new(restream::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-hide_banner",
             "-loglevel",

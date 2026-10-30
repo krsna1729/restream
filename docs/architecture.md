@@ -236,7 +236,7 @@ flowchart TD
 | Egress fabric | `egress-shard-<n>` | grows with load, at most `clamp(C, 2, 8)` per fabric | `RESTREAM_EGRESS_SHARDS` (ceiling) | one fabric per feed and protocol (per HLS store for HLS PUT); RTMP/RTMPS, SRT, HLS PUT and MoQ shards each run a Compio runtime |
 | OS threads | `restream-ffin`, `restream-ffout`, recording writer, resolvers | per stage or per fabric | — | blocking FFmpeg pipes, disk writes, DNS |
 
-`C` is the host's CPU count from `HostCapacity` (`src/capacity.rs`): the
+`C` is the host's CPU count from `HostCapacity` (`src/media/host_capacity.rs`): the
 affinity mask and root cgroup `cpu.max` quota, read once at boot.
 `/metrics/system` reports it as `hostCapacity`. The full list of runtime
 variables is in [Configuration](configuration.md).

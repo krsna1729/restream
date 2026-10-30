@@ -217,7 +217,7 @@ impl MediaEngine {
         };
         self.runtime
             .event_log
-            .emit(crate::events::EventKind::IngestProbed {
+            .emit(crate::media::events::EventKind::IngestProbed {
                 pipeline_id: ingest.pipeline_id.clone(),
                 protocol: ingest.protocol.clone(),
             });

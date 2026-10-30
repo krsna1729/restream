@@ -105,7 +105,7 @@ pub(crate) async fn run_hls_pull_duty(
 
     let ports = TestPorts::from_env();
     let plan = Plan {
-        ffmpeg: restream::ffmpeg_binary::ffmpeg_bin_path().to_path_buf(),
+        ffmpeg: restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf(),
         fixture: restream::test_fixtures::canonical_h264_ts_fixture()?,
         db_path: default_work_db_path(&work_dir, "hls-pull-duty.sqlite"),
         log_path: work_dir.join("restream.log"),

@@ -117,7 +117,7 @@ impl EgressReconciler {
                             self.engine.clear_egress_retry_state(&output.id).await;
                             self.runtime_state.mark_changed();
                             warn!(
-                                correlation_id = %crate::logging::next_correlation_id("out"),
+                                correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
                                 output_id = %output.id,
                                 output_name = %output.name,
                                 max_retries = self.tuning.output_max_retries,
@@ -126,7 +126,7 @@ impl EgressReconciler {
                         }
                         Err(err) => {
                             warn!(
-                                correlation_id = %crate::logging::next_correlation_id("out"),
+                                correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
                                 output_id = %output.id,
                                 error = %err,
                                 "failed to record exhausted output retries in db; will retry on next tick",
@@ -162,7 +162,7 @@ impl EgressReconciler {
                 OutputStopAction::KeepRunning => {}
                 OutputStopAction::StopBecauseIngestLost => {
                     info!(
-                        correlation_id = %crate::logging::next_correlation_id("out"),
+                        correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
                         output_id = %output.id,
                         output_name = %output.name,
                         pipeline_id = %output.pipeline_id,
@@ -175,7 +175,7 @@ impl EgressReconciler {
                 }
                 OutputStopAction::StopRequested => {
                     info!(
-                        correlation_id = %crate::logging::next_correlation_id("out"),
+                        correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
                         output_id = %output.id,
                         output_name = %output.name,
                         pipeline_id = %output.pipeline_id,
@@ -192,7 +192,7 @@ impl EgressReconciler {
     }
 
     async fn start(&self, output: &Output) {
-        let correlation_id = crate::logging::next_correlation_id("out");
+        let correlation_id = crate::media::correlation_id::next_correlation_id("out");
         info!(
             correlation_id = %correlation_id,
             output_id = %output.id,
@@ -537,6 +537,6 @@ impl EgressReconciler {
 pub(super) fn next_output_job_id(output_id: &str) -> String {
     format!(
         "job_{output_id}_{}",
-        crate::logging::next_correlation_id("attempt")
+        crate::media::correlation_id::next_correlation_id("attempt")
     )
 }

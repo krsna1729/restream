@@ -267,7 +267,7 @@ impl EgressFabricRuntime {
     pub(crate) fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,
-        host: crate::capacity::HostCapacity,
+        host: crate::media::host_capacity::HostCapacity,
         reason: ResizeReason,
         shard_config: EgressShardConfig,
         mut factory_for: G,

@@ -12,7 +12,7 @@
 #[cfg(all(panic = "abort", not(kani)))]
 compile_error!(
     "restream requires panic = \"unwind\": per-connection, per-peer and per-output \
-     panic boundaries (src/panic_boundary.rs) depend on it"
+     panic boundaries (src/media/panic_boundary.rs) depend on it"
 );
 
 #[cfg(feature = "mcp-http-backend")]
@@ -34,17 +34,12 @@ pub mod capacity;
 pub mod config;
 pub mod db;
 pub mod diag;
-pub mod events;
-pub mod ffmpeg_binary;
-pub mod ffmpeg_capabilities;
 pub mod host_tuning;
 pub mod infrastructure;
 pub mod logging;
 pub mod malloc_tuning;
 pub mod media;
-pub mod panic_boundary;
 pub mod runtime_info;
-pub mod secret_display;
 pub(crate) mod system_sampling;
 pub mod test_fixtures;
 

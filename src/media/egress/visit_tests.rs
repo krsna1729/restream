@@ -707,7 +707,7 @@ fn engine_panic_is_contained_as_a_retryable_failure_of_that_leaf() {
     let mut common = common(1);
     let mut engine = FakeEngine::new(vec![EngineScript::Panic]);
     let mut transport = FakeTransport::default();
-    let before = crate::panic_boundary::contained_panics();
+    let before = crate::media::panic_boundary::contained_panics();
 
     let result = EngineVisit {
         generation: 1,
@@ -731,5 +731,5 @@ fn engine_panic_is_contained_as_a_retryable_failure_of_that_leaf() {
     assert!(failure.retryable);
     assert_eq!(failure.detail, "scripted engine panic");
     assert_eq!(decision, VisitDecision::Close);
-    assert!(crate::panic_boundary::contained_panics() > before);
+    assert!(crate::media::panic_boundary::contained_panics() > before);
 }

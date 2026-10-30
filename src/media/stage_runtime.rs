@@ -135,7 +135,7 @@ impl StageRuntimeManager {
         self.engine
             .runtime
             .event_log
-            .emit(crate::events::EventKind::StageRegistered {
+            .emit(crate::media::events::EventKind::StageRegistered {
                 pipeline_id: key.pipeline.to_string(),
                 encoding: key.kind.to_string(),
             });

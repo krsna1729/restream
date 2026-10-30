@@ -177,7 +177,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::StageRegistered {
+        .emit(restream::media::events::EventKind::StageRegistered {
             pipeline_id: "pipe-diagctx".to_string(),
             encoding: "video:720p".to_string(),
         });

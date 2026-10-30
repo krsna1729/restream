@@ -331,7 +331,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         },
         // The FFmpeg executables and what each FFmpeg-backed feature can use;
         // `null` until the startup check finishes.
-        "externalTools": crate::ffmpeg_capabilities::finished(),
+        "externalTools": crate::media::ffmpeg_capabilities::finished(),
         "sbom": {
             "format": "CycloneDX",
             "specVersion": "1.5",

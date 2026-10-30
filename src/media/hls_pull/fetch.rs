@@ -364,7 +364,7 @@ fn ipv4_refused(address: Ipv4Addr) -> bool {
 /// any query replaced by `?<redacted>` and any path segment that carries a `=`
 /// replaced by `<redacted>`.
 ///
-/// [`crate::secret_display::redact_url`] redacts only the query keys it knows
+/// [`crate::media::secret_display::redact_url`] redacts only the query keys it knows
 /// (`streamid`, `passphrase`, `key`, `stream_key`, `token`, `cid`), while a
 /// signed origin carries its credential under its own key — Akamai `hdnts`,
 /// CloudFront `Policy`/`Signature`/`Key-Pair-Id`, S3 `X-Amz-Signature` — which

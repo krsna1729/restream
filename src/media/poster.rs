@@ -41,10 +41,14 @@ pub fn poster_args(path: &Path, at_sec: u32) -> Vec<String> {
 /// A PNG of one frame of the file's video, at most `POSTER_WIDTH` wide: 5 s
 /// in, or the first frame of a shorter file.
 pub async fn extract_poster(path: &Path) -> Result<Vec<u8>, String> {
-    let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();
+    let ffmpeg = crate::media::ffmpeg_binary::ffmpeg_bin_path();
     for at_sec in [POSTER_AT_SEC, 0] {
-        let png = crate::ffmpeg_binary::run_tool(ffmpeg, &poster_args(path, at_sec), POSTER_WITHIN)
-            .await?;
+        let png = crate::media::ffmpeg_binary::run_tool(
+            ffmpeg,
+            &poster_args(path, at_sec),
+            POSTER_WITHIN,
+        )
+        .await?;
         if png.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Ok(png);
         }
