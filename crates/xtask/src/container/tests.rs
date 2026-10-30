@@ -15,24 +15,25 @@ impl Engine {
         let executable = directory.join("engine");
         // A Docker argv adapter, not a second implementation of the shim.
         // Production run_with owns all launching, waiting, forwarding and cleanup.
+        // Each invocation appends one line: its arguments, each ended by
+        // the unit separator (0x1f), so spaces survive.
         fs::write(
             &executable,
-            r#"#!/usr/bin/env python3
-import json, os, pathlib, signal, sys, time
-root = pathlib.Path(__file__).parent
-with (root / 'events').open('a') as log:
-    log.write(json.dumps(sys.argv[1:]) + '\n')
-if sys.argv[1] == 'run':
-    (root / 'pid').write_text(str(os.getpid()))
-    if os.environ.get('RESTREAM_TEST_MODE') == 'fail':
-        sys.exit(37)
-    def terminated(sig, frame):
-        (root / 'signal').write_text(str(sig))
-        sys.exit(128 + sig)
-    signal.signal(signal.SIGTERM, terminated)
-    signal.signal(signal.SIGINT, terminated)
-    (root / 'ready').write_text('ready')
-    time.sleep(60)
+            r#"#!/bin/sh
+root=$(dirname "$0")
+line=
+for arg do line="$line$arg$(printf '\037')"; done
+printf '%s\n' "$line" >> "$root/events"
+if [ "$1" = run ]; then
+    printf '%s' "$$" > "$root/pid"
+    if [ "$RESTREAM_TEST_MODE" = fail ]; then exit 37; fi
+    sleep 60 &
+    child=$!
+    trap 'printf 15 > "$root/signal"; kill "$child"; exit 143' TERM
+    trap 'printf 2 > "$root/signal"; kill "$child"; exit 130' INT
+    printf ready > "$root/ready"
+    wait "$child"
+fi
 "#,
         )
         .unwrap();
@@ -57,7 +58,7 @@ if sys.argv[1] == 'run':
         fs::read_to_string(self.directory.join("events"))
             .unwrap()
             .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .map(|line| line.split_terminator('\u{1f}').map(String::from).collect())
             .collect()
     }
     fn assert_reaped(&self) {

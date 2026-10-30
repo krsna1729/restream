@@ -79,26 +79,14 @@ jobs:
             exit 0
           fi
 
-          FINDINGS=$(python3 - <<'PYEOF'
-          import json, sys
-          with open("grype-results.json") as f:
-              data = json.load(f)
-          matches = data.get("matches", [])
-          high_crit = [
-              m for m in matches
-              if m.get("vulnerability", {}).get("severity", "").upper() in ("HIGH", "CRITICAL")
-          ]
-          if not high_crit:
-              print("NONE")
-              sys.exit(0)
-          lines = []
-          for m in high_crit:
-              v = m.get("vulnerability", {})
-              art = m.get("artifact", {})
-              lines.append(f"- **{v.get('id','')}** ({v.get('severity','')}) in `{art.get('name','')} {art.get('version','')}`: {v.get('description','')[:120]}")
-          print("\n".join(lines))
-          PYEOF
-          )
+          FINDINGS=$(jq -r '
+            [(.matches // [])[]
+              | select((.vulnerability.severity // "" | ascii_upcase) as $s
+                       | $s == "HIGH" or $s == "CRITICAL")]
+            | if length == 0 then "NONE"
+              else map("- **\(.vulnerability.id // "")** (\(.vulnerability.severity // "")) in `\(.artifact.name // "") \(.artifact.version // "")`: \((.vulnerability.description // "")[:120])")
+                | join("\n")
+              end' grype-results.json)
 
           if [ "$FINDINGS" = "NONE" ]; then
             echo "No HIGH/CRITICAL findings; skipping issue."
