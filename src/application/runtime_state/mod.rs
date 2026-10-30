@@ -405,7 +405,7 @@ fn project_output(
     has_ingest: bool,
     context: &ProjectContext<'_>,
 ) -> OutputState {
-    let actual = active.map(|egress| *crate::sync::lock(&egress.phase));
+    let actual = active.map(|egress| *restream_sync::lock::lock(&egress.phase));
     // The same rule as the output status view: without ingest nothing is
     // expected to move, so an egress cannot be stalled.
     let stalled = active.is_some_and(|egress| {
@@ -445,19 +445,17 @@ fn project_output(
         Flow::Idle
     };
     let evidence = match active {
-        Some(egress) => {
-            crate::sync::lock(&egress.last_error)
-                .clone()
-                .map(|error| FailureEvidence {
-                    error,
-                    phase: crate::sync::lock(&egress.failure_phase).clone(),
-                    at_ms: egress.last_error_ms.load(Ordering::Relaxed),
-                })
-        }
+        Some(egress) => restream_sync::lock::lock(&egress.last_error)
+            .clone()
+            .map(|error| FailureEvidence {
+                error,
+                phase: restream_sync::lock::lock(&egress.failure_phase).clone(),
+                at_ms: egress.last_error_ms.load(Ordering::Relaxed),
+            }),
         None => recent_evidence.cloned(),
     };
     let backpressure = active
-        .and_then(|egress| *crate::sync::lock(&egress.backpressure_reason))
+        .and_then(|egress| *restream_sync::lock::lock(&egress.backpressure_reason))
         .map(str::to_string);
     let diagnosis = diagnose(&OutputSignals {
         wants_running: output.desired_state == DesiredOutputState::Running,

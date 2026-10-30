@@ -47,16 +47,16 @@ impl SrtIngestPolicyStore {
     }
 
     pub fn replace(&self, global: SrtGlobalIngestConfig, entries: &[SrtIngestPolicyEntry]) {
-        let mut guard = crate::sync::write(&self.inner);
+        let mut guard = restream_sync::lock::write(&self.inner);
         *guard = build_policy_snapshot(global, entries);
     }
 
     pub fn global_config(&self) -> SrtGlobalIngestConfig {
-        crate::sync::read(&self.inner).global.clone()
+        restream_sync::lock::read(&self.inner).global.clone()
     }
 
     pub(crate) fn resolved_policy(&self, stream_key: &str) -> Option<ResolvedSrtIngestConfig> {
-        crate::sync::read(&self.inner)
+        restream_sync::lock::read(&self.inner)
             .per_stream_key
             .get(stream_key)
             .cloned()

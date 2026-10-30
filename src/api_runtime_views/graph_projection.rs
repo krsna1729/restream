@@ -125,7 +125,7 @@ pub(super) fn processing_graph_demux_details(ingest: &ActiveIngest) -> serde_jso
         "video": metadata.video,
         "videoTrackSelection": ingest_video_track_selection_json(ingest),
         "audio": metadata.audio,
-        "audioTracks": crate::sync::lock(&ingest.audio_tracks)
+        "audioTracks": restream_sync::lock::lock(&ingest.audio_tracks)
             .iter()
             .cloned()
             .collect::<Vec<_>>(),
@@ -181,7 +181,7 @@ pub(super) fn processing_graph_egress_details(
     let bytes = egress.bytes_sent.load(Ordering::Relaxed);
     let mut details = egress_runtime_json(egress, true, has_ingest, None);
     details["totalSize"] = serde_json::json!(bytes);
-    details["bitrateKbps"] = serde_json::json!(*crate::sync::lock(&egress.bitrate_kbps));
+    details["bitrateKbps"] = serde_json::json!(*restream_sync::lock::lock(&egress.bitrate_kbps));
     details["startedAt"] = serde_json::Value::String(egress.started_at.clone());
     details
 }

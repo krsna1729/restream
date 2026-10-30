@@ -58,7 +58,7 @@ destination.
 | SRT Owner → Tokio events | all SRT peers | — | 256-slot bridge plus 1024 pending events; media never waits | [runtime crossings](runtime-crossings.md) |
 | Egress shard thread | outputs on the shard | panic boundary per visit; `WorkBudget` per visit | — | `panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others`, `blocked_leaf_does_not_starve_ready_leaf_on_same_shard_thread` |
 | Egress send memory | outputs on the shard | `LeafLimits::max_pending_bytes`, lag, backpressure time | shard leaf capacity | `src/media/egress/shard/tests/leaf_isolation.rs` |
-| Std locks shared by entities | entities and the status API | poison-tolerant `crate::sync::{lock, read, write}`; raw calls disallowed by `clippy.toml` | — | `a_poisoned_lock_still_serves_later_callers`; clippy `-D warnings` |
+| Std locks shared by entities | entities and the status API | poison-tolerant `restream_sync::lock::{lock, read, write}`; raw calls disallowed by `clippy.toml` | — | `a_poisoned_lock_still_serves_later_callers`; clippy `-D warnings` |
 | Feed rings | one pipeline's outputs | readers never block the producer; an overrun resyncs the reader | ring capacity | `fault_injection_rapid_overflow_recovery`, `first_visit_primes_the_cursor_to_the_latest_sync_point` |
 | Listener tasks | the whole protocol | — | restart with backoff | `listener_supervisor` tests |
 | Allocator, FDs, CPU | everything | the per-entity bounds above | `nofile`, cgroup | capacity ramps |
@@ -94,7 +94,7 @@ the RTMP admission deadline, lock poisoning, the `ts_demux` fuzz target).
 | Guard | Mechanism | Status |
 |---|---|---|
 | Containment needs unwinding | `#[cfg(all(panic = "abort", not(kani)))] compile_error!` in `src/lib.rs` | done |
-| No panicking or skipped lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock` and `RwLock::{read,write}` outside `crate::sync` (tests, benches and the harness may use them) | done |
+| No panicking or skipped lock access | `clippy.toml` `disallowed-methods` on `Mutex::lock` and `RwLock::{read,write}` outside `restream_sync::lock` (tests, benches and the harness may use them) | done |
 | Parsers cannot index, overflow or unwrap | `#![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::panic)]` per parser module | per module (F6) |
 | Overflow is never silent | `overflow-checks = true` in release | rejected (F7) |
 | Fault-injection points never ship | `#[cfg(test)]` only (`INJECTED_PANIC_PAYLOAD`, `injected_panics`, `EngineScript::Panic`) | done |

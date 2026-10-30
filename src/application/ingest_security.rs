@@ -55,7 +55,7 @@ mod tests {
                 if self.fail {
                     return Err(MetaLookupError::new("db unavailable"));
                 }
-                Ok(crate::sync::lock(&self.value).clone())
+                Ok(restream_sync::lock::lock(&self.value).clone())
             })
         }
     }
@@ -69,7 +69,7 @@ mod tests {
                 if self.fail {
                     return Err(MetaLookupError::new("db unavailable"));
                 }
-                *crate::sync::lock(&self.value) = Some(value.to_string());
+                *restream_sync::lock::lock(&self.value) = Some(value.to_string());
                 Ok(value.to_string())
             })
         }
@@ -152,7 +152,7 @@ mod tests {
 
         save_ingest_security_config(&store, &config).await.unwrap();
 
-        let persisted = crate::sync::lock(&store.value).clone().unwrap();
+        let persisted = restream_sync::lock::lock(&store.value).clone().unwrap();
         let roundtrip: IngestSecurityConfig = serde_json::from_str(&persisted).unwrap();
         assert_eq!(roundtrip.failure_limit, config.failure_limit);
         assert_eq!(roundtrip.failure_window_ms, config.failure_window_ms);
@@ -175,7 +175,7 @@ mod tests {
 
         save_ingest_security_config(&store, &config).await.unwrap();
 
-        let persisted = crate::sync::lock(&store.value).clone().unwrap();
+        let persisted = restream_sync::lock::lock(&store.value).clone().unwrap();
         let roundtrip: IngestSecurityConfig = serde_json::from_str(&persisted).unwrap();
         assert_eq!(roundtrip.failure_limit, 1);
         assert_eq!(roundtrip.failure_window_ms, 1);

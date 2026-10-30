@@ -713,7 +713,7 @@ impl SegmentPublisher {
         }
         for packet in &self.packets {
             if packet.media_type == MediaType::Video && packet.is_keyframe {
-                let mut times = crate::sync::lock(&target.keyframe_times);
+                let mut times = restream_sync::lock::lock(&target.keyframe_times);
                 times.push(packet.pts);
                 if times.len() > 30 {
                     times.remove(0);

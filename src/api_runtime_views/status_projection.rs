@@ -35,7 +35,7 @@ pub(super) fn active_pipeline_input_json(
         "remoteAddr": metadata.remote_addr,
         "quality": metadata.quality,
     });
-    let audio_tracks = crate::sync::lock(&ingest.audio_tracks)
+    let audio_tracks = restream_sync::lock::lock(&ingest.audio_tracks)
         .iter()
         .cloned()
         .collect::<Vec<_>>();
@@ -95,7 +95,7 @@ pub(super) fn active_pipeline_input_summary_json(
         let ts = chrono::Utc::now() - chrono::Duration::seconds(elapsed_secs as i64);
         ts.to_rfc3339()
     };
-    let audio_tracks = crate::sync::lock(&ingest.audio_tracks);
+    let audio_tracks = restream_sync::lock::lock(&ingest.audio_tracks);
     let probe_ready = metadata.video.is_some() || !audio_tracks.is_empty();
     let probe_status = if probe_ready { "ready" } else { "pending" };
     let probe_pending_ms = (!probe_ready).then_some((elapsed_secs * 1000.0).round() as u64);
@@ -359,7 +359,7 @@ mod tests {
     fn active_input_surfaces_single_video_selection_policy() {
         let ingest = active_ingest("srt", 0, 0, 0);
         {
-            let mut metadata = crate::sync::write(&ingest.metadata);
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
             metadata.video = Some(restream_core::metadata::VideoMeta {
                 codec: "h264".to_string(),
                 ..Default::default()

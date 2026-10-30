@@ -27,7 +27,7 @@ async fn egress_with_delivery(
         .register_egress(output_id, pipeline_id, "rtmp://dest/live")
         .await;
     let active = engine.egresses.active.read().await;
-    let mut quality = crate::sync::lock(&active[output_id].quality);
+    let mut quality = restream_sync::lock::lock(&active[output_id].quality);
     quality.delivered_bps = rate.map(|(bps, _)| bps);
     quality.delivery_ratio = rate.map(|(_, ratio)| ratio);
 }

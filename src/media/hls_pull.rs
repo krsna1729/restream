@@ -179,7 +179,7 @@ impl HlsPullTask {
     /// one end a restart would replay, so it is the one a caller must not
     /// restart.
     pub fn end(&self) -> Option<PullEnd> {
-        *crate::sync::lock(&self.end)
+        *restream_sync::lock::lock(&self.end)
     }
 
     /// The state [`Self::end`] reads, shared with the task.
@@ -219,7 +219,7 @@ pub fn spawn(
     let task_end = end.clone();
     let join = tokio::spawn(async move {
         let ended = run(engine, ingest, identity, source, limits, token).await;
-        *crate::sync::lock(&task_end) = Some(ended);
+        *restream_sync::lock::lock(&task_end) = Some(ended);
     });
     HlsPullTask { cancel, join, end }
 }

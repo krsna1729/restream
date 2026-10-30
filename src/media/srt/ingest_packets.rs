@@ -80,7 +80,7 @@ fn record_keyframes(keyframe_times: &Arc<Mutex<Vec<i64>>>, packets: &[MediaPacke
         if packet.media_type != MediaType::Video || !packet.is_keyframe {
             continue;
         }
-        let mut times = crate::sync::lock(keyframe_times);
+        let mut times = restream_sync::lock::lock(keyframe_times);
         times.push(packet.pts);
         if times.len() > 30 {
             times.remove(0);

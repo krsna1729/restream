@@ -157,8 +157,8 @@ impl MediaEngine {
         let Some(ingest) = ingest else {
             return (None, None);
         };
-        let video = crate::sync::lock(&ingest.video_sequence_header).clone();
-        let audio = crate::sync::lock(&ingest.audio_sequence_header).clone();
+        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
         (video, audio)
     }
 

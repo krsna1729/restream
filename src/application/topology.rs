@@ -48,7 +48,7 @@ impl ReconcileRequests {
 
     /// Run an output pass at `at` (or right away if it is past).
     pub fn wake_at(&self, at: Instant) {
-        crate::sync::lock(&self.deadlines).insert(at);
+        restream_sync::lock::lock(&self.deadlines).insert(at);
         // The loop recomputes its sleep with the new deadline.
         self.wake.notify_one();
     }
@@ -57,7 +57,7 @@ impl ReconcileRequests {
     /// every deadline at or before `now`.
     pub fn take_due(&self, now: Instant) -> bool {
         let dirty = self.dirty.swap(false, Ordering::AcqRel);
-        let mut deadlines = crate::sync::lock(&self.deadlines);
+        let mut deadlines = restream_sync::lock::lock(&self.deadlines);
         let before = deadlines.len();
         deadlines.retain(|at| *at > now);
         dirty || deadlines.len() != before
@@ -65,7 +65,7 @@ impl ReconcileRequests {
 
     /// The earliest pending deadline.
     pub fn next_deadline(&self) -> Option<Instant> {
-        crate::sync::lock(&self.deadlines).first().copied()
+        restream_sync::lock::lock(&self.deadlines).first().copied()
     }
 
     /// The pipeline's persisted input selection changed: the next pass makes
@@ -76,7 +76,7 @@ impl ReconcileRequests {
     /// not an input row id, so the engine's selected id legitimately differs
     /// from the persisted one while they publish.
     pub fn input_selection_changed(&self, pipeline_id: &str) {
-        crate::sync::lock(&self.dirty_selections).insert(pipeline_id.to_string());
+        restream_sync::lock::lock(&self.dirty_selections).insert(pipeline_id.to_string());
         self.wake();
     }
 
@@ -86,11 +86,11 @@ impl ReconcileRequests {
     }
 
     fn take_dirty_selections(&self) -> HashSet<String> {
-        std::mem::take(&mut *crate::sync::lock(&self.dirty_selections))
+        std::mem::take(&mut *restream_sync::lock::lock(&self.dirty_selections))
     }
 
     fn keep_dirty_selection(&self, pipeline_id: String) {
-        crate::sync::lock(&self.dirty_selections).insert(pipeline_id);
+        restream_sync::lock::lock(&self.dirty_selections).insert(pipeline_id);
     }
 }
 

@@ -55,7 +55,7 @@ struct ConnectionCounter<'a> {
 
 impl Drop for ConnectionCounter<'_> {
     fn drop(&mut self) {
-        restream::sync::lock(&self.metrics.per_connection)
+        restream_sync::lock::lock(&self.metrics.per_connection)
             .retain(|bytes| !Arc::ptr_eq(bytes, self.bytes));
     }
 }
@@ -69,7 +69,7 @@ impl GeneralizedSinkMetrics {
     }
 
     pub(crate) fn per_connection_bytes(&self) -> Vec<u64> {
-        restream::sync::lock(&self.per_connection)
+        restream_sync::lock::lock(&self.per_connection)
             .iter()
             .map(|bytes| bytes.load(Ordering::Relaxed))
             .collect()
@@ -223,7 +223,7 @@ where
 {
     metrics.connections.fetch_add(1, Ordering::Relaxed);
     let wire_bytes = Arc::new(AtomicU64::new(0));
-    restream::sync::lock(&metrics.per_connection).push(wire_bytes.clone());
+    restream_sync::lock::lock(&metrics.per_connection).push(wire_bytes.clone());
     let _registered = ConnectionCounter {
         metrics: &metrics,
         bytes: &wire_bytes,

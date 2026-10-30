@@ -170,7 +170,7 @@ impl IngestWriter for FakeIngestWriter {
                 target_gop_seconds,
                 playlist: Vec::new(),
             };
-            crate::sync::lock(&self.created).push(ingest.clone());
+            restream_sync::lock::lock(&self.created).push(ingest.clone());
             Ok(ingest)
         })
     }
@@ -243,7 +243,7 @@ impl IngestWriter for FakeIngestWriter {
             if let Some(message) = self.fail {
                 return Err(IngestWriteError::new(message));
             }
-            crate::sync::lock(&self.deleted).push(id.to_string());
+            restream_sync::lock::lock(&self.deleted).push(id.to_string());
             Ok(true)
         })
     }
@@ -757,7 +757,7 @@ async fn persist_pipeline_file_ingest_updates_pipeline_and_deletes_stale_ingests
 
     assert_eq!(saved.id, "ingest-current");
     assert_eq!(saved.filename, "updated.mp4");
-    let deleted = crate::sync::lock(&ingest_writer.deleted).clone();
+    let deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
     assert_eq!(deleted, vec!["ingest-stale".to_string()]);
 }
 
@@ -826,10 +826,10 @@ async fn persist_pipeline_file_ingest_creates_new_ingest_when_none_exists() {
 
     assert_eq!(saved.id, "generated-id");
     assert_eq!(saved.filename, "new.mp4");
-    let created = crate::sync::lock(&ingest_writer.created).clone();
+    let created = restream_sync::lock::lock(&ingest_writer.created).clone();
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].id, "generated-id");
-    let deleted = crate::sync::lock(&ingest_writer.deleted).clone();
+    let deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
     assert!(deleted.is_empty());
 }
 
@@ -916,7 +916,7 @@ async fn remove_pipeline_file_ingest_deletes_all_ingests_and_clears_input_source
         .await
         .unwrap();
 
-    let mut deleted = crate::sync::lock(&ingest_writer.deleted).clone();
+    let mut deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
     deleted.sort();
     assert_eq!(
         deleted,

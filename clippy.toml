@@ -1,5 +1,5 @@
 disallowed-methods = [
-  { path = "std::sync::Mutex::lock", reason = "use crate::sync::lock: a poisoned lock must not panic every later reader" },
-  { path = "std::sync::RwLock::read", reason = "use crate::sync::read (poison-tolerant)" },
-  { path = "std::sync::RwLock::write", reason = "use crate::sync::write (poison-tolerant)" },
+  { path = "std::sync::Mutex::lock", reason = "use restream_sync::lock::lock: a poisoned lock must not panic every later reader" },
+  { path = "std::sync::RwLock::read", reason = "use restream_sync::lock::read (poison-tolerant)" },
+  { path = "std::sync::RwLock::write", reason = "use restream_sync::lock::write (poison-tolerant)" },
 ]

@@ -4234,6 +4234,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "restream",
+ "restream-sync",
  "rml_rtmp",
  "rtrb",
  "rustls-pki-types",

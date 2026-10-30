@@ -433,7 +433,7 @@ fn eviction_candidate(records: &HashMap<String, OperationRecord>) -> Option<Stri
 }
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    crate::sync::lock(mutex)
+    restream_sync::lock::lock(mutex)
 }
 
 pub fn public_record(record: &OperationRecord) -> Value {

@@ -317,7 +317,7 @@ async fn resolve_hls_preview_metadata(
             ingests.get(pipeline_id).and_then(|ingest| {
                 let metadata = ingest.metadata();
                 let video = preview_video_meta.clone().or(metadata.video)?;
-                let lock = crate::sync::lock(&ingest.audio_tracks);
+                let lock = restream_sync::lock::lock(&ingest.audio_tracks);
                 let tracks = if lock.is_empty() {
                     metadata
                         .audio

@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 restream = { path = "../.." }
+restream-sync = { path = "../restream-sync" }
 axum = { version = "0.8", features = ["macros"] }
 bytes = "1.12"
 chrono = { version = "0.4", features = ["serde"] }

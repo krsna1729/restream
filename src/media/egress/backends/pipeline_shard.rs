@@ -62,7 +62,7 @@ impl SharedPipelineTargetSource {
     }
 
     pub(crate) fn set(&self, output_id: OutputId, target: PipelineTarget) {
-        crate::sync::lock(&self.pending).insert(output_id, target);
+        restream_sync::lock::lock(&self.pending).insert(output_id, target);
     }
 
     /// Drop a claimed target once its output is genuinely removed (not
@@ -71,7 +71,7 @@ impl SharedPipelineTargetSource {
     /// `SharedRtmpPublishStartupSource::remove`, called from
     /// `dispatch_pipeline_fabric_command` on `EgressCommand::Remove`.
     pub(crate) fn remove(&self, output_id: &OutputId) {
-        crate::sync::lock(&self.pending).remove(output_id);
+        restream_sync::lock::lock(&self.pending).remove(output_id);
     }
 }
 
@@ -87,7 +87,9 @@ impl PipelineTargetSource for SharedPipelineTargetSource {
     // target input (see `PipelineEngine::close`'s doc comment), so leaving
     // the entry in place until the output is genuinely removed is safe.
     fn take_target(&mut self, output_id: &OutputId) -> Option<PipelineTarget> {
-        crate::sync::lock(&self.pending).get(output_id).cloned()
+        restream_sync::lock::lock(&self.pending)
+            .get(output_id)
+            .cloned()
     }
 }
 

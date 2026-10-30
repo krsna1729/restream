@@ -93,7 +93,7 @@ async fn digest_origin(
         .unwrap_or_default()
         .to_string();
     let answered = {
-        let mut seen = crate::sync::lock(&origin.seen);
+        let mut seen = restream_sync::lock::lock(&origin.seen);
         seen.push(authorization.clone());
         seen.iter()
             .filter(|value| value.starts_with("Digest "))
@@ -147,7 +147,7 @@ async fn fetch_with_digest(
     .unwrap();
     let scope = AuthScope::new(&url, auth);
     let result = super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
-    let seen = crate::sync::lock(&origin.seen).clone();
+    let seen = restream_sync::lock::lock(&origin.seen).clone();
     (result, seen)
 }
 
@@ -274,7 +274,7 @@ async fn a_nonce_rotated_without_stale_is_answered_on_the_next_request() {
     let served = nonce.clone();
     let app =
         axum::Router::new().fallback(axum::routing::get(move |headers: axum::http::HeaderMap| {
-            let current = *crate::sync::lock(&served);
+            let current = *restream_sync::lock::lock(&served);
             async move {
                 use axum::response::IntoResponse as _;
                 let authorization = headers
@@ -309,7 +309,7 @@ async fn a_nonce_rotated_without_stale_is_answered_on_the_next_request() {
     let fetch = || super::fetch::fetch_small(&client, &url, &scope, 4096);
 
     assert!(fetch().await.is_ok(), "the first challenge is answered");
-    *crate::sync::lock(&nonce) = "n2";
+    *restream_sync::lock::lock(&nonce) = "n2";
     assert!(
         matches!(fetch().await, Err(super::fetch::FetchError::Status(401))),
         "a non-stale refusal is not re-sent within the request"
@@ -350,7 +350,7 @@ async fn a_digest_username_outside_ascii_is_refused_with_its_reason() {
         other => panic!("a non-ASCII Digest username is refused, got {other:?}"),
     }
     assert_eq!(
-        crate::sync::lock(&origin.seen).len(),
+        restream_sync::lock::lock(&origin.seen).len(),
         1,
         "no Digest answer was sent"
     );

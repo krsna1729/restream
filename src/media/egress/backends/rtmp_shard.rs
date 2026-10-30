@@ -87,17 +87,19 @@ impl SharedRtmpPublishStartupSource {
     }
 
     pub(crate) fn set(&self, output_id: OutputId, startup: RtmpPublishStartup) {
-        crate::sync::lock(&self.pending).insert(output_id, startup);
+        restream_sync::lock::lock(&self.pending).insert(output_id, startup);
     }
 
     pub(crate) fn remove(&self, output_id: &OutputId) {
-        crate::sync::lock(&self.pending).remove(output_id);
+        restream_sync::lock::lock(&self.pending).remove(output_id);
     }
 }
 
 impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
     fn take_startup(&mut self, output_id: &OutputId) -> Option<RtmpPublishStartup> {
-        crate::sync::lock(&self.pending).get(output_id).cloned()
+        restream_sync::lock::lock(&self.pending)
+            .get(output_id)
+            .cloned()
     }
 }
 

@@ -101,22 +101,22 @@ async fn credentials_do_not_leave_the_source_origin() {
 
     wait_for_request(&origin, "/live/seg1.ts").await;
     wait_for_request(&other, "/ad/seg0.ts").await;
-    let own = crate::sync::lock(&origin.authorization).clone();
+    let own = restream_sync::lock::lock(&origin.authorization).clone();
     assert!(
         own.iter().all(|value| value == "Bearer origin-token") && own.len() >= 2,
         "the source's own requests carry it: {own:?}"
     );
-    let own_keys = crate::sync::lock(&origin.api_keys).clone();
+    let own_keys = restream_sync::lock::lock(&origin.api_keys).clone();
     assert!(
         own_keys.iter().all(|value| value == "origin-key") && own_keys.len() >= 2,
         "{own_keys:?}"
     );
     assert!(
-        crate::sync::lock(&other.authorization).is_empty(),
+        restream_sync::lock::lock(&other.authorization).is_empty(),
         "the other origin never sees Authorization"
     );
     assert!(
-        crate::sync::lock(&other.api_keys).is_empty(),
+        restream_sync::lock::lock(&other.api_keys).is_empty(),
         "the other origin never sees the custom header"
     );
 
@@ -202,7 +202,7 @@ async fn a_redirect_out_of_the_source_origin_is_not_followed() {
         "the redirect was refused, not followed"
     );
     assert!(
-        crate::sync::lock(&other.authorization).is_empty(),
+        restream_sync::lock::lock(&other.authorization).is_empty(),
         "and the other origin saw no credential"
     );
 

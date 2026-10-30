@@ -150,14 +150,14 @@ impl Findings {
     }
 
     fn update(&self, change: impl FnOnce(&mut QaTracker)) {
-        let mut tracker = crate::sync::lock(&self.tracker);
+        let mut tracker = restream_sync::lock::lock(&self.tracker);
         change(&mut tracker);
-        *crate::sync::lock(&self.published) = tracker.snapshot().clone();
+        *restream_sync::lock::lock(&self.published) = tracker.snapshot().clone();
     }
 
     /// A restarted child starts a new picture sequence.
     fn forget_picture(&self) {
-        crate::sync::lock(&self.tracker).forget_picture();
+        restream_sync::lock::lock(&self.tracker).forget_picture();
     }
 
     /// A new child checks this many tracks.
@@ -331,7 +331,7 @@ async fn run_child(
         };
         (
             ingest.metadata().video.clone(),
-            crate::sync::lock(&ingest.audio_tracks).to_vec(),
+            restream_sync::lock::lock(&ingest.audio_tracks).to_vec(),
         )
     };
     let has_video = video.is_some();

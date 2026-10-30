@@ -79,7 +79,7 @@ mod tests {
                 if self.fail {
                     return Err(MetaLookupError::new("db unavailable"));
                 }
-                Ok(crate::sync::lock(&self.value).clone())
+                Ok(restream_sync::lock::lock(&self.value).clone())
             })
         }
     }
@@ -93,7 +93,7 @@ mod tests {
                 if self.fail {
                     return Err(MetaLookupError::new("db unavailable"));
                 }
-                *crate::sync::lock(&self.value) = Some(value.to_string());
+                *restream_sync::lock::lock(&self.value) = Some(value.to_string());
                 Ok(value.to_string())
             })
         }

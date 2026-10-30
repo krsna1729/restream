@@ -65,7 +65,7 @@ impl RevocableKey {
     }
 
     pub(crate) fn seen_client_ips(&self) -> Vec<String> {
-        crate::sync::lock(&self.seen_client_ips).clone()
+        restream_sync::lock::lock(&self.seen_client_ips).clone()
     }
 }
 
@@ -77,7 +77,7 @@ impl PipelineAccessAuthenticator for RevocableKey {
         client_ip: &'a str,
     ) -> PipelineAccessFuture<'a> {
         Box::pin(async move {
-            crate::sync::lock(&self.seen_client_ips).push(client_ip.to_string());
+            restream_sync::lock::lock(&self.seen_client_ips).push(client_ip.to_string());
             if mode == PipelineAccessMode::HlsPublish
                 && stream_key == STREAM_KEY
                 && !self.revoked.load(std::sync::atomic::Ordering::Relaxed)

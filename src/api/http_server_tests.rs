@@ -71,7 +71,7 @@ async fn a_departed_streaming_client_is_released_at_once() {
     let app = Router::new().route(
         "/stream",
         get(move || {
-            let guard = crate::sync::lock(&guard).take();
+            let guard = restream_sync::lock::lock(&guard).take();
             async move {
                 let first = futures_util::stream::once(async {
                     Ok::<_, std::io::Error>(Bytes::from_static(b"data: hello\n\n"))
@@ -115,7 +115,7 @@ async fn an_upload_half_closed_after_its_body_is_read() {
     let app = Router::new().route(
         "/ingest/hls/{key}/{*path}",
         put(move |body: Bytes| {
-            if let Some(sender) = crate::sync::lock(&received).take() {
+            if let Some(sender) = restream_sync::lock::lock(&received).take() {
                 let _ = sender.send(body);
             }
             async { "ok" }

@@ -173,16 +173,18 @@ pub(crate) struct SharedMoqStartupSource {
 
 impl SharedMoqStartupSource {
     pub(crate) fn set(&self, output_id: OutputId, startup: MoqPublishStartup) {
-        crate::sync::lock(&self.pending).insert(output_id, startup);
+        restream_sync::lock::lock(&self.pending).insert(output_id, startup);
     }
 
     pub(crate) fn remove(&self, output_id: &OutputId) {
-        crate::sync::lock(&self.pending).remove(output_id);
+        restream_sync::lock::lock(&self.pending).remove(output_id);
     }
 
     /// The snapshot for `output_id`; it stays until the output is removed,
     /// so a reconnect of the same generation finds it again.
     pub(crate) fn take_startup(&self, output_id: &OutputId) -> Option<MoqPublishStartup> {
-        crate::sync::lock(&self.pending).get(output_id).cloned()
+        restream_sync::lock::lock(&self.pending)
+            .get(output_id)
+            .cloned()
     }
 }
