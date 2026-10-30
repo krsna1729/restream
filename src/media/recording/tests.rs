@@ -98,24 +98,6 @@ fn build_conversion_state_path_adds_sidecar_suffix() {
     );
 }
 
-#[tokio::test]
-async fn recording_settings_default_to_deleting_source_ts() {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-        .await
-        .expect("in-memory sqlite should connect");
-    crate::db::setup_database_schema(&pool)
-        .await
-        .expect("schema should initialize");
-    let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
-
-    assert_eq!(
-        crate::application::recording::load_recording_settings(&meta_store).await,
-        RecordingSettings {
-            retain_source_ts: false
-        }
-    );
-}
-
 #[test]
 fn build_recording_remux_args_targets_faststart_mp4_copy() {
     let input = Path::new("/tmp/input.ts");

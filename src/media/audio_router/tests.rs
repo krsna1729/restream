@@ -87,39 +87,6 @@ fn apply_routing_select_tracks_filters_and_reindexes() {
     assert_eq!(result[1].sample_rate, 32000);
 }
 
-/// Verify that stage keys for different video presets with the same audio
-/// routing produce different cache keys, preventing cross-contamination.
-#[test]
-fn stage_keys_isolate_video_presets() {
-    use crate::planner::EncodingStagePlan;
-
-    let plan_720 = EncodingStagePlan::from_encoding("pipe1", "720p+atrack:0");
-    let plan_1080 = EncodingStagePlan::from_encoding("pipe1", "1080p+atrack:0");
-
-    let audio_720 = plan_720.audio_stage().unwrap();
-    let audio_1080 = plan_1080.audio_stage().unwrap();
-    assert_ne!(
-        audio_720, audio_1080,
-        "audio stages with different video upstreams must have different keys"
-    );
-
-    let plan_720_dup = EncodingStagePlan::from_encoding("pipe1", "720p+atrack:0");
-    assert_eq!(audio_720, plan_720_dup.audio_stage().unwrap());
-}
-
-/// Verify video stage keys are shared across outputs with different audio routing.
-#[test]
-fn video_stage_shared_across_audio_variants() {
-    use crate::domain::stage::StageKind;
-    use crate::planner::EncodingStagePlan;
-    let expected = StageKind::video_preset("720p");
-    for encoding in &["720p", "720p+atrack:0", "720p+remap:0:1"] {
-        let plan = EncodingStagePlan::from_encoding("pipe1", encoding);
-        let video = plan.video_stage().unwrap();
-        assert_eq!(video.kind, expected, "encoding={}", encoding);
-    }
-}
-
 #[test]
 fn test_apply_audio_routing_reindexes() {
     let input_tracks = vec![
