@@ -51,7 +51,7 @@ gates.
 
 ## Loom models
 
-The gates run every model in `LOOM_TARGETS`
+`cargo xtask concurrency fast` runs every model in `LOOM_TARGETS`
 (`crates/xtask/src/concurrency.rs`). Each is `tests/<target>.rs`, built with
 `--cfg loom` on the test crate only.
 
@@ -70,15 +70,12 @@ The gates run every model in `LOOM_TARGETS`
 Build and run one model the way the gate does:
 
 ```sh
-cargo rustc --test byte_queue_loom --message-format=json-render-diagnostics -- --cfg loom
-# then run the test executable named in the last compiler-artifact message:
-target/debug/deps/byte_queue_loom-<hash> --nocapture
+cargo xtask loom byte_queue_loom
 ```
 
-`cargo xtask concurrency fast` does both steps for every model. Add a loom
-model only for a new cross-thread primitive (a wake, a snapshot swap, a
-shutdown signal, a get-or-create registry). Loom across the dataplane means
-the ownership model was broken.
+Add a loom model only for a new cross-thread primitive (a wake, a snapshot
+swap, a shutdown signal, a get-or-create registry). Loom across the dataplane
+means the ownership model was broken.
 
 ## Live fault modes
 
@@ -102,12 +99,14 @@ cargo xtask concurrency contract   # CI: concurrency-contract, master only
 
 | Step | `fast` | `contract` |
 |---|---|---|
+| All loom models | yes | — |
 | Process-lifecycle guard over `crates/test_harness/src/main.rs` (every spawn armed for kill-and-wait) | — | yes |
-| All loom models | yes | yes |
-| `COMMON_TESTS`: focused API, db, lib, proptest and transcoder tests | yes | yes |
-| `FAST_ONLY_TESTS`: RTMP feed-wake, two SRT ingress Owners, health view, `test_harness` unit tests | yes | — |
 | Build `restream` and `test_harness`, run the five `CONTRACT_MODES` | — | yes |
 | No new `restream`, `mediamtx`, `ffmpeg`, `ffprobe` or `test_harness` process survives a mode | — | yes |
+
+Unit, integration and property tests, including the mandatory surfaces
+below, run in the CI `test` job (`cargo test --workspace`) on every run; the
+gates do not repeat them.
 
 `contract` logs each step to `.local/artifacts/concurrency-contract-logs/`
 and prints a log only on failure. `CONCURRENCY_HARNESS_ARGS` passes extra
@@ -118,40 +117,41 @@ harness flags (CI sets `--no-netns`).
 When you touch concurrency-sensitive code:
 
 1. Add or update the narrowest proof that catches the bug.
-2. Add it to `crates/xtask/src/concurrency.rs` if it must be mandatory.
+2. Add a new loom model to `LOOM_TARGETS` in
+   `crates/xtask/src/concurrency.rs`; a new live mode to `CONTRACT_MODES`.
 3. Update the live harness if visible teardown or recovery changed.
 4. Update the API docs if status semantics changed.
 
 If no new proof is needed, name the existing coverage in the commit
 message. Run the targeted new or changed proof locally; CI runs the
-mandatory gates. A test filter that selects no tests fails the step.
+mandatory gates.
 
 ## Mandatory surfaces
 
 These tests guard the boundaries above. Weaken or remove one only with an
-equal or stronger replacement in the same change. Names marked *gate* run in
-`cargo xtask concurrency fast` and `contract`.
+equal or stronger replacement in the same change. They run in the CI `test`
+job; loom models also run in `cargo xtask concurrency fast`.
 
 | Area | Tests |
 |---|---|
-| API status retention (`tests/api.rs`, *gate*) | `health_endpoint_exposes_probe_and_egress_fault_fields`, `health_endpoint_surfaces_repeated_transient_disconnects_as_flapping`, `recovered_output_surfaces_flapping_after_repeated_sink_failures`, `output_status_and_health_preserve_recent_egress_failure_after_unregister` |
-| Output status contract (`tests/output_status_contract.rs`, *gate*) | `active_output_status_matches_health_runtime_fields`, `stalled_output_status_matches_health_runtime_fields` |
-| Ring migration (`tests/ring_migration.rs`, *gate*) | `prop_no_loss_no_gap_no_duplication`, `prop_multi_reader_migration_preserves_each_reader_order` |
-| Engine attempts (`src/media/engine_tests/`, *gate*) | `stale_ingest_unregister_cannot_clobber_replacement_attempt`, `stale_ingest_disconnect_cannot_poison_replacement_attempt`, `stale_egress_unregister_cannot_clobber_replacement_attempt`, `stale_egress_error_cannot_poison_replacement_attempt` |
-| Engine health (*gate*) | `build_recent_ingest_outcome_resets_flap_streak_outside_window`, `prop_ingest_lifecycle_preserves_health_invariants`, `build_recent_egress_outcome_resets_flap_streak_outside_window`, `health_snapshot_surfaces_flapping_after_repeated_reconnects`, `health_snapshot_surfaces_flapping_after_repeated_egress_recoveries`, `output_status_surfaces_retry_backoff_after_failure`, `prop_egress_lifecycle_preserves_runtime_and_health_invariants` |
-| Egress cursor priming (`src/media/egress/visit_tests.rs`, *gate*) | `first_visit_primes_the_cursor_to_the_latest_sync_point`, `first_visit_primes_to_the_live_edge_without_a_sync_point`, `first_visit_primes_the_cursor_epoch_from_the_feed` |
+| API status retention (`tests/api.rs`) | `health_endpoint_exposes_probe_and_egress_fault_fields`, `health_endpoint_surfaces_repeated_transient_disconnects_as_flapping`, `recovered_output_surfaces_flapping_after_repeated_sink_failures`, `output_status_and_health_preserve_recent_egress_failure_after_unregister` |
+| Output status contract (`tests/output_status_contract.rs`) | `active_output_status_matches_health_runtime_fields`, `stalled_output_status_matches_health_runtime_fields` |
+| Ring migration (`tests/ring_migration.rs`) | `prop_no_loss_no_gap_no_duplication`, `prop_multi_reader_migration_preserves_each_reader_order` |
+| Engine attempts (`src/media/engine_tests/`) | `stale_ingest_unregister_cannot_clobber_replacement_attempt`, `stale_ingest_disconnect_cannot_poison_replacement_attempt`, `stale_egress_unregister_cannot_clobber_replacement_attempt`, `stale_egress_error_cannot_poison_replacement_attempt` |
+| Engine health | `build_recent_ingest_outcome_resets_flap_streak_outside_window`, `prop_ingest_lifecycle_preserves_health_invariants`, `build_recent_egress_outcome_resets_flap_streak_outside_window`, `health_snapshot_surfaces_flapping_after_repeated_reconnects`, `health_snapshot_surfaces_flapping_after_repeated_egress_recoveries`, `output_status_surfaces_retry_backoff_after_failure`, `prop_egress_lifecycle_preserves_runtime_and_health_invariants` |
+| Egress cursor priming (`src/media/egress/visit_tests.rs`) | `first_visit_primes_the_cursor_to_the_latest_sync_point`, `first_visit_primes_to_the_live_edge_without_a_sync_point`, `first_visit_primes_the_cursor_epoch_from_the_feed` |
 | SRT egress Owners (`src/media/egress/backends/srt/owner_set.rs`) | `runtime_and_owners_live_and_die_on_the_shard_thread`, `many_ipv4_outputs_share_one_owner_and_one_caller_socket`, `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`, `mixed_family_bond_is_rejected_without_partial_admission` |
 | SRT egress scheduling (`src/media/egress/backends/srt/tests/`) | `stale_queued_admission_never_attaches_to_a_replacement_generation`, `late_dns_for_an_old_generation_is_ignored`, `one_ready_batch_is_one_owner_service_pass`, `a_wake_examines_a_bounded_slice_of_parked_leaves`, `command_wakes_a_parked_compio_wait_promptly`, `owner_protocol_deadline_bounds_the_park`, `shutdown_under_active_tx_reaches_owner_quiescence` |
-| Recording byte queue (`crates/restream-sync/src/byte_queue.rs`, *gate*) | `byte_queue_loom`; `cargo test -p restream-sync --lib byte_queue::tests` (includes `write_batch_round_trips_random_chunks`) |
-| Transcoder (*gate*) | `replacement_video_stage_preserves_codec_hint_and_audio_tracks` (`tests/transcoder.rs`); `external_output_stream_idx_routes_known_tracks_without_aliasing`, `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`, `external_720p_stage_emits_live_packets_for_h264_marker_fixture`, `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts` |
-| HLS (*gate*) | `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
-| SRT ingress Owner (`src/media/srt/ingress_*`, *gate* via `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |
-| RTMP listener (`src/media/rtmp/listener.rs`, *gate*) | `media::rtmp::listener::tests` |
-| Egress feed wakes | `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (`rtmp_shard_tests.rs`), `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (`egress/runtime.rs`), and in `egress/shard/tests/feed_wake.rs`: `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`, `a_full_command_queue_cannot_strand_a_feeds_final_publication`, `full_fallback_preserves_an_already_queued_publication_wake` (all *gate*) |
-| Egress shard recovery (*gate*: `lib-egress-resize`, `lib-egress-panic-recovery`) | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
-| SRT stream id (*gate*) | `media::srt_stream_id::tests` |
+| Recording byte queue (`crates/restream-sync/src/byte_queue.rs`) | `byte_queue_loom`; `cargo test -p restream-sync --lib byte_queue::tests` (includes `write_batch_round_trips_random_chunks`) |
+| Transcoder | `replacement_video_stage_preserves_codec_hint_and_audio_tracks` (`tests/transcoder.rs`); `external_output_stream_idx_routes_known_tracks_without_aliasing`, `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`, `external_720p_stage_emits_live_packets_for_h264_marker_fixture`, `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts` |
+| HLS | `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream` |
+| SRT ingress Owner (`src/media/srt/ingress_*`: `media::srt::ingress_live_tests`, `ingress_bridge_tests`, `ingress_admission`) | `read_play_sends_through_the_owner_and_target_deletion_disconnects`, `asynchronous_rejection_disconnects_the_owner_peer`, `fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling`, `owner_stamps_receive_quality_and_stops_sampling_retired_peers`, `publisher_receive_quality_reaches_the_ingest_snapshot`, `one_ingress_owner_thread_serves_many_peers`, `owner_and_runtime_are_not_send`, `two_owners_share_the_port_and_each_session_command_reaches_its_owner` |
+| RTMP listener (`src/media/rtmp/listener.rs`) | `media::rtmp::listener::tests` |
+| Egress feed wakes | `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (`rtmp_shard_tests.rs`), `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (`egress/runtime.rs`), and in `egress/shard/tests/feed_wake.rs`: `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`, `a_full_command_queue_cannot_strand_a_feeds_final_publication`, `full_fallback_preserves_an_already_queued_publication_wake` |
+| Egress shard recovery | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
+| SRT stream id | `media::srt_stream_id::tests` |
 | TS chunk ring | `live_reader_starts_after_existing_chunks` |
-| Harness (`crates/test_harness/src/main.rs`) | `kill_and_wait_child_terminates_spawned_process` (*gate*), and the live modes above |
+| Harness (`crates/test_harness/src/main.rs`) | `kill_and_wait_child_terminates_spawned_process`, and the live modes above |
 
 ## Open gaps
 

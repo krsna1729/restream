@@ -176,7 +176,7 @@ lists the package and consumer-suite distinction.
 
 The frontend remains React/TypeScript under `web/ts/`, built with Node/Vite
 into generated `public/` assets. Repository workflows (harness, release,
-qualification, containers, setup, fetches, fixtures, worktrees, Git hooks)
+qualification, containers, setup, fetches, fixtures, Git hooks)
 are `cargo xtask` commands in `crates/xtask`. Three shell entrypoints remain
 because they run before Rust exists or in the compilerless runtime image:
 `scripts/dev/bootstrap.sh`, `scripts/dev/bootstrap-runtime.sh` and

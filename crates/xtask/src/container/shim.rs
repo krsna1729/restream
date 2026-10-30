@@ -124,7 +124,7 @@ pub(super) fn run_with(
             .as_ref()
             .is_some_and(|(_, start)| start.elapsed() >= Duration::from_secs(5))
         {
-            client.terminate(libc::SIGKILL, Duration::ZERO)?;
+            client.terminate(libc::SIGKILL, Duration::ZERO);
             return Err(Error::exit(
                 (128 + stopping.unwrap().0) as u8,
                 "container shim interrupted",

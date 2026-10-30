@@ -35,7 +35,7 @@ A release must:
 |---|---|
 | `cargo xtask qualify release-evidence` ([source](../crates/xtask/src/qualify/evidence.rs)) | Scanners (`cargo audit`, `cargo deny check advisories licenses bans sources`, `grype`, `trivy`), artifact inspection, startup proofs, failure policy |
 | `cargo xtask release package-binaries` ([source](../crates/xtask/src/release/package.rs)) | Supported executables, archive names, bundle contents |
-| `cargo xtask release emit-sbom` ([source](../crates/xtask/src/release/native.rs)) | Runtime SBOM |
+| `restream --emit-sbom <path>` ([source](../src/main.rs)), run by `cargo xtask release package-binaries` | Runtime SBOM |
 
 Run them through the [release runbook](release-runbook.md). Changing a
 scanner, asset or smoke test is a script and CI change, not a docs change.

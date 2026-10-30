@@ -17,20 +17,9 @@ fn real_restream() -> Result<std::ffi::OsString, Error> {
         .ok_or_else(|| Error::from("REAL_RESTREAM is required"))
 }
 
-/// These entrypoints are also argv0 aliases. Exec, rather than spawn/wait, is
-/// essential: the harness samples and signals the PID returned when it starts
-/// RESTREAM_BIN, which must become Restream itself.
-pub(crate) fn pinned(args: &[&str]) -> WorkflowResult {
-    let real = real_restream()?;
-    exec_taskset(
-        Command::new("taskset")
-            .arg("-c")
-            .arg(env_default("PIN_CPUS", "5"))
-            .arg(real)
-            .args(args),
-    )
-}
-
+/// Exec, rather than spawn/wait, is essential: the harness samples and signals
+/// the PID returned when it starts RESTREAM_BIN, which must become Restream
+/// itself.
 pub(crate) fn segregated(args: &[&str]) -> WorkflowResult {
     let real = real_restream()?;
     let sets = CpuSets {
@@ -308,7 +297,7 @@ mod tests {
         let mut union = vec![control, media, hot];
         union.sort_unstable();
         union.dedup();
-        for mode in ["pinned", "segregated", "shared"] {
+        for mode in ["segregated", "shared"] {
             let dir = crate::workflow::TempDir::new("restream-harness-test").unwrap();
             let evidence = dir.path().join("process.json");
             let log = fs::File::create(dir.path().join("child.log")).unwrap();
@@ -324,7 +313,6 @@ mod tests {
                 .env("Q105_AFFINITY_FIXTURE", mode)
                 .env("Q105_AFFINITY_EVIDENCE", &evidence)
                 .env("REAL_RESTREAM", &exe)
-                .env("PIN_CPUS", control.to_string())
                 .env("SEG_CONTROL_CPUS", control.to_string())
                 .env("SEG_MEDIA_CPUS", media.to_string())
                 .env("SEG_HOT_CPUS", hot.to_string())
@@ -342,16 +330,11 @@ mod tests {
             let evidence: serde_json::Value =
                 serde_json::from_slice(&fs::read(evidence).unwrap()).unwrap();
             assert_eq!(evidence["pid"], pid);
-            let expected_boot = if mode == "pinned" {
-                vec![control]
+            assert_eq!(evidence["boot"], serde_json::json!(union));
+            let expected = if mode == "shared" {
+                vec![union.clone(), union.clone(), union.clone()]
             } else {
-                union.clone()
-            };
-            assert_eq!(evidence["boot"], serde_json::json!(expected_boot));
-            let expected = match mode {
-                "pinned" => vec![vec![control], vec![control], vec![control]],
-                "shared" => vec![union.clone(), union.clone(), union.clone()],
-                _ => vec![vec![control], vec![media], vec![hot]],
+                vec![vec![control], vec![media], vec![hot]]
             };
             assert_eq!(evidence["final"], serde_json::json!(expected));
         }
@@ -360,18 +343,13 @@ mod tests {
     #[test]
     #[ignore = "subprocess fixture for native_launchers_preserve_pid_boot_union_and_thread_masks"]
     fn native_launch_fixture() {
-        let mode = env::var("Q105_AFFINITY_FIXTURE").expect("subprocess fixture only");
-        let args = [
+        env::var("Q105_AFFINITY_FIXTURE").expect("subprocess fixture only");
+        let result = segregated(&[
             "--exact",
             "harness::affinity::tests::native_target_fixture",
             "--ignored",
             "--nocapture",
-        ];
-        let result = if mode == "pinned" {
-            pinned(&args)
-        } else {
-            segregated(&args)
-        };
+        ]);
         if let Err(error) = result {
             panic!("native launcher did not exec: {error}");
         }

@@ -4,14 +4,9 @@ import { pathToFileURL } from "node:url";
 
 export function resolveFrontendModulesDir() {
   const modulesDir =
-    process.env.FRONTEND_MODULES_DIR ||
-    process.env.FRONTEND_JS_DIR ||
-    process.env.API_CONTRACT_JS_DIR;
+    process.env.FRONTEND_MODULES_DIR || process.env.FRONTEND_JS_DIR;
 
-  assert.ok(
-    modulesDir,
-    "FRONTEND_MODULES_DIR, FRONTEND_JS_DIR, or API_CONTRACT_JS_DIR must be set",
-  );
+  assert.ok(modulesDir, "FRONTEND_MODULES_DIR or FRONTEND_JS_DIR must be set");
 
   return modulesDir;
 }

@@ -151,7 +151,7 @@ RUN cargo xtask build-bench
 
 # Seed the state directory as a copyable path; WORKDIR alone did not make it
 # writable by UID 1000 in rootless container engines.
-FROM toolchain AS runtime-state
+FROM ubuntu:24.04 AS runtime-state
 RUN mkdir -p /restream-state && touch /restream-state/.keep
 
 # FFmpeg is not linked into the engine; images carry the BtbN build that
@@ -218,7 +218,7 @@ COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
 
 # Release packaging uses the same final image recipe without rebuilding Rust:
-# `cargo xtask release package-runtime-image` supplies an already-built restream
+# `cargo xtask release package-binaries` supplies the already-built restream
 # binary as the `release_payload` build context.
 FROM runtime-base AS runtime-artifact
 

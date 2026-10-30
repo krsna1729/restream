@@ -49,8 +49,8 @@ runner's help for exact ladders and all options.
 
 ## Run it
 
-Use an otherwise idle Linux host and a worktree at the revision under test
-(build and process rules: [AGENTS.md](../AGENTS.md#build-and-worktree-safety)).
+Use an otherwise idle Linux host and a checkout at the revision under test
+(build and process rules: [AGENTS.md](../AGENTS.md#branches-and-build-safety)).
 The runner refuses live media and, by default, a dirty tree. It needs
 `io_uring` and a file-descriptor limit of at least 65536; for RTMPS kTLS,
 load the kernel `tls` module where required. Run it under the host

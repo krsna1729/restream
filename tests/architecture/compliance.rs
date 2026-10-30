@@ -469,7 +469,7 @@ fn runtime_json_views_stay_out_of_application_services() {
 fn frontend_tooling_and_vendored_assets_are_reproducible() {
     let package_json = include_str!("../../package.json");
     assert!(package_json.contains("\"build:frontend\""));
-    assert!(package_json.contains("\"format:check\""));
+    assert!(package_json.contains("\"check:types\""));
     assert!(package_json.contains("\"test:frontend\""));
 
     let package_lock = include_str!("../../package-lock.json");

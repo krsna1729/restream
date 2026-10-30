@@ -22,7 +22,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/dev/bootstrap.sh [options]
 Bootstraps a Debian/Ubuntu development environment: apt prerequisites, rustup
-and the pinned Rust toolchain, frontend npm dependencies, compiled Git hooks,
+and the pinned Rust toolchain, frontend npm dependencies, repo-managed Git hooks,
 and a pinned MediaMTX binary for live-harness interoperability checks.
   --skip-frontend             skip Node.js/npm installation and npm ci
   --skip-mediamtx             skip the live-harness MediaMTX binary
@@ -52,9 +52,12 @@ if ! command -v apt-get >/dev/null; then
 fi
 
 ensure_frontend_node_toolchain() (
-    local current_major='' tmp
-    if command -v node >/dev/null 2>&1; then current_major="$(node -p 'process.versions.node.split(".")[0]')"; fi
-    if command -v npm >/dev/null 2>&1 && [[ -n "$current_major" ]] && ((current_major >= FRONTEND_NODE_MIN_MAJOR)); then
+    local current_major='' version tmp
+    if command -v node >/dev/null 2>&1 && version="$(node --version)"; then
+        version="${version#v}"
+        current_major="${version%%.*}"
+    fi
+    if command -v npm >/dev/null 2>&1 && [[ "$current_major" =~ ^[0-9]+$ ]] && ((current_major >= FRONTEND_NODE_MIN_MAJOR)); then
         echo "bootstrap-dev: Node.js $(node --version) already satisfies frontend toolchain"
         exit 0
     fi
@@ -93,8 +96,8 @@ if ((WITH_FRONTEND)); then
     fi
 fi
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo 'bootstrap-dev: installing compiled repo-managed Git hooks'
-    (cd "$ROOT" && cargo run -p xtask -- setup install-git-hooks)
+    echo 'bootstrap-dev: pointing core.hooksPath at the repo-managed .githooks'
+    git -C "$ROOT" config --local core.hooksPath .githooks
 else echo 'bootstrap-dev: skipping Git hooks outside a worktree'; fi
 if ((INSTALL_MEDIAMTX)); then "$ROOT/scripts/dev/bootstrap-runtime.sh" --mediamtx-only; fi
 if ((CONFIGURE_HARNESS_HOST)); then restream_harness_host_prereqs 1

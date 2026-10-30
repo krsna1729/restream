@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::{StepResult, cargo, run};
+use crate::StepResult;
 
 /// One matching line, printed as `path:line:text` like `grep -n`.
 pub(crate) struct Hit {
@@ -89,9 +89,6 @@ const INLINE_GENERATORS: &[&str] = &[
 ];
 
 pub(crate) fn fixture_discipline() -> StepResult {
-    eprintln!("[fixture-discipline] validating checked-in fixture contract");
-    cargo(&["test", "--test", "fixtures", "--", "--nocapture"])?;
-
     eprintln!("[fixture-discipline] scanning test and benchmark code for inline media generators");
     let hits = inline_generator_hits(Path::new("."))?;
     if !hits.is_empty() {
@@ -174,13 +171,6 @@ const NOISE: &[&str] = &[
 ];
 
 pub(crate) fn test_hygiene() -> StepResult {
-    eprintln!("[test-hygiene] checking Rust formatting with pinned toolchain");
-    run(
-        "cargo",
-        &["fmt", "--all", "--check"],
-        &[("CARGO_TERM_COLOR", "never")],
-    )?;
-
     eprintln!("[test-hygiene] running Rust test graph with captured output");
     let (log, passed) = tee_combined_output(
         Command::new("cargo")

@@ -147,19 +147,6 @@ fn verify_linkage(binary: &Path, linkage: &str) -> WorkflowResult {
     Ok(())
 }
 
-pub(super) fn emit_sbom_args(args: &[&str]) -> WorkflowResult {
-    if args.len() != 2 {
-        return Err(Error::usage(
-            "usage: cargo xtask release emit-sbom <restream-binary> <sbom-path>",
-        ));
-    }
-    emit_sbom(
-        Path::new(args[0]),
-        Path::new(args[1]),
-        crate::workflow::env_or("RESTREAM_SKIP_SBOM", "0") == "1",
-    )
-}
-
 fn emit_sbom(binary: &Path, sbom: &Path, skip: bool) -> WorkflowResult {
     if skip {
         println!("Skipping SBOM emission (RESTREAM_SKIP_SBOM=1).");

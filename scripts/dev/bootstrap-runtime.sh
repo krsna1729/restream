@@ -40,7 +40,8 @@ fi
 install_mediamtx() (
     local current_version='' archive_name archive_url tmpdir
     if command -v mediamtx >/dev/null 2>&1; then
-        current_version="$(mediamtx --version 2>/dev/null | awk 'NR==1 {print $2}')"
+        read -r current_version < <(mediamtx --version 2>/dev/null) || true
+        current_version="${current_version##* }"
         if [[ "$current_version" == "$MEDIAMTX_VERSION" ]]; then
             echo "bootstrap-runtime: mediamtx $MEDIAMTX_VERSION already present"
             exit 0

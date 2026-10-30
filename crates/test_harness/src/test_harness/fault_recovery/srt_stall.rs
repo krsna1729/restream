@@ -23,7 +23,11 @@
 //!   connection that breaks and re-attempts against an unreachable
 //!   destination, held for several minutes, does not grow the process's RSS
 //!   unboundedly — the retry/backoff/cleanup cycle is not leaking sockets,
-//!   buffers, or retained feed state.
+//!   buffers, or retained feed state. A 1 s sampler records RSS, PSS,
+//!   threads, fds, SRT shard rows, output health and retained-ring
+//!   accounting from live progress to capture completion in `samples.jsonl`;
+//!   a sample error, a gap over 2 s, or samples that miss the fault or the
+//!   retry window fail the test.
 //! - `srt_egress_srt_rs_receiver_delivery` uses the purpose-built Tokio/
 //!   srt-rs listener in `srt_raw_sink.rs` to prove a live handshake and
 //!   delivered media events without making MediaMTX part of the receiver
@@ -44,6 +48,10 @@ use super::super::resource_sweep::read_proc_status_kb_checked;
 use super::super::*;
 use super::egress::wait_for_outputs_live_and_progressing;
 use super::resilience::{create_pipeline, delete_pipeline_v1};
+
+#[path = "srt_stall_sampler.rs"]
+mod sampler;
+use sampler::{CaptureMarkers, RETRY_WINDOW, Sampler};
 
 /// Environmental scheduling contention for `fault.srt-output-stall`:
 /// `FAULT_CONTENTION_BURNER_THREADS=N` spawns N pure-spin threads for the
@@ -212,21 +220,6 @@ fn frozen_rss_observation(before: Result<u64, String>, after: Result<u64, String
     })
 }
 
-fn frozen_phase(work_dir: &std::path::Path, phase: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut events = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(work_dir.join("frozen-phases.jsonl"))
-        .map_err(|e| e.to_string())?;
-    writeln!(
-        events,
-        "{}",
-        json!({"phase": phase, "t": chrono::Utc::now().timestamp_millis() as f64 / 1000.0})
-    )
-    .map_err(|e| e.to_string())
-}
-
 async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, String> {
     let work_dir = artifact_path("fault.srt-output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -293,17 +286,31 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    if !reached_progress {
-        stop_child(&mut pub_child).await;
-        stop_child(&mut mediamtx).await;
-        stop_child(&mut child).await;
-        return Err(
-            "srt-egress-stalled-destination: output never reached real progress before the stall"
-                .to_string(),
-        );
-    }
 
-    frozen_phase(&work_dir, "live-progress")?;
+    let capture_origin = std::time::Instant::now();
+    let since_capture_origin = || capture_origin.elapsed().as_secs_f64();
+    let samples_path = work_dir.join("samples.jsonl");
+    let started = if reached_progress {
+        child
+            .id()
+            .ok_or_else(|| "restream child PID unavailable".to_string())
+            .and_then(|restream_pid| {
+                Sampler::spawn(&api, restream_pid, capture_origin, samples_path.clone())
+                    .map(|sampler| (restream_pid, sampler))
+            })
+    } else {
+        Err("output never reached real progress before the stall".to_string())
+    };
+    let (restream_pid, sampler) = match started {
+        Ok(started) => started,
+        Err(error) => {
+            stop_child(&mut pub_child).await;
+            stop_child(&mut mediamtx).await;
+            stop_child(&mut child).await;
+            return Err(format!("srt-egress-stalled-destination: {error}"));
+        }
+    };
+    let mut markers = CaptureMarkers::default();
     let receiver_progress = crate::mediamtx_probe::verify_mediamtx_path_health(
         mtx_defaults.mtx_api,
         &["fault-egress-srt-stall-sink".to_string()],
@@ -311,12 +318,7 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         timeout,
     )
     .await;
-    let restream_pid = child.id();
-    let read_rss = || {
-        restream_pid
-            .ok_or_else(|| "restream child PID unavailable".to_string())
-            .and_then(|pid| read_proc_status_kb_checked(pid, "VmRSS", &log_path))
-    };
+    let read_rss = || read_proc_status_kb_checked(restream_pid, "VmRSS", &log_path);
     let rss_before_stall = read_rss();
 
     let stall_started = std::time::Instant::now();
@@ -324,7 +326,7 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
     if let Some(pid) = mediamtx_pid {
         sigstop_ok = signal_process(pid, libc::SIGSTOP).is_ok();
     }
-    frozen_phase(&work_dir, "sigstop")?;
+    markers.sigstop = since_capture_origin();
 
     // Confirm the output actually entered the retry/failure cycle (not just
     // silently frozen) before measuring RSS across an extended window of
@@ -341,14 +343,7 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    frozen_phase(
-        &work_dir,
-        if entered_retry_cycle {
-            "retry-observed"
-        } else {
-            "retry-not-observed"
-        },
-    )?;
+    markers.retry_observed = since_capture_origin();
 
     // The runtime state names the frozen destination as the cause, with the
     // ingest and the feed (and the shard, while an attempt runs on it)
@@ -384,7 +379,7 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
     // in this harness makes for wall-clock reasons — the property under
     // test (no unbounded growth while an output keeps failing to connect)
     // is what a longer window would also show, just slower.
-    tokio::time::sleep(Duration::from_secs(120)).await;
+    tokio::time::sleep(RETRY_WINDOW).await;
     let rss = frozen_rss_observation(rss_before_stall, read_rss());
     let rss_bounded = rss["bounded"].as_bool().unwrap_or(false);
 
@@ -394,39 +389,57 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         final_output.health.clone(),
     );
 
+    // Every exit from here runs the same cleanup, and the sampler is always
+    // finished before the engine stops, so no sample observes the shutdown.
+    let teardown = async {
+        api.post_null(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
+            .await?;
+        wait_for_outputs_stopped(&api, &pid, std::slice::from_ref(&oid), timeout).await?;
+        markers.output_stopped = since_capture_origin();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        stop_child(&mut pub_child).await;
+        delete_pipeline_v1(&api, &pid).await?;
+        markers.pipeline_deleted = since_capture_origin();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        Ok::<(), String>(())
+    }
+    .await;
+    stop_child(&mut pub_child).await;
+    if let Some(pid) = mediamtx_pid {
+        let _ = signal_process(pid, libc::SIGCONT);
+    }
+    stop_child(&mut mediamtx).await;
+    markers.capture_complete = since_capture_origin();
+    let capture = sampler.finish().await;
+    stop_child(&mut child).await;
+    teardown?;
+
+    let (capture_errors, sampled) = match &capture {
+        Ok(outcome) => (
+            sampler::capture_errors(outcome, &markers),
+            sampler::sampled_summary(&outcome.samples, markers.sigstop),
+        ),
+        Err(error) => (vec![error.clone()], Value::Null),
+    };
     let passed = sigstop_ok
         && entered_retry_cycle
         && rss_bounded
         && diagnosed_destination
-        && receiver_progress.is_ok();
+        && receiver_progress.is_ok()
+        && capture_errors.is_empty();
 
     println!(
-        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} diagnosedDestination={} bytesAtStallStart={} rss={} elapsed={:.1}s)",
+        "[fault] SRT egress bounded RSS under frozen destination: {} (sigstopOk={} enteredRetryCycle={} diagnosedDestination={} bytesAtStallStart={} rss={} sampled={} captureErrors={:?} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sigstop_ok,
         entered_retry_cycle,
         diagnosed_destination,
         bytes_at_stall_start,
         rss,
+        sampled,
+        capture_errors,
         stall_started.elapsed().as_secs_f64(),
     );
-
-    api.post_null(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-        .await?;
-    wait_for_outputs_stopped(&api, &pid, std::slice::from_ref(&oid), timeout).await?;
-    frozen_phase(&work_dir, "output-stopped")?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    stop_child(&mut pub_child).await;
-    delete_pipeline_v1(&api, &pid).await?;
-    frozen_phase(&work_dir, "pipeline-deleted")?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    if let Some(pid) = mediamtx_pid {
-        let _ = signal_process(pid, libc::SIGCONT);
-    }
-    stop_child(&mut mediamtx).await;
-    // The sampler may now observe this process disappearing without losing capture coverage.
-    frozen_phase(&work_dir, "capture-complete")?;
-    stop_child(&mut child).await;
 
     Ok(json!({
         "test": "srt-egress-bounded-rss-under-frozen-destination",
@@ -443,6 +456,10 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         "rssAfterStallKb": rss["afterKb"],
         "rssGrowthKb": rss["growthKb"],
         "rssMeasurement": rss,
+        "sampledRss": sampled,
+        "captureErrors": capture_errors,
+        "phases": markers,
+        "samplesPath": samples_path,
         "status": status_snapshot,
         "healthOutput": health_snapshot,
     }))

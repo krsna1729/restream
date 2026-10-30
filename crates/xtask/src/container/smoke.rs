@@ -1,7 +1,5 @@
-use super::process::{
-    OwnedChild, Signals, execute, install_executable, quiet, quiet_capture, unique_dir,
-};
-use crate::workflow::{Error, WorkflowResult, output};
+use super::process::{OwnedChild, Signals, execute, install_executable, quiet, quiet_capture};
+use crate::workflow::{Error, WorkflowResult, output, unique_dir};
 use regex::Regex;
 use serde_json::json;
 use std::fs;
@@ -498,7 +496,7 @@ impl Smoke {
             &self.signals,
             None,
         )?;
-        producer.wait(&self.signals)
+        producer.wait()
     }
     fn report(&self) -> WorkflowResult {
         let Some(path) =

@@ -1,11 +1,10 @@
 //! `cargo xtask setup-skills`: local Claude Code skill registrations for the
 //! canonical, agent-neutral skills in `docs/agent-guidance/skills/`.
 //!
-//! `.claude/` is gitignored; run once per clone or worktree
-//! (`cargo xtask worktree` runs it). Idempotent: re-run after adding a
-//! skill or editing skill frontmatter. The default writes one small shim per
-//! skill; `--symlink` links `.claude/skills` at the canonical directory
-//! instead (no drift, but relies on the loader following symlinks).
+//! `.claude/` is gitignored; run once per clone. Idempotent: re-run after
+//! adding a skill or editing skill frontmatter. The default writes one small
+//! shim per skill; `--symlink` links `.claude/skills` at the canonical
+//! directory instead (no drift, but relies on the loader following symlinks).
 
 use std::fs;
 use std::path::Path;

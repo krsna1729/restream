@@ -26,8 +26,9 @@ dashboard route contract.
 - Routing and per-view polling use TanStack Router and Query
   (`web/ts/control-room/router.tsx`, `polled.tsx`); the pushed runtime state
   stays in `store.ts`.
-- When a route or payload changes, update the API contract tests
-  (`cargo xtask api-contract`).
+- When a route or payload changes, update
+  `test/frontend/frontend-api-contract.test.mjs` (run by
+  `npm run test:frontend`).
 - The runtime-state TypeScript contract is generated from Rust:
   `cargo test --lib runtime_state::tests::write_generated -- --ignored`.
 

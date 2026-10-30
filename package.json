@@ -3,9 +3,8 @@
   "scripts": {
     "prepare:frontend-assets": "node ./scripts/dev/frontend/prepare-assets.mjs",
     "build:frontend": "npm run prepare:frontend-assets && npx tsc -p tsconfig.json && vite build && npx tailwindcss -i web/styles/input.css -o public/output.css",
-    "build:css": "npx tailwindcss -i web/styles/input.css -o public/output.css",
     "check:api-contract": "cargo xtask api-contract",
-    "format:check": "npx tsc -p tsconfig.json",
+    "check:types": "npx tsc -p tsconfig.json",
     "test:frontend": "cargo xtask frontend node-tests && npm run test:frontend:js-smoke",
     "test:frontend:coverage": "cargo xtask frontend node-tests --coverage && npm run test:frontend:js-smoke",
     "test:frontend:js-smoke": "npm run build:frontend && FRONTEND_MODULES_DIR=public/js node --experimental-default-type=module --test test/frontend/frontend-api-contract.test.mjs test/frontend/frontend-log-stream.test.mjs",

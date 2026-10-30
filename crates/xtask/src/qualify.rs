@@ -13,9 +13,8 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
         Some((&"release-artifact-smoke", rest)) => artifact::run(rest),
         Some((&"release-evidence", rest)) => evidence::run(rest),
         Some((&"harness-shard", rest)) => shards::harness(rest),
-        Some((&"dispatch-dry-run", rest)) => dispatch(rest),
         _ => Err(Error::usage(
-            "usage: cargo xtask qualify <local-due-diligence|release-artifact-smoke|release-evidence|harness-shard|dispatch-dry-run> [args]",
+            "usage: cargo xtask qualify <local-due-diligence|release-artifact-smoke|release-evidence|harness-shard> [args]",
         )),
     }
 }
@@ -103,41 +102,6 @@ fn local_due_diligence(args: &[&str]) -> WorkflowResult {
         String::from_utf8_lossy(&sha.stdout).trim()
     );
     Ok(())
-}
-
-fn dispatch(args: &[&str]) -> WorkflowResult {
-    const USAGE: &str = "usage: cargo xtask qualify dispatch-dry-run [ref]\nDispatches the non-publishing Release workflow for the supplied ref or current branch.";
-    if matches!(args.first(), Some(&"-h" | &"--help")) {
-        println!("{USAGE}");
-        return Ok(());
-    }
-    if args.len() > 1 {
-        return Err(Error::usage(USAGE));
-    }
-    let reference =
-        crate::release::ref_or_current_branch(args.first().copied().filter(|s| !s.is_empty()))?;
-    for tool in ["gh", "jq"] {
-        support::require_command(tool, "dispatch-dry-run")?;
-    }
-    checked(Command::new("gh").args(["workflow", "run", "release.yml", "--ref", &reference]))?;
-    // GNU sleep accepts fractional durations and unit suffixes; retain that CLI.
-    checked(Command::new("sleep").arg(crate::workflow::env_or(
-        "RESTREAM_RELEASE_DISPATCH_SETTLE_SECS",
-        "3",
-    )))?;
-    let result = output(Command::new("gh").args([
-        "run",
-        "list",
-        "--workflow",
-        "release.yml",
-        "--branch",
-        &reference,
-        "--limit",
-        "1",
-        "--json",
-        "databaseId,status,conclusion,headSha,createdAt,url",
-    ]))?;
-    support::with_input(Command::new("jq").arg(".[0]"), &result.stdout)
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ mod package;
 mod prepare;
 mod publish;
 
-pub(crate) use common::{ref_or_current_branch, require_version};
+pub(crate) use common::require_version;
 pub(crate) use native::app_native_without_sbom;
 pub(crate) use package::package_binaries;
 pub(crate) use prepare::prepare_build_tree;
@@ -19,12 +19,8 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     match *command {
         "prepare-build-tree" => prepare::run(args),
         "app-native" => native::run(args),
-        "emit-sbom" => native::emit_sbom_args(args),
         "package-binaries" => package::package_binaries(version_arg(command, args)?),
-        "package-runtime-image" => package::package_runtime_image(version_arg(command, args)?),
-        "publish-image" => publish::publish_image(version_arg(command, args)?),
         "tag-and-publish" => publish::tag_and_publish(args),
-        "checksums" => package::checksums(args),
         "shards" => crate::qualify::shards::run(args),
         "-h" | "--help" | "help" => {
             println!("{}", usage());
@@ -46,5 +42,5 @@ fn version_arg<'a>(command: &str, args: &'a [&str]) -> Result<&'a str, Error> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo xtask release <prepare-build-tree|app-native|emit-sbom|package-binaries|package-runtime-image|tag-and-publish|publish-image|checksums|shards> [args]"
+    "Usage: cargo xtask release <prepare-build-tree|app-native|package-binaries|tag-and-publish|shards --json> [args]"
 }

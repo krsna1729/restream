@@ -50,19 +50,6 @@ pub(crate) fn require_clean_checkout(caller: &str) -> WorkflowResult {
     Ok(())
 }
 
-pub(crate) fn ref_or_current_branch(reference: Option<&str>) -> Result<String, Error> {
-    let reference = match reference.filter(|s| !s.is_empty()) {
-        Some(value) => value.to_owned(),
-        None => git(&["branch", "--show-current"])?,
-    };
-    if reference.is_empty() {
-        return Err(Error::usage(
-            "could not infer branch; pass a ref explicitly",
-        ));
-    }
-    Ok(reference)
-}
-
 pub(super) fn git(args: &[&str]) -> Result<String, Error> {
     Ok(
         String::from_utf8_lossy(&output(Command::new("git").args(args))?.stdout)

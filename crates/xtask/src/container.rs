@@ -15,11 +15,9 @@ use std::process::{Command, Stdio};
 pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     match args {
         ["smoke", rest @ ..] => smoke::run(rest),
-        ["restream-shim", rest @ ..] => shim(rest),
-        ["run-in-harness-runtime", rest @ ..] => runtime(rest, false),
-        ["run-harness-shard-in-runtime", rest @ ..] => runtime(rest, true),
+        ["run-harness-shard-in-runtime", rest @ ..] => shard_in_runtime(rest),
         _ => Err(Error::usage(
-            "usage: cargo xtask container <smoke|restream-shim|run-in-harness-runtime|run-harness-shard-in-runtime> [args...]",
+            "usage: cargo xtask container <smoke|run-harness-shard-in-runtime> [args...]",
         )),
     }
 }
@@ -37,16 +35,12 @@ fn split_env(key: &str) -> Vec<OsString> {
         .collect()
 }
 
-fn runtime(args: &[&str], shard: bool) -> WorkflowResult {
-    let usage = if shard {
-        "usage: cargo xtask container run-harness-shard-in-runtime <release-shard> [harness args...]"
-    } else {
-        "usage: cargo xtask container run-in-harness-runtime <command> [args...]"
-    };
+fn shard_in_runtime(args: &[&str]) -> WorkflowResult {
+    const USAGE: &str = "usage: cargo xtask container run-harness-shard-in-runtime <release-shard> [harness args...]";
     match args {
-        [] => return Err(Error::usage(usage)),
+        [] => return Err(Error::usage(USAGE)),
         ["-h" | "--help"] => {
-            println!("{usage}");
+            println!("{USAGE}");
             return Ok(());
         }
         _ => {}
@@ -77,7 +71,7 @@ fn runtime(args: &[&str], shard: bool) -> WorkflowResult {
             let mut child = process::OwnedChild::spawn(&mut login)?;
             // Credentials only reach stdin, never argv or diagnostics.
             child.write_stdin(format!("{token}\n").as_bytes())?;
-            child.wait(&signals)?;
+            child.wait()?;
         }
         println!("ci-harness-runtime: pulling {image}");
         execute(
@@ -88,23 +82,15 @@ fn runtime(args: &[&str], shard: bool) -> WorkflowResult {
     }
     let name = format!("restream-ci-harness-{}", std::process::id());
     let _container = RuntimeContainer(&name);
-    let mut command = runtime_command(&root, &home, &image, shard, &name);
-    if shard {
-        // The image has no Cargo: run this prebuilt workflow binary, which
-        // reaches the bench binaries with BENCH_BUILD=never.
-        let executable = install_executable(&root.join(".local/bin"), "restream-xtask-runtime")?;
-        println!("ci-harness-runtime: run shard={} image={image}", args[0]);
-        command
-            .arg(executable)
-            .args(["qualify", "harness-shard"])
-            .args(args);
-    } else {
-        println!(
-            "ci-harness-runtime: run command={} image={image}",
-            args.join(" ")
-        );
-        command.args(args);
-    }
+    let mut command = runtime_command(&root, &home, &image, &name);
+    // The image has no Cargo: run this prebuilt workflow binary, which
+    // reaches the bench binaries with BENCH_BUILD=never.
+    let executable = install_executable(&root.join(".local/bin"), "restream-xtask-runtime")?;
+    println!("ci-harness-runtime: run shard={} image={image}", args[0]);
+    command
+        .arg(executable)
+        .args(["qualify", "harness-shard"])
+        .args(args);
     execute(&mut command, &signals, None)
 }
 
@@ -120,7 +106,6 @@ fn runtime_command(
     root: &std::path::Path,
     home: &std::path::Path,
     image: &str,
-    shard: bool,
     name: &str,
 ) -> Command {
     // SAFETY: geteuid/getegid only read this process's credentials.
@@ -151,21 +136,12 @@ fn runtime_command(
         .arg(format!("GITHUB_SHA={}", env_or("GITHUB_SHA", "")))
         .arg("-e")
         .arg(format!("RESTREAM_REPO_ROOT={}", root.display()));
-    let keys: &[&str] = if shard {
-        &[
-            "RELEASE_VERSION",
-            "RELEASE_HARNESS_SHARD_TIMEOUT",
-            "HARNESS_BIN",
-            "RESTREAM_BIN",
-        ]
-    } else {
-        &[
-            "TEST_HARNESS_USE_HOST_NET",
-            "INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL",
-            "INTERNAL_BACKEND_SMOKE_ARTIFACT_DIR",
-        ]
-    };
-    for key in keys {
+    for key in [
+        "RELEASE_VERSION",
+        "RELEASE_HARNESS_SHARD_TIMEOUT",
+        "HARNESS_BIN",
+        "RESTREAM_BIN",
+    ] {
         command.arg("-e").arg(format!("{key}={}", env_or(key, "")));
     }
     command

@@ -112,7 +112,7 @@ restream_harness_host_prereqs() (
         cat >&2 <<'EOF'
 harness-host-prereqs: private live-harness network namespaces are unavailable.
 Use --no-netns only as a temporary fallback, or configure this host explicitly:
-  scripts/dev/bootstrap-runtime.sh --configure-harness-host
+  scripts/ci/install-system-deps.sh --harness-host --configure
 If AppArmor still blocks unshare afterwards, ask the host administrator to
 approve that policy change; this helper never disables AppArmor.
 EOF
@@ -143,7 +143,7 @@ EOF
         echo 'harness-host-prereqs: SRT UDP buffer ceilings satisfy the 8 MiB policy'
     else
         echo "harness-host-prereqs: SRT UDP buffer ceilings are below the live-harness policy (rmem_max=${rmem_max:-unavailable}, wmem_max=${wmem_max:-unavailable}; need at least 26214400 and 8388608)." >&2
-        echo 'Configure explicitly with scripts/dev/bootstrap-runtime.sh --configure-harness-host' >&2
+        echo 'Configure explicitly with scripts/ci/install-system-deps.sh --harness-host --configure' >&2
     fi
 )
 
@@ -179,6 +179,13 @@ restream_ci_main() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     case "${1:-}" in
         --apt-attempt) shift; restream_apt_attempt "$@" ;;
+        --harness-host)
+            case "${2:-}" in
+                '') restream_harness_host_prereqs 0 ;;
+                --configure) restream_harness_host_prereqs 1 ;;
+                *) echo 'usage: scripts/ci/install-system-deps.sh --harness-host [--configure]' >&2; exit 2 ;;
+            esac
+            ;;
         --demote-mirror)
             list=/etc/apt/apt-mirrors.txt
             [[ -f "$list" ]] || exit 0

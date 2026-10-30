@@ -7,22 +7,21 @@ use std::path::PathBuf;
 
 use crate::workflow::{Error, WorkflowResult};
 
-const USAGE: &str = "usage: cargo xtask frontend compile-for-node <out-dir> | node-tests [--coverage] | e2e [playwright arguments]";
+const USAGE: &str =
+    "usage: cargo xtask frontend node-tests [--coverage] | e2e [playwright arguments]";
 
 pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     let Some((mode, args)) = args.split_first() else {
         return Err(Error::usage(USAGE));
     };
     if matches!(*mode, "-h" | "--help")
-        || (matches!(*mode, "compile-for-node" | "node-tests")
-            && matches!(args.first(), Some(&"-h" | &"--help")))
+        || (*mode == "node-tests" && matches!(args.first(), Some(&"-h" | &"--help")))
     {
         println!("{USAGE}");
         return Ok(());
     }
     let root = crate::repo_root().canonicalize()?;
     match *mode {
-        "compile-for-node" => node::compile(&root, args),
         "node-tests" => node::tests(&root, args),
         "e2e" => e2e::run(&root, args),
         _ => Err(Error::usage(format!(

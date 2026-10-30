@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage: cargo xtask qualify release-evidence [runtime-image-archive] [sbom (dist/restream-runtime.cdx.json)] [binary-bundle]
+const USAGE: &str = "usage: cargo xtask qualify release-evidence <runtime-image-archive> <sbom> <binary-bundle>
 Runs cargo-audit, cargo-deny, grype and trivy, certifies the bundle and seccomp profile, then smokes the image.";
 
 pub(super) fn run(args: &[&str]) -> WorkflowResult {
@@ -13,15 +13,10 @@ pub(super) fn run(args: &[&str]) -> WorkflowResult {
         println!("{USAGE}");
         return Ok(());
     }
-    let archive = args.first().copied().unwrap_or("");
-    // `${2:-dist/restream-runtime.cdx.json}`: an empty argument takes the default.
-    let sbom = Path::new(
-        args.get(1)
-            .copied()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("dist/restream-runtime.cdx.json"),
-    );
-    let bundle = args.get(2).copied().unwrap_or("");
+    let &[archive, sbom, bundle] = args else {
+        return Err(Error::usage(USAGE));
+    };
+    let sbom = Path::new(sbom);
     for tool in ["cargo-audit", "cargo-deny", "grype", "trivy"] {
         support::require_command(tool, "release-evidence")?;
     }
@@ -34,59 +29,48 @@ pub(super) fn run(args: &[&str]) -> WorkflowResult {
         "bans",
         "sources",
     ]))?;
-    if !bundle.is_empty() {
-        for tool in ["ldd", "tar"] {
-            support::require_command(tool, "release-evidence")?;
-        }
-        if !crate::workflow::nonempty(Path::new(bundle)) {
-            return Err(format!("release-evidence: binary bundle was not found: {bundle}").into());
-        }
-        let extracted = crate::workflow::TempDir::new("restream-qualify")?;
-        let bundle_root = extracted.path().join("bundle");
-        fs::create_dir(&bundle_root)?;
-        checked(
-            Command::new("tar")
-                .args(["-xzf", bundle, "-C"])
-                .arg(&bundle_root),
-        )?;
-        let binary = certified_binary(&bundle_root)?;
-        // A statically linked executable makes ldd fail; the original gate only
-        // rejects an actual libsrt dependency, not ldd's static-binary exit code.
-        let link_log = extracted.path().join("ldd.log");
-        let log = fs::File::create(&link_log)?;
-        let mut child = crate::workflow::spawn(
-            Command::new("ldd")
-                .arg(&binary)
-                .stdout(log.try_clone()?)
-                .stderr(log),
-        )?;
-        let _status = crate::workflow::wait(&mut child)?;
-        let links = fs::read(link_log)?;
-        if links.windows(6).any(|w| w == b"libsrt") {
-            return Err(format!(
-                "release-evidence: packaged binary still links libsrt dynamically: {}",
-                binary.display()
-            )
-            .into());
-        }
-        let sboms = support::sboms(&bundle_root, true)?;
-        let [source] = sboms.as_slice() else {
-            return Err(
-                format!("release-evidence: expected exactly one SBOM inside {bundle}").into(),
-            );
-        };
-        if let Some(parent) = sbom.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(source, sbom)?;
-    } else {
-        checked(
-            support::xtask()?
-                .args(["release", "app-native"])
-                .env("RESTREAM_SBOM_PATH", sbom)
-                .env("RESTREAM_BUILD_PROFILE", "release"),
-        )?;
+    for tool in ["ldd", "tar"] {
+        support::require_command(tool, "release-evidence")?;
     }
+    if !crate::workflow::nonempty(Path::new(bundle)) {
+        return Err(format!("release-evidence: binary bundle was not found: {bundle}").into());
+    }
+    let extracted = crate::workflow::TempDir::new("restream-qualify")?;
+    let bundle_root = extracted.path().join("bundle");
+    fs::create_dir(&bundle_root)?;
+    checked(
+        Command::new("tar")
+            .args(["-xzf", bundle, "-C"])
+            .arg(&bundle_root),
+    )?;
+    let binary = certified_binary(&bundle_root)?;
+    // A statically linked executable makes ldd fail; the original gate only
+    // rejects an actual libsrt dependency, not ldd's static-binary exit code.
+    let link_log = extracted.path().join("ldd.log");
+    let log = fs::File::create(&link_log)?;
+    let mut child = crate::workflow::spawn(
+        Command::new("ldd")
+            .arg(&binary)
+            .stdout(log.try_clone()?)
+            .stderr(log),
+    )?;
+    let _status = crate::workflow::wait(&mut child)?;
+    let links = fs::read(link_log)?;
+    if links.windows(6).any(|w| w == b"libsrt") {
+        return Err(format!(
+            "release-evidence: packaged binary still links libsrt dynamically: {}",
+            binary.display()
+        )
+        .into());
+    }
+    let sboms = support::sboms(&bundle_root, true)?;
+    let [source] = sboms.as_slice() else {
+        return Err(format!("release-evidence: expected exactly one SBOM inside {bundle}").into());
+    };
+    if let Some(parent) = sbom.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, sbom)?;
     if !crate::workflow::nonempty(sbom) {
         return Err(format!("release-evidence: SBOM was not written: {}", sbom.display()).into());
     }
@@ -100,27 +84,21 @@ pub(super) fn run(args: &[&str]) -> WorkflowResult {
             .args(["sbom", "--exit-code", "1", "--severity", "HIGH,CRITICAL"])
             .arg(sbom),
     )?;
-    if archive.is_empty() {
-        crate::container::run(&["smoke", "--image", "restream:release"])
-    } else {
-        if !bundle.is_empty() {
-            artifact::run(&[bundle])?;
-        }
-        let profile = seccomp_path(archive);
-        certify_seccomp(
-            &profile,
-            Path::new("distribution/docker/restream-seccomp.json"),
-        )?;
-        crate::container::run(&[
-            "smoke",
-            "--image",
-            "restream:release",
-            "--load-archive",
-            archive,
-            "--seccomp-profile",
-            crate::path_str(&profile)?,
-        ])
-    }
+    artifact::run(&[bundle])?;
+    let profile = seccomp_path(archive);
+    certify_seccomp(
+        &profile,
+        Path::new("distribution/docker/restream-seccomp.json"),
+    )?;
+    crate::container::run(&[
+        "smoke",
+        "--image",
+        "restream:release",
+        "--load-archive",
+        archive,
+        "--seccomp-profile",
+        crate::path_str(&profile)?,
+    ])
 }
 
 fn certified_binary(root: &Path) -> Result<PathBuf, Error> {

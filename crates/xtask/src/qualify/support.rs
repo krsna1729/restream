@@ -1,8 +1,7 @@
 use crate::workflow::{Error, WorkflowResult, on_path};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 pub(super) fn xtask() -> Result<Command, Error> {
     Ok(Command::new(std::env::current_exe()?))
@@ -16,16 +15,6 @@ pub(super) fn require_command(name: &str, caller: &str) -> WorkflowResult {
     }
 }
 
-pub(super) fn with_input(command: &mut Command, input: &[u8]) -> WorkflowResult {
-    let mut child = crate::workflow::spawn(command.stdin(Stdio::piped()))?;
-    let written = child.stdin.take().expect("piped stdin").write_all(input);
-    let status = crate::workflow::wait(&mut child)?;
-    if !status.success() {
-        return Err(Error::status(status, format!("{command:?} failed")));
-    }
-    written?;
-    Ok(())
-}
 /// Match find's default non-symlink-following traversal and sorted file results.
 pub(super) fn files(root: &Path, recursive: bool) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
