@@ -1,5 +1,5 @@
 use super::*;
-use restream::domain::pipeline_input::PipelineInputSource;
+use restream_domain::domain::pipeline_input::PipelineInputSource;
 
 #[tokio::test]
 async fn rtmps_output_is_accepted_by_api() {

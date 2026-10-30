@@ -7,8 +7,8 @@
 
 use sqlx::SqlitePool;
 
-use crate::domain::ids::RecordingId;
-use crate::domain::state::RecordingPhase;
+use restream_domain::domain::ids::RecordingId;
+use restream_domain::domain::state::RecordingPhase;
 
 // ─── Row type ────────────────────────────────────────────────────────────────
 

@@ -131,7 +131,7 @@ pub async fn start_sink_egress(
         .update_egress_phase_if_current(
             &output_id,
             &registration,
-            crate::domain::state::EgressPhase::Discarding,
+            restream_domain::domain::state::EgressPhase::Discarding,
         )
         .await;
 

@@ -1,8 +1,8 @@
 //! SQLite-backed recording metadata reporter wiring.
 
-use crate::domain::ids::RecordingId;
-use crate::domain::state::RecordingPhase;
 use crate::media::recording::{RecordingMetadataEvent, RecordingMetadataReporter};
+use restream_domain::domain::ids::RecordingId;
+use restream_domain::domain::state::RecordingPhase;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 

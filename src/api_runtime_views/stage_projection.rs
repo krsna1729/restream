@@ -1,4 +1,4 @@
-use crate::runtime::stage::{StageRuntimeSnapshot, phase_name};
+use restream_domain::runtime::stage::{StageRuntimeSnapshot, phase_name};
 
 pub(crate) fn stage_runtime_snapshot_json(snapshot: &StageRuntimeSnapshot) -> serde_json::Value {
     let mut value = serde_json::json!({
@@ -28,8 +28,8 @@ pub(crate) fn stage_runtime_snapshot_json(snapshot: &StageRuntimeSnapshot) -> se
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::stage::{StageKey, StageKind};
-    use crate::domain::state::{StageBackendKind, StagePhase};
+    use restream_domain::domain::stage::{StageKey, StageKind};
+    use restream_domain::domain::state::{StageBackendKind, StagePhase};
 
     #[test]
     fn snapshot_projection_preserves_status_contract() {

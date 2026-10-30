@@ -4,7 +4,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::application::services::{PipelineService, ServiceError, ServiceResult};
-use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole, PipelineInputSource};
+use restream_domain::domain::pipeline_input::{
+    PipelineInput, PipelineInputRole, PipelineInputSource,
+};
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
 

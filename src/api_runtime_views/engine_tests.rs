@@ -1,12 +1,12 @@
 //! Runtime-view assertions (health, output status, processing graph) over a
 //! live `MediaEngine`.
-use crate::domain::stage::{StageKey, StageKind};
-use crate::domain::state::{DesiredOutputState, EgressPhase, EgressPhase as EP};
 use crate::media::engine::tests::{test_audio_packet, test_video_packet};
 use crate::media::engine::*;
 use crate::media::snapshots::PublisherQuality;
 use proptest::prelude::*;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::domain::state::{DesiredOutputState, EgressPhase, EgressPhase as EP};
 use restream_sync::Reader;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -45,7 +45,6 @@ use self::fetch::{
     pump_body, send, source_resolves_private, variant_expired,
 };
 use self::namespace::{Prepared, parse_and_prepare};
-use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::engine::MediaEngine;
 use crate::media::hls::upload_policy::backoff;
 use crate::media::hls_ingest::playlist::{MasterPlaylist, MediaPlaylist, Variant};
@@ -54,6 +53,7 @@ use crate::media::hls_ingest::{
     ObjectOutcome,
 };
 use crate::media::ingest_auth::AuthenticatedPipeline;
+use restream_domain::domain::pipeline_input::{PullAuth, VariantRule};
 
 mod audio;
 mod digest;

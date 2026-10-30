@@ -3,8 +3,8 @@ use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookupFuture, IngestUpdateFuture,
     IngestWriteFuture, PipelineLookupFuture,
 };
-use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::security::IngestSecurityService;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -123,10 +123,10 @@ impl PipelineInputLookup for FakePipelineStore {
                     pipeline_id: pipeline.id.clone(),
                     label: "Primary".to_string(),
                     stream_key: stream_key.to_string(),
-                    role: crate::domain::pipeline_input::PipelineInputRole::Primary,
+                    role: restream_domain::domain::pipeline_input::PipelineInputRole::Primary,
                     enabled: true,
                     selected: true,
-                    ..crate::domain::pipeline_input::PipelineInput::keyed_default()
+                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
                 }))
         })
     }
@@ -423,20 +423,24 @@ struct PullInputLookup;
 impl PipelineInputLookup for PullInputLookup {
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a> {
         Box::pin(async move {
-            Ok(Some(crate::domain::pipeline_input::PipelineInput {
-                id: "input-pull".to_string(),
-                pipeline_id: "pipeline-1".to_string(),
-                label: "Pull".to_string(),
-                stream_key: stream_key.to_string(),
-                role: crate::domain::pipeline_input::PipelineInputRole::Primary,
-                enabled: true,
-                selected: true,
-                source_kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
-                source_url: Some("http://origin.example/master.m3u8".to_string()),
-                variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
-                source_auth: crate::domain::pipeline_input::PullAuth::None,
-                push_auth: crate::domain::pipeline_input::PushAuth::None,
-            }))
+            Ok(Some(
+                restream_domain::domain::pipeline_input::PipelineInput {
+                    id: "input-pull".to_string(),
+                    pipeline_id: "pipeline-1".to_string(),
+                    label: "Pull".to_string(),
+                    stream_key: stream_key.to_string(),
+                    role: restream_domain::domain::pipeline_input::PipelineInputRole::Primary,
+                    enabled: true,
+                    selected: true,
+                    source_kind:
+                        restream_domain::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+                    source_url: Some("http://origin.example/master.m3u8".to_string()),
+                    variant_rule:
+                        restream_domain::domain::pipeline_input::VariantRule::HighestBandwidth,
+                    source_auth: restream_domain::domain::pipeline_input::PullAuth::None,
+                    push_auth: restream_domain::domain::pipeline_input::PushAuth::None,
+                },
+            ))
         })
     }
 }

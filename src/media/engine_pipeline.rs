@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lease::StageLease;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 
 impl MediaEngine {

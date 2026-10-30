@@ -5,7 +5,7 @@
 use super::fetch::{AuthScope, RequestAuth, build_client};
 use super::tests_origin::{Origin, media_playlist};
 use super::*;
-use crate::domain::pipeline_input::PullAuth;
+use restream_domain::domain::pipeline_input::PullAuth;
 
 // ---- the resolver guard ----------------------------------------------------
 

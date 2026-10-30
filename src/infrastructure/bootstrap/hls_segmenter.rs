@@ -17,7 +17,7 @@ pub(super) fn spawn_pipeline_hls_segmenter(
     store: Arc<crate::media::hls::HlsStore>,
     ring: Arc<restream_sync::RingBuffer>,
     cancel: tokio_util::sync::CancellationToken,
-    stage_key: crate::domain::stage::StageKey,
+    stage_key: restream_domain::domain::stage::StageKey,
     stages: Vec<StageLease>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {

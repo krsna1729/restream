@@ -3,10 +3,10 @@ use std::sync::RwLock;
 
 use tracing::warn;
 
-use crate::domain::srt_ingest::{
+use crate::secret_display::redact_secret;
+use restream_domain::domain::srt_ingest::{
     ResolvedSrtIngestConfig, SrtGlobalIngestConfig, SrtPipelineIngestConfig,
 };
-use crate::secret_display::redact_secret;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SrtIngestPolicyEntry {
@@ -95,7 +95,7 @@ fn build_policy_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::srt_ingest::{
+    use restream_domain::domain::srt_ingest::{
         DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, SrtGlobalIngestMode,
         SrtPipelineIngestConfig, SrtPipelineIngestMode,
     };

@@ -17,7 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 use futures_util::StreamExt;
 
 use crate::application::ingest::PipelineInputLookup;
-use crate::domain::pipeline_input::PushAuth;
+use restream_domain::domain::pipeline_input::PushAuth;
 
 /// Bound queued/running password KDFs as well as their memory consumption.
 /// A permit lives in the blocking closure even if its HTTP request is dropped.
@@ -135,7 +135,7 @@ pub(super) async fn hls_ingest_handler(
                 && input.pipeline_id == pipeline.id
                 && input.enabled
                 && input.source_kind
-                    == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed =>
+                    == restream_domain::domain::pipeline_input::PipelineInputSourceKind::Keyed =>
         {
             input.push_auth
         }

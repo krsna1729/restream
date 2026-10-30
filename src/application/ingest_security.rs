@@ -1,11 +1,11 @@
 //! Application-layer persistence adapter for ingest security configuration.
 //! This file owns the metadata key and JSON round-tripping between the
 //! `MetaStore` port and the domain config; validation semantics live in
-//! `crate::domain::ingest_security`, while runtime enforcement lives in
+//! `restream_domain::domain::ingest_security`, while runtime enforcement lives in
 //! `crate::media::security`.
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
-use crate::domain::ingest_security::IngestSecurityConfig;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 
 pub const INGEST_SECURITY_CONFIG_META_KEY: &str = "ingest_security_config";
 

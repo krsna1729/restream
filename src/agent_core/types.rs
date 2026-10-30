@@ -34,7 +34,7 @@ pub struct ProposedChange {
     pub name: Option<String>,
     pub url: Option<String>,
     pub monitoring_url: Option<String>,
-    pub config: Option<crate::domain::output_spec::OutputConfig>,
+    pub config: Option<restream_domain::domain::output_spec::OutputConfig>,
     pub desired_state: Option<String>,
 }
 

@@ -124,7 +124,7 @@ pub(super) fn egress_runtime_view(
     egress: &ActiveEgress,
     include_target_url: bool,
     has_ingest: bool,
-    blocked_by: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+    blocked_by: Option<&restream_domain::runtime::stage::StageRuntimeSnapshot>,
 ) -> EgressRuntimeView {
     let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
     let last_error_ms = egress.last_error_ms.load(Ordering::Relaxed);
@@ -179,7 +179,7 @@ pub(super) fn egress_runtime_json(
     egress: &ActiveEgress,
     include_target_url: bool,
     has_ingest: bool,
-    blocked_by: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+    blocked_by: Option<&restream_domain::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     to_json(&egress_runtime_view(
         egress,
@@ -194,7 +194,7 @@ pub(super) fn to_json(view: &impl serde::Serialize) -> serde_json::Value {
 }
 
 pub(super) fn output_runtime_explanation_json(
-    explanation: &crate::runtime::output::OutputRuntimeExplanation,
+    explanation: &restream_domain::runtime::output::OutputRuntimeExplanation,
 ) -> serde_json::Value {
     serde_json::json!({
         "outputId": explanation.output_id.to_string(),
@@ -404,7 +404,7 @@ pub(super) fn reader_snapshot_json(reader: &restream_sync::ReaderSnapshot) -> se
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
+    use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 
     fn failed_recent_outcome() -> RecentEgressOutcome {
         RecentEgressOutcome {

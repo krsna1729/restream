@@ -12,8 +12,8 @@ use std::sync::{Arc, Weak};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::stage::StageKey;
 
 /// One consumer's hold on a shared stage. Clones share the hold.
 #[derive(Clone)]

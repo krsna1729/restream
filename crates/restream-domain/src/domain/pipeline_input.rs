@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum PipelineInputRole {
     Primary,
@@ -118,7 +118,7 @@ impl PipelineInput {
 /// have no listener at all: the engine fetches a remote HLS origin, or dials
 /// a remote SRT listener (caller mode) and receives its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum PipelineInputSourceKind {
     #[default]
@@ -164,7 +164,7 @@ impl std::error::Error for PipelineInputSourceKindParseError {}
 
 /// Which rendition of a remote master playlist an `HlsPull` input follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum VariantRule {
     #[default]

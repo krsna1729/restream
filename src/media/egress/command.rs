@@ -12,7 +12,7 @@ use std::fmt;
 /// Stable identity for a live output destination.
 ///
 /// Carried as a thin `String` newtype so pipeline IDs, output IDs, etc.
-/// cannot be accidentally mixed (mirrors `crate::domain::ids` conventions).
+/// cannot be accidentally mixed (mirrors `restream_domain::domain::ids` conventions).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OutputId(String);
 

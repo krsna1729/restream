@@ -7,7 +7,7 @@ use axum::routing::put;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use crate::domain::stage::{StageKey, StageKind};
+use restream_domain::domain::stage::{StageKey, StageKind};
 
 /// `uri` with the per-attempt session token (`r<hex>-`) of segment names
 /// replaced by `S-`, so tests can name segments.

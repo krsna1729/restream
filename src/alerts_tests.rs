@@ -1,8 +1,8 @@
 use super::*;
 use crate::api_runtime_views::stage_runtime_snapshot_json;
-use crate::domain::stage::{StageKey, StageKind};
-use crate::domain::state::{StageBackendKind, StagePhase};
-use crate::runtime::stage::{StageRuntimeSnapshot, phase_name};
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::domain::state::{StageBackendKind, StagePhase};
+use restream_domain::runtime::stage::{StageRuntimeSnapshot, phase_name};
 use serde_json::json;
 
 fn snapshot_with_pipeline(pipeline_id: &str, input_status: &str) -> serde_json::Value {

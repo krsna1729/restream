@@ -21,8 +21,8 @@ use tracing::warn;
 use url::Host;
 
 use super::digest;
-use crate::domain::pipeline_input::{HeaderPair, PullAuth};
 use crate::media::hls_ingest::{BodyError, ObjectBody};
+use restream_domain::domain::pipeline_input::{HeaderPair, PullAuth};
 
 /// Connect timeout for origin requests; a stalled request is bounded by
 /// `REQUEST_TIMEOUT` and by task cancellation.

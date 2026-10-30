@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use restream::domain::output_spec::RtmpOutputMode;
+use restream_domain::domain::output_spec::RtmpOutputMode;
 use serde::Deserialize;
 
 use super::super::{HarnessSrtMode, harness_srt_output_url};

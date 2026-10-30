@@ -6,13 +6,13 @@ use crate::application::ports::{
     IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
     PipelineStoreError,
 };
-use crate::domain::pipeline_input::PipelineInput;
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
     PipelineAccessMode,
 };
 use crate::media::security::{IngestSecurityService, RateLimitScope};
+use restream_domain::domain::pipeline_input::PipelineInput;
 use std::sync::Arc;
 use std::{future::Future, pin::Pin};
 
@@ -136,7 +136,7 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
                         && input.enabled
                         && (!pushing
                             || input.source_kind
-                                == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed)
+                                == restream_domain::domain::pipeline_input::PipelineInputSourceKind::Keyed)
                 })
                 .ok_or(PipelineAccessError::InvalidStreamKey)?;
 

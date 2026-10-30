@@ -15,11 +15,11 @@ use std::{sync::Arc, time::Duration};
 
 use crate::api_view_models;
 
-use crate::domain::output_spec::{
+use restream_domain::domain::output_spec::{
     OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities, RecirculationTarget,
 };
 
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::state::DesiredOutputState;
 
 use super::error::ApiError;
 use super::state::{
@@ -684,8 +684,10 @@ pub async fn output_status_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::audio_routing::AudioRouting;
-    use crate::domain::output_spec::{OutputVideoCodec, OutputVideoConfig, RtmpOutputMode};
+    use restream_domain::domain::audio_routing::AudioRouting;
+    use restream_domain::domain::output_spec::{
+        OutputVideoCodec, OutputVideoConfig, RtmpOutputMode,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

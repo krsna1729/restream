@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use super::{HlsIngest, HlsIngestLimits};
-use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
     PipelineAccessMode,
 };
 use crate::media::security::IngestSecurityService;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 
 pub(crate) const STREAM_KEY: &str = "hls-key";
 pub(crate) const PIPELINE_ID: &str = "pipe-hls";

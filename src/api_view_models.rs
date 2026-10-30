@@ -122,7 +122,7 @@ mod tests {
     use super::*;
     use crate::application::models::JobStatus;
     use crate::application::srt_ingest::serialize_persisted_srt_ingest_policy;
-    use crate::domain::srt_ingest::{SrtPipelineIngestConfig, SrtPipelineIngestMode};
+    use restream_domain::domain::srt_ingest::{SrtPipelineIngestConfig, SrtPipelineIngestMode};
 
     #[test]
     fn pipeline_responses_preserve_pipeline_and_file_ingest_shape() {

@@ -4,7 +4,7 @@
 use super::hub::{Since, StateHub};
 use super::tests::{output, ports, project_rows};
 use super::*;
-use crate::domain::pipeline_input::PipelineInputSource;
+use restream_domain::domain::pipeline_input::PipelineInputSource;
 
 async fn database() -> sqlx::SqlitePool {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -102,7 +102,7 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
         (primary.position, primary.role, primary.selected),
         (
             0,
-            crate::domain::pipeline_input::PipelineInputRole::Primary,
+            restream_domain::domain::pipeline_input::PipelineInputRole::Primary,
             true
         )
     );
@@ -110,7 +110,7 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
         (backup.position, backup.role, backup.selected),
         (
             1,
-            crate::domain::pipeline_input::PipelineInputRole::Backup,
+            restream_domain::domain::pipeline_input::PipelineInputRole::Backup,
             false
         )
     );
@@ -254,7 +254,7 @@ async fn the_graph_is_the_running_structure_without_counters() {
     }];
     let outputs = [output(
         "out",
-        crate::domain::state::DesiredOutputState::Running,
+        restream_domain::domain::state::DesiredOutputState::Running,
     )];
     let idle = project_rows(&engine, &pipelines, &outputs).await;
     let graph = &idle.graphs["pipe"];

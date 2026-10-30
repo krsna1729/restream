@@ -3198,6 +3198,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "restream-core",
+ "restream-domain",
  "restream-moq",
  "restream-mpegts",
  "restream-rtmp",
@@ -3243,6 +3244,18 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "restream-domain"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "restream-core",
+ "serde",
+ "serde_json",
+ "ts-rs",
+ "url",
 ]
 
 [[package]]
@@ -4234,6 +4247,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "restream",
+ "restream-domain",
  "restream-sync",
  "rml_rtmp",
  "rtrb",

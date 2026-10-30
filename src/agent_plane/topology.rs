@@ -8,9 +8,9 @@ use serde::Serialize;
 
 use crate::agent_core::{PlanRequest, ProposedChange};
 use crate::application::models::Output;
-use crate::domain::output_spec::{EgressProtocol, OutputConfig, OutputUrlScheme};
-use crate::domain::stage::StageKind;
-use crate::planner::{PlannedOutput, plan_pipeline_graph};
+use restream_domain::domain::output_spec::{EgressProtocol, OutputConfig, OutputUrlScheme};
+use restream_domain::domain::stage::StageKind;
+use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 
 /// Wanted-running outputs that read one stage over one protocol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -207,7 +207,7 @@ fn shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::state::DesiredOutputState;
+    use restream_domain::domain::state::DesiredOutputState;
 
     fn stored(id: &str, config: OutputConfig, url: &str, running: bool) -> Output {
         Output {

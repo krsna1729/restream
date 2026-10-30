@@ -9,8 +9,8 @@ use super::super::{
 use super::agent_health_snapshot;
 use crate::api_runtime_views::ResourceMapOptions;
 use crate::application::models::{Ingest, Job, Output, Pipeline};
-use crate::domain::output_spec::OutputUrlScheme;
 use crate::{alerts, api_view_models, events};
+use restream_domain::domain::output_spec::OutputUrlScheme;
 
 pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let catalog = state.agent_context_catalog().await;

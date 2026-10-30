@@ -645,7 +645,7 @@ mod tests {
             .unwrap();
         crate::db::create_recording(
             &pool,
-            &crate::domain::ids::RecordingId::from("rec-1"),
+            &restream_domain::domain::ids::RecordingId::from("rec-1"),
             "pipe-1",
             "2026-07-09T00:00:00Z",
             Some("/media/recording_1.ts"),

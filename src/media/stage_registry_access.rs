@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
 use crate::media::engine_hls::input_id_from_hls_preview_resource_id;
 use crate::media::engine_registries::StageRuntime;
@@ -14,7 +13,8 @@ use crate::media::stage_lifecycle::{
 };
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
-use crate::runtime::stage::StageRuntimeSnapshot;
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -501,7 +501,8 @@ impl MediaEngine {
                 } else {
                     active_codecs.get(&pipeline_id).map(String::as_str)
                 };
-            let Some(plan) = crate::planner::plan_hls_preview_graph(&pipeline_id, ingest_codec)
+            let Some(plan) =
+                restream_domain::planner::plan_hls_preview_graph(&pipeline_id, ingest_codec)
             else {
                 continue;
             };

@@ -1,6 +1,6 @@
 //! Central startup/join policy for live readers and FFmpeg probe budgets.
 
-use crate::domain::output_spec::VideoCodecKind;
+use restream_domain::domain::output_spec::VideoCodecKind;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
 // These are fallbacks, not the normal live policy. Restream measures the

@@ -127,7 +127,7 @@ async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
     assert!(
         matches!(
             blocked,
-            Some(crate::runtime::stage::StageRuntimeSnapshot {
+            Some(restream_domain::runtime::stage::StageRuntimeSnapshot {
                 phase: StagePhase::WaitingForCapacity { .. },
                 capacity_permits_total: Some(3),
                 ..

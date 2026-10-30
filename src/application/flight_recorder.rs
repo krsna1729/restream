@@ -24,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 use crate::application::fleet_history::is_delivering;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::state::DesiredOutputState;
 
 /// How often the recorder samples: the dashboard's own sampling clock.
 pub const FLIGHT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);

@@ -15,9 +15,9 @@ use tracing::warn;
 use crate::api_view_models;
 
 use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
-use crate::domain::ingest_security::IngestSecurityConfig;
-use crate::domain::srt_ingest::SrtGlobalIngestConfig;
-use crate::domain::transcode_profile::TranscodeProfiles;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_domain::domain::transcode_profile::TranscodeProfiles;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST, require_authenticated,
@@ -35,7 +35,7 @@ pub struct ConfigPatchPayload {
     pub server_name: Option<String>,
     pub ingest_host: Option<String>,
     pub ingest_security: Option<IngestSecurityConfig>,
-    pub recording_settings: Option<crate::domain::recording::RecordingSettings>,
+    pub recording_settings: Option<restream_domain::domain::recording::RecordingSettings>,
     pub srt_ingest: Option<SrtGlobalIngestConfig>,
     pub transcode_profiles: Option<TranscodeProfiles>,
 }
@@ -414,10 +414,12 @@ mod tests {
         let settings = crate::application::settings::SettingsSnapshot {
             server_name: "restream".to_string(),
             ingest_host: "localhost".to_string(),
-            ingest_security: crate::domain::ingest_security::IngestSecurityConfig::default(),
-            recording_settings: crate::domain::recording::RecordingSettings::default(),
-            srt_ingest: crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
-            transcode_profiles: crate::domain::transcode_profile::TranscodeProfiles::default(),
+            ingest_security:
+                restream_domain::domain::ingest_security::IngestSecurityConfig::default(),
+            recording_settings: restream_domain::domain::recording::RecordingSettings::default(),
+            srt_ingest: restream_domain::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+            transcode_profiles:
+                restream_domain::domain::transcode_profile::TranscodeProfiles::default(),
         };
 
         let response = config_response_json(&settings, Vec::new(), &[], Vec::new(), false, true);

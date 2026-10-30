@@ -1,6 +1,6 @@
-use crate::domain::output_spec::VideoCodecKind;
 use crate::media::engine::MediaEngine;
 use restream_core::metadata::AudioMeta;
+use restream_domain::domain::output_spec::VideoCodecKind;
 use restream_sync::RingBuffer;
 use rml_rtmp::sessions::StreamMetadata;
 use std::sync::Arc;

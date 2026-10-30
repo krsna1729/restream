@@ -4,8 +4,8 @@
 //! the external (child-process) transcoder, which consumes it so it does not
 //! parse stringified stage keys or preset names itself.
 
-use crate::domain::stage::StageKey;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::stage::StageKey;
 
 /// Codec kinds that can appear in a stage plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,7 +167,7 @@ impl FfmpegStagePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::stage::{StageKey as DomainStageKey, StageKind};
+    use restream_domain::domain::stage::{StageKey as DomainStageKey, StageKind};
 
     fn input_spec() -> StageInputSpec {
         StageInputSpec {

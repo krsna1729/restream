@@ -3,13 +3,13 @@ use super::*;
 use bytes::Bytes;
 
 use crate::application::egress::prepare_output_ring;
-use crate::domain::output_spec::{OutputConfig, VideoCodecKind};
-use crate::domain::state::DesiredOutputState;
 use crate::media::egress::EgressFeed;
 use crate::media::moq::egress::startup::startup_video;
 use crate::media::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
 use restream_core::codec::build_avcc_sequence_header;
 use restream_core::metadata::AudioMeta;
+use restream_domain::domain::output_spec::{OutputConfig, VideoCodecKind};
+use restream_domain::domain::state::DesiredOutputState;
 use restream_moq::media::AudioConfig;
 use restream_moq::media::TrackContainer;
 use restream_moq::media::VideoCodec;

@@ -1,6 +1,6 @@
 use super::*;
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::state::DesiredOutputState;
 
 async fn pool() -> SqlitePool {
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
@@ -57,12 +57,12 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     // A listener that accepts and never answers, so the pull task parks in
     // its first request; a closed port would log a warning on every backoff.
     let (origin, stalled) = crate::media::hls_ingest::test_support::stalled_origin();
-    let pull = |url: String| crate::domain::pipeline_input::PipelineInputSource {
-        kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+    let pull = |url: String| restream_domain::domain::pipeline_input::PipelineInputSource {
+        kind: restream_domain::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
         url: Some(url),
-        variant_rule: crate::domain::pipeline_input::VariantRule::HighestBandwidth,
-        auth: crate::domain::pipeline_input::PullAuth::None,
-        push_auth: crate::domain::pipeline_input::PushAuth::None,
+        variant_rule: restream_domain::domain::pipeline_input::VariantRule::HighestBandwidth,
+        auth: restream_domain::domain::pipeline_input::PullAuth::None,
+        push_auth: restream_domain::domain::pipeline_input::PushAuth::None,
     };
     let first_url = format!("http://{origin}/master.m3u8");
     crate::db::create_pipeline_input(
@@ -81,7 +81,7 @@ async fn pull_inputs_follow_their_rows_across_passes() {
         "pipe",
         "keyed",
         "key-keyed",
-        &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+        &restream_domain::domain::pipeline_input::PipelineInputSource::keyed(),
     )
     .await
     .unwrap();
@@ -152,7 +152,7 @@ async fn a_deleted_inputs_key_state_is_released() {
             "pipe",
             input_id,
             &format!("key-{input_id}"),
-            &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+            &restream_domain::domain::pipeline_input::PipelineInputSource::keyed(),
         )
         .await
         .unwrap();
@@ -264,7 +264,7 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
         "pipe",
         "Backup",
         "key-b",
-        &crate::domain::pipeline_input::PipelineInputSource::keyed(),
+        &restream_domain::domain::pipeline_input::PipelineInputSource::keyed(),
     )
     .await
     .unwrap();

@@ -5,9 +5,9 @@ use crate::application::ports::{
     IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError, MetaStoreWriter,
     MetaWriteFuture,
 };
-use crate::domain::ids::RecordingId;
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
+use restream_domain::domain::ids::RecordingId;
 use std::sync::Mutex;
 
 fn sqlite_pipeline_service(pool: &sqlx::SqlitePool) -> PipelineService {

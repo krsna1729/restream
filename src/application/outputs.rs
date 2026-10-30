@@ -7,8 +7,8 @@ use sqlx::SqlitePool;
 
 use crate::application::models::Output;
 use crate::application::services::error::{ServiceError, ServiceResult};
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::state::DesiredOutputState;
 
 fn output_from_record(record: crate::db::OutputRecord) -> Output {
     Output {

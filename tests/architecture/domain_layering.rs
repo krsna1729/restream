@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 #[test]
 fn production_domain_dependencies_are_contract_only() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let domain_dir = manifest_dir.join("src/domain");
-    let dependencies = declared_dependency_roots(include_str!("../../Cargo.toml"));
+    let domain_dir = manifest_dir.join("crates/restream-domain/src/domain");
+    let dependencies =
+        declared_dependency_roots(include_str!("../../crates/restream-domain/Cargo.toml"));
     let mut sources = Vec::new();
     collect_rust_sources(&domain_dir, &mut sources);
     let mut offenders = Vec::new();
@@ -24,11 +25,11 @@ fn production_domain_dependencies_are_contract_only() {
             .strip_prefix(manifest_dir)
             .expect("domain source should be inside the crate");
 
-        for namespace in ["crate::", "restream::"] {
+        for namespace in ["crate::", "restream::", "restream_domain::"] {
             for (offset, _) in production.match_indices(namespace) {
                 let reference = &production[offset..];
                 let allowed = reference.starts_with("crate::domain::")
-                    || reference.starts_with("restream::domain::");
+                    || reference.starts_with("restream_domain::domain::");
                 if !allowed {
                     offenders.push(format!(
                         "{} uses an outward internal dependency near `{}`",
@@ -40,7 +41,8 @@ fn production_domain_dependencies_are_contract_only() {
         }
 
         for dependency in &dependencies {
-            if matches!(dependency.as_str(), "serde" | "url") {
+            // `ts_rs` only backs the `ts`-feature TypeScript export derives.
+            if matches!(dependency.as_str(), "serde" | "url" | "ts_rs") {
                 continue;
             }
             if uses_dependency(&dependencies_source, dependency) {

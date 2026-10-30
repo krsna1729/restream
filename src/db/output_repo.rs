@@ -1,5 +1,5 @@
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::state::DesiredOutputState;
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 
 pub(crate) fn serialize_config(config: &OutputConfig) -> Result<String, sqlx::Error> {

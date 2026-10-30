@@ -6,7 +6,7 @@ use crate::application::pipeline_inputs::{
     PipelineInputStore, PipelineInputStoreError,
 };
 use crate::application::ports::PipelineStoreError;
-use crate::domain::pipeline_input::PipelineInputSource;
+use restream_domain::domain::pipeline_input::PipelineInputSource;
 
 #[derive(Clone)]
 pub struct SqlitePipelineInputStore {

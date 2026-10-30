@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::domain::ingest_security::IngestSecurityConfig;
 use restream::media::engine::MediaEngine;
 use restream::media::hls_ingest::{HlsIngest, HlsIngestLimits};
 use restream::media::ingest_auth::{
@@ -17,6 +16,7 @@ use restream::media::ingest_auth::{
 };
 use restream::media::security::IngestSecurityService;
 use restream_core::MediaType;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_sync::RingBuffer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -55,11 +55,11 @@ impl restream::application::ingest::PipelineInputLookup for OneKey {
     ) -> restream::application::ingest::PipelineInputLookupFuture<'a> {
         Box::pin(async move {
             Ok((stream_key == STREAM_KEY).then(|| {
-                restream::domain::pipeline_input::PipelineInput {
+                restream_domain::domain::pipeline_input::PipelineInput {
                     id: INPUT_ID.to_string(),
                     pipeline_id: PIPELINE_ID.to_string(),
                     enabled: true,
-                    ..restream::domain::pipeline_input::PipelineInput::keyed_default()
+                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
                 }
             }))
         })

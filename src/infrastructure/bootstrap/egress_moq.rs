@@ -10,11 +10,11 @@ use std::sync::Arc;
 use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::egress::PreparedOutput;
 use crate::application::models::Output;
-use crate::domain::state::EgressPhase;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
 use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::moq::egress::MoqPublishStartup;
+use restream_domain::domain::state::EgressPhase;
 
 use super::EgressTask;
 

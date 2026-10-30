@@ -315,8 +315,8 @@ proptest! {
 
 #[tokio::test]
 async fn test_audio_router_reindexes_packets() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -380,8 +380,8 @@ async fn test_audio_router_reindexes_packets() {
 
 #[tokio::test]
 async fn audio_router_stage_is_not_blocking_after_output() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -446,8 +446,8 @@ async fn audio_router_stage_is_not_blocking_after_output() {
 
 #[tokio::test]
 async fn audio_router_replays_prebuffered_upstream_stage() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -553,8 +553,8 @@ async fn audio_router_replays_prebuffered_upstream_stage() {
 async fn audio_router_propagates_late_arriving_audio_tracks() {
     // Simulates SRT multi-audio: source ring has no audio_tracks when the
     // audio_router stage starts, then they arrive mid-stream.
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -705,8 +705,8 @@ async fn audio_tracks_ring_supports_reconnect_update() {
 
 #[tokio::test]
 async fn audio_router_preserves_upstream_video_parameter_sets() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -749,8 +749,8 @@ async fn audio_router_preserves_upstream_video_parameter_sets() {
 
 #[tokio::test]
 async fn audio_router_learns_video_parameter_sets_from_live_packets() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -817,8 +817,8 @@ async fn audio_router_learns_video_parameter_sets_from_live_packets() {
 
 #[tokio::test]
 async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
@@ -877,8 +877,8 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
 /// it in the middle of one burst.
 #[tokio::test]
 async fn audio_router_copies_a_configuration_change_inside_one_burst() {
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::engine::MediaEngine;
+    use restream_domain::domain::stage::{StageKey, StageKind};
 
     const SPS: &[u8] = &[0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80];
     const PPS_A: &[u8] = &[0, 0, 0, 1, 0x68, 0xce, 0x06, 0xe2];

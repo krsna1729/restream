@@ -88,7 +88,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         retries_exhausted: false,
-        config: crate::domain::output_spec::OutputConfig::source(),
+        config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
 
     let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
@@ -133,7 +133,7 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         retries_exhausted: false,
-        config: crate::domain::output_spec::OutputConfig::source(),
+        config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
     engine
         .register_egress(
@@ -211,7 +211,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         retries_exhausted: false,
-        config: crate::domain::output_spec::OutputConfig::source(),
+        config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
 
     let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
@@ -255,7 +255,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         retries_exhausted: false,
-        config: crate::domain::output_spec::OutputConfig::source(),
+        config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
     // Held: a consumer of the HEVC-era path still leases its stages.
     let _stale =
@@ -269,8 +269,8 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         retries_exhausted: false,
-        config: crate::domain::output_spec::OutputConfig::preset("h264").with_audio(
-            crate::domain::audio_routing::AudioRouting::SelectTracks { tracks: vec![1] },
+        config: restream_domain::domain::output_spec::OutputConfig::preset("h264").with_audio(
+            restream_domain::domain::audio_routing::AudioRouting::SelectTracks { tracks: vec![1] },
         ),
     };
 

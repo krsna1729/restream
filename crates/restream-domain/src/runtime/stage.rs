@@ -20,7 +20,7 @@ pub struct StageRuntimeSnapshot {
     pub capacity_wait_ms: Option<u64>,
 }
 
-pub(crate) const fn phase_name(phase: &StagePhase) -> &'static str {
+pub const fn phase_name(phase: &StagePhase) -> &'static str {
     match phase {
         StagePhase::Planned => "planned",
         StagePhase::Registered => "registered",

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
+use restream_domain::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
 
 pub const BASELINE_TRANSCODE_PROFILE_KEY: &str = "h264";
 

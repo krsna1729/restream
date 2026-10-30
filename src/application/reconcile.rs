@@ -3,8 +3,8 @@
 
 use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::state::DesiredOutputState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputRetryPolicy {
@@ -257,8 +257,8 @@ mod tests {
     use super::*;
     use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
-    use crate::domain::output_spec::OutputConfig;
     use restream_core::metadata::VideoMeta;
+    use restream_domain::domain::output_spec::OutputConfig;
     // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
     use proptest::strategy::Strategy;
     use std::collections::HashMap;
