@@ -254,7 +254,10 @@ the [assurance roadmap](assurance-roadmap.md).
   `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
   (`crates/restream-engine/src/external_transcoder_tests/hevc_pipeline.rs`, output deadline)
   each failed once in a full local `--lib` run; each passes when rerun.
-  Remove the timing dependence.
+  `container_timeout_reaps_engine_client` (`crates/xtask/src/container/tests.rs`)
+  failed once in CI: its fake engine had not written its `pid` file when the
+  1 s shim timeout fired; it passed 40 local runs and 20 runs pinned to one
+  saturated CPU. Remove the timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.
 
