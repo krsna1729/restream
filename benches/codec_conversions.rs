@@ -132,7 +132,7 @@ fn bench_avcc_to_annexb(c: &mut Criterion) {
 //   with_scratch: reuses caller-provided positions Vec (0 allocs after warmup;
 //                 faster for small/multi-NALU frames)
 //
-// 2026-06-23 Zen results: two_pass wins IDR 80k (+42%); with_scratch wins
+// On the Zen reference host two_pass wins IDR 80k (+42%); with_scratch wins
 // P-frame 8k (+34%) and 3-NALU 30k (+9%). Production uses two_pass.
 // Re-run on target hardware before switching: cargo bench --bench codec_conversions
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ fn bench_annexb_to_avcc(c: &mut Criterion) {
         let annexb = make_annexb(num_nalus, nalu_size);
         group.throughput(Throughput::Bytes(annexb.len() as u64));
 
-        // Current two-pass implementation (chosen on 2026-06-23 Zen benchmarks)
+        // Production two-pass implementation (faster for IDR frames on the Zen reference host)
         group.bench_with_input(BenchmarkId::new("two_pass", label), &annexb, |b, data| {
             b.iter(|| black_box(annexb_to_avcc(data)))
         });

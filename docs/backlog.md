@@ -26,7 +26,8 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
-- [Q-106 intermittent timing tests](#q-106-testing-sonnet-three-tests-fail-intermittently-on-a-loaded-host)
+- [Q-106 intermittent timing tests](#q-106-testing-sonnet-timing-tests-fail-intermittently-on-a-loaded-host)
+- [Q-107 matrix_throughput transcode benches](#q-107-testing-sonnet-matrix_throughput-transcode-benches-deliver-nothing)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -243,14 +244,26 @@ the [assurance roadmap](assurance-roadmap.md).
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
 
-### Q-106 [testing] [sonnet] Three tests fail intermittently on a loaded host
+### Q-106 [testing] [sonnet] Timing tests fail intermittently on a loaded host
 - Goal: find why `the_projector_rebuilds_only_while_a_client_listens`
   (`src/application/runtime_state/tests.rs`) and
   `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
   (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job, and
   `a_playlist_parse_does_not_block_the_pull_task_worker`
-  (`src/media/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) failed
-  once in a full local `--lib` run; each passes when rerun. Remove the
-  timing dependence.
+  (`src/media/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) and
+  `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
+  (`src/media/external_transcoder_tests/hevc_pipeline.rs`, output deadline)
+  each failed once in a full local `--lib` run; each passes when rerun.
+  Remove the timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.
+
+### Q-107 [testing] [sonnet] matrix_throughput transcode benches deliver nothing
+- Goal: the `*_trans` cases of `benches/matrix_throughput.rs` fail with
+  `pulled=0` on master. The pinned FFmpeg child
+  (`.restream/runtime/ffmpeg/ffmpeg`, libx265 720p) exits with `AVERROR_EOF`
+  (-541478725) because its stdin closes before it opens the MPEG-TS input;
+  the bench waits only 50 ms after starting the transcoder (around lines
+  202-215). Make every transcode case deliver.
+- Gates: every `_trans` case runs and reports a time; no change to engine
+  behaviour without a failing test.
