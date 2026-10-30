@@ -68,7 +68,7 @@ impl Reconciler {
         }
     }
 
-    /// Runs until shutdown. Two cadences (Q-040):
+    /// Runs until shutdown. Two cadences:
     /// - the output pass (rows, topology, egress start/stop/retry) runs only
     ///   when requested or due: a mutation or lifecycle event, a deadline it
     ///   scheduled itself (retry backoff, ingest-disconnect grace), and a

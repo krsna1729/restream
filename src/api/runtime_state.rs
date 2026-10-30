@@ -1,4 +1,4 @@
-//! `/api/v1/state` and `/api/v1/state/stream` (Q-042).
+//! `/api/v1/state` and `/api/v1/state/stream`.
 //!
 //! The stream sends `snapshot` (a whole `RuntimeState`) or `delta` (a
 //! `StateDelta`) events, each with `id: <epoch>.<revision>`. A client

@@ -1,22 +1,21 @@
-//! The `fault.srt-output-stall` mode: two live proofs of the Phase 4
-//! exit-gate criteria for a destination that stops taking data
-//! (egress migration record, git history).
+//! The `fault.srt-output-stall` mode: two live proofs of stalled-destination
+//! recovery and bounded RSS for a destination that stops taking data.
 //!
-//! **Two different faults, because `SIGSTOP` is not backpressure.** The
-//! original intent of this file was a single test of the
-//! *backpressured-but-connected* path (`classify_stall`/`observe_stall` in
+//! **Two different faults, because `SIGSTOP` is not backpressure.** A single
+//! `SIGSTOP` test cannot cover the *backpressured-but-connected* path
+//! (`classify_stall`/`observe_stall` in
 //! `src/media/egress/policy.rs` and `src/media/egress/backends/srt.rs`): a
 //! destination that keeps the SRT connection alive but never drains
 //! application data, so the leaf sits at `LeafStallClass::Backpressured`
 //! and is closed only once it reaches `Stalled`. `SIGSTOP` on a real
-//! MediaMTX receiver was meant to produce exactly that by freezing its
+//! MediaMTX receiver looks like it would produce exactly that by freezing its
 //! `recv()` loop. It does not: `SIGSTOP` freezes *every* thread in the
 //! receiver process, including its SRT protocol/ACK workers,
 //! so the connection is detected as fully broken within seconds (observed:
 //! `srt_send failed ... Connection was broken`), not backpressured — SRT
 //! has no way to distinguish "receiver alive but not reading" from
 //! "receiver process frozen" once the underlying process stops generating
-//! ACKs. So the two conditions are now tested separately:
+//! ACKs. So the two conditions are tested separately:
 //!
 //! - `srt_egress_bounded_rss_under_frozen_destination` keeps the `SIGSTOP`
 //!   receiver and proves what it actually produces: a real SRT egress
@@ -372,7 +371,7 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
         .iter()
         .all(|layer| ruled_out.iter().any(|value| value == layer));
 
-    // "Bounded RSS during indefinite stalls" (Phase 4 exit gate): sample
+    // Bounded RSS during indefinite stalls: sample
     // restream's RSS across an extended window of continuous
     // connect-failure retries. A bounded sample window standing in for
     // "indefinite" is the same practical compromise every other live proof

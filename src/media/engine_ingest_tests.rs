@@ -94,7 +94,7 @@ async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
 }
 
 #[tokio::test]
-async fn q098_authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
+async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     use restream_core::metadata::{AudioMeta, VideoMeta};
 
     let engine = MediaEngine::new();
@@ -170,7 +170,7 @@ async fn q098_authoritative_tracks_follow_selection_and_reject_replaced_attempts
 }
 
 #[tokio::test]
-async fn q098_authoritative_snapshot_clears_an_obsolete_sequence_header() {
+async fn authoritative_snapshot_clears_an_obsolete_sequence_header() {
     let engine = MediaEngine::new();
     engine.get_or_create_pipeline("pipe").await;
     let registration = engine

@@ -301,9 +301,9 @@ pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
 ///
 /// # Implementation choice: callback walker (no allocation)
 ///
-/// History: a `memmem::find_iter().peekable()` single-pass variant was
-/// measured 25–31% slower than a two-pass split into two small `Vec`s on
-/// 2026-06-23 (1-NALU P-frame at 8 KiB, ~890 ns vs ~690 ns), in a
+/// A `memmem::find_iter().peekable()` single-pass variant measured 25–31%
+/// slower than a two-pass split into two small `Vec`s (1-NALU P-frame at
+/// 8 KiB, ~890 ns vs ~690 ns), in a
 /// single-threaded micro-benchmark where allocation is uncontended. Under
 /// production load those per-packet `Vec`s contend on the allocator (arena
 /// lock waits on the SRT ingress Owner, runtime-crossings C3), so this walks
@@ -346,7 +346,7 @@ fn get_start_code_finder() -> &'static memchr::memmem::Finder<'static> {
 /// (typically stored alongside the `video_conv_buf` scratch). It is cleared and
 /// repopulated on every call.
 ///
-/// # Benchmark results (2026-06-23, bench-dev, x86-64 Zen, `annexb_to_avcc` group)
+/// # Reference benchmark results (bench-dev, x86-64 Zen, `annexb_to_avcc` group)
 ///
 /// | Input | `two_pass` | `with_scratch` | Winner |
 /// |---|---|---|---|

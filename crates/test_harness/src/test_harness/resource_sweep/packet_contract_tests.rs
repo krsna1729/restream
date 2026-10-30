@@ -1,4 +1,4 @@
-//! Tests for the WI3.4 packet-rate contract sampler.
+//! Tests for the packet-rate contract sampler.
 
 use super::packet_contract::*;
 use super::packet_contract_peers::peer_state_from_json;

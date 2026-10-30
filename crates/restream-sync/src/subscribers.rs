@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// Woken by a ring's producer right after each publication, and when the ring
 /// is sealed or ends. Egress fabric shards subscribe with their coalescing
 /// wake gates, so a publication reaches them from the producing thread with no
-/// watcher task in between (WI11). The same type backs
+/// watcher task in between. The same type backs
 /// [`crate::ring_buffer::RingBuffer::metadata_subscribers`], woken only on track
 /// metadata changes. Implementations must be cheap and must not block: they
 /// run on the producer's hot path.

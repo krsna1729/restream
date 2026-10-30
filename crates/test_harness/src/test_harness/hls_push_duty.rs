@@ -1,7 +1,7 @@
 //! `hls-push-duty`: the harness mode that drives HLS push (and pull) ingest.
 //!
-//! The mode exists for two purposes: it is the Q-067 harness gate for HLS
-//! push ingest, and it is the treatment arm of an executor-isolation
+//! The mode exists for two purposes: it is the harness gate for HLS push
+//! ingest, and it is the treatment arm of an executor-isolation
 //! measurement — does adding HLS ingest sessions degrade the existing
 //! RTMP/SRT ingest-and-egress guarantees?
 //!

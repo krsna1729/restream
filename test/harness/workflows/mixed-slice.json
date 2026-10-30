@@ -14,7 +14,7 @@
       "op": "expandSliceAxes",
       "as": "axisCases",
       "axes": "${slice.axes}",
-      "legacyAxisFields": [
+      "axisFields": [
         "bitrateAxis",
         "branchAxis",
         "cryptoAxis"

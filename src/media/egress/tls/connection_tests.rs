@@ -671,7 +671,7 @@ fn client_awaiting_handoff(
 /// Finished. When they reach the receive buffer before the hand-off (the
 /// Finished still being sent, as under load), the hand-off must still happen
 /// when that write completes: nothing else reads the buffer in this state,
-/// so the connection used to sit in userspace TLS until its timeout.
+/// so the connection would otherwise sit in userspace TLS until its timeout.
 #[test]
 fn session_tickets_received_before_the_ktls_handoff_do_not_hold_it_back() {
     let runtime = compio::runtime::Runtime::new().unwrap();

@@ -371,9 +371,9 @@ mod tests {
     fn video_flush_segment_clears_buffers_even_when_dts_rewind_fails_the_flush() {
         // A DTS rewind (e.g. an attacker-influenced FLV composition offset
         // decoupling PTS from DTS) makes build_mux_samples compute a
-        // negative sample duration and return Err. Before the fix,
-        // flush_segment returned early on that Err without clearing
-        // self.samples/self.payload, so every future packet kept
+        // negative sample duration and return Err. If flush_segment
+        // returned early on that Err without clearing
+        // self.samples/self.payload, every future packet would keep
         // accumulating in an unbounded buffer for the rest of the stream.
         let mut state = VideoRenditionState::new(&test_video_meta(), None);
         let packet = MediaPacket {

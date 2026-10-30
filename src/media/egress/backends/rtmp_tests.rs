@@ -607,9 +607,8 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
     // of `current_batch` in the same visit. The startup batch here queues
     // three packets (metadata, video sequence header, audio sequence
     // header) before any feed unit is ever read, so this exercises the
-    // write path directly — the budget check used to sit only right before
-    // `feed.read_from`, so a queued batch this size drained unconditionally
-    // in one visit regardless of `budget.max_bytes`.
+    // write path directly: the budget check must bound a queued batch, not
+    // only the next `feed.read_from`.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
@@ -664,7 +663,7 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 
     // Give the peer a moment to actually receive whatever was sent, then
     // confirm it did not receive the full three-packet batch in one go —
-    // the fix must have cut the visit off after (at most) one wire packet.
+    // the budget must have cut the visit off after (at most) one wire packet.
     let received = progress_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("peer never received any bytes from the budgeted visit");
@@ -703,11 +702,9 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 
 #[test]
 fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
-    // Regression test: `LeafCommon::pending_application_bytes` was never
-    // updated for any RTMP leaf, always reading `0` regardless of how much
-    // encoded-but-unsent data was actually queued (a hot-path audit
-    // finding). `RtmpFabricEngine::pending_application_bytes` now reports
-    // the real total.
+    // `LeafCommon::pending_application_bytes` must report the
+    // encoded-but-unsent data queued for an RTMP leaf
+    // (`RtmpFabricEngine::pending_application_bytes`), and drain to zero.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
@@ -793,11 +790,9 @@ fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
 
 #[test]
 fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
-    // Regression test: `MediaPublisher` used to call `feed.read_from` once
-    // per feed unit (`ReadBudget::new(1, ..)`), each call carrying its own
-    // `Vec` allocation and ring-atomic traffic (the exact class of overhead
-    // an earlier RTMP optimization already removed once — see
-    // the egress migration record (git history) Phase 5 status). It now pulls up to
+    // `MediaPublisher` must not call `feed.read_from` once per feed unit
+    // (`ReadBudget::new(1, ..)`): each call carries its own `Vec` allocation
+    // and ring-atomic traffic. It pulls up to
     // `FEED_READ_BURST` units into a local `pending_units` buffer per
     // `read_from` call. Proven here by blocking the write side (readiness
     // `writable: false`) so `advance` can pull from the feed but cannot

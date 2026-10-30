@@ -134,7 +134,7 @@ pub(super) fn next_pmt_version(demuxer: &TsDemuxer) -> u8 {
 }
 
 #[test]
-fn q098_pmt_video_removal_and_reappearance_preserves_audio() {
+fn pmt_video_removal_and_reappearance_preserves_audio() {
     let (mut demuxer, initial, ts) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -207,7 +207,7 @@ fn q098_pmt_video_removal_and_reappearance_preserves_audio() {
 }
 
 #[test]
-fn q098_pmt_audio_removal_reindexes_retained_config() {
+fn pmt_audio_removal_reindexes_retained_config() {
     let (mut demuxer, initial, ts) = fixture_probe_demux(true);
     assert_eq!(initial.audio_tracks.len(), 2);
     let video_pid = initial
@@ -251,7 +251,7 @@ fn q098_pmt_audio_removal_reindexes_retained_config() {
 }
 
 #[test]
-fn q098_pmt_retransmission_and_version_only_change_are_noops() {
+fn pmt_retransmission_and_version_only_change_are_noops() {
     let (mut demuxer, initial, ts) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -289,7 +289,7 @@ fn q098_pmt_retransmission_and_version_only_change_are_noops() {
 }
 
 #[test]
-fn q098_pmt_descriptor_change_updates_cached_metadata_without_pes() {
+fn pmt_descriptor_change_updates_cached_metadata_without_pes() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -327,7 +327,7 @@ fn q098_pmt_descriptor_change_updates_cached_metadata_without_pes() {
 }
 
 #[test]
-fn q098_pmt_codec_kind_change_drops_pes_and_cached_video_config() {
+fn pmt_codec_kind_change_drops_pes_and_cached_video_config() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -364,7 +364,7 @@ fn q098_pmt_codec_kind_change_drops_pes_and_cached_video_config() {
 }
 
 #[test]
-fn q098_pmt_removal_propagates_while_added_track_waits_for_config() {
+fn pmt_removal_propagates_while_added_track_waits_for_config() {
     let (mut demuxer, initial, ts) = fixture_probe_demux(false);
     let audio_pid = initial.audio_tracks[0].pid.expect("audio PID");
     let new_pid = 0x120;
@@ -396,7 +396,7 @@ fn q098_pmt_removal_propagates_while_added_track_waits_for_config() {
 }
 
 #[test]
-fn q098_pmt_removing_all_tracks_publishes_empty_snapshot() {
+fn pmt_removing_all_tracks_publishes_empty_snapshot() {
     let (mut demuxer, _, _) = fixture_probe_demux(false);
     let version = next_pmt_version(&demuxer);
     demuxer.feed(&make_pmt_ts_pkt(version, &[]));
@@ -411,7 +411,7 @@ fn q098_pmt_removing_all_tracks_publishes_empty_snapshot() {
 }
 
 #[test]
-fn q098_pmt_initial_probe_stays_complete_across_topology_change() {
+fn pmt_initial_probe_stays_complete_across_topology_change() {
     let (video, audio) = first_probe_ready_payloads();
     let mut demuxer = TsDemuxer::new();
     demuxer.feed(&make_pat_ts_pkt());
@@ -436,7 +436,7 @@ fn q098_pmt_initial_probe_stays_complete_across_topology_change() {
 }
 
 #[test]
-fn q098_pmt_current_next_false_does_not_apply_or_consume_version() {
+fn pmt_current_next_false_does_not_apply_or_consume_version() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -463,7 +463,7 @@ fn q098_pmt_current_next_false_does_not_apply_or_consume_version() {
 }
 
 #[test]
-fn q098_pmt_malformed_sections_leave_active_probe_and_version_unchanged() {
+fn pmt_malformed_sections_leave_active_probe_and_version_unchanged() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let audio_pid = initial.audio_tracks[0].pid.expect("audio PID");
     let previous_version = demuxer.pmt_version;
@@ -498,12 +498,11 @@ fn q098_pmt_malformed_sections_leave_active_probe_and_version_unchanged() {
     assert_eq!(update.audio_tracks.len(), 1);
 }
 
-// --- Regression: issue #3 — PMT version tracking ---
+// --- PMT version tracking ---
 
 #[test]
 fn pmt_retransmission_same_version_is_idempotent() {
-    // Regression: the old guard `if !self.streams.is_empty() && pmt_expected == 0 { return }`
-    // was replaced by explicit version tracking. A retransmission of the same
+    // Explicit version tracking: a retransmission of the same
     // PMT version must NOT rebuild the stream map (no phantom duplicates).
     let mut data = Vec::new();
     data.extend_from_slice(&make_pat_ts_pkt());
@@ -534,8 +533,8 @@ fn pmt_retransmission_same_version_is_idempotent() {
 
 #[test]
 fn pmt_version_change_rebuilds_stream_map() {
-    // Regression: the old code returned early on non-empty streams, silently
-    // dropping genuine PMT version changes (e.g., broadcaster adds audio mid-stream).
+    // A non-empty stream map must not hide a genuine PMT version change
+    // (e.g., broadcaster adds audio mid-stream).
     let mut data = Vec::new();
     data.extend_from_slice(&make_pat_ts_pkt());
     // Version 0: video only
@@ -611,13 +610,13 @@ fn malformed_pmt_does_not_consume_version_or_replace_stream_map() {
     }
 }
 
-// --- Regression: issue #12 — PCR negative guard ---
+// --- PCR negative guard ---
 
 #[test]
 fn write_pcr_clamps_negative_ts_to_zero() {
-    // Regression: before the .max(0) fix, a negative DTS reaching write_pcr
-    // would silently cast to a large u64, producing a nonsensical PCR value
-    // that makes decoders stall or seek unexpectedly.
+    // A negative DTS reaching write_pcr must clamp to 0: cast to u64 it
+    // would become a nonsensical PCR value that makes decoders stall or seek
+    // unexpectedly.
     let mut buf_neg = [0u8; 6];
     let mut buf_zero = [0u8; 6];
     write_pcr(&mut buf_neg, -1_000_000);
@@ -633,11 +632,11 @@ fn write_pcr_clamps_negative_ts_to_zero() {
     assert_eq!(buf_min, buf_zero);
 }
 
-// --- Regression: issue #6 (Round 3) — TsDemuxer remainder length cap ---
-// Before the MAX_REMAINDER guard, feeding a stream of single-byte 0x47
-// chunks would cause remainder to grow by 1 byte on every call — O(n)
+// --- TsDemuxer remainder length cap ---
+// Without the MAX_REMAINDER guard, feeding a stream of single-byte 0x47
+// chunks would grow the remainder by 1 byte on every call — O(n)
 // memory growth per byte of input, i.e. O(n²) overall processing cost
-// for a corrupt / adversarial stream.  After the fix the remainder must
+// for a corrupt / adversarial stream. The remainder must
 // never exceed TS_PACKET_SIZE - 1 = 187 bytes.
 #[test]
 fn feed_remainder_capped_on_corrupt_stream() {
@@ -655,13 +654,12 @@ fn feed_remainder_capped_on_corrupt_stream() {
     );
 }
 
-// --- Regression: issue #5 (Round 4) — PMT version rebuild preserves in-flight PES ---
-// Before the fix, a PMT version change discarded ALL StreamInfo (including
-// PesAccumulator buffers).  A partially-assembled video frame would be lost,
-// producing a glitch until the next IDR.  After the fix, PES buffers for PIDs
-// that survive into the new PMT are carried over.
+// --- PMT version rebuild preserves in-flight PES ---
+// A PMT version change must not discard the PesAccumulator buffers of PIDs
+// that survive into the new PMT: a partially-assembled video frame would be
+// lost, producing a glitch until the next IDR.
 #[test]
-fn q098_review_pmt_version_change_preserves_pes_for_unchanged_pid() {
+fn pmt_version_change_preserves_pes_for_unchanged_pid() {
     let pid = 0x100;
     let payload = [0, 0, 1, 0x65, 0xDE, 0xAD, 0xBE, 0xEF];
     let complete = valid_video_pes_packet(pid, 3, 90_000, &payload);

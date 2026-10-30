@@ -460,7 +460,7 @@ impl Drop for FeedWakeSubscription {
 /// Wake a fabric's shards directly from the feed's producer: each
 /// publication (and each seal or end of stream) calls into the shards'
 /// coalescing wake gates on the publishing thread, with no watcher task or
-/// runtime hop in between (WI11). Shared by all four
+/// runtime hop in between. Shared by all four
 /// `engine_*_egress_fabric.rs` callers (`kind` only labels the log line).
 ///
 /// `wake_handles` is shared with `EgressFabricRuntime::rescale`, so shards

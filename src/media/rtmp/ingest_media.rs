@@ -1,14 +1,14 @@
 //! RTMP publish media, run to completion on the RTMP ingress owner thread:
 //! FLV classification, sequence-header caching, input gating, timestamp
 //! mapping, standby GOP caching and promotion, and ring publication, for each
-//! decoded audio/video message as the owner parses it (WI11 step 2). Nothing
+//! decoded audio/video message as the owner parses it. Nothing
 //! per message crosses to Tokio.
 //!
 //! Tokio authorizes and registers the publisher, builds this state and hands
 //! it to the owner in the publish reply. The only things the owner reports
 //! back are the one-time stream probes ([`RtmpMediaEvent`]), which update
 //! ingest metadata. Sequence headers go straight into the ingest session's
-//! shared cells, so play, egress and promotion read the same values as before.
+//! shared cells, so play, egress and promotion read the values cached here.
 #![deny(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,

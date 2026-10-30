@@ -1,4 +1,4 @@
-//! MoQ ingest (Q-070): a publisher pushes a live stream to Restream over
+//! MoQ ingest: a publisher pushes a live stream to Restream over
 //! QUIC or WebTransport (moq-lite + hang) and it feeds a keyed pipeline
 //! input, as an RTMP, SRT or HLS push does.
 //!

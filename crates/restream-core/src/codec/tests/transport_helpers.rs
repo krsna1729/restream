@@ -189,8 +189,8 @@ fn audio_for_rtmp_into_reuses_buffer() {
 
 /// The ADTS length field is 13 bits and includes the header. The largest
 /// frame it can describe reads back as exactly one frame; one byte more is
-/// refused. It used to be written with a truncated length, so a TS demuxer
-/// lost ADTS sync on the rest of the stream.
+/// refused: written with a truncated length, it would make a TS demuxer lose
+/// ADTS sync on the rest of the stream.
 #[test]
 fn adts_header_refuses_frames_its_length_field_cannot_hold() {
     let mut largest = Vec::from(build_adts_header(MAX_ADTS_PAYLOAD, 48_000, 2).unwrap());

@@ -30,8 +30,9 @@ pub struct HlsPreviewGraph {
 /// Resolve and start the HLS preview runtime graph for a pipeline.
 ///
 /// For HEVC/H.265 ingest, this reuses the shared `hevc_to_h264:from:source`
-/// codec edge (same key as legacy RTMP) so audio and video stay on one ring at
-/// source resolution. For H.264 and other codecs, the source ring is used as-is.
+/// codec edge (the same key H.264-only outputs use) so audio and video stay on
+/// one ring at source resolution. For H.264 and other codecs, the source ring
+/// is used as-is.
 ///
 /// Returns `None` when the ingest codec cannot be determined within the
 /// deadline (3 seconds).

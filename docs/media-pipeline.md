@@ -681,7 +681,8 @@ Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
   copies that join. This limits session dispatch to one unit, not the CPU
   time of every operation inside it. In particular, fMP4 still decodes a
   whole bounded `moof` and plans its samples when first reached; incremental
-  parsing/planning remains open in Q-074.
+  parsing/planning remains open in
+  [Q-074](backlog.md#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause).
 - **Bad segment.** A segment that fails to demux is dropped and counted. The
   timeline re-anchors and publishing continues.
 - **Known limit.** An init lost on the wire under the same URI is invisible;

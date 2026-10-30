@@ -5,7 +5,7 @@ use super::tables_and_sync::{
 use super::*;
 
 #[test]
-fn q098_review_coalesced_audio_index_churn_discards_old_identity() {
+fn coalesced_audio_index_churn_discards_old_identity() {
     let (a_pid, b_pid) = (0x101, 0x102);
     let a = adts_frame(40, 0xAA);
     let b = adts_frame(40, 0xBB);
@@ -62,7 +62,7 @@ fn q098_review_coalesced_audio_index_churn_discards_old_identity() {
 }
 
 #[test]
-fn q098_review_coalesced_video_pid_and_codec_replacement_invalidates() {
+fn coalesced_video_pid_and_codec_replacement_invalidates() {
     let hevc_fixture =
         crate::test_fixtures::canonical_h265_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
     let hevc_ts = std::fs::read(&hevc_fixture)
@@ -176,7 +176,7 @@ fn q098_review_coalesced_video_pid_and_codec_replacement_invalidates() {
 }
 
 #[test]
-fn q098_review_topology_flags_accumulate_without_a_complete_probe() {
+fn topology_flags_accumulate_without_a_complete_probe() {
     let original = [(0x1B, 0x100), (0x0F, 0x101)];
     let mut demuxer = TsDemuxer::new();
     demuxer.feed(&make_pat_ts_pkt());
@@ -206,7 +206,7 @@ fn q098_review_topology_flags_accumulate_without_a_complete_probe() {
 }
 
 #[test]
-fn q098_review_noop_and_descriptor_pmts_preserve_packets_and_flags() {
+fn noop_and_descriptor_pmts_preserve_packets_and_flags() {
     let pid = 0x101;
     let audio = adts_frame(40, 0xAA);
     let pmt = make_pmt_ts_pkt(0, &[(0x0F, pid)]);
@@ -242,7 +242,7 @@ fn q098_review_noop_and_descriptor_pmts_preserve_packets_and_flags() {
 }
 
 #[test]
-fn q098_review_unselected_video_changes_do_not_invalidate_packets() {
+fn unselected_video_changes_do_not_invalidate_packets() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -285,7 +285,7 @@ fn q098_review_unselected_video_changes_do_not_invalidate_packets() {
 }
 
 #[test]
-fn q098_review_same_version_bad_crc_video_type_is_ignored() {
+fn same_version_bad_crc_video_type_is_ignored() {
     let (mut demuxer, initial, _) = fixture_probe_demux(false);
     let video_pid = initial
         .video
@@ -367,7 +367,7 @@ fn q098_review_same_version_bad_crc_video_type_is_ignored() {
 }
 
 #[test]
-fn q098_review_first_empty_pmt_publishes_snapshot() {
+fn first_empty_pmt_publishes_snapshot() {
     let mut initial = make_pat_ts_pkt();
     let pmt = make_pmt_ts_pkt(0, &[]);
     initial.extend_from_slice(&pmt);
@@ -395,7 +395,7 @@ fn q098_review_first_empty_pmt_publishes_snapshot() {
 }
 
 #[test]
-fn q098_review_incomplete_initial_topology_to_empty_publishes_snapshot() {
+fn incomplete_initial_topology_to_empty_publishes_snapshot() {
     let mut demuxer = TsDemuxer::new();
     demuxer.feed(&make_pat_ts_pkt());
     demuxer.feed(&make_pmt_ts_pkt(0, &[(0x1B, 0x100), (0x0F, 0x101)]));

@@ -17,11 +17,11 @@ use crate::lock::lock;
 
 pub const DEFAULT_RECORDING_QUEUE_CAPACITY: usize = 512 * 1024;
 
-// 512 KB is the pre-cutover default: it absorbed bursts between the async TS
-// reader and the blocking SRT/RTMP sender threads that used this queue then
-// (scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s across all
-// config×bitrate combinations, 0 blocked_writes throughout). Recording is the
-// only user left; operators can raise it with RESTREAM_RECORDING_QUEUE_CAPACITY.
+// 512 KB absorbs bursts between an async TS reader and a blocking writer
+// thread (scale-test evidence with SRT/RTMP sender threads on this queue: max
+// per-queue HWM = 398 KB at 8 Mb/s across all config×bitrate combinations,
+// 0 blocked_writes throughout). Recording is its user; operators can raise it
+// with RESTREAM_RECORDING_QUEUE_CAPACITY.
 
 fn default_recording_queue_capacity() -> usize {
     DEFAULT_RECORDING_QUEUE_CAPACITY

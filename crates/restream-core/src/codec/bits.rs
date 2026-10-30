@@ -127,7 +127,7 @@ mod tests {
     }
 
     /// The largest codeNum (2^32 - 2, 31 leading zeros) is -(2^31 - 1); it
-    /// used to wrap through `as i32` to +1 in the RTMP copy of this reader.
+    /// must not wrap through `as i32` to +1.
     #[test]
     fn signed_exp_golomb_covers_the_full_code_range() {
         let mut r = BitReader::new(&[0, 0, 0, 0b0000_0001, 0xFF, 0xFF, 0xFF, 0xFE]);

@@ -3,7 +3,7 @@ use restream_mpegts::TsDemuxer;
 /// A chunk that continues a partial packet is joined in a buffer the demuxer
 /// keeps, not in a fresh chunk-sized allocation: on the MEDIA executor one
 /// such feed is one poll, and allocate/copy/free of the whole chunk per poll
-/// was measurable per-poll work (`hlsIngest`, Q-074).
+/// was measurable per-poll work (`hlsIngest`).
 #[test]
 fn continuing_a_partial_packet_reuses_its_staging_buffer() {
     // 100 bytes of a packet: no complete 188-byte packet, so it becomes the

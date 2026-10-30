@@ -175,7 +175,7 @@ its evidence in the commit message.
 
 - Squash-and-merge by default: the branch history records how the work converged.
 - Rebase-and-merge when the commits are curated and are the design of the
-  change, such as phased architecture or media-pipeline migrations.
+  change, such as a multi-step architecture or media-pipeline change.
 - A merge commit only when the branch topology itself matters.
 
 ## Operational Guidance

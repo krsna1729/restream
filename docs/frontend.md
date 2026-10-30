@@ -159,7 +159,7 @@ The primitives live in `web/ts/ui/`, a layer below the app: `ui/` may import
 
 Pages are built from these, not from raw DaisyUI markup:
 `cargo xtask frontend-style` (CI, Source architecture audit) fails on
-legacy cards (`card bg-base-200`, `card-body`, `card-title`), DaisyUI 4
+raw DaisyUI cards (`card bg-base-200`, `card-body`, `card-title`), DaisyUI 4
 `*-bordered` classes, DaisyUI 4 `form-control`/`label-text` (a labelled
 control is a `Field`), a status drawn as a bare toned `badge`, hand-rolled
 header tabs, and dates formatted by hand instead of `<When>`. A line that must keep one says why in a

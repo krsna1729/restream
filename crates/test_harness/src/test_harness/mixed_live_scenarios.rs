@@ -205,7 +205,7 @@ pub(in super::super) async fn run_mixed_anchor_config(
         .await?;
     }
 
-    // Phase 4: harness sink probe — assert DTS monotonicity, video+audio
+    // Live egress sink probe: assert DTS monotonicity, video+audio
     // presence, and keyframe cadence on the live egress.
     let sink_port = harness_port_defaults()
         .sink

@@ -99,8 +99,7 @@ fn progressive_frames_report_their_cropped_size() {
 
 /// 1080i: coded as 34 field-pair map units (1088 lines) with crop_bottom 2.
 /// The vertical crop unit is SubHeightC × (2 − frame_mbs_only) = 4, so the
-/// picture is 1080 lines. The former RTMP copy of this parser used a fixed
-/// unit of 2 and reported 1084.
+/// picture is 1080 lines; a fixed unit of 2 would report 1084.
 #[test]
 fn interlaced_crop_uses_the_field_crop_unit() {
     let interlaced = SpsShape {
@@ -122,9 +121,8 @@ fn chroma_444_crops_in_single_columns() {
     assert_eq!(dimensions(&shape), Some((1276, 720)));
 }
 
-/// Profile 138 (and 139, 134, 135) carry chroma and bit-depth fields. The
-/// former MPEG-TS copy did not list them and read those fields as the rest
-/// of the SPS.
+/// Profile 138 (and 139, 134, 135) carry chroma and bit-depth fields; a
+/// parser that does not list them reads those fields as the rest of the SPS.
 #[test]
 fn every_high_profile_reads_its_chroma_fields() {
     for profile in [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135] {

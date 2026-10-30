@@ -214,10 +214,10 @@ async fn remove_pipeline_frees_source_ring_buffer() {
 
 #[tokio::test]
 async fn concurrent_get_or_create_transcoder_yields_single_stage() {
-    // Bug #4 regression: the old read-lock-then-write-lock TOCTOU window
-    // allowed concurrent callers to both see "key absent" and both insert,
-    // spawning two transcoder tasks writing to different ring buffers.
-    // After the fix, all concurrent callers must receive the SAME Arc<RingBuffer>.
+    // A read-lock-then-write-lock TOCTOU window would let concurrent callers
+    // both see "key absent" and both insert, spawning two transcoder tasks
+    // writing to different ring buffers. All concurrent callers must receive
+    // the SAME Arc<RingBuffer>.
     use std::sync::Arc as StdArc;
     use tokio::sync::Barrier;
     use tokio::task::JoinSet;

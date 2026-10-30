@@ -333,7 +333,7 @@ mod capacity_tests {
     #[test]
     fn msr_multitrack_rate_scales_past_the_fixed_default() {
         // 30 audio tracks (50 pps each) + 60 fps video = 1,560 pps; 5 s of
-        // headroom needs 7,800 chunks — the old fixed 256 wrapped every
+        // headroom needs 7,800 chunks — a fixed 256 would wrap every
         // ~0.17 s at this rate.
         let ring = ring_with_rate(1_560);
         assert_eq!(srt_ts_ring_capacity(&ring, 256), 7_800);

@@ -87,7 +87,7 @@ async fn media_executor_metrics_tracks_service_classes_and_latency() {
     let (ready, started) = oneshot::channel();
     let (done, finish) = oneshot::channel();
     let task = spawn_with_class(
-        labelled("q035-classes", "recording"),
+        labelled("class-metrics", "recording"),
         cancel.clone(),
         async move {
             ready.send(()).unwrap();
@@ -101,14 +101,14 @@ async fn media_executor_metrics_tracks_service_classes_and_latency() {
     // Class counters are shared with tests running in parallel; this
     // service's own row is not.
     assert!(active(&snap_running, MediaServiceClass::Recording) >= 1);
-    assert!(service_row(&snap_running, "q035-classes").is_some());
+    assert!(service_row(&snap_running, "class-metrics").is_some());
     assert!(snap_running.spawned_total > snap_before.spawned_total);
     assert_eq!(snap_running.workers.len(), configured_workers());
 
     done.send(()).unwrap();
     task.await.unwrap();
     let snap_after = snapshot(true);
-    assert!(service_row(&snap_after, "q035-classes").is_none());
+    assert!(service_row(&snap_after, "class-metrics").is_none());
     assert!(snap_after.completed_total > snap_before.completed_total);
     assert!(snap_after.queue_latency_samples > snap_before.queue_latency_samples);
 }
@@ -332,7 +332,7 @@ async fn busy_time_is_attributed_to_the_service_that_spent_it() {
     let (busy_ready, busy_started) = oneshot::channel();
     let (busy_done, busy_finish) = oneshot::channel::<()>();
     let busy = spawn_with_class(
-        labelled("q035-busy", "q035-busy:video"),
+        labelled("attributed-busy", "attributed-busy:video"),
         cancel.clone(),
         async move {
             std::thread::sleep(Duration::from_millis(20));
@@ -346,7 +346,7 @@ async fn busy_time_is_attributed_to_the_service_that_spent_it() {
     .unwrap();
     let (idle_ready, idle_started) = oneshot::channel();
     let idle = spawn_with_class(
-        labelled("q035-idle", "recording"),
+        labelled("attributed-idle", "recording"),
         CancellationToken::new(),
         async move {
             idle_ready.send(()).unwrap();
@@ -362,14 +362,14 @@ async fn busy_time_is_attributed_to_the_service_that_spent_it() {
         "summary stays fixed-size"
     );
     let running = snapshot(true);
-    let busy_row = service_row(&running, "q035-busy").expect("busy service listed");
-    let idle_row = service_row(&running, "q035-idle").expect("idle service listed");
+    let busy_row = service_row(&running, "attributed-busy").expect("busy service listed");
+    let idle_row = service_row(&running, "attributed-idle").expect("idle service listed");
     assert_eq!(busy_row.class, MediaServiceClass::Recording);
     assert!(
         idle_row.service_id > busy_row.service_id,
         "ids follow spawn order, so a restart is a new id"
     );
-    assert_eq!(busy_row.stage, "q035-busy:video");
+    assert_eq!(busy_row.stage, "attributed-busy:video");
     assert_eq!(idle_row.stage, "recording");
     assert!(busy_row.timing.busy_us >= 20_000, "{busy_row:?}");
     assert!(
@@ -383,6 +383,6 @@ async fn busy_time_is_attributed_to_the_service_that_spent_it() {
     idle.abort();
     assert!(idle.await.unwrap_err().is_cancelled());
     let ended = snapshot(true);
-    assert!(service_row(&ended, "q035-busy").is_none());
-    assert!(service_row(&ended, "q035-idle").is_none());
+    assert!(service_row(&ended, "attributed-busy").is_none());
+    assert!(service_row(&ended, "attributed-idle").is_none());
 }

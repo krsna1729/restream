@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ── Generalized harness sink (Phase 1) ──────────────────────────────────────
+// ── Generalized harness sink ────────────────────────────────────────────────
 //
 // Extends the existing SinkMetrics from byte-counting to packet-level tracking
 // with timestamps, format, keyframe flags, and counts — the single source of
@@ -439,7 +439,7 @@ where
     Ok(())
 }
 
-// ── Harness sink probe (Phase 4) ──────────────────────────────────────────
+// ── Harness sink probe ────────────────────────────────────────────────────
 //
 // Spins up a generalized sink, creates an output pointed at it, waits for
 // packets, asserts DTS monotonicity / video+audio presence / keyframes,

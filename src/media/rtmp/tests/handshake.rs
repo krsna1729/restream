@@ -881,11 +881,11 @@ fn short_amf0_command_from_a_destination_is_a_protocol_error() {
 }
 
 /// Connections that end while new clients connect must not cost those
-/// clients their connection. The owner used to build a fresh Compio accept
-/// for every `select!` iteration; when a finishing connection won the
-/// select, the pending accept was dropped together with a completion that
-/// could already hold the next client's socket, which was then closed
-/// unseen ("remote closed during handshake" on the client).
+/// clients their connection. A fresh Compio accept per `select!` iteration
+/// would lose clients: when a finishing connection won the select, the
+/// pending accept would be dropped together with a completion that could
+/// already hold the next client's socket, closing it unseen ("remote closed
+/// during handshake" on the client).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn clients_connecting_while_connections_end_are_all_accepted() {
     const CLIENTS: usize = 48;

@@ -631,7 +631,7 @@ None of these change a production server.
 | Variable | Read by | Effect |
 |---|---|---|
 | `RESTREAM_AGENT_BASE_URL`, `RESTREAM_AGENT_SESSION_COOKIE`, `RESTREAM_AGENT_BEARER_TOKEN`, `RESTREAM_MCP_ALLOWED_ORIGINS`, `RESTREAM_MCP_VERSION_CHECK` | `src/bin/restream-mcp.rs` | MCP bridge; see [agent plane integration](agent-plane-integration.md) |
-| `RESTREAM_WI37_SRT_SHARDS` | `src/config.rs`, only with the `wi37-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
+| `RESTREAM_BENCH_SRT_SHARDS` | `src/config.rs`, only with the `srt-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
 | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `src/media/srt/knobs.rs` | Harness SRT sink receive budget |
 | `RESTREAM_BUILD_GIT_COMMIT` (else `GITHUB_SHA`), `RESTREAM_BUILD_TIMESTAMP` (else `SOURCE_DATE_EPOCH`) | `build.rs` | Commit and timestamp stamped into the binary |
 | `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `crates/test_harness/` | Harness runs; see [testing](testing.md) |

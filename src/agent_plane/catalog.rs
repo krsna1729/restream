@@ -36,14 +36,14 @@ pub fn capabilities() -> AgentCapabilities {
         redaction: redaction_policy(),
         notes: if execution_enabled {
             vec![
-                "Phase 6 execution is compiled in.",
+                "Execution is compiled in.",
                 "Operations are approval-gated and emit audit/verification records.",
                 "Core operator routes are intentionally omitted from the agent catalog because their responses are not guaranteed to be redacted.",
             ]
         } else {
             vec![
-                "Phase 4 is read/planning only.",
-                "Phase 6 execution is intentionally not compiled into this feature.",
+                "This build is read/planning only.",
+                "Execution is intentionally not compiled into this feature.",
                 "Core operator routes are intentionally omitted from the agent catalog because their responses are not guaranteed to be redacted.",
             ]
         },

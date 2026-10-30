@@ -1,4 +1,4 @@
-//! Transport ownership guards (WI5B / WI7). SRT and RTMP/RTMPS transport I/O
+//! Transport ownership guards. SRT and RTMP/RTMPS transport I/O
 //! is owned by Compio/io_uring owner threads; these source checks keep retired
 //! or bypassing transport paths from returning. Test-only items are excluded
 //! item by item (`strip_test_items`), so production code that follows a test
@@ -55,7 +55,7 @@ fn strip_test_items_keeps_production_code_after_a_test_block() {
     assert!(!production.contains("use b;"));
 }
 
-/// WI5B ownership: SRT and RTMP/RTMPS transport I/O runs on Compio/io_uring
+/// SRT and RTMP/RTMPS transport I/O runs on Compio/io_uring
 /// owners. Production transport code holds no Tokio network type, no byte
 /// bridge into Tokio, and no runtime-selection switch; each transport builds
 /// its runtime on io_uring and refuses anything else.
@@ -124,7 +124,7 @@ fn production_transport_stays_on_io_uring_owners() {
 
 /// RTMP/RTMPS transport is Compio/io_uring only. The retired epoll egress
 /// poller must not return, not even as a test adapter: level-triggered test
-/// readiness hid edge-triggered completion wakeup bugs from unit tests (WI5B).
+/// readiness hid edge-triggered completion wakeup bugs from unit tests.
 #[test]
 fn media_transport_has_no_epoll_readiness_path() {
     const FORBIDDEN: &[&str] = &[

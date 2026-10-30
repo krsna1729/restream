@@ -177,9 +177,8 @@ pub struct EgressProgressSink {
     pub bytes_sent: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// The same `StageMetrics` block every other stage type shares (status
     /// `metrics` source: `bytesOut`/`packetsOut`/`packetsPerSec`/etc.).
-    /// Legacy egress tasks shared this `Arc` directly and called
-    /// `record_out` per send; the fabric shares the identical `Arc` here
-    /// instead, so both surfaces stay driven by one counter set.
+    /// Shared with the output's egress registry entry, so every surface that
+    /// reads it is driven by one counter set.
     pub metrics: Option<std::sync::Arc<crate::media::stage_metrics::StageMetrics>>,
     /// Wall-clock milliseconds of the most recent progress.
     pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
@@ -509,11 +508,10 @@ mod tests {
         assert_eq!(snapshot.packets_out, 4);
     }
 
-    /// The gap this closes: fabric egress never wrote to `ActiveEgress.quality`
-    /// at all — `record_quality` is the publication half of the fix (the SRT
-    /// and RTMP shard sweeps are the sampling half); this proves the sink
-    /// side lands a sampled snapshot correctly and leaves the previous value
-    /// alone when there is nothing new to publish.
+    /// Fabric egress publishes quality into `ActiveEgress.quality` through
+    /// `record_quality` (the SRT and RTMP shard sweeps do the sampling); this
+    /// proves the sink side lands a sampled snapshot correctly and leaves the
+    /// previous value alone when there is nothing new to publish.
     #[test]
     fn record_quality_publishes_into_the_shared_slot_and_leaves_it_alone_when_absent() {
         let slot = std::sync::Arc::new(std::sync::Mutex::new(

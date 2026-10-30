@@ -1,4 +1,4 @@
-//! One revisioned runtime state (Q-042).
+//! One revisioned runtime state.
 //!
 //! Each pipeline and output is projected into one typed record that holds
 //! the operator's intent (desired), what the engine is doing (actual), how

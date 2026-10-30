@@ -27,8 +27,7 @@
 //! Default: 1024 slots, configurable with `RESTREAM_RING_CAPACITY`. Slots hold
 //! demuxed media packets rather than fixed 188-byte TS packets, so retained
 //! payload memory scales with compressed frame size. The default gives tens of
-//! seconds of burst tolerance for common live inputs while bounding memory
-//! earlier than the old 4096-slot default.
+//! seconds of burst tolerance for common live inputs while bounding memory.
 //!
 //! # Overflow & Recovery
 //!

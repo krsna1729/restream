@@ -26,11 +26,9 @@ async fn empty_write_batch_does_not_add_data() {
     assert_eq!(queue.read_nonblocking(&mut output), 0);
 }
 
-// --- Regression: issue #2 (Round 3) — MemoryQueue::read must not panic
-// if the Mutex is poisoned by a panicking writer thread.
-// Before the fix, `cvar.wait(inner).unwrap()` would propagate the poison
-// and panic a reader thread.
-// After the fix the lock is recovered and reading resumes normally.
+// MemoryQueue::read must not panic if the Mutex is poisoned by a panicking
+// writer thread: `cvar.wait(inner).unwrap()` would propagate the poison and
+// panic a reader thread, so the lock is recovered and reading resumes.
 #[tokio::test]
 async fn read_recovers_from_poisoned_mutex() {
     // Poison the MemoryQueue's internal mutex from a separate thread,
@@ -299,12 +297,12 @@ async fn read_wakes_on_write() {
     handle.join().unwrap();
 }
 
-// Regression: `write()` used to call `space_available.notified()` *after*
-// releasing the capacity-check lock. A reader on another OS thread could
-// drain the buffer and call `notify_waiters()` in that gap — before the
-// writer's future existed to observe it — losing the wakeup and hanging
-// the writer forever. Reproduced by benches/byte_queue_throughput.rs, which hung
-// indefinitely at 0% CPU on its first warmup iteration. This test mirrors
+// Regression: `write()` must register `space_available.notified()` before
+// releasing the capacity-check lock. Otherwise a reader on another OS thread
+// can drain the buffer and call `notify_waiters()` in that gap — before the
+// writer's future exists to observe it — losing the wakeup and hanging
+// the writer forever (benches/byte_queue_throughput.rs then hangs at 0% CPU
+// on its first warmup iteration). This test mirrors
 // that shape (multi-thread runtime writer + tight-loop reader on a real
 // OS thread, capacity crossed on nearly every write) so the race window
 // is exercised on essentially every iteration; a timeout catches a

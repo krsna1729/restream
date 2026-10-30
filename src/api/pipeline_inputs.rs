@@ -692,7 +692,7 @@ pub async fn pipeline_input_promote_handler(
         Ok(input) => input,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    // The reconciler switches the forwarded input (Q-039); report whether the
+    // The reconciler switches the forwarded input; report whether the
     // target has a live session to switch to.
     state.reconcile.input_selection_changed(&pipeline_id);
     let connected = state

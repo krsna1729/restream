@@ -448,7 +448,7 @@ async fn sink_discard_progress_marks_active_without_network_bytes() {
 }
 
 #[tokio::test]
-async fn egress_attribution_defaults_to_legacy_ownership() {
+async fn unplaced_egress_has_no_fabric_attribution() {
     let engine = MediaEngine::new();
     engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")

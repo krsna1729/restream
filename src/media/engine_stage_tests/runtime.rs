@@ -134,7 +134,7 @@ async fn diag_semaphore_prevents_concurrent_runs_on_same_pipeline() {
     );
 }
 
-// ── stage leases (Q-041) ───────────────────────────────────────
+// ── stage leases ───────────────────────────────────────────────
 
 /// Polls until `done` holds: a lease release runs on a spawned task.
 async fn eventually(mut done: impl AsyncFnMut() -> bool) -> bool {

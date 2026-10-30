@@ -1,5 +1,4 @@
-//! `srt.admission`: drive one SRT shard pool past its admission ceiling
-//! (Q-034).
+//! `srt.admission`: drive one SRT shard pool past its admission ceiling.
 //!
 //! Restream runs with `ADMISSION_SHARDS` (default 1) egress shards at most per
 //! pool (`RESTREAM_EGRESS_SHARDS`) and a ten-minute restart backoff, so an
@@ -19,7 +18,8 @@ use crate::thread_cpu::{
 use std::collections::BTreeMap;
 
 const RETRY_BACKOFF_MS: &str = "600000";
-/// Busy at which one SRT shard began losing outputs (runtime-crossings M6).
+/// Busy at which one SRT shard began losing outputs (runtime-crossings, SRT
+/// shard capacity).
 const DEGRADED_BUSY: f64 = 0.62;
 
 fn env_u(name: &str, default: u64) -> u64 {

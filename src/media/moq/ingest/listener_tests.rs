@@ -338,9 +338,9 @@ async fn a_publisher_feeds_a_moq_input_and_shutdown_joins_the_thread() {
 
 /// A catalog hang refuses ends that publisher's session with its input
 /// released and the reason recorded, and the listener serves the next
-/// publisher. Before the fix hang panicked on this catalog: Compio's task
-/// boundary dropped the session, so the input was released as "the MoQ
-/// ingest listener stopped".
+/// publisher. If hang panicked on this catalog, Compio's task boundary would
+/// drop the session and the input would be released as "the MoQ ingest
+/// listener stopped".
 async fn assert_catalog_rejection_releases_only_its_publisher(
     name: &str,
     broadcast_name: &'static str,

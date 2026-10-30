@@ -603,8 +603,8 @@ async fn wait_for_stage_metadata_still_prefers_late_audio_before_grace() {
 
 /// A stage an input preview leases (its H.264 bridge, keyed
 /// `__input__:<input>`) reads that input's session, which is not a
-/// pipeline's live ingest: the wait used to look only at live ingests and
-/// never ended, so an H.265 input's H.264 preview never started.
+/// pipeline's live ingest: a wait that looked only at live ingests would
+/// never end, so an H.265 input's H.264 preview would never start.
 #[tokio::test]
 async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_session() {
     let engine = Arc::new(MediaEngine::new());

@@ -332,7 +332,7 @@ fn mux_audio_only_does_not_panic() {
 }
 
 #[test]
-fn mpegts_diagnostics_remain_visible_to_legacy_target_filters() {
+fn mpegts_diagnostics_use_the_media_mpegts_log_target() {
     use tracing_subscriber::{Layer, layer::SubscriberExt};
 
     struct Events(std::sync::mpsc::Sender<(&'static str, tracing::Level)>);

@@ -703,11 +703,10 @@ async fn drain_ready_bursts_test_call(
     .await
 }
 
-// Regression proof for the CI flake fixed alongside this test: a recorder
-// task descheduled while the ring accumulated a backlog (CI CPU contention)
-// used to drain the *entire* backlog on resume even after a stop had already
-// been requested, extending recordings well past the requested stop point.
-// The drain loop now checks cancellation between bursts, so this must stop
+// A recorder task descheduled while the ring accumulated a backlog (CI CPU
+// contention) must not drain the *entire* backlog on resume once a stop has
+// been requested, which would extend recordings well past the requested stop
+// point. The drain loop checks cancellation between bursts, so this must stop
 // after at most one in-flight burst.
 #[tokio::test]
 async fn drain_ready_bursts_stops_within_one_burst_after_cancellation() {

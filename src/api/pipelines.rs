@@ -395,7 +395,7 @@ pub async fn pipelines_update_handler(
 
 /// Deletes a pipeline row (its outputs and inputs cascade); the reconciler then
 /// tears down its egresses, ingest sessions, file-ingest children, stages and
-/// HLS runtime (Q-039). Persisting first means a pass between the two steps
+/// HLS runtime. Persisting first means a pass between the two steps
 /// can no longer restart outputs of a pipeline that is being deleted.
 pub async fn pipelines_delete_handler(
     State(state): State<Arc<AppState>>,

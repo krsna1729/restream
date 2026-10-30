@@ -30,7 +30,7 @@ the [assurance roadmap](assurance-roadmap.md).
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
-  `src/media/egress/sizing.rs`, [M6](runtime-crossings.md#measurement-references))
+  `src/media/egress/sizing.rs`, [SRT shard capacity](runtime-crossings.md#srt-shard-capacity))
   and `srt_egress_connect_concurrency` (`src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
@@ -67,9 +67,9 @@ the [assurance roadmap](assurance-roadmap.md).
   `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs`.
 - Context: a pooled prototype cut shard CPU at 16 feeds × 2 outputs by more
   than half, but an injected Owner fault failed both feeds in a shared pool
-  ([M8](runtime-crossings.md#measurement-references)). Production keeps
-  per-feed groups until a design preserves the failure domains or that
-  contract is explicitly changed.
+  ([per-feed shard isolation](runtime-crossings.md#per-feed-shard-isolation)).
+  Production keeps per-feed groups until a design preserves the failure
+  domains or that contract is explicitly changed.
 - Gates: in the many-feed matrix, shard threads stop growing with feeds and
   per-feed shard CPU falls toward the per-output cost, every output
   delivered; frozen-destination, feed-teardown and structural Owner/shard
@@ -234,7 +234,7 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-104 [platform] [sonnet] Move the FFmpeg pin to a 9.0.x point release
 - Goal: `restream ffmpeg-fetch` and the container images pin a BtbN 9.0.x
   build (a month's last, per [FFmpeg versions](ffmpeg-versions.md)) once a
-  point release follows 9.0 "Lei" (August 2026). Nothing restream uses needs
+  point release follows 9.0 "Lei". Nothing restream uses needs
   9.0; the move keeps the pin on a maintained branch. 9.0 turns `tls_verify`
   on and drops old NVENC options, neither of which restream uses.
 - Gates: the startup capability check passes on the new build; the caption
@@ -243,11 +243,14 @@ the [assurance roadmap](assurance-roadmap.md).
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
 
-### Q-106 [testing] [sonnet] Two tests fail intermittently under coverage
+### Q-106 [testing] [sonnet] Three tests fail intermittently on a loaded host
 - Goal: find why `the_projector_rebuilds_only_while_a_client_listens`
   (`src/application/runtime_state/tests.rs`) and
   `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
-  (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job
-  (October 2026) and passed on rerun; remove the timing dependence.
+  (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job, and
+  `a_playlist_parse_does_not_block_the_pull_task_worker`
+  (`src/media/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) failed
+  once in a full local `--lib` run; each passes when rerun. Remove the
+  timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.

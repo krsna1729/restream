@@ -310,8 +310,8 @@ mod tests {
                     "--ignored",
                     "--nocapture",
                 ])
-                .env("Q105_AFFINITY_FIXTURE", mode)
-                .env("Q105_AFFINITY_EVIDENCE", &evidence)
+                .env("AFFINITY_TEST_FIXTURE", mode)
+                .env("AFFINITY_TEST_EVIDENCE", &evidence)
                 .env("REAL_RESTREAM", &exe)
                 .env("SEG_CONTROL_CPUS", control.to_string())
                 .env("SEG_MEDIA_CPUS", media.to_string())
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     #[ignore = "subprocess fixture for native_launchers_preserve_pid_boot_union_and_thread_masks"]
     fn native_launch_fixture() {
-        env::var("Q105_AFFINITY_FIXTURE").expect("subprocess fixture only");
+        env::var("AFFINITY_TEST_FIXTURE").expect("subprocess fixture only");
         let result = segregated(&[
             "--exact",
             "harness::affinity::tests::native_target_fixture",
@@ -359,9 +359,9 @@ mod tests {
     #[test]
     #[ignore = "exec target for native_launchers_preserve_pid_boot_union_and_thread_masks"]
     fn native_target_fixture() {
-        let path = env::var_os("Q105_AFFINITY_EVIDENCE").expect("subprocess fixture only");
+        let path = env::var_os("AFFINITY_TEST_EVIDENCE").expect("subprocess fixture only");
         let boot = current_cpus();
-        let segregated = env::var("Q105_AFFINITY_FIXTURE").unwrap() == "segregated";
+        let segregated = env::var("AFFINITY_TEST_FIXTURE").unwrap() == "segregated";
         let wait = if segregated {
             Duration::from_millis(2800)
         } else {

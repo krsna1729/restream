@@ -1,4 +1,4 @@
-//! MoQ egress (Q-047): `moqt://` outputs published to a relay over
+//! MoQ egress: `moqt://` outputs published to a relay over
 //! moq-lite + hang, and the ring → broadcast path the origin reuses.
 //!
 //! - [`restream_moq::url`]: the output URL (relay address, session path,

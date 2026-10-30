@@ -583,12 +583,11 @@ impl EgressFeed for DisagreementFeed {
 // sync point, or — when the ring retains none — at the live edge, never
 // at the oldest retained sequence and never outside the retained window.
 //
-// This is the property that leaf `overrun`-recovery implementers
-// historically disagreed on (the fabric rewound to `oldest_sequence` —
-// the maximum possible backward rewind — while the sink and
-// recirculation readers used the live edge, see visit.rs's
-// `live_start_cursor` docs): every future implementer agrees by
-// construction that the property holds, not by code review.
+// Leaf `overrun`-recovery implementations can easily disagree on this
+// (rewinding to `oldest_sequence` — the maximum possible backward rewind —
+// versus the live edge; see visit.rs's `live_start_cursor` docs): the
+// proptest makes every implementer agree by construction, not by code
+// review.
 proptest! {
     #[test]
     fn live_start_cursor_never_rewinds_outside_the_retained_window(

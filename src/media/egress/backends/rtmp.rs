@@ -141,17 +141,14 @@ impl MediaPendingWrite {
 /// Drains `RingFeed` media units into non-blocking RTMP wire writes, reusing
 /// [`RtmpSessionCore`]'s pure packet-building calls and [`RtmpMediaEncoder`]'s
 /// pure per-packet encoding (sequence-header refresh, keyframe gating,
-/// timestamp guarding) — the same logic the legacy Tokio adapter uses in
-/// `src/media/rtmp/egress.rs`, factored out so both paths share it instead of
-/// diverging.
+/// timestamp guarding).
 ///
 /// Unlike the handshake and negotiation drivers (bounded to one syscall per
 /// `advance()` call, since they run once and are not hot), this batches
 /// multiple feed units and their wire packets into one visit, bounded by the
 /// visit's [`WorkBudget`] — mirroring the SRT fabric engine's fragment
-/// batching (`src/media/srt/egress_engine.rs`), which existed precisely
-/// because one-wake-per-unit caused a measured CPU regression (see
-/// the egress migration record (git history) Phase 4 status).
+/// batching (`src/media/srt/egress_engine.rs`), because one wake per unit
+/// costs measurably more CPU.
 struct MediaPublisher {
     core: RtmpSessionCore,
     encoder: RtmpMediaEncoder,
@@ -181,7 +178,7 @@ struct MediaPublisher {
 }
 
 /// Feed units pulled per `feed.read_from` refill once `pending_units` is
-/// empty. Matches the legacy RTMP egress path's burst size.
+/// empty.
 const FEED_READ_BURST: usize = 32;
 
 impl MediaPublisher {
@@ -241,12 +238,9 @@ impl MediaPublisher {
     /// transport: the remainder of any in-flight `pending_write` plus every
     /// still-queued `current_batch` packet. Used to keep
     /// `LeafCommon::pending_application_bytes` (`src/media/egress/leaf.rs`)
-    /// accurate for this leaf — previously always `0` for every RTMP leaf,
-    /// since nothing updated it (a hot-path audit finding: the common
-    /// pending-byte limit was believed to count "the wire packet" but
-    /// nothing actually wired it up at all, for any protocol). This covers
-    /// the base case (queued wire bytes); rustls-internal buffering for
-    /// RTMPS on top of this remains a separate, unaddressed refinement.
+    /// accurate for this leaf, which the common pending-byte limit and the
+    /// stall sweep read. This covers queued wire bytes; rustls-internal
+    /// buffering for RTMPS is not counted.
     fn pending_bytes(&self) -> usize {
         let pending_write_remaining = self
             .pending_write
@@ -363,11 +357,10 @@ impl MediaPublisher {
         loop {
             // Checked at the top of every pass, not just before a feed read:
             // `current_batch` (one encoded feed unit's wire packets — e.g. a
-            // large keyframe split across many small RTMP chunks) used to
-            // drain and write unconditionally once started, since the old
-            // single budget check only sat right before `feed.read_from`.
-            // One outsized unit could then fully flush in one visit,
-            // ignoring `budget.max_bytes`/the visit deadline and starving
+            // large keyframe split across many small RTMP chunks) must not
+            // drain and write unconditionally once started. One outsized
+            // unit could otherwise fully flush in one visit, ignoring
+            // `budget.max_bytes`/the visit deadline and starving
             // every other leaf on the shard for that visit's duration —
             // exactly the per-visit fairness `WorkBudget` exists to bound.
             // Cutting off here instead just defers the rest to the next

@@ -1,4 +1,4 @@
-//! Fixed-shape measurement snapshot (Q-037) for `GET /api/v1/measure`.
+//! Fixed-shape measurement snapshot for `GET /api/v1/measure`.
 //!
 //! A capacity sample needs counts and byte sums, not the operator payloads.
 //! Those payloads grow with output count (about 1.5 MB each at 500 outputs,

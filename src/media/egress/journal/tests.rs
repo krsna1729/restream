@@ -368,7 +368,7 @@ fn ring_feed_many_leaf_cursors_share_payload_storage() {
     );
 }
 
-/// Phase 2 exit gate: a synthetic 1,000-leaf feed shows bounded memory while
+/// Bounded retention: a synthetic 1,000-leaf feed shows bounded memory while
 /// the ring wraps repeatedly under lagging consumers.
 ///
 /// Cursors are plain values — nothing registers per leaf — so the proof is
@@ -454,7 +454,7 @@ fn thousand_leaf_feed_keeps_memory_bounded_with_lagging_cursors() {
     assert!(snapshot.retained_bytes <= (CAPACITY * PAYLOAD_BYTES) as u64);
 }
 
-/// Phase 2 exit gate: wake amplification is proportional to interested
+/// Coalesced shard wakes: wake amplification is proportional to interested
 /// shards, not leaves.  A publish burst delivers at most one wake per shard
 /// gate regardless of leaf count; draining re-arms exactly one more delivery.
 #[test]

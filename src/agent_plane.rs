@@ -419,8 +419,8 @@ pub fn plan_response(
             }));
         } else {
             steps.push(serde_json::json!({
-                "id": "await-phase-6-execution",
-                "title": "Execution requires the separate phase-6 feature",
+                "id": "execution-unavailable",
+                "title": "Execution requires the agent-execution feature",
                 "phase": "execute",
                 "status": "blocked"
             }));
@@ -434,9 +434,9 @@ pub fn plan_response(
         intent: request.intent,
         execution_enabled: cfg!(feature = "agent-execution"),
         execution_note: if cfg!(feature = "agent-execution") {
-            "Phase 6 can create approval-gated operations; mutation happens only after explicit approval and apply."
+            "This build can create approval-gated operations; mutation happens only after explicit approval and apply."
         } else {
-            "Phase 4 only plans and validates; no runtime mutation is performed."
+            "This planning-only build plans and validates; no runtime mutation is performed."
         },
         steps,
         validation,

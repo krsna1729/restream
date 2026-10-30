@@ -48,7 +48,7 @@ async fn native_peer() -> IngressPeer {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn q098_review_control_backpressure_bounds_replies_and_preserves_handoff_order() {
+async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
     let peer = native_peer().await;
     let other = IngressPeer { owner: 1, ..peer };
     let (handle, mut receivers, events) = SrtIngressHandle::test_channels(2);

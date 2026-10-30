@@ -139,9 +139,9 @@ pub(crate) fn visit_leaf<F: EgressFeed>(
 /// live edge (`head_sequence`) when no sync point is retained — for example an
 /// audio-only feed, or a video feed whose GOP is longer than the retention
 /// window. It deliberately mirrors `RingBuffer::fast_forward`, the positioning
-/// every legacy ring reader already uses (`Reader::new` on attach and the
-/// overflow recovery inside `Reader::pull*`), so fabric leaves start and
-/// resynchronize exactly where the pre-fabric readers did.
+/// every ring `Reader` uses (`Reader::new` on attach and the overflow recovery
+/// inside `Reader::pull*`), so fabric leaves and ring readers start and
+/// resynchronize at the same place.
 ///
 /// The fallback must not be `oldest_sequence`: that is the maximum possible
 /// backward rewind, landing mid-GOP one slot away from being overwritten, so

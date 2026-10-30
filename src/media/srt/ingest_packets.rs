@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn q098_review_standby_promotion_follows_shared_ring_handoffs() {
+    fn standby_promotion_follows_shared_ring_handoffs() {
         let gate = Arc::new(InputPacketGate::standby());
         let registration = registration(gate.clone(), i64::MIN);
         let original = Arc::new(RingBuffer::new(16));
