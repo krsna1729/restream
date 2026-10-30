@@ -397,7 +397,7 @@ async fn a_cancel_asks_the_task_to_stop_before_it_waits_for_it() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     // Where the task records how it ended, read through the map it lives in.
     let end = {
-        let pulls = crate::sync::lock(&ingest.pulls);
+        let pulls = restream_sync::lock::lock(&ingest.pulls);
         pulls
             .get(&identity.input_id)
             .expect("the pull task is registered")
@@ -416,7 +416,7 @@ async fn a_cancel_asks_the_task_to_stop_before_it_waits_for_it() {
     // join: a cancel that only asked the task to stop would return with the
     // task still parked and its end still unset.
     assert!(
-        crate::sync::lock(&end).is_some(),
+        restream_sync::lock::lock(&end).is_some(),
         "the task had not stopped when the cancel returned"
     );
     assert!(ingest.pull_input_ids().is_empty());
@@ -445,7 +445,7 @@ async fn a_batch_cancel_stops_every_pull_and_clears_every_applied_init() {
     // An input whose pull has already ended: its init is still cleared.
     let gone = "input-pull-gone".to_string();
     let key = ingest.key_state(&gone);
-    crate::sync::lock(&key.init).set(
+    restream_sync::lock::lock(&key.init).set(
         0,
         AppliedInit {
             uri: "init.mp4".to_string(),
@@ -465,7 +465,7 @@ async fn a_batch_cancel_stops_every_pull_and_clears_every_applied_init() {
         "no pull is left running"
     );
     assert!(
-        crate::sync::lock(&key.init).is_empty(),
+        restream_sync::lock::lock(&key.init).is_empty(),
         "an input with no pull running still has its applied init cleared"
     );
     assert!(

@@ -14,7 +14,7 @@ async fn forget_input_clears_the_applied_init() {
     ingest.seed_applied_init_for_tests(INPUT_ID);
     ingest.forget_input(INPUT_ID);
     assert!(
-        crate::sync::lock(&key.init).is_empty(),
+        restream_sync::lock::lock(&key.init).is_empty(),
         "the applied init is released"
     );
     assert_eq!(

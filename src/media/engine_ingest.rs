@@ -203,7 +203,7 @@ impl MediaEngine {
             Some(replacement) if replacement.pipeline_id == pipeline_id => {
                 replacement.gate.arm_for_promotion();
                 let metadata = replacement.metadata();
-                let audio_tracks = crate::sync::lock(&replacement.audio_tracks).clone();
+                let audio_tracks = restream_sync::lock::lock(&replacement.audio_tracks).clone();
                 if let Some(ring) = self.ingests.pipelines.read().await.get(pipeline_id) {
                     if let Some(video) = metadata.video {
                         ring.set_codec_hint(&video.codec);
@@ -283,12 +283,12 @@ impl MediaEngine {
         if let Some(video) = metadata.video {
             ring.set_codec_hint(&video.codec);
         }
-        let audio_tracks = crate::sync::lock(&ingest.audio_tracks).clone();
+        let audio_tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
         if !audio_tracks.is_empty() {
             ring.set_audio_tracks(audio_tracks.as_ref().clone());
         }
-        let video_header = crate::sync::lock(&ingest.video_sequence_header).clone();
-        let audio_header = crate::sync::lock(&ingest.audio_sequence_header).clone();
+        let video_header = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio_header = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
         if let Some(payload) = video_header {
             ring.push(MediaPacket {
                 media_type: MediaType::Video,
@@ -482,7 +482,9 @@ impl MediaEngine {
             .map(|ingest| ingest.protocol.clone())
             .unwrap_or_default();
         if let Some(ingest) = removed_selected {
-            let remote_addr = crate::sync::read(&ingest.metadata).remote_addr.clone();
+            let remote_addr = restream_sync::lock::read(&ingest.metadata)
+                .remote_addr
+                .clone();
             let mut recent = self.ingests.recent.write().await;
             recent
                 .entry(pipeline_id.to_string())
@@ -547,7 +549,9 @@ impl MediaEngine {
             .map(|ingest| ingest.protocol.clone())
             .unwrap_or_default();
         if let Some(ingest) = removed_selected {
-            let remote_addr = crate::sync::read(&ingest.metadata).remote_addr.clone();
+            let remote_addr = restream_sync::lock::read(&ingest.metadata)
+                .remote_addr
+                .clone();
             let mut recent = self.ingests.recent.write().await;
             recent
                 .entry(pipeline_id.to_string())

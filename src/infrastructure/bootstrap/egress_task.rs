@@ -653,7 +653,7 @@ impl EgressTask {
         forwarded: &mut ForwardedUploadStatus,
     ) {
         let (failure, retry, healthy) = {
-            let status = crate::sync::lock(status);
+            let status = restream_sync::lock::lock(status);
             let failure = (status.failures > forwarded.failures)
                 .then(|| status.last_failure.clone())
                 .flatten();

@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::media::timing::{ThreadUsage, thread_cpu_ns, thread_usage};
-use crate::sync::lock;
+use restream_sync::lock::lock;
 
 use serde::Serialize;
 use tokio::runtime::{Builder, Runtime};

@@ -345,7 +345,7 @@ impl HlsIngest {
     pub async fn ensure_pull(self: &Arc<Self>, identity: PullIdentity, source: PullSource) -> bool {
         let now = std::time::Instant::now();
         let action = {
-            let pulls = crate::sync::lock(&self.pulls);
+            let pulls = restream_sync::lock::lock(&self.pulls);
             let observed = pulls.get(&identity.input_id).map(RunningPull::observe);
             pull_action(observed.as_ref(), &source, now)
         };
@@ -354,7 +354,7 @@ impl HlsIngest {
             PullAction::WaitToRetry => {
                 // Record the deadline once: the next pass that finds it
                 // elapsed starts the task.
-                let mut pulls = crate::sync::lock(&self.pulls);
+                let mut pulls = restream_sync::lock::lock(&self.pulls);
                 if let Some(running) = pulls.get_mut(&identity.input_id)
                     && running.retry_at.is_none()
                 {
@@ -374,12 +374,12 @@ impl HlsIngest {
         //
         // The removal is its own statement so the map's guard is released
         // before the await, never held across it.
-        let previous = crate::sync::lock(&self.pulls).remove(&identity.input_id);
+        let previous = restream_sync::lock::lock(&self.pulls).remove(&identity.input_id);
         if let Some(previous) = previous {
             previous.task.cancel();
             let end = previous.task.end_state();
             previous.task.join().await;
-            if crate::sync::lock(&end).is_none() {
+            if restream_sync::lock::lock(&end).is_none() {
                 warn!(
                     input = %identity.input_id,
                     "HLS pull task stopped without recording why; restarting it"
@@ -400,7 +400,7 @@ impl HlsIngest {
             source.clone(),
             self.limits,
         );
-        crate::sync::lock(&self.pulls).insert(
+        restream_sync::lock::lock(&self.pulls).insert(
             input_id,
             RunningPull {
                 source,
@@ -435,7 +435,7 @@ impl HlsIngest {
     pub async fn cancel_pulls(&self, input_ids: &[String]) -> Vec<String> {
         let mut stopping = Vec::new();
         for input_id in input_ids {
-            if let Some(running) = crate::sync::lock(&self.pulls).remove(input_id) {
+            if let Some(running) = restream_sync::lock::lock(&self.pulls).remove(input_id) {
                 running.task.cancel();
                 stopping.push((input_id.clone(), running));
             }
@@ -461,20 +461,26 @@ impl HlsIngest {
     }
 
     fn clear_applied_init(&self, input_id: &str) {
-        let keys = crate::sync::lock(&self.keys);
+        let keys = restream_sync::lock::lock(&self.keys);
         if let Some(key) = keys.get(input_id) {
-            *crate::sync::lock(&key.init) = AppliedInits::default();
+            *restream_sync::lock::lock(&key.init) = AppliedInits::default();
         }
     }
 
     /// The inputs currently pulling.
     pub fn pull_input_ids(&self) -> HashSet<String> {
-        crate::sync::lock(&self.pulls).keys().cloned().collect()
+        restream_sync::lock::lock(&self.pulls)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// The inputs whose key state this registry holds.
     pub fn keyed_input_ids(&self) -> HashSet<String> {
-        crate::sync::lock(&self.keys).keys().cloned().collect()
+        restream_sync::lock::lock(&self.keys)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Release one input's key state, for an input whose row is gone.
@@ -490,7 +496,7 @@ impl HlsIngest {
 
     /// Stop every pull task. Called once, on shutdown.
     pub fn cancel_all_pulls(&self) {
-        let running: Vec<_> = crate::sync::lock(&self.pulls).drain().collect();
+        let running: Vec<_> = restream_sync::lock::lock(&self.pulls).drain().collect();
         for (_, running) in running {
             running.task.cancel();
         }
@@ -527,7 +533,7 @@ impl HlsIngest {
     }
 
     fn key_state(&self, input_id: &str) -> Arc<KeyState> {
-        crate::sync::lock(&self.keys)
+        restream_sync::lock::lock(&self.keys)
             .entry(input_id.to_string())
             .or_insert_with(|| {
                 Arc::new(KeyState {
@@ -659,7 +665,7 @@ impl HlsIngest {
     }
 
     fn current_session(&self, input_id: &str) -> Option<(u64, mpsc::Sender<HlsObject>)> {
-        crate::sync::lock(&self.sessions)
+        restream_sync::lock::lock(&self.sessions)
             .get(input_id)
             .map(|handle| (handle.attempt_id, handle.objects.clone()))
     }
@@ -755,7 +761,7 @@ impl HlsIngest {
             .await;
         let (objects, receiver) = mpsc::channel(OBJECT_QUEUE);
         let attempt_id = registration.attempt_id;
-        crate::sync::lock(&self.sessions).insert(
+        restream_sync::lock::lock(&self.sessions).insert(
             pipeline.input_id.clone(),
             SessionHandle {
                 attempt_id,
@@ -783,7 +789,7 @@ impl HlsIngest {
     }
 
     fn forget(&self, input_id: &str, attempt_id: u64) {
-        let mut sessions = crate::sync::lock(&self.sessions);
+        let mut sessions = restream_sync::lock::lock(&self.sessions);
         if sessions
             .get(input_id)
             .is_some_and(|handle| handle.attempt_id == attempt_id)
@@ -801,11 +807,11 @@ impl HlsIngest {
     /// the key state is that init's home. It lives as long as the init does:
     /// one per input that has pushed fMP4 (see `AppliedInit`).
     fn evict_key_if_idle(&self, input_id: &str) {
-        let idle = !crate::sync::lock(&self.sessions).contains_key(input_id);
-        let mut keys = crate::sync::lock(&self.keys);
+        let idle = !restream_sync::lock::lock(&self.sessions).contains_key(input_id);
+        let mut keys = restream_sync::lock::lock(&self.keys);
         if idle
             && keys.get(input_id).is_some_and(|key| {
-                crate::sync::lock(&key.init).is_empty()
+                restream_sync::lock::lock(&key.init).is_empty()
                     && Arc::strong_count(key) == 1
                     && Arc::strong_count(&key.uploads) == 1
                     && Arc::strong_count(&key.share) == 1
@@ -825,7 +831,7 @@ impl HlsIngest {
     #[cfg(test)]
     pub(crate) fn seed_applied_init_for_tests(&self, input_id: &str) {
         let key = self.key_state(input_id);
-        crate::sync::lock(&key.init).set(
+        restream_sync::lock::lock(&key.init).set(
             0,
             AppliedInit {
                 uri: "init.mp4".to_string(),

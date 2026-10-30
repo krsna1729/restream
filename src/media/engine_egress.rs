@@ -314,7 +314,7 @@ impl MediaEngine {
     pub async fn update_egress_phase(&self, output_id: &str, phase: EgressPhase) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *crate::sync::lock(&egress.phase) = phase;
+            *restream_sync::lock::lock(&egress.phase) = phase;
         }
     }
 
@@ -325,7 +325,7 @@ impl MediaEngine {
         phase: EgressPhase,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *crate::sync::lock(&egress.phase) = phase;
+            *restream_sync::lock::lock(&egress.phase) = phase;
         })
         .await
         .is_some()
@@ -334,7 +334,7 @@ impl MediaEngine {
     pub async fn update_egress_target_addr(&self, output_id: &str, addr: String) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *crate::sync::lock(&egress.target_addr) = Some(addr);
+            *restream_sync::lock::lock(&egress.target_addr) = Some(addr);
         }
     }
 
@@ -345,7 +345,7 @@ impl MediaEngine {
         addr: String,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *crate::sync::lock(&egress.target_addr) = Some(addr);
+            *restream_sync::lock::lock(&egress.target_addr) = Some(addr);
         })
         .await
         .is_some()
@@ -354,7 +354,7 @@ impl MediaEngine {
     pub async fn update_egress_quality(&self, output_id: &str, quality: PublisherQuality) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *crate::sync::lock(&egress.quality) = quality;
+            *restream_sync::lock::lock(&egress.quality) = quality;
         }
     }
 
@@ -371,9 +371,9 @@ impl MediaEngine {
             } else {
                 EgressPhase::Sending
             };
-            *crate::sync::lock(&egress.phase) = active_phase;
-            *crate::sync::lock(&egress.failure_phase) = None;
-            *crate::sync::lock(&egress.last_error) = None;
+            *restream_sync::lock::lock(&egress.phase) = active_phase;
+            *restream_sync::lock::lock(&egress.failure_phase) = None;
+            *restream_sync::lock::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         }
     }
@@ -395,9 +395,9 @@ impl MediaEngine {
             } else {
                 EgressPhase::Sending
             };
-            *crate::sync::lock(&egress.phase) = active_phase;
-            *crate::sync::lock(&egress.failure_phase) = None;
-            *crate::sync::lock(&egress.last_error) = None;
+            *restream_sync::lock::lock(&egress.phase) = active_phase;
+            *restream_sync::lock::lock(&egress.failure_phase) = None;
+            *restream_sync::lock::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         })
         .await
@@ -418,9 +418,9 @@ impl MediaEngine {
             } else {
                 EgressPhase::Sending
             };
-            *crate::sync::lock(&egress.phase) = active_phase;
-            *crate::sync::lock(&egress.failure_phase) = None;
-            *crate::sync::lock(&egress.last_error) = None;
+            *restream_sync::lock::lock(&egress.phase) = active_phase;
+            *restream_sync::lock::lock(&egress.failure_phase) = None;
+            *restream_sync::lock::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         })
         .await
@@ -436,9 +436,9 @@ impl MediaEngine {
             egress
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            *crate::sync::lock(&egress.phase) = EgressPhase::Discarding;
-            *crate::sync::lock(&egress.failure_phase) = None;
-            *crate::sync::lock(&egress.last_error) = None;
+            *restream_sync::lock::lock(&egress.phase) = EgressPhase::Discarding;
+            *restream_sync::lock::lock(&egress.failure_phase) = None;
+            *restream_sync::lock::lock(&egress.last_error) = None;
             egress.last_error_ms.store(0, Ordering::Relaxed);
         })
         .await
@@ -549,9 +549,9 @@ impl MediaEngine {
             let egresses = self.egresses.active.read().await;
             if let Some(egress) = egresses.get(output_id) {
                 let pipeline_id = egress.pipeline_id.clone();
-                *crate::sync::lock(&egress.phase) = EgressPhase::Failed;
-                *crate::sync::lock(&egress.failure_phase) = Some(phase.to_string());
-                *crate::sync::lock(&egress.last_error) = Some(message.clone());
+                *restream_sync::lock::lock(&egress.phase) = EgressPhase::Failed;
+                *restream_sync::lock::lock(&egress.failure_phase) = Some(phase.to_string());
+                *restream_sync::lock::lock(&egress.last_error) = Some(message.clone());
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);
@@ -581,9 +581,9 @@ impl MediaEngine {
         let event = self
             .with_current_egress(output_id, registration, |egress| {
                 let pipeline_id = egress.pipeline_id.clone();
-                *crate::sync::lock(&egress.phase) = EgressPhase::Failed;
-                *crate::sync::lock(&egress.failure_phase) = Some(phase.to_string());
-                *crate::sync::lock(&egress.last_error) = Some(message.clone());
+                *restream_sync::lock::lock(&egress.phase) = EgressPhase::Failed;
+                *restream_sync::lock::lock(&egress.failure_phase) = Some(phase.to_string());
+                *restream_sync::lock::lock(&egress.last_error) = Some(message.clone());
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);

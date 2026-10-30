@@ -24,17 +24,17 @@ impl MediaEngine {
     /// Register an OS thread JoinHandle so it can be joined at shutdown.
     /// Already-finished handles are pruned opportunistically.
     pub fn register_os_thread(&self, handle: std::thread::JoinHandle<()>) {
-        let mut guards = crate::sync::lock(&self.runtime.os_threads);
+        let mut guards = restream_sync::lock::lock(&self.runtime.os_threads);
         guards.retain(|thread| !thread.is_finished());
         guards.push(handle);
     }
 
     pub fn register_listener_shutdown(&self, shutdown: impl Fn() + Send + Sync + 'static) {
-        crate::sync::lock(&self.runtime.listener_shutdowns).push(Box::new(shutdown));
+        restream_sync::lock::lock(&self.runtime.listener_shutdowns).push(Box::new(shutdown));
     }
 
     pub fn shutdown_listeners(&self) {
-        let shutdowns: Vec<_> = crate::sync::lock(&self.runtime.listener_shutdowns)
+        let shutdowns: Vec<_> = restream_sync::lock::lock(&self.runtime.listener_shutdowns)
             .drain(..)
             .collect();
         for shutdown in shutdowns {
@@ -44,7 +44,7 @@ impl MediaEngine {
 
     /// Drain all registered OS thread handles for joining at shutdown.
     pub fn drain_os_thread_handles(&self) -> Vec<std::thread::JoinHandle<()>> {
-        crate::sync::lock(&self.runtime.os_threads)
+        restream_sync::lock::lock(&self.runtime.os_threads)
             .drain(..)
             .collect()
     }
@@ -176,7 +176,7 @@ impl MediaEngine {
         CancellationToken,
         Arc<std::sync::Mutex<crate::media::stream_qa::StreamQa>>,
     )> {
-        let mut entries = crate::sync::lock(&self.stream_qa.entries);
+        let mut entries = restream_sync::lock::lock(&self.stream_qa.entries);
         if entries
             .get(pipeline_id)
             .is_some_and(|entry| !entry.cancel.is_cancelled())
@@ -194,7 +194,8 @@ impl MediaEngine {
 
     /// Stops a pipeline's stream checks.
     pub fn unregister_stream_qa(&self, pipeline_id: &str) {
-        if let Some(entry) = crate::sync::lock(&self.stream_qa.entries).remove(pipeline_id) {
+        if let Some(entry) = restream_sync::lock::lock(&self.stream_qa.entries).remove(pipeline_id)
+        {
             entry.cancel.cancel();
         }
     }
@@ -206,7 +207,7 @@ impl MediaEngine {
         pipeline_id: &str,
         findings: &Arc<std::sync::Mutex<crate::media::stream_qa::StreamQa>>,
     ) {
-        let mut entries = crate::sync::lock(&self.stream_qa.entries);
+        let mut entries = restream_sync::lock::lock(&self.stream_qa.entries);
         if entries
             .get(pipeline_id)
             .is_some_and(|entry| Arc::ptr_eq(&entry.findings, findings))
@@ -216,16 +217,16 @@ impl MediaEngine {
     }
 
     pub fn is_stream_qa_active(&self, pipeline_id: &str) -> bool {
-        crate::sync::lock(&self.stream_qa.entries)
+        restream_sync::lock::lock(&self.stream_qa.entries)
             .get(pipeline_id)
             .is_some_and(|entry| !entry.cancel.is_cancelled())
     }
 
     /// The latest findings of a pipeline's running checks.
     pub fn stream_qa(&self, pipeline_id: &str) -> Option<crate::media::stream_qa::StreamQa> {
-        let entries = crate::sync::lock(&self.stream_qa.entries);
+        let entries = restream_sync::lock::lock(&self.stream_qa.entries);
         let entry = entries.get(pipeline_id)?;
-        Some(crate::sync::lock(&entry.findings).clone())
+        Some(restream_sync::lock::lock(&entry.findings).clone())
     }
 
     pub async fn cancel_all_active_tasks(&self) {
@@ -247,7 +248,7 @@ impl MediaEngine {
                 token.cancel();
             }
         }
-        for entry in crate::sync::lock(&self.stream_qa.entries).values() {
+        for entry in restream_sync::lock::lock(&self.stream_qa.entries).values() {
             entry.cancel.cancel();
         }
         self.shutdown_all_srt_fabric_runtimes().await;

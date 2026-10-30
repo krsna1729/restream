@@ -106,7 +106,7 @@ fn audio_rendition() -> Box<dyn SegmentDemux> {
 async fn recorded(engine: &MediaEngine, pipeline: &str) -> (bool, bool) {
     let ingests = engine.ingests.active.read().await;
     let ingest = ingests.get(pipeline).expect("the ingest is registered");
-    let metadata = crate::sync::read(&ingest.metadata);
+    let metadata = restream_sync::lock::read(&ingest.metadata);
     (metadata.video.is_some(), metadata.audio.is_some())
 }
 

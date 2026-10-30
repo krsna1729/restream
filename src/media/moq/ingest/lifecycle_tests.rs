@@ -189,7 +189,7 @@ async fn the_probe_records_tracks_and_metadata_on_the_session() {
         .with_ingest_session(&admission.session.registration, |ingest| {
             (
                 ingest.metadata(),
-                crate::sync::lock(&ingest.audio_tracks).clone(),
+                restream_sync::lock::lock(&ingest.audio_tracks).clone(),
             )
         })
         .await

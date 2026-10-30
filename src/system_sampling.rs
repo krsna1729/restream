@@ -95,7 +95,7 @@ const HOST_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15);
 
 pub(crate) fn sample_host_settings() -> HostSettingsSnapshot {
     let cache = HOST_SETTINGS_CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = crate::sync::lock(cache);
+    let mut guard = restream_sync::lock::lock(cache);
     if let Some((instant, snapshot)) = guard.as_ref()
         && instant.elapsed() < HOST_SETTINGS_CACHE_TTL
     {
@@ -347,7 +347,7 @@ pub(crate) fn sample_child_process_resources(
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
     let sample_store = CHILD_PROCESS_CPU_SAMPLES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut previous = crate::sync::lock(sample_store);
+    let mut previous = restream_sync::lock::lock(sample_store);
     let mut resources = HashMap::new();
     for pid in pids {
         let process_ticks = proc_process_ticks(pid);
@@ -401,7 +401,7 @@ static HOST_SAMPLER: std::sync::LazyLock<std::sync::Mutex<System>> =
 /// then run `read` on the refreshed view. `read` must not block: the sampler
 /// is shared.
 pub(crate) fn sampled_system<R>(read: impl FnOnce(&System) -> R) -> R {
-    let mut sys = crate::sync::lock(&HOST_SAMPLER);
+    let mut sys = restream_sync::lock::lock(&HOST_SAMPLER);
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     let own = sysinfo::Pid::from_u32(std::process::id());
@@ -481,7 +481,7 @@ fn sample_engine_cpu_usage(
         external_ffmpeg_ticks,
     };
     let lock = ENGINE_CPU_SAMPLE.get_or_init(|| Mutex::new(None));
-    let mut previous = crate::sync::lock(lock);
+    let mut previous = restream_sync::lock::lock(lock);
     let Some(previous_sample) = *previous else {
         *previous = Some(sample);
         return EngineCpuUsageSnapshot::default();

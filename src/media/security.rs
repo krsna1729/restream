@@ -94,11 +94,11 @@ impl IngestSecurityService {
     pub fn update_config(&self, new_config: IngestSecurityConfig) {
         let mut new_config = new_config;
         new_config.normalize();
-        *crate::sync::write(&self.config) = new_config;
+        *restream_sync::lock::write(&self.config) = new_config;
     }
 
     pub fn get_config(&self) -> IngestSecurityConfig {
-        crate::sync::read(&self.config).clone()
+        restream_sync::lock::read(&self.config).clone()
     }
 
     pub fn is_ip_banned(&self, ip: &str) -> Option<Duration> {
@@ -113,7 +113,7 @@ impl IngestSecurityService {
         // Read lock only — no mutations. Cleanup of stale entries happens
         // lazily in record_failure, keeping this hot check lock-free under
         // concurrent ban lookups (e.g., flood from many IPs).
-        let state = crate::sync::read(&self.state);
+        let state = restream_sync::lock::read(&self.state);
         let key = Self::scoped_key(scope, ip);
         let record = state.get(&key)?;
         let now = Instant::now();
@@ -135,7 +135,7 @@ impl IngestSecurityService {
         if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
             return false;
         }
-        let mut state = crate::sync::write(&self.state);
+        let mut state = restream_sync::lock::write(&self.state);
 
         let now = Instant::now();
         let config = self.get_config();
@@ -214,7 +214,7 @@ impl IngestSecurityService {
         if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
             return;
         }
-        crate::sync::write(&self.state).remove(&Self::scoped_key(scope, ip));
+        restream_sync::lock::write(&self.state).remove(&Self::scoped_key(scope, ip));
     }
 
     fn scoped_key(scope: RateLimitScope, ip: &str) -> String {
@@ -227,7 +227,7 @@ impl IngestSecurityService {
     }
 
     pub fn snapshots(&self) -> Vec<RateLimitSnapshot> {
-        let state = crate::sync::read(&self.state);
+        let state = restream_sync::lock::read(&self.state);
         let now = Instant::now();
         let mut snapshots = state
             .iter()
@@ -254,7 +254,7 @@ impl IngestSecurityService {
     }
 
     pub fn reset(&self, scope: Option<RateLimitScope>, ip: Option<&str>) -> usize {
-        let mut state = crate::sync::write(&self.state);
+        let mut state = restream_sync::lock::write(&self.state);
         let before = state.len();
         state.retain(|key, _| {
             let Some((stored_scope, stored_ip)) = Self::parse_scoped_key(key) else {

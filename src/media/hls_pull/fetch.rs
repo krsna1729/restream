@@ -180,7 +180,7 @@ impl AuthScope {
                     .to_string(),
             ));
         }
-        let mut state = crate::sync::lock(&self.digest);
+        let mut state = restream_sync::lock::lock(&self.digest);
         let answer_now = state.is_none() || challenge.stale;
         *state = Some((challenge, 0));
         Ok(answer_now)
@@ -201,7 +201,7 @@ impl AuthScope {
             return builder;
         }
         if let RequestAuth::Basic { username, password } = &self.auth
-            && let Some((challenge, uses)) = crate::sync::lock(&self.digest).as_mut()
+            && let Some((challenge, uses)) = restream_sync::lock::lock(&self.digest).as_mut()
         {
             *uses = uses.saturating_add(1);
             let uri = &url[url::Position::BeforePath..url::Position::AfterQuery];

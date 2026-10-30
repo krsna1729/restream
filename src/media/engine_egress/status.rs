@@ -11,7 +11,7 @@ impl MediaEngine {
             return "stopped".to_string();
         }
 
-        let phase = *crate::sync::lock(&egress.phase);
+        let phase = *restream_sync::lock::lock(&egress.phase);
         if phase == EgressPhase::Failed {
             return "failed".to_string();
         }
@@ -36,8 +36,8 @@ impl MediaEngine {
     }
 
     fn recent_egress_status(egress: &ActiveEgress, has_ingest: bool) -> EgressRuntimeStatus {
-        let phase = *crate::sync::lock(&egress.phase);
-        if phase == EgressPhase::Failed || crate::sync::lock(&egress.last_error).is_some() {
+        let phase = *restream_sync::lock::lock(&egress.phase);
+        if phase == EgressPhase::Failed || restream_sync::lock::lock(&egress.last_error).is_some() {
             return EgressRuntimeStatus::Failed;
         }
         if !has_ingest {
@@ -65,9 +65,9 @@ impl MediaEngine {
         has_ingest: bool,
         clean_stop: bool,
     ) -> RecentEgressOutcome {
-        let active_phase = *crate::sync::lock(&egress.phase);
-        let last_error = crate::sync::lock(&egress.last_error).clone();
-        let failure_phase = crate::sync::lock(&egress.failure_phase).clone();
+        let active_phase = *restream_sync::lock::lock(&egress.phase);
+        let last_error = restream_sync::lock::lock(&egress.last_error).clone();
+        let failure_phase = restream_sync::lock::lock(&egress.failure_phase).clone();
         let ended_at_ms = Self::now_epoch_ms();
         let had_error =
             active_phase == EgressPhase::Failed || last_error.is_some() || failure_phase.is_some();
@@ -114,7 +114,7 @@ impl MediaEngine {
             pipeline_id: egress.pipeline_id.clone(),
             protocol: egress.protocol.clone(),
             target_url: egress.target_url.clone(),
-            target_addr: crate::sync::lock(&egress.target_addr).clone(),
+            target_addr: restream_sync::lock::lock(&egress.target_addr).clone(),
             status,
             raw_status,
             phase,
@@ -124,13 +124,13 @@ impl MediaEngine {
             last_progress_ms: egress.last_progress_ms.load(Ordering::Relaxed),
             resync_count: egress.resync_count.load(Ordering::Relaxed),
             feed_lag_units: egress.feed_lag_units.load(Ordering::Relaxed),
-            backpressure_reason: *crate::sync::lock(&egress.backpressure_reason),
+            backpressure_reason: *restream_sync::lock::lock(&egress.backpressure_reason),
             last_error,
             last_error_ms: egress.last_error_ms.load(Ordering::Relaxed),
             failure_phase,
             first_failure_at_ms,
             failure_count,
-            quality: crate::sync::lock(&egress.quality).clone(),
+            quality: restream_sync::lock::lock(&egress.quality).clone(),
             metrics: egress.metrics.snapshot(),
             ended_at_ms,
         }

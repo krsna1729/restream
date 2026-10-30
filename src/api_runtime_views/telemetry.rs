@@ -257,7 +257,7 @@ pub(super) struct DeliveryInput {
 }
 
 pub(super) fn delivery_input(egress: &crate::media::engine::ActiveEgress) -> DeliveryInput {
-    let quality = crate::sync::lock(&egress.quality);
+    let quality = restream_sync::lock::lock(&egress.quality);
     DeliveryInput {
         feed: egress
             .terminal_stage_key

@@ -26,7 +26,7 @@ pub(super) fn input_telemetry_json(session: &ActiveIngest) -> serde_json::Value 
         "pipelineId": session.pipeline_id,
         "uptimeSecs": session.start_time.elapsed().as_secs_f64(),
         "bytesReceived": session.bytes_received.load(Ordering::Relaxed),
-        "quality": crate::sync::read(&session.metadata).quality,
+        "quality": restream_sync::lock::read(&session.metadata).quality,
     })
 }
 

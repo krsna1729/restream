@@ -218,7 +218,7 @@ impl SinkCounters {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    restream::sync::lock(mutex)
+    restream_sync::lock::lock(mutex)
 }
 
 pub(crate) struct HarnessSrtSinkPool {

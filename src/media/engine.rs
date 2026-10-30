@@ -76,7 +76,7 @@ pub struct ActiveIngest {
 
 impl ActiveIngest {
     pub fn metadata(&self) -> IngestMetadata {
-        crate::sync::read(&self.metadata).clone()
+        restream_sync::lock::read(&self.metadata).clone()
     }
 }
 
@@ -367,7 +367,7 @@ impl MediaEngine {
     pub(crate) fn sample_ingest_bitrate_kbps(ingest: &ActiveIngest) -> Option<f64> {
         let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
         let previous_bytes = ingest.prev_bytes_received.load(Ordering::Relaxed);
-        let mut previous_time = crate::sync::lock(&ingest.prev_sample_time);
+        let mut previous_time = restream_sync::lock::lock(&ingest.prev_sample_time);
         let elapsed = previous_time.elapsed().as_secs_f64();
 
         if elapsed > 0.5 && bytes_received > previous_bytes {
@@ -380,13 +380,13 @@ impl MediaEngine {
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
             *previous_time = Instant::now();
-            *crate::sync::lock(&ingest.bitrate_kbps) = Some(rate);
+            *restream_sync::lock::lock(&ingest.bitrate_kbps) = Some(rate);
             Some(rate)
         } else if elapsed > 1.0 && bytes_received == previous_bytes {
-            *crate::sync::lock(&ingest.bitrate_kbps) = Some(0.0);
+            *restream_sync::lock::lock(&ingest.bitrate_kbps) = Some(0.0);
             Some(0.0)
         } else {
-            *crate::sync::lock(&ingest.bitrate_kbps)
+            *restream_sync::lock::lock(&ingest.bitrate_kbps)
         }
     }
 

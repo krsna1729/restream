@@ -217,11 +217,11 @@ pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
         return false;
     };
     let key = (tls13, cipher);
-    if let Some(&proven) = crate::sync::lock(&KTLS_CAPABILITY_CACHE).get(&key) {
+    if let Some(&proven) = restream_sync::lock::lock(&KTLS_CAPABILITY_CACHE).get(&key) {
         return proven;
     }
     let proven = probe_capability(version, suite, cipher);
-    crate::sync::lock(&KTLS_CAPABILITY_CACHE).insert(key, proven);
+    restream_sync::lock::lock(&KTLS_CAPABILITY_CACHE).insert(key, proven);
     proven
 }
 

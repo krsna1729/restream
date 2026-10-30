@@ -306,7 +306,7 @@ impl FlightRecorder {
 
     /// Records one sample of every pipeline in `probes`, at `at_ms`.
     pub fn record(&self, at_ms: u64, probes: Vec<PipelineProbe>) {
-        let mut traces = crate::sync::lock(&self.traces);
+        let mut traces = restream_sync::lock::lock(&self.traces);
         let present: std::collections::HashSet<&str> = probes
             .iter()
             .map(|probe| probe.pipeline_id.as_str())
@@ -410,7 +410,7 @@ impl FlightRecorder {
     /// The pipeline's samples from `since_ms` (inclusive); `None` for a
     /// pipeline the recorder does not know.
     pub fn trace(&self, pipeline_id: &str, since_ms: u64) -> Option<FlightTrace> {
-        let traces = crate::sync::lock(&self.traces);
+        let traces = restream_sync::lock::lock(&self.traces);
         let trace = traces.get(pipeline_id)?;
         let first = trace
             .samples
@@ -428,7 +428,7 @@ impl FlightRecorder {
 
     /// The newest sample of every pipeline, to persist.
     pub fn newest(&self) -> Vec<(String, FlightSample)> {
-        let traces = crate::sync::lock(&self.traces);
+        let traces = restream_sync::lock::lock(&self.traces);
         traces
             .iter()
             .filter_map(|(pipeline_id, trace)| {
@@ -445,7 +445,7 @@ impl FlightRecorder {
         since_ms: u64,
         until_ms: u64,
     ) -> Option<(u64, Vec<FlightSample>)> {
-        let traces = crate::sync::lock(&self.traces);
+        let traces = restream_sync::lock::lock(&self.traces);
         let trace = traces.get(pipeline_id)?;
         let first = trace
             .samples
@@ -580,7 +580,7 @@ async fn collect_probes(
         .await
         .values()
         .map(|egress| {
-            let quality = crate::sync::lock(&egress.quality);
+            let quality = restream_sync::lock::lock(&egress.quality);
             (
                 egress.output_id.clone(),
                 EgressProbe {
@@ -598,7 +598,7 @@ async fn collect_probes(
     for (pipeline_id, ingest) in engine.ingests.active.read().await.iter() {
         let metadata = ingest.metadata();
         // Every track a multi-track source declared, else its one track.
-        let tracks = crate::sync::lock(&ingest.audio_tracks).clone();
+        let tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
         let frames: HashMap<u32, f64> = tracks
             .iter()
             .chain(
@@ -638,7 +638,7 @@ async fn collect_probes(
                 width: video.map(|video| video.width).filter(|width| *width > 0),
                 height: video.map(|video| video.height).filter(|height| *height > 0),
                 fps: video.map(|video| video.fps).filter(|fps| *fps > 0.0),
-                keyframe_ms: crate::sync::lock(&ingest.keyframe_times).clone(),
+                keyframe_ms: restream_sync::lock::lock(&ingest.keyframe_times).clone(),
                 rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
                 loss_per_sec: quality.packets_received_loss_per_sec,
                 retrans_per_sec: quality.packets_received_retrans_per_sec,
@@ -754,7 +754,7 @@ async fn destination_readings(
         .await
         .values()
         .map(|egress| {
-            let quality = crate::sync::lock(&egress.quality);
+            let quality = restream_sync::lock::lock(&egress.quality);
             (
                 egress.pipeline_id.clone(),
                 egress.output_id.clone(),

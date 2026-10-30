@@ -19,7 +19,7 @@ pub(crate) async fn resolved_output_audio_tracks(
     engine
         .with_active_ingest(pipeline_id, |ingest| {
             let metadata = ingest.metadata();
-            let tracks = crate::sync::lock(&ingest.audio_tracks);
+            let tracks = restream_sync::lock::lock(&ingest.audio_tracks);
             if !tracks.is_empty() {
                 tracks.as_ref().clone()
             } else {

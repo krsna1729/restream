@@ -534,8 +534,8 @@ async fn a_dropped_segment_keeps_its_failure_cause_visible() {
         let observed = engine
             .with_active_egress("out1", |egress| {
                 (
-                    crate::sync::lock(&egress.failure_phase).clone(),
-                    crate::sync::lock(&egress.last_error).clone(),
+                    restream_sync::lock::lock(&egress.failure_phase).clone(),
+                    restream_sync::lock::lock(&egress.last_error).clone(),
                 )
             })
             .await
@@ -594,7 +594,7 @@ async fn uploader_rejects_terminal_stage_mismatch() {
 
     let error = engine
         .with_active_egress("out1", |egress| {
-            crate::sync::lock(&egress.last_error).clone()
+            restream_sync::lock::lock(&egress.last_error).clone()
         })
         .await
         .flatten()
@@ -652,7 +652,7 @@ fn connection_recording_origin() -> (std::net::SocketAddr, SeenRequests) {
                     }
                     buffer.drain(..head_end + length);
                     let nth = {
-                        let mut seen = crate::sync::lock(&seen);
+                        let mut seen = restream_sync::lock::lock(&seen);
                         seen.push((connection, target));
                         seen.len() - 1
                     };
@@ -680,11 +680,11 @@ async fn a_retry_uses_a_new_connection() {
         spawn_uploader(format!("http://{addr}/live/out.m3u8"), store.clone()).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while crate::sync::lock(&seen).len() < 2 {
+    while restream_sync::lock::lock(&seen).len() < 2 {
         assert!(tokio::time::Instant::now() < deadline, "no retry");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let seen = crate::sync::lock(&seen).clone();
+    let seen = restream_sync::lock::lock(&seen).clone();
     assert_eq!(seen[0].1, seen[1].1, "the same segment is retried");
     assert_ne!(seen[0].0, seen[1].0, "the retry opened a new connection");
 

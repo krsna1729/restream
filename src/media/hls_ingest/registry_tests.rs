@@ -18,7 +18,7 @@ async fn an_object_for_a_session_that_just_ended_restarts_it_once() {
     let (engine, ingest) = test_ingest(HlsIngestLimits::default());
     let (stale, receiver) = mpsc::channel(OBJECT_QUEUE);
     drop(receiver);
-    crate::sync::lock(&ingest.sessions).insert(
+    restream_sync::lock::lock(&ingest.sessions).insert(
         INPUT_ID.to_string(),
         SessionHandle {
             attempt_id: u64::MAX,
@@ -44,7 +44,7 @@ async fn an_object_for_a_session_that_just_ended_restarts_it_once() {
         .await;
 
     assert_eq!(outcome, Ok(ObjectOutcome::Held));
-    let attempt = crate::sync::lock(&ingest.sessions)[INPUT_ID].attempt_id;
+    let attempt = restream_sync::lock::lock(&ingest.sessions)[INPUT_ID].attempt_id;
     assert_ne!(attempt, u64::MAX, "the stale handle was replaced");
     assert!(engine.input_has_session(PIPELINE_ID, INPUT_ID).await);
     engine.cancel_pipeline_input(INPUT_ID).await;

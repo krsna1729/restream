@@ -180,7 +180,7 @@ impl FleetHistory {
     /// NTP correction): it is raised to the newest kept sample's, so the
     /// samples stay in time order for [`Self::window`].
     pub fn push(&self, mut sample: FleetSample) {
-        let mut state = crate::sync::lock(&self.state);
+        let mut state = restream_sync::lock::lock(&self.state);
         let HistoryState {
             samples,
             complete_from_ms,
@@ -209,7 +209,7 @@ impl FleetHistory {
     /// The samples taken from `since_ms` through `until_ms` (both
     /// inclusive), oldest first.
     pub fn window(&self, since_ms: u64, until_ms: u64) -> FleetHistoryWindow {
-        let state = crate::sync::lock(&self.state);
+        let state = restream_sync::lock::lock(&self.state);
         // Sorted by time: skip the others without visiting them.
         let first = state
             .samples

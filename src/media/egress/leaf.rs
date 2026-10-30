@@ -280,7 +280,7 @@ impl EgressProgressSink {
             counter.store(lag_units, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(slot) = &self.backpressure_reason {
-            *crate::sync::lock(slot) = reason;
+            *restream_sync::lock::lock(slot) = reason;
         }
     }
 
@@ -293,7 +293,7 @@ impl EgressProgressSink {
     #[inline]
     pub fn record_quality(&self, quality: crate::media::snapshots::PublisherQuality) {
         if let Some(slot) = &self.quality {
-            *crate::sync::lock(slot) = quality;
+            *restream_sync::lock::lock(slot) = quality;
         }
     }
 
@@ -314,7 +314,7 @@ impl EgressProgressSink {
         retry: Option<(u32, u64)>,
     ) {
         if let Some(slot) = &self.upload_status {
-            let mut status = crate::sync::lock(slot);
+            let mut status = restream_sync::lock::lock(slot);
             status.failures = status.failures.saturating_add(1);
             status.last_failure = Some((phase, message));
             status.healthy = false;
@@ -328,14 +328,14 @@ impl EgressProgressSink {
     /// progress.
     pub fn clear_upload_retry(&self) {
         if let Some(slot) = &self.upload_status {
-            crate::sync::lock(slot).retry = None;
+            restream_sync::lock::lock(slot).retry = None;
         }
     }
 
     /// A request was acknowledged: no retry is in progress.
     pub fn record_upload_acknowledged(&self) {
         if let Some(slot) = &self.upload_status {
-            let mut status = crate::sync::lock(slot);
+            let mut status = restream_sync::lock::lock(slot);
             status.retry = None;
             status.healthy = true;
         }

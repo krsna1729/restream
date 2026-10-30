@@ -35,7 +35,7 @@ impl MediaEngine {
     pub async fn record_keyframe(&self, pipeline_id: &str, pts: i64) {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
-            let mut times = crate::sync::lock(&ingest.keyframe_times);
+            let mut times = restream_sync::lock::lock(&ingest.keyframe_times);
             times.push(pts);
             if times.len() > 30 {
                 times.remove(0);
@@ -58,7 +58,7 @@ impl MediaEngine {
         }
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
-            let mut metadata = crate::sync::write(&ingest.metadata);
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
             if video.is_some() {
                 metadata.video = video;
                 if metadata.video_track_count == 0 {
@@ -84,7 +84,7 @@ impl MediaEngine {
         declared: restream_core::metadata::DeclaredEncoder,
     ) {
         if let Some(ingest) = self.current_ingest_session(registration).await {
-            crate::sync::write(&ingest.metadata).declared = Some(declared);
+            restream_sync::lock::write(&ingest.metadata).declared = Some(declared);
         }
     }
 
@@ -100,7 +100,7 @@ impl MediaEngine {
             return;
         };
         {
-            let mut metadata = crate::sync::write(&ingest.metadata);
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
             if video.is_some() {
                 metadata.video = video.clone();
                 if metadata.video_track_count == 0 {
@@ -164,17 +164,17 @@ impl MediaEngine {
             .await;
         }
         {
-            let mut metadata = crate::sync::write(&ingest.metadata);
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
             metadata.video = video.clone();
             metadata.audio = audio_tracks.first().cloned();
             metadata.video_track_count = video_track_count;
             metadata.selected_video_track_index = video.as_ref().map(|_| 0);
             metadata.tracks_authoritative = true;
         }
-        *crate::sync::lock(&ingest.audio_tracks) = Arc::new(audio_tracks.clone());
-        *crate::sync::lock(&ingest.video_sequence_header) = video_sequence_header;
+        *restream_sync::lock::lock(&ingest.audio_tracks) = Arc::new(audio_tracks.clone());
+        *restream_sync::lock::lock(&ingest.video_sequence_header) = video_sequence_header;
         if audio_tracks.is_empty() {
-            *crate::sync::lock(&ingest.audio_sequence_header) = None;
+            *restream_sync::lock::lock(&ingest.audio_sequence_header) = None;
         }
         let update_ring = |ring: &restream_sync::RingBuffer| {
             if let Some(video) = &video {
@@ -230,7 +230,7 @@ impl MediaEngine {
         selected_video_track_index: Option<u32>,
     ) {
         if let Some(ingest) = self.current_ingest_session(registration).await {
-            let mut metadata = crate::sync::write(&ingest.metadata);
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
             metadata.video_track_count = video_track_count;
             metadata.selected_video_track_index = selected_video_track_index;
         }
@@ -245,7 +245,7 @@ impl MediaEngine {
         let Some(ingest) = self.current_ingest_session(registration).await else {
             return;
         };
-        *crate::sync::lock(&ingest.audio_tracks) = Arc::new(tracks.clone());
+        *restream_sync::lock::lock(&ingest.audio_tracks) = Arc::new(tracks.clone());
         if !tracks.is_empty()
             && let Some(preview_ring) = registration.preview_ring.load_full()
         {
@@ -272,9 +272,9 @@ impl MediaEngine {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
             if is_video {
-                *crate::sync::lock(&ingest.video_sequence_header) = Some(data);
+                *restream_sync::lock::lock(&ingest.video_sequence_header) = Some(data);
             } else {
-                *crate::sync::lock(&ingest.audio_sequence_header) = Some(data);
+                *restream_sync::lock::lock(&ingest.audio_sequence_header) = Some(data);
             }
         }
     }
@@ -289,9 +289,9 @@ impl MediaEngine {
             return;
         };
         if is_video {
-            *crate::sync::lock(&ingest.video_sequence_header) = Some(data);
+            *restream_sync::lock::lock(&ingest.video_sequence_header) = Some(data);
         } else {
-            *crate::sync::lock(&ingest.audio_sequence_header) = Some(data);
+            *restream_sync::lock::lock(&ingest.audio_sequence_header) = Some(data);
         }
     }
 
@@ -302,8 +302,8 @@ impl MediaEngine {
         let Some(ingest) = self.current_ingest_session(registration).await else {
             return (None, None);
         };
-        let video = crate::sync::lock(&ingest.video_sequence_header).clone();
-        let audio = crate::sync::lock(&ingest.audio_sequence_header).clone();
+        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
         (video, audio)
     }
 
@@ -313,7 +313,7 @@ impl MediaEngine {
     /// written at this instant (the caller retries on a later packet).
     pub fn try_video_sequence_header(&self, pipeline_id: &str) -> Option<bytes::Bytes> {
         let ingests = self.ingests.active.try_read().ok()?;
-        crate::sync::lock(&ingests.get(pipeline_id)?.video_sequence_header).clone()
+        restream_sync::lock::lock(&ingests.get(pipeline_id)?.video_sequence_header).clone()
     }
 
     pub async fn get_sequence_headers(
@@ -322,8 +322,8 @@ impl MediaEngine {
     ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
-            let video = crate::sync::lock(&ingest.video_sequence_header).clone();
-            let audio = crate::sync::lock(&ingest.audio_sequence_header).clone();
+            let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+            let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
             (video, audio)
         } else {
             (None, None)
@@ -334,7 +334,7 @@ impl MediaEngine {
         {
             let ingests = self.ingests.active.read().await;
             if let Some(ingest) = ingests.get(pipeline_id) {
-                *crate::sync::lock(&ingest.audio_tracks) = Arc::new(tracks.clone());
+                *restream_sync::lock::lock(&ingest.audio_tracks) = Arc::new(tracks.clone());
             }
         }
         if !tracks.is_empty() {
@@ -348,7 +348,7 @@ impl MediaEngine {
     pub async fn update_publisher_quality(&self, pipeline_id: &str, quality: PublisherQuality) {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
-            crate::sync::write(&ingest.metadata).quality = quality;
+            restream_sync::lock::write(&ingest.metadata).quality = quality;
         }
     }
 
@@ -380,7 +380,7 @@ impl MediaEngine {
         let ingests = self.ingests.active.read().await;
         let ingest = ingests.get(pipeline_id)?;
         {
-            let metadata = crate::sync::read(&ingest.metadata);
+            let metadata = restream_sync::lock::read(&ingest.metadata);
             if metadata.video.is_some() || metadata.audio.is_some() {
                 return Some(true);
             }
@@ -398,7 +398,7 @@ impl MediaEngine {
         quality: PublisherQuality,
     ) {
         if let Some(ingest) = self.current_ingest_session(registration).await {
-            crate::sync::write(&ingest.metadata).quality = quality;
+            restream_sync::lock::write(&ingest.metadata).quality = quality;
         }
     }
 }

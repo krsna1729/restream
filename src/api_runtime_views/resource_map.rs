@@ -591,7 +591,7 @@ pub(crate) async fn resource_map(
     let srt_sender_limit = 512u64;
     let srt_sender_threads =
         srt_sender_limit.saturating_sub(engine.runtime.sender_semaphore.available_permits() as u64);
-    let registered_os_threads = crate::sync::lock(&engine.runtime.os_threads)
+    let registered_os_threads = restream_sync::lock::lock(&engine.runtime.os_threads)
         .iter()
         .filter(|thread| !thread.is_finished())
         .count() as u64;

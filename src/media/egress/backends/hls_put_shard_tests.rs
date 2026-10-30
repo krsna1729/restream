@@ -44,7 +44,7 @@ impl Origin {
     }
 
     fn seen(&self) -> Vec<Seen> {
-        crate::sync::lock(&self.seen).clone()
+        restream_sync::lock::lock(&self.seen).clone()
     }
 
     fn wait_for(&self, what: &str, done: impl Fn(&[Seen]) -> bool) -> Vec<Seen> {
@@ -101,7 +101,7 @@ fn serve(
         let body = buffer[head_end..head_end + length].to_vec();
         buffer.drain(..head_end + length);
         let nth = {
-            let mut seen = crate::sync::lock(seen);
+            let mut seen = restream_sync::lock::lock(seen);
             seen.push(Seen {
                 method,
                 target: target.clone(),
@@ -130,7 +130,7 @@ struct Output {
 
 impl Output {
     fn upload_status(&self) -> crate::media::egress::leaf::UploadStatus {
-        crate::sync::lock(&self.upload_status).clone()
+        restream_sync::lock::lock(&self.upload_status).clone()
     }
 }
 

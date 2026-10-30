@@ -95,7 +95,7 @@ impl HlsStore {
     }
 
     pub fn clear(&self) {
-        let mut inner = crate::sync::lock(&self.inner);
+        let mut inner = restream_sync::lock::lock(&self.inner);
         inner.segments.clear();
         inner.next_index = 0;
         inner.target_duration = TARGET_DURATION_SECS;
@@ -106,7 +106,7 @@ impl HlsStore {
     }
 
     pub fn push_segment(&self, duration: f64, data: Bytes) {
-        let mut inner = crate::sync::lock(&self.inner);
+        let mut inner = restream_sync::lock::lock(&self.inner);
         let index = inner.next_index;
         inner.next_index += 1;
         if duration > inner.target_duration {
@@ -147,7 +147,7 @@ impl HlsStore {
     where
         F: FnMut(u64) -> String,
     {
-        let inner = crate::sync::lock(&self.inner);
+        let inner = restream_sync::lock::lock(&self.inner);
         if inner.segments.is_empty() {
             return None;
         }
@@ -166,7 +166,7 @@ impl HlsStore {
     }
 
     pub fn get_segment(&self, index: u64) -> Option<Bytes> {
-        let inner = crate::sync::lock(&self.inner);
+        let inner = restream_sync::lock::lock(&self.inner);
         inner
             .segments
             .iter()
@@ -175,23 +175,23 @@ impl HlsStore {
     }
 
     pub fn set_stream_metadata(&self, video: Option<VideoMeta>, audio_tracks: Vec<AudioMeta>) {
-        let mut inner = crate::sync::lock(&self.inner);
+        let mut inner = restream_sync::lock::lock(&self.inner);
         inner.video = video;
         inner.audio_tracks = audio_tracks;
     }
 
     pub fn stream_metadata(&self) -> (Option<VideoMeta>, Vec<AudioMeta>) {
-        let inner = crate::sync::lock(&self.inner);
+        let inner = restream_sync::lock::lock(&self.inner);
         (inner.video.clone(), inner.audio_tracks.clone())
     }
 
     pub fn get_variant_segment(&self, index: u64, variant: HlsSegmentVariant) -> Option<Bytes> {
-        let inner = crate::sync::lock(&self.inner);
+        let inner = restream_sync::lock::lock(&self.inner);
         inner.variant_segments.get(&(index, variant)).cloned()
     }
 
     pub fn put_variant_segment(&self, index: u64, variant: HlsSegmentVariant, data: Bytes) {
-        let mut inner = crate::sync::lock(&self.inner);
+        let mut inner = restream_sync::lock::lock(&self.inner);
         if inner.segments.iter().any(|segment| segment.index == index) {
             inner.variant_segments.insert((index, variant), data);
         }

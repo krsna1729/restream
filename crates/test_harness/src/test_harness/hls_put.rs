@@ -236,7 +236,7 @@ async fn hls_put_sink_put(
         "contentType": content_type,
         "bytes": body.len(),
     });
-    let _guard = restream::sync::lock(&state.write_lock);
+    let _guard = restream_sync::lock::lock(&state.write_lock);
     match OpenOptions::new()
         .create(true)
         .append(true)

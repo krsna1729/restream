@@ -97,7 +97,7 @@ impl AlertTracker {
 
     /// Keep `alerts`, already tracked, as the evaluation readers are served.
     pub fn publish(&self, generated_at: String, alerts: &[Alert]) {
-        crate::sync::lock(&self.state).latest = Some(Evaluation {
+        restream_sync::lock::lock(&self.state).latest = Some(Evaluation {
             generated_at,
             alerts: alerts.to_vec(),
         });
@@ -105,7 +105,7 @@ impl AlertTracker {
 
     /// The last published evaluation, if one has run.
     pub fn latest(&self) -> Option<Evaluation> {
-        crate::sync::lock(&self.state).latest.clone()
+        restream_sync::lock::lock(&self.state).latest.clone()
     }
 
     /// Stamp alerts that a reader derived itself (a pipeline view) with the
@@ -114,7 +114,7 @@ impl AlertTracker {
     /// many pages are open.
     pub fn stamp_only(&self, alerts: &mut [Alert]) {
         let stamp = Utc::now().to_rfc3339();
-        let state = crate::sync::lock(&self.state);
+        let state = restream_sync::lock::lock(&self.state);
         for alert in alerts.iter_mut() {
             if let Some(history) = state.open.get(&alert.id) {
                 alert.first_seen = Some(history.first_seen.clone());
@@ -125,7 +125,7 @@ impl AlertTracker {
 
     fn track_at(&self, alerts: &mut [Alert], now: DateTime<Utc>) {
         let stamp = now.to_rfc3339();
-        let mut state = crate::sync::lock(&self.state);
+        let mut state = restream_sync::lock::lock(&self.state);
         let TrackerState {
             open,
             resolved,
@@ -170,12 +170,12 @@ impl AlertTracker {
     }
 
     pub fn active_count(&self) -> usize {
-        crate::sync::lock(&self.state).open.len()
+        restream_sync::lock::lock(&self.state).open.len()
     }
 
     /// Alerts resolved at or after `since`, newest first.
     pub fn resolved_since(&self, since: DateTime<Utc>) -> ResolvedWindow {
-        let state = crate::sync::lock(&self.state);
+        let state = restream_sync::lock::lock(&self.state);
         ResolvedWindow {
             alerts: state
                 .resolved

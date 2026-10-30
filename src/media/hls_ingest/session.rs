@@ -105,7 +105,7 @@ pub(super) async fn run(
     let outbox_limit = context.limits.hold_bytes;
     let max_init_bytes = context.max_init_bytes;
     let mut session = Session::new(context.limits);
-    for (rendition, applied) in crate::sync::lock(&context.init).clone().iter() {
+    for (rendition, applied) in restream_sync::lock::lock(&context.init).clone().iter() {
         session.seed_init(rendition, &applied.uri, applied.bytes.clone());
     }
     let end = match PublishTarget::open(
@@ -141,7 +141,7 @@ pub(super) async fn run(
     };
     if end == SessionEnd::Ended {
         // The stream is over: the next run uploads its own init.
-        *crate::sync::lock(&context.init) = AppliedInits::default();
+        *restream_sync::lock::lock(&context.init) = AppliedInits::default();
     }
     // End the attempt before the queue closes: a handler whose send then
     // fails must find the attempt cancelled, so its one restart registers
@@ -376,7 +376,7 @@ async fn publish_next_chunk(
                 .await
                 .map_err(failed)?;
             // The init outlives this session: an encoder uploads it once.
-            crate::sync::lock(init).set(
+            restream_sync::lock::lock(init).set(
                 release.rendition,
                 AppliedInit {
                     uri: release_init.uri.clone(),
@@ -468,7 +468,7 @@ fn apply(
             // stream as H.264, another codec's frames as AAC.
             if is_map_object || boxes::is_init_segment(&payload.bytes) {
                 session.void_map(&path);
-                crate::sync::lock(&state.init).forget_uri(&path);
+                restream_sync::lock::lock(&state.init).forget_uri(&path);
             }
             return rejection.into();
         }

@@ -965,13 +965,13 @@ pub(super) mod injected_panics {
     static MARKED: Mutex<Option<HashSet<SocketAddr>>> = Mutex::new(None);
 
     pub(in crate::media::rtmp) fn mark(peer: SocketAddr) {
-        crate::sync::lock(&MARKED)
+        restream_sync::lock::lock(&MARKED)
             .get_or_insert_with(HashSet::new)
             .insert(peer);
     }
 
     pub(super) fn unwind_if_marked(peer: SocketAddr) {
-        let marked = crate::sync::lock(&MARKED)
+        let marked = restream_sync::lock::lock(&MARKED)
             .as_mut()
             .is_some_and(|set| set.remove(&peer));
         if marked {

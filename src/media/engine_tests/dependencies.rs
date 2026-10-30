@@ -46,7 +46,7 @@ async fn runtime_helpers_expose_registered_ingest_and_egress() {
             (
                 egress.protocol.clone(),
                 egress.bytes_sent.load(Ordering::Relaxed),
-                crate::sync::lock(&egress.phase).to_string(),
+                restream_sync::lock::lock(&egress.phase).to_string(),
             )
         })
         .await;

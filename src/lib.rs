@@ -1,7 +1,7 @@
 //! Crate root for the restream server.
 
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
-// Raw std lock access is disallowed in shipped code (clippy.toml, `crate::sync`);
+// Raw std lock access is disallowed in shipped code (clippy.toml, `restream_sync::lock`);
 // tests may poison and inspect locks directly.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
@@ -48,7 +48,6 @@ pub mod planner;
 pub mod runtime;
 pub mod runtime_info;
 pub mod secret_display;
-pub mod sync;
 pub(crate) mod system_sampling;
 pub mod test_fixtures;
 

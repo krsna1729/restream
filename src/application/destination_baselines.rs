@@ -172,7 +172,7 @@ impl DestinationBaselines {
     /// One sample of every running output: `(pipeline, output, readings)`.
     /// An output absent from the sample is forgotten.
     pub fn observe(&self, at_ms: u64, sample: Vec<(String, String, Readings)>) {
-        let mut outputs = crate::sync::lock(&self.outputs);
+        let mut outputs = restream_sync::lock::lock(&self.outputs);
         let present: std::collections::HashSet<&str> = sample
             .iter()
             .map(|(_, output, _)| output.as_str())
@@ -195,7 +195,7 @@ impl DestinationBaselines {
 
     /// The destinations off their usual now, ordered by output and signal.
     pub fn anomalies(&self) -> Vec<Anomaly> {
-        let outputs = crate::sync::lock(&self.outputs);
+        let outputs = restream_sync::lock::lock(&self.outputs);
         let mut found: Vec<Anomaly> = outputs
             .iter()
             .flat_map(|(output_id, output)| {

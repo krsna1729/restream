@@ -75,14 +75,14 @@ impl RenameRollbackIngestStore {
     }
 
     fn snapshot(&self) -> Vec<Ingest> {
-        crate::sync::lock(&self.ingests).clone()
+        restream_sync::lock::lock(&self.ingests).clone()
     }
 }
 
 impl IngestLookup for RenameRollbackIngestStore {
     fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
         Box::pin(async move {
-            Ok(crate::sync::lock(&self.ingests)
+            Ok(restream_sync::lock::lock(&self.ingests)
                 .iter()
                 .find(|ingest| ingest.id == id)
                 .cloned())
@@ -91,7 +91,7 @@ impl IngestLookup for RenameRollbackIngestStore {
 
     fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
         Box::pin(async move {
-            Ok(crate::sync::lock(&self.ingests)
+            Ok(restream_sync::lock::lock(&self.ingests)
                 .iter()
                 .find(|ingest| ingest.stream_key == stream_key)
                 .cloned())
@@ -151,7 +151,7 @@ impl IngestWriter for RenameRollbackIngestStore {
             if id == self.fail_id && filename == self.fail_filename {
                 return Err(IngestWriteError::new("injected update failure"));
             }
-            let mut ingests = crate::sync::lock(&self.ingests);
+            let mut ingests = restream_sync::lock::lock(&self.ingests);
             let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
                 return Ok(None);
             };
@@ -174,7 +174,7 @@ impl IngestWriter for RenameRollbackIngestStore {
             if id == self.fail_id && filename == self.fail_filename {
                 return Err(IngestWriteError::new("injected update failure"));
             }
-            let mut ingests = crate::sync::lock(&self.ingests);
+            let mut ingests = restream_sync::lock::lock(&self.ingests);
             let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
                 return Ok(None);
             };
@@ -501,7 +501,7 @@ impl ConcurrentWriteIngestStore {
     }
 
     fn snapshot(&self) -> Vec<Ingest> {
-        crate::sync::lock(&self.ingests).clone()
+        restream_sync::lock::lock(&self.ingests).clone()
     }
 }
 
@@ -533,7 +533,7 @@ impl IngestLookup for ConcurrentWriteIngestStore {
                 .into_iter()
                 .filter(|ingest| ingest.filename == filename)
                 .collect::<Vec<_>>();
-            let mut ingests = crate::sync::lock(&self.ingests);
+            let mut ingests = restream_sync::lock::lock(&self.ingests);
             for ingest in ingests.iter_mut() {
                 ingest.stream_key = self.concurrent_stream_key.clone();
             }
@@ -578,7 +578,7 @@ impl IngestWriter for ConcurrentWriteIngestStore {
         target_gop_seconds: u32,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
-            let mut ingests = crate::sync::lock(&self.ingests);
+            let mut ingests = restream_sync::lock::lock(&self.ingests);
             let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
                 return Ok(None);
             };
@@ -598,7 +598,7 @@ impl IngestWriter for ConcurrentWriteIngestStore {
         filename: &'a str,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
-            let mut ingests = crate::sync::lock(&self.ingests);
+            let mut ingests = restream_sync::lock::lock(&self.ingests);
             let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
                 return Ok(None);
             };

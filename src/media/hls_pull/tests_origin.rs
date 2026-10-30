@@ -57,39 +57,40 @@ impl Origin {
     }
 
     pub(super) fn serve(&self, path: &str, body: impl Into<Vec<u8>>) {
-        crate::sync::lock(&self.routes).insert(path.to_string(), body.into());
+        restream_sync::lock::lock(&self.routes).insert(path.to_string(), body.into());
     }
 
     /// Answer 404 for `path` from now on, as an origin does when a signed URL
     /// expires.
     pub(super) fn unserve(&self, path: &str) {
-        crate::sync::lock(&self.routes).remove(path);
+        restream_sync::lock::lock(&self.routes).remove(path);
     }
 
     /// Serve `path_and_query` exactly, taking precedence over [`Self::serve`]:
     /// `?sig=1` and `?sig=2` can answer differently.
     pub(super) fn serve_exact(&self, path_and_query: &str, body: impl Into<Vec<u8>>) {
-        crate::sync::lock(&self.exact_routes).insert(path_and_query.to_string(), body.into());
+        restream_sync::lock::lock(&self.exact_routes)
+            .insert(path_and_query.to_string(), body.into());
     }
 
     pub(super) fn unserve_exact(&self, path_and_query: &str) {
-        crate::sync::lock(&self.exact_routes).remove(path_and_query);
+        restream_sync::lock::lock(&self.exact_routes).remove(path_and_query);
     }
 
     /// Answer 302 with `location` for `path`.
     pub(super) fn redirect(&self, path: &str, location: &str) {
-        crate::sync::lock(&self.redirects).insert(path.to_string(), location.to_string());
+        restream_sync::lock::lock(&self.redirects).insert(path.to_string(), location.to_string());
     }
 
     pub(super) fn count(&self, path: &str) -> usize {
-        crate::sync::lock(&self.requests)
+        restream_sync::lock::lock(&self.requests)
             .iter()
             .filter(|request| request.contains(path))
             .count()
     }
 
     fn set_cookie(&self, value: &str) {
-        *crate::sync::lock(&self.set_cookie) = Some(value.to_string());
+        *restream_sync::lock::lock(&self.set_cookie) = Some(value.to_string());
     }
 
     pub(super) async fn spawn(&self) -> String {
@@ -113,26 +114,29 @@ async fn origin(
         .path_and_query()
         .map(|value| value.as_str().to_string())
         .unwrap_or_else(|| path.clone());
-    crate::sync::lock(&origin.requests).push(path_and_query.clone());
+    restream_sync::lock::lock(&origin.requests).push(path_and_query.clone());
     if let Some(cookie) = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
     {
-        crate::sync::lock(&origin.cookies).push(cookie.to_string());
+        restream_sync::lock::lock(&origin.cookies).push(cookie.to_string());
     }
     if let Some(auth) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
     {
-        crate::sync::lock(&origin.authorization).push(auth.to_string());
+        restream_sync::lock::lock(&origin.authorization).push(auth.to_string());
     }
     if let Some(key) = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
     {
-        crate::sync::lock(&origin.api_keys).push(key.to_string());
+        restream_sync::lock::lock(&origin.api_keys).push(key.to_string());
     }
-    if let Some(location) = crate::sync::lock(&origin.redirects).get(&path).cloned() {
+    if let Some(location) = restream_sync::lock::lock(&origin.redirects)
+        .get(&path)
+        .cloned()
+    {
         let mut response = StatusCode::FOUND.into_response();
         response.headers_mut().insert(
             header::LOCATION,
@@ -153,10 +157,14 @@ async fn origin(
         );
         return response;
     }
-    let body = crate::sync::lock(&origin.exact_routes)
+    let body = restream_sync::lock::lock(&origin.exact_routes)
         .get(&path_and_query)
         .cloned()
-        .or_else(|| crate::sync::lock(&origin.routes).get(&path).cloned());
+        .or_else(|| {
+            restream_sync::lock::lock(&origin.routes)
+                .get(&path)
+                .cloned()
+        });
     match body {
         Some(body) => {
             let content_type = if path.ends_with(".m3u8") {
@@ -169,7 +177,7 @@ async fn origin(
                 .headers_mut()
                 .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
             if path.ends_with(".m3u8")
-                && let Some(cookie) = crate::sync::lock(&origin.set_cookie).clone()
+                && let Some(cookie) = restream_sync::lock::lock(&origin.set_cookie).clone()
             {
                 response
                     .headers_mut()
@@ -273,7 +281,7 @@ pub(super) struct CapturedMessages(Arc<Mutex<Vec<String>>>);
 
 impl CapturedMessages {
     pub(super) fn matching(&self, needle: &str) -> Vec<String> {
-        crate::sync::lock(&self.0)
+        restream_sync::lock::lock(&self.0)
             .iter()
             .filter(|message| message.contains(needle))
             .cloned()
@@ -299,7 +307,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedMessages {
         }
         let mut fields = Fields(String::new());
         event.record(&mut fields);
-        crate::sync::lock(&self.0).push(fields.0);
+        restream_sync::lock::lock(&self.0).push(fields.0);
     }
 }
 
@@ -321,7 +329,7 @@ async fn a_cookie_string_is_sent_as_the_one_cookie_header() {
     let task = spawn(engine.clone(), ingest, identity(), pull_source, limits());
 
     wait_for_request(&origin, "/live/seg0.ts").await;
-    let cookies = crate::sync::lock(&origin.cookies).clone();
+    let cookies = restream_sync::lock::lock(&origin.cookies).clone();
     assert!(
         cookies
             .iter()
@@ -725,7 +733,7 @@ async fn bearer_auth_and_playlist_cookies_travel_with_every_request() {
     let task = spawn(engine.clone(), ingest, identity(), pull_source, limits());
 
     wait_for_request(&origin, "/live/seg0.ts").await;
-    let authorization = crate::sync::lock(&origin.authorization).clone();
+    let authorization = restream_sync::lock::lock(&origin.authorization).clone();
     assert!(
         authorization
             .iter()
@@ -736,7 +744,7 @@ async fn bearer_auth_and_playlist_cookies_travel_with_every_request() {
         authorization.len() >= 2,
         "the playlist and segment requests carry it"
     );
-    let cookies = crate::sync::lock(&origin.cookies).clone();
+    let cookies = restream_sync::lock::lock(&origin.cookies).clone();
     assert!(
         cookies.iter().any(|cookie| cookie.contains("sid=abc")),
         "the playlist's cookie is presented with its segment: {cookies:?}"
@@ -806,7 +814,7 @@ async fn a_finished_pull_reports_why_it_stopped() {
     .await
     .expect("the ended playlist finishes the task");
     assert_eq!(task.end(), Some(PullEnd::Ended));
-    assert_eq!(*crate::sync::lock(&end_state), Some(PullEnd::Ended));
+    assert_eq!(*restream_sync::lock::lock(&end_state), Some(PullEnd::Ended));
     engine.cancel_pipeline_input(INPUT_ID).await;
 
     // A source that can never be pulled ends `Fatal`: the source may

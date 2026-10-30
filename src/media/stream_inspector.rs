@@ -539,12 +539,12 @@ impl StreamInspector {
 
     /// The pipelines to read from now on.
     pub fn watch(&self, rings: Vec<Watched>) {
-        *crate::sync::lock(&self.shared.rings) = rings;
+        *restream_sync::lock::lock(&self.shared.rings) = rings;
     }
 
     /// A pipeline's latest inspection.
     pub fn inspection(&self, pipeline_id: &str) -> Option<StreamInspection> {
-        crate::sync::lock(&self.shared.inspections)
+        restream_sync::lock::lock(&self.shared.inspections)
             .get(pipeline_id)
             .cloned()
     }
@@ -568,7 +568,7 @@ fn run(shared: &Shared) {
         if shared.stop.load(Ordering::Acquire) {
             return;
         }
-        let rings = crate::sync::lock(&shared.rings).clone();
+        let rings = restream_sync::lock::lock(&shared.rings).clone();
         let now_ms = crate::media::engine::MediaEngine::now_epoch_ms();
         let mut found = HashMap::with_capacity(rings.len());
         for Watched {
@@ -600,7 +600,7 @@ fn run(shared: &Shared) {
             found.insert(pipeline_id, cursor.timeline.inspect(now_ms));
         }
         cursors.retain(|pipeline_id, _| found.contains_key(pipeline_id));
-        *crate::sync::lock(&shared.inspections) = found;
+        *restream_sync::lock::lock(&shared.inspections) = found;
     }
 }
 
