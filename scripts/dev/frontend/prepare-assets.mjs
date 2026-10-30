@@ -6,23 +6,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
+// public/ name -> source under web/.
+const assets = {
+    'index.html': 'pages/index.html',
+    'login.html': 'pages/login.html',
+    'base-path.js': 'assets/base-path.js',
+    'login.js': 'assets/login.js',
+    'sw.js': 'assets/sw.js',
+    'logo.png': 'assets/logo.png',
+};
+
 const publicDir = path.join(repoRoot, 'public');
 await mkdir(publicDir, { recursive: true });
-await Promise.all([
-    rm(path.join(publicDir, 'index.html'), { force: true }),
-    rm(path.join(publicDir, 'login.html'), { force: true }),
-    rm(path.join(publicDir, 'base-path.js'), { force: true }),
-    rm(path.join(publicDir, 'login.js'), { force: true }),
-    rm(path.join(publicDir, 'sw.js'), { force: true }),
-    rm(path.join(publicDir, 'logo.png'), { force: true }),
-    rm(path.join(publicDir, 'output.css'), { force: true }),
-    rm(path.join(publicDir, 'js'), { recursive: true, force: true }),
-]);
-await cp(path.join(repoRoot, 'web', 'pages', 'index.html'), path.join(publicDir, 'index.html'));
-await cp(path.join(repoRoot, 'web', 'pages', 'login.html'), path.join(publicDir, 'login.html'));
-await cp(path.join(repoRoot, 'web', 'assets', 'base-path.js'), path.join(publicDir, 'base-path.js'));
-await cp(path.join(repoRoot, 'web', 'assets', 'login.js'), path.join(publicDir, 'login.js'));
-await cp(path.join(repoRoot, 'web', 'assets', 'sw.js'), path.join(publicDir, 'sw.js'));
-await cp(path.join(repoRoot, 'web', 'assets', 'logo.png'), path.join(publicDir, 'logo.png'));
+// output.css and js/ are rebuilt by Tailwind and Vite after this step.
+await Promise.all(
+    [...Object.keys(assets), 'output.css', 'js'].map((name) =>
+        rm(path.join(publicDir, name), { recursive: true, force: true }),
+    ),
+);
+await Promise.all(
+    Object.entries(assets).map(([name, source]) =>
+        cp(path.join(repoRoot, 'web', source), path.join(publicDir, name)),
+    ),
+);
 
 console.log('Synced pages and assets into public/');

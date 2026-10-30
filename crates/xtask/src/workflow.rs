@@ -110,7 +110,7 @@ pub(crate) fn interrupted() -> Option<i32> {
     }
 }
 
-fn interruption(signal: i32) -> Error {
+pub(crate) fn interruption(signal: i32) -> Error {
     Error::exit(
         (128 + signal).clamp(1, 255) as u8,
         format!("interrupted by signal {signal}"),
@@ -245,6 +245,11 @@ pub(crate) fn checked(command: &mut Command) -> WorkflowResult {
     // Never log Command's Debug form: it includes environment values, which
     // may contain credentials. stdout can be a machine-readable result.
     eprintln!("==> {}", command.get_program().to_string_lossy());
+    foreground(command)
+}
+
+/// `checked` without its `==>` line, for callers that announce the command.
+pub(crate) fn foreground(command: &mut Command) -> WorkflowResult {
     if let Some((stdout, stderr)) = crate::captured_output()? {
         command.stdout(stdout).stderr(stderr);
     }

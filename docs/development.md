@@ -64,8 +64,9 @@ cargo fmt --all
 - Run the test you are writing, not the full suite. GitHub PR CI runs the
   correctness gates. [AGENTS.md](../AGENTS.md#inner-loop) maps each kind of
   change to its CI job.
-- The pre-commit hook runs `cargo fmt --all --check`,
-  `cargo xtask docs-audit` and `cargo xtask source-audit`.
+- The pre-commit hook runs `cargo xtask precommit`: `cargo fmt --all --check`,
+  `docs-audit` and `source-audit`. Each CI source gate is one
+  `cargo xtask <group>`; `cargo xtask help` lists the groups and their steps.
 - Use `--profile bench` instead of `--release` for local builds. Harness
   modes need `cargo xtask build-bench`, which fills `target/bench/`.
 - Benchmarks are declared in `Cargo.toml` and live in `benches/`. A measured

@@ -3,10 +3,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export function resolveFrontendModulesDir() {
-  const modulesDir =
-    process.env.FRONTEND_MODULES_DIR || process.env.FRONTEND_JS_DIR;
+  const modulesDir = process.env.FRONTEND_MODULES_DIR;
 
-  assert.ok(modulesDir, "FRONTEND_MODULES_DIR or FRONTEND_JS_DIR must be set");
+  assert.ok(modulesDir, "FRONTEND_MODULES_DIR must be set");
 
   return modulesDir;
 }

@@ -69,7 +69,7 @@ fn local_due_diligence(args: &[&str]) -> WorkflowResult {
     let bundle = format!("{dist}/restream-{version}-{arch}.tar.gz");
     let archive = format!("{dist}/restream-{version}-oci.tar.gz");
     let sbom = format!("{dist}/restream-{version}-{arch}.sbom.cdx.json");
-    checked(Command::new("cargo").args(["fmt", "--all", "--check"]))?;
+    checked(support::xtask()?.arg("fmt"))?;
     crate::release::prepare_build_tree()?;
     checked(Command::new("npm").args(["run", "test:frontend"]))?;
     for gate in ["api-contract", "test-hygiene", "fixture-discipline"] {

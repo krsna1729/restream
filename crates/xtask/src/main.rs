@@ -1,8 +1,8 @@
-//! Repository checks: `cargo xtask <command>`.
+//! Repository checks and workflows: `cargo xtask <command>`.
 //!
-//! Each command is a fixed sequence of steps. A step either runs a program in
-//! the repository root or runs a scan written in Rust. The first failing step
-//! stops the command with a non-zero exit code.
+//! The CI gates are a table in `checks`: a group runs every step, prints a
+//! summary and fails if any step failed. Workflows are fixed sequences of
+//! steps; their first failing step stops the command.
 
 use std::cell::RefCell;
 use std::env;
@@ -14,6 +14,7 @@ use std::sync::{LazyLock, OnceLock};
 mod api_drift;
 mod bins;
 mod capacity;
+mod checks;
 #[cfg(test)]
 mod ci_scope;
 mod concurrency;
@@ -65,14 +66,15 @@ fn main() -> ExitCode {
         eprintln!("xtask: cannot enter {}: {error}", root.display());
         return ExitCode::FAILURE;
     }
-    let result = match args[..] {
+    exit(command(&args))
+}
+
+fn command(args: &[&str]) -> workflow::WorkflowResult {
+    match *args {
         ["help" | "-h" | "--help"] => {
-            println!("{USAGE}");
+            println!("{}", usage());
             Ok(())
         }
-        ["source-audit"] => source_audit::run().map_err(Into::into),
-        ["fixture-discipline"] => scan::fixture_discipline().map_err(Into::into),
-        ["test-hygiene"] => scan::test_hygiene().map_err(Into::into),
         ["api-contract"] => api_contract().map_err(Into::into),
         ["concurrency", "fast"] => concurrency::fast().map_err(Into::into),
         ["concurrency", "contract"] => concurrency::contract().map_err(Into::into),
@@ -93,14 +95,10 @@ fn main() -> ExitCode {
         ["fetch", ref rest @ ..] => fetch::run(rest),
         ["fixtures", ref rest @ ..] => fixtures::run(rest),
         ["deploy", ref rest @ ..] => deployment::run(rest),
-        ["fuzz", ref rest @ ..] => fuzz::run(rest),
-        ["docs-audit", ref rest @ ..] => docs_audit::run(rest),
-        ["frontend-style", ref rest @ ..] => frontend_style::run(rest),
         ["api-drift", ref rest @ ..] => api_drift::run(rest),
         ["require-test-filters", ref rest @ ..] => test_filters::run(rest),
-        _ => Err(workflow::Error::usage(USAGE)),
-    };
-    exit(result)
+        _ => checks::run(args).unwrap_or_else(|| Err(workflow::Error::usage(usage()))),
+    }
 }
 
 /// Maps a workflow outcome to the process status (usage 2, child status or
@@ -115,12 +113,13 @@ fn exit(result: workflow::WorkflowResult) -> ExitCode {
     }
 }
 
+fn usage() -> String {
+    format!("{USAGE}\n\n{}", checks::help())
+}
+
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
-  source-audit          layering, file-size, env-var and guardrail audit
-  fixture-discipline    no inline media generators in test-facing code
-  test-hygiene          full test run whose passing log stays quiet
   api-contract          API drift guard + api-smoke harness run
   concurrency fast      every loom model under --cfg loom
   concurrency contract  live fault/recovery harness modes + process cleanup guard
@@ -148,8 +147,7 @@ workflows (each prints its own usage):
   fetch mediamtx|moq-dev|moxygen
   fixtures generate-bench|generate-msr-1080p [args]
   deploy install-systemd-service [--now]
-  fuzz seed-corpus
-  docs-audit | frontend-style | api-drift
+  api-drift
   require-test-filters <cargo test ...> -- <filter>...
 
 argv0 aliases: restream-container-shim, restream-cgroup-wrap";
@@ -321,5 +319,14 @@ mod tests {
         assert!(failed.is_err());
         assert_eq!(text, "out\nerr\n");
         assert!(CAPTURE.with(|capture| capture.borrow().is_none()));
+    }
+
+    #[test]
+    fn an_unknown_command_is_a_usage_error_listing_the_check_groups() {
+        for args in [&["nope"][..], &["fuzz", "seed-corpus"], &["lint", "extra"]] {
+            let error = command(args).unwrap_err();
+            assert_eq!(error.code, 2, "{args:?}");
+            assert!(error.to_string().contains("precommit"), "{args:?}");
+        }
     }
 }

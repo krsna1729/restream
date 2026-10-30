@@ -207,10 +207,11 @@ fn noisy_lines(log: &str) -> Vec<(usize, &str)> {
 /// Runs `command` with stdout and stderr on one pipe, echoing each line as it
 /// arrives to `echo` (like `2>&1 | tee`), and returns the whole log and the
 /// exit status.
-fn tee_combined_output(
+pub(crate) fn tee_combined_output(
     command: &mut Command,
     echo: &mut dyn Write,
 ) -> Result<(String, bool), String> {
+    let program = command.get_program().to_string_lossy().into_owned();
     let (reader, writer) =
         std::io::pipe().map_err(|error| format!("cannot create pipe: {error}"))?;
     let writer_err = writer
@@ -220,14 +221,14 @@ fn tee_combined_output(
         .stdout(writer)
         .stderr(writer_err)
         .spawn()
-        .map_err(|error| format!("cannot start cargo test: {error}"))?;
+        .map_err(|error| format!("cannot start {program}: {error}"))?;
     // The Command still owns both write ends; drop them so the read loop sees
     // end-of-file once the child exits.
     drop(std::mem::replace(command, Command::new("true")));
 
     let mut log = String::new();
     for line in BufReader::new(reader).lines() {
-        let line = line.map_err(|error| format!("cannot read test output: {error}"))?;
+        let line = line.map_err(|error| format!("cannot read {program} output: {error}"))?;
         // Best effort: a closed terminal must not fail the check.
         let _ = writeln!(echo, "{line}");
         log.push_str(&line);
@@ -235,7 +236,7 @@ fn tee_combined_output(
     }
     let status = child
         .wait()
-        .map_err(|error| format!("cannot wait for cargo test: {error}"))?;
+        .map_err(|error| format!("cannot wait for {program}: {error}"))?;
     Ok((log, status.success()))
 }
 

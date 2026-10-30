@@ -28,12 +28,12 @@ then CI job.
 
 ```mermaid
 flowchart LR
-    rust["Any Rust change"] --> fmt["cargo fmt / clippy"] --> jlint["format, lint"]
+    rust["Any Rust change"] --> fmt["cargo xtask format / lint"] --> jlint["format, lint"]
     unit["Logic, fixtures"] --> hyg["cargo xtask test-hygiene"] --> jtest["test, coverage"]
     api["API routes"] --> apic["cargo xtask api-contract"] --> japi["api-contract"]
     conc["Waits, registries, teardown"] --> cf["cargo xtask concurrency fast"] --> jcf["concurrency-fast"]
-    parser["Untrusted-byte parser"] --> fz["cargo +nightly fuzz run"] --> jfz["fuzz-smoke"]
-    unsafe["unsafe, FFI, egress primitive"] --> mk["miri / asan / cargo kani"] --> jmk["miri, asan, kani"]
+    parser["Untrusted-byte parser"] --> fz["cargo xtask fuzz"] --> jfz["fuzz-smoke"]
+    unsafe["unsafe, FFI, egress primitive"] --> mk["cargo xtask miri / asan / kani"] --> jmk["miri, asan, kani"]
     docs["Markdown"] --> dc["cargo xtask docs-audit"] --> jarch["architecture-guardrails"]
 ```
 
@@ -49,22 +49,28 @@ flowchart LR
     life["Live lifecycle faults"] --> cc["cargo xtask concurrency contract"] --> jcc["concurrency-contract"]
 ```
 
+Each source-level job runs one `cargo xtask <group>`. The groups and their
+steps are a table in `crates/xtask/src/checks.rs`; `cargo xtask help` lists
+them. A group runs every step, even after one fails, then prints each step's
+result and time and fails if any step failed. Each step is also a command of
+its own, for example `cargo xtask clippy-lib` or `cargo xtask docs-audit`.
+
 | CI job (name) | Runs | When |
 |---|---|---|
-| `format` (Source formatting and TS types) | `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit` | every run |
-| `lint` (Rust lint) | `cargo clippy` for the lib, all targets, and the MCP features; the MCP feature `cargo check` matrix; agent tests with and without the agent plane | every run |
-| `architecture-guardrails` (Source architecture audit) | `cargo xtask source-audit`, `cargo xtask docs-audit` | every run |
-| `test` (Rust unit hygiene and fixtures) | `cargo xtask test-hygiene` (runs `cargo test --workspace`, then scans for noise), `cargo xtask fixture-discipline` | every run |
+| `format` (Source formatting and TS types) | `cargo xtask format`: `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit` | every run |
+| `lint` (Rust lint) | `cargo xtask lint`: `cargo clippy` for the lib, all targets, and the MCP features; the MCP feature `cargo check` matrix; agent tests with and without the agent plane | every run |
+| `architecture-guardrails` (Source architecture audit) | `cargo xtask architecture`: `source-audit`, `docs-audit`, `frontend-style` | every run |
+| `test` (Rust unit hygiene and fixtures) | `cargo xtask unit`: `test-hygiene` (runs `cargo test --workspace`, then scans for noise), `fixture-discipline` | every run |
 | `coverage` (Workspace coverage report) | `cargo llvm-cov --workspace`; uploads to Codecov; never fails on a percentage | after `test` |
 | `api-contract` (API contract smoke) | `cargo xtask api-contract` | every run |
 | `frontend` (Frontend unit) | `npm run test:frontend:coverage` | every run |
 | `frontend-e2e` (Frontend app E2E) | `npm run test:e2e` in Chromium | after `frontend` |
 | `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast` (every loom model) | every run, in parallel |
 | `concurrency-contract` (Concurrency live lifecycle proof) | `cargo xtask concurrency contract` with `--no-netns` | `master` only |
-| `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
-| `miri` (Miri) | selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
-| `kani` (Kani) | `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
-| `asan` (AddressSanitizer) | selected root FFI/syscall and MPEG-TS allocation tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
+| `fuzz-smoke` (Parser fuzz smoke) | `cargo xtask fuzz`: seeds the corpus, then every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, the xtask fuzz step or check table, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
+| `miri` (Miri) | `cargo xtask miri`: selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
+| `kani` (Kani) | `cargo xtask kani`: `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
+| `asan` (AddressSanitizer) | `cargo xtask asan`: selected root FFI/syscall and MPEG-TS allocation tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
 | `integration-build` (Transport live-harness build) | `cargo xtask build-bench`; uploads `restream` and `test_harness` | after `test` |
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
@@ -159,7 +165,7 @@ vendored moq-net's wire codecs are reached through its `fuzz` feature
 | `moq_wire` | MoQ session bytes: a draft and message-type selector, then the body | vendored moq-net IETF (drafts 14-22) and moq-lite control/object codecs, moq-lite announce-stream prefix compression (decoded value must re-encode to itself) |
 
 ```sh
-cargo xtask fuzz seed-corpus   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
+cargo xtask fuzz-seed-corpus   # seeds ts_demux, http_response, hls_playlist, fmp4_ingest, moq_ingest, moq_wire
 ```
 
 `moq_wire` seeds come from `moq_net::fuzz::seeds()`, written by the small
@@ -169,9 +175,9 @@ cargo xtask fuzz seed-corpus   # seeds ts_demux, http_response, hls_playlist, fm
 cargo +nightly fuzz run <target> -- -max_total_time=60
 ```
 
-CI runs every target from `cargo +nightly fuzz list` for 30 s
-(`-timeout=5`). A crash becomes a regression unit test next to the parser
-before the fix lands.
+`cargo xtask fuzz` seeds the corpus, then runs every target from
+`cargo +nightly fuzz list` for 30 s (`-timeout=5`), as CI does. A crash
+becomes a regression unit test next to the parser before the fix lands.
 
 ### Miri and AddressSanitizer
 
@@ -184,24 +190,25 @@ touch raw syscall and FFI memory.
 | `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
 | `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts_allocation_tests`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
 
-The named root filters, core bit-reader filter and each extracted sanitizer
-suite first pass `cargo xtask require-test-filters`. It fails when a selection
-contains no test. The root MPEG-TS filter retains the allocation and ordered
-packet-output guard; the complete mux/demux behavior suite runs separately
-in `restream-mpegts`, alongside the `restream-sync` unit suite.
+`cargo xtask miri` and `cargo xtask asan` set the job's filters and
+environment on each command; the sanitizer flags never reach the xtask
+build. The named root filters, core bit-reader filter and each extracted
+sanitizer suite first pass `cargo xtask require-test-filters`. It fails when
+a selection contains no test. The root MPEG-TS filter retains the allocation
+and ordered packet-output guard; the complete mux/demux behavior suite runs
+separately in `restream-mpegts`, alongside the `restream-sync` unit suite.
 
 ```sh
-MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
-  cargo +nightly miri test -p restream --lib -- media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
-MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 \
-  cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
+cargo xtask miri                # every Miri step
+cargo xtask miri-core           # one step: the restream-core bit reader
+cargo xtask asan                # every ASan step
 RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=0 \
   cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream-sync --lib -- byte_queue::tests
 ```
 
 `ring_buffer` and `egress::journal` are not in Miri: they are too slow there
 and have no project `unsafe`. When a module gains `unsafe` or an FFI call,
-add it to the matching job.
+add it to the matching filter list in `crates/xtask/src/checks.rs`.
 
 ### Kani proofs
 
@@ -223,7 +230,7 @@ symbolic. Unit tests cover `pop` skipping a stale entry. `kani::cover!`
 statements show each proof reaches its interesting branches; the job fails
 if one is unsatisfiable. Kani builds abort on panic, so the `panic = "abort"`
 guard in `src/lib.rs` skips `cfg(kani)`. A new proof raises `KANI_PROOFS` in
-the job.
+`crates/xtask/src/checks.rs`.
 
 ```sh
 cargo install --locked kani-verifier --version 0.68.0 && cargo kani setup

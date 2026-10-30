@@ -26,6 +26,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
+- [Q-106 two intermittent tests](#q-106-testing-sonnet-two-tests-fail-intermittently-under-coverage)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -241,3 +242,12 @@ the [assurance roadmap](assurance-roadmap.md).
   `-a53cc` fix) still keeps every cue; the transport harness and the HEVC
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
+
+### Q-106 [testing] [sonnet] Two tests fail intermittently under coverage
+- Goal: find why `the_projector_rebuilds_only_while_a_client_listens`
+  (`src/application/runtime_state/tests.rs`) and
+  `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
+  (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job
+  (October 2026) and passed on rerun; remove the timing dependence.
+- Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
+  loaded host, with no added sleeps or widened timeouts.
