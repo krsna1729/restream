@@ -5,11 +5,11 @@ use std::sync::OnceLock;
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
-use crate::media::egress::backends::hls_put_shard::HLS_PUT_TLS_COUNTERS;
-use crate::media::egress::backends::rtmp::RTMPS_TLS_COUNTERS;
-use crate::media::egress::tls::TlsTelemetrySnapshot;
-use crate::media::uring_capabilities::UringCapabilities;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
+use restream_engine::egress::backends::hls_put_shard::HLS_PUT_TLS_COUNTERS;
+use restream_engine::egress::backends::rtmp::RTMPS_TLS_COUNTERS;
+use restream_engine::egress::tls::TlsTelemetrySnapshot;
+use restream_engine::uring_capabilities::UringCapabilities;
 
 use super::configured_media_root;
 
@@ -149,7 +149,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "engine": engine,
             "capacity": capacity,
             "hostCapacity": host_capacity,
-            "mediaExecutor": crate::media::executor::snapshot(false),
+            "mediaExecutor": restream_engine::executor::snapshot(false),
             "egressShards": egress_shards,
             "ioUring": io_uring,
             "rtmps": tls_counters_json(&rtmps),
@@ -181,7 +181,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "engine": engine,
             "capacity": capacity,
             "hostCapacity": host_capacity,
-            "mediaExecutor": crate::media::executor::snapshot(true),
+            "mediaExecutor": restream_engine::executor::snapshot(true),
             "egressShards": egress_shards,
             "ioUring": io_uring,
             "rtmps": tls_counters_json(&rtmps),
@@ -308,7 +308,7 @@ fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Val
     use std::sync::atomic::Ordering::Relaxed;
     let engine = &state.engine;
     let control = state.config.tokio_runtime.worker_threads;
-    let media = crate::media::executor::configured_workers();
+    let media = restream_engine::executor::configured_workers();
     let rtmp = engine.runtime.rtmp_listener_stats.owners.load(Relaxed) as usize;
     let srt = engine
         .runtime
@@ -317,7 +317,7 @@ fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Val
         .owners
         .load(Relaxed) as usize;
     serde_json::json!({
-        "cpus": crate::media::host_capacity::HostCapacity::get().cpus,
+        "cpus": restream_engine::host_capacity::HostCapacity::get().cpus,
         "controlWorkers": control,
         "mediaWorkers": media,
         "rtmpIngressOwners": rtmp,

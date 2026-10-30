@@ -18,11 +18,11 @@ use crate::application::srt_ingest::{
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
-use crate::media::security::IngestSecurityService;
-use crate::media::srt::SrtIngestPolicyStore;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
+use restream_engine::security::IngestSecurityService;
+use restream_engine::srt::SrtIngestPolicyStore;
 
 use super::error::{ServiceError, ServiceResult};
 use super::pipeline_service::PipelineService;
@@ -202,10 +202,10 @@ mod tests {
     };
     use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
     use crate::infrastructure::service_wiring::SqliteServiceFactory;
-    use crate::media::security::IngestSecurityService;
-    use crate::media::srt::SrtIngestPolicyStore;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use restream_domain::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
+    use restream_engine::security::IngestSecurityService;
+    use restream_engine::srt::SrtIngestPolicyStore;
 
     #[derive(Default)]
     struct FakeSettingsStore {

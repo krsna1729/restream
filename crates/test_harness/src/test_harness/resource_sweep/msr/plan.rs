@@ -224,11 +224,11 @@ impl MsrRunProfile {
             ));
         }
         match self {
-            Self::Canonical => restream::media::test_fixtures::checked_in_fixture(
+            Self::Canonical => restream_engine::test_fixtures::checked_in_fixture(
                 "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
             ),
             Self::SignalCalibration => {
-                restream::media::test_fixtures::av_marker_transport_fixture("h264", true)
+                restream_engine::test_fixtures::av_marker_transport_fixture("h264", true)
             }
         }
     }

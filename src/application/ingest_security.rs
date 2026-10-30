@@ -2,7 +2,7 @@
 //! This file owns the metadata key and JSON round-tripping between the
 //! `MetaStore` port and the domain config; validation semantics live in
 //! `restream_domain::domain::ingest_security`, while runtime enforcement lives in
-//! `crate::media::security`.
+//! `restream_engine::security`.
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use restream_domain::domain::ingest_security::IngestSecurityConfig;

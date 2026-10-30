@@ -6,9 +6,9 @@ use std::path::PathBuf;
 mod mixed_manifest_loader;
 pub(crate) use mixed_manifest_loader::*;
 
-use restream::media::test_fixtures::AvMarkerBframeMode;
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::output_spec::RtmpOutputMode;
+use restream_engine::test_fixtures::AvMarkerBframeMode;
 
 /// Input transport family for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

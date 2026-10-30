@@ -1,0 +1,118 @@
+//! Media stack — RTMP/SRT ingest, ring-buffer fan-out, muxing, transcoding, HLS, and recording.
+//!
+//! Transcoding and file ingest run as managed `ffmpeg` child processes
+//! ([`external_transcoder`], `external_file_ingest`).
+//!
+//! Live packets flow through [`restream_sync::ring_buffer`] (lock-free SPMC). MediaMTX is not a
+//! runtime dependency; it appears only as an optional live-harness peer.
+//! Supports H.264, H.265/HEVC, and multi-track audio.
+
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+// Raw std lock access is disallowed in shipped code (clippy.toml, `restream_sync::lock`);
+// tests may poison and inspect locks directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
+// Per-entity fault domains (`panic_boundary`) contain a panic by unwinding.
+// With `panic = "abort"` every contained panic would end the process, so
+// that configuration must not build. Kani builds abort by design and run no
+// boundary: a panic in a proof is a failed property.
+#[cfg(all(panic = "abort", not(kani)))]
+compile_error!(
+    "restream requires panic = \"unwind\": per-connection, per-peer and per-output \
+     panic boundaries (crates/restream-engine/src/panic_boundary.rs) depend on it"
+);
+
+pub mod audio_router;
+#[forbid(unsafe_code)]
+pub mod codec;
+pub mod config;
+pub mod correlation_id;
+pub mod egress;
+pub mod engine;
+mod engine_egress;
+mod engine_egress_fabric;
+pub mod engine_egress_fabric_diagnostics;
+pub mod engine_hls;
+pub mod engine_hls_egress_fabric;
+mod engine_ingest;
+mod engine_ingest_metadata;
+mod engine_moq_egress_fabric;
+mod engine_pipeline;
+mod engine_pipeline_egress_fabric;
+pub mod engine_registries;
+mod engine_rtmp_egress_fabric;
+mod engine_runtime;
+mod engine_sink_egress_fabric;
+mod engine_snapshots;
+pub mod events;
+pub mod executor;
+pub mod external_file_ingest;
+pub mod external_transcoder;
+pub mod feeder;
+pub mod ffmpeg_binary;
+pub mod ffmpeg_capabilities;
+pub mod file_analysis;
+pub mod hls;
+pub mod poster;
+pub use hls::fmp4 as hls_fmp4;
+pub use hls::upload as hls_upload;
+pub mod hls_ingest;
+pub mod hls_pull;
+pub mod host_capacity;
+pub mod ingest_auth;
+pub mod input_gate;
+pub mod moq;
+#[doc(hidden)]
+pub use moq::bench_entry as moq_bench_entry;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub use moq::fuzz_entry as moq_fuzz_entry;
+#[doc(hidden)]
+pub use moq::subscribe_entry as moq_subscribe_entry;
+#[cfg(test)]
+mod mpegts_allocation_tests;
+pub mod panic_boundary;
+pub mod pipe_metrics;
+pub mod profiles;
+pub mod recirculation;
+pub mod recording;
+pub mod rtmp;
+pub mod secret_display;
+pub mod security;
+pub mod snapshots;
+pub mod srt;
+pub(crate) mod srt_stream_id;
+pub mod stage_lease;
+pub mod stage_lifecycle;
+pub mod stage_metrics;
+pub mod stage_registry_access;
+pub mod stage_runtime;
+pub mod startup_policy;
+pub mod stream_inspector;
+pub mod stream_qa;
+
+pub mod ffmpeg;
+pub mod ingest_publisher;
+pub mod tcp_stats;
+#[cfg(test)]
+pub(crate) mod test_alloc;
+pub mod test_fixtures;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+pub mod timing;
+pub mod ts_chunk_ring;
+pub mod uring_capabilities;
+
+use restream_sync::MEDIA_PULL_BURST_PACKETS;
+
+/// One fixed-size MPEG-TS packet.
+pub const MPEG_TS_PACKET_BYTES: usize = 188;
+
+/// Seven TS packets fit exactly in one 1316-byte SRT payload.
+pub const MPEG_TS_PACKETS_PER_SRT_PAYLOAD: usize = 7;
+
+/// SRT payload size that keeps MPEG-TS frames whole.
+pub const SRT_TS_PAYLOAD_BYTES: usize = MPEG_TS_PACKET_BYTES * MPEG_TS_PACKETS_PER_SRT_PAYLOAD;
+
+/// Reusable MPEG-TS batch capacity aligned to full 1316-byte SRT payloads.
+pub const MEDIA_TS_BATCH_TARGET_BYTES: usize = SRT_TS_PAYLOAD_BYTES * MEDIA_PULL_BURST_PACKETS;

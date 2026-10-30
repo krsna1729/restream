@@ -12,7 +12,7 @@ use super::enhanced::enhanced_rtmp_connect_packet;
 /// Pure, socket-independent RTMP client session state: owns `ClientSession`
 /// (the `rml_rtmp` protocol state machine) and produces outbound packet
 /// bytes without performing any I/O itself. Driven by the fabric's
-/// non-blocking engine (`src/media/egress/backends/rtmp.rs`) from a
+/// non-blocking engine (`crates/restream-engine/src/egress/backends/rtmp.rs`) from a
 /// readiness-polled shard visit.
 pub struct RtmpSessionCore {
     parts: RtmpUrlParts,

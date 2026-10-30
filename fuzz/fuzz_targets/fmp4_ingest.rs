@@ -7,8 +7,8 @@
 #![no_main]
 
 use bytes::Bytes;
-use restream::media::ingest_publisher::SegmentDemux;
-use restream::media::ingest_publisher::fmp4::{Fmp4Demux, boxes};
+use restream_engine::ingest_publisher::SegmentDemux;
+use restream_engine::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 
 const MAX_INIT_BYTES: usize = 4 * 1024 * 1024;
 const CHUNK: usize = 4096;

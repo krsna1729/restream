@@ -37,7 +37,7 @@ because a skill is relevant.
 
 | Touching | Skill |
 |---|---|
-| `src/media/`, `crates/restream-*/src/`, protocol paths, stages, ring buffers, any hot path, thread/runtime placement | [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md) |
+| `crates/restream-engine/src/`, `crates/restream-*/src/`, protocol paths, stages, ring buffers, any hot path, thread/runtime placement | [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md) |
 | `web/ts/`, `web/styles/`, frontend build, API contract | [frontend](docs/agent-guidance/skills/frontend/SKILL.md) |
 | RTMP/SRT/HLS behavior, codecs, live fault recovery | [protocol-test](docs/agent-guidance/skills/protocol-test/SKILL.md) |
 | synchronization, thread hops, cancellation, teardown/recovery | [concurrency-proof](docs/agent-guidance/skills/concurrency-proof/SKILL.md) |
@@ -52,11 +52,11 @@ Claude Code shims are generated locally by `cargo xtask setup-skills`
 ## Repository Map
 
 - Backend: `src/`
-- Media engine and lifecycle: `src/media/`; shared codec, synchronization and protocol utilities: `crates/restream-*/src/`
+- Media engine and lifecycle: `crates/restream-engine/src/`; shared codec, synchronization and protocol utilities: `crates/restream-*/src/`
 - Frontend source: `web/ts/`
 - Generated frontend output: `public/js/`
 - Tests: `test/`
-- Benchmarks: `benches/`
+- Benchmarks: `crates/restream-engine/benches/` (engine), `benches/` (API)
 - Docs: `docs/`
 
 ## Commands
@@ -113,7 +113,7 @@ in on demand, and verify with the narrowest gate first.
 | Markdown documentation | Source architecture audit (`cargo xtask docs-audit`) | — |
 | `web/ts/`, `web/styles/input.css` | Frontend unit, Frontend app E2E | the new test only |
 | RTMP/SRT/HLS protocol behavior | Transport live-harness; master push transport matrix | one harness mode for a new scenario (`test_harness catalog list-modes`) |
-| hot-path code | — | relevant `benches/` suite before and after |
+| hot-path code | — | relevant Criterion suite (`crates/restream-engine/benches/`) before and after |
 
 ## Branches and Build Safety
 
@@ -142,7 +142,7 @@ pgrep -a -x cargo
 
 - Passing test logs should stay quiet: no warnings, panic text, FFmpeg probe chatter, or stale-binary drift.
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
-- Resolve media through `src/media/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`. Prefer checked-in fixtures over inline media generation.
+- Resolve media through `crates/restream-engine/src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`. Prefer checked-in fixtures over inline media generation.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
 - `cargo xtask test-hygiene` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
 - Scale and capacity runs are performance measurement and stay local: `cargo xtask capacity-ramp`, serially, on an idle host.

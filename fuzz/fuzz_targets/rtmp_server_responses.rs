@@ -12,5 +12,5 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
         reads.push(read);
         rest = next;
     }
-    restream::media::rtmp::fuzz_entry::rtmp_server_responses(reads);
+    restream_engine::rtmp::fuzz_entry::rtmp_server_responses(reads);
 });

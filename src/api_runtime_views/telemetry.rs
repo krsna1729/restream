@@ -4,10 +4,10 @@
 //! runtime layer continues to own the underlying counters and registries.
 
 use super::telemetry_projection as api_view_models;
-use crate::media::engine::MediaEngine;
-use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::stage_metrics::StageMetrics;
 use restream_domain::domain::stage::StageKey;
+use restream_engine::engine::MediaEngine;
+use restream_engine::pipe_metrics::PipeMetrics;
+use restream_engine::stage_metrics::StageMetrics;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -256,7 +256,7 @@ pub(super) struct DeliveryInput {
     pub(super) rate: Option<(f64, f64)>,
 }
 
-pub(super) fn delivery_input(egress: &crate::media::engine::ActiveEgress) -> DeliveryInput {
+pub(super) fn delivery_input(egress: &restream_engine::engine::ActiveEgress) -> DeliveryInput {
     let quality = restream_sync::lock::lock(&egress.quality);
     DeliveryInput {
         feed: egress
@@ -317,7 +317,7 @@ pub(super) fn feed_delivery(inputs: impl IntoIterator<Item = DeliveryInput>) -> 
                     .count(),
                 floor: DELIVERY_FLOOR,
                 ratio_min: rated.iter().map(|(_, ratio)| *ratio).reduce(f64::min),
-                jain: crate::media::egress::delivery::jain_index(&rates),
+                jain: restream_engine::egress::delivery::jain_index(&rates),
             }
         })
         .collect()
@@ -387,10 +387,10 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.jain == Some(1.0)));
     }
-    use crate::media::pipe_metrics::PipeMetrics;
-    use crate::media::stage_lifecycle::StagePhase;
-    use crate::media::stage_runtime::StageRuntimeManager;
     use restream_domain::domain::stage::{StageKey, StageKind};
+    use restream_engine::pipe_metrics::PipeMetrics;
+    use restream_engine::stage_lifecycle::StagePhase;
+    use restream_engine::stage_runtime::StageRuntimeManager;
     use restream_sync::RingBuffer;
     use std::sync::Arc;
 

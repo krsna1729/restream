@@ -290,17 +290,17 @@ const MIRI: Tool = Tool {
 };
 // The empty RUSTFLAGS keeps nightly lints from failing the gate without a
 // code change.
-const MIRI_ROOT: Cmd = cargo(&[
+const MIRI_ENGINE: Cmd = cargo(&[
     "+nightly",
     "miri",
     "test",
     "-p",
-    "restream",
+    "restream-engine",
     "--lib",
     "--",
-    "media::egress::tls::ktls::tests::ancillary",
-    "media::egress::leaf_arena",
-    "media::egress::scheduler",
+    "egress::tls::ktls::tests::ancillary",
+    "egress::leaf_arena",
+    "egress::scheduler",
 ])
 .env(&[
     ("MIRIFLAGS", "-Zmiri-disable-isolation"),
@@ -318,12 +318,12 @@ const MIRI_CORE: Cmd = cargo(&[
     "codec::bits::tests",
 ])
 .env(&[("MIRIFLAGS", "-Zmiri-disable-isolation"), ("RUSTFLAGS", "")]);
-static MIRI_ROOT_FILTERS: Step = Step::filters("miri-root-filters", MIRI_ROOT).needs(MIRI);
-static MIRI_ROOT_RUN: Step = Step::command("miri-root", MIRI_ROOT).needs(MIRI);
+static MIRI_ENGINE_FILTERS: Step = Step::filters("miri-engine-filters", MIRI_ENGINE).needs(MIRI);
+static MIRI_ENGINE_RUN: Step = Step::command("miri-engine", MIRI_ENGINE).needs(MIRI);
 static MIRI_CORE_FILTERS: Step = Step::filters("miri-core-filters", MIRI_CORE).needs(MIRI);
 static MIRI_CORE_RUN: Step = Step::command("miri-core", MIRI_CORE).needs(MIRI);
 
-/// Every proof `cargo kani --lib` finds; a proof that stops compiling (a cfg
+/// Every proof `cargo kani -p restream-engine --lib` finds; a proof that stops compiling (a cfg
 /// typo, a moved module) must fail the gate, not vanish.
 const KANI_PROOFS: usize = 7;
 static KANI: Step = Step::builtin("kani-proofs", kani).needs(Tool {
@@ -354,15 +354,27 @@ const ASAN_ROOT: Cmd = cargo(&[
     "restream",
     "--lib",
     "--",
-    "media::egress::tls",
-    "media::egress::backends::compio_tcp",
-    "media::external_transcoder",
-    "media::timing",
-    "media::rtmp::listener",
-    "media::rtmp::tests",
-    "media::tcp_stats",
     "runtime_info",
-    "media::mpegts_allocation_tests",
+])
+.env(ASAN_ENV);
+const ASAN_ENGINE: Cmd = cargo(&[
+    "+nightly",
+    "test",
+    "-Zbuild-std",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "-p",
+    "restream-engine",
+    "--lib",
+    "--",
+    "egress::tls",
+    "egress::backends::compio_tcp",
+    "external_transcoder",
+    "timing",
+    "rtmp::listener",
+    "rtmp::tests",
+    "tcp_stats",
+    "mpegts_allocation_tests",
 ])
 .env(ASAN_ENV);
 const ASAN_SYNC: Cmd = cargo(&[
@@ -406,6 +418,8 @@ const ASAN_EXTRACTED: Cmd = cargo(&[
 .env(ASAN_ENV);
 static ASAN_ROOT_FILTERS: Step = Step::filters("asan-root-filters", ASAN_ROOT).needs(NIGHTLY);
 static ASAN_ROOT_RUN: Step = Step::command("asan-root", ASAN_ROOT).needs(NIGHTLY);
+static ASAN_ENGINE_FILTERS: Step = Step::filters("asan-engine-filters", ASAN_ENGINE).needs(NIGHTLY);
+static ASAN_ENGINE_RUN: Step = Step::command("asan-engine", ASAN_ENGINE).needs(NIGHTLY);
 static ASAN_SYNC_FILTERS: Step = Step::filters("asan-sync-filters", ASAN_SYNC).needs(NIGHTLY);
 static ASAN_MPEGTS_FILTERS: Step = Step::filters("asan-mpegts-filters", ASAN_MPEGTS).needs(NIGHTLY);
 static ASAN_EXTRACTED_RUN: Step = Step::command("asan-extracted", ASAN_EXTRACTED).needs(NIGHTLY);
@@ -462,8 +476,8 @@ static GROUPS: &[Group] = &[
         name: "miri",
         about: "Miri over the pure modules it can execute (nightly)",
         steps: &[
-            &MIRI_ROOT_FILTERS,
-            &MIRI_ROOT_RUN,
+            &MIRI_ENGINE_FILTERS,
+            &MIRI_ENGINE_RUN,
             &MIRI_CORE_FILTERS,
             &MIRI_CORE_RUN,
         ],
@@ -479,6 +493,8 @@ static GROUPS: &[Group] = &[
         steps: &[
             &ASAN_ROOT_FILTERS,
             &ASAN_ROOT_RUN,
+            &ASAN_ENGINE_FILTERS,
+            &ASAN_ENGINE_RUN,
             &ASAN_SYNC_FILTERS,
             &ASAN_MPEGTS_FILTERS,
             &ASAN_EXTRACTED_RUN,
@@ -637,7 +653,7 @@ fn require(tool: Tool) -> WorkflowResult {
 fn kani() -> WorkflowResult {
     // No RUSTFLAGS override: Kani passes an empty one on as an argument.
     let (log, passed) = scan::tee_combined_output(
-        Command::new("cargo").args(["kani", "--lib", "-Z", "stubbing"]),
+        Command::new("cargo").args(["kani", "-p", "restream-engine", "--lib", "-Z", "stubbing"]),
         &mut std::io::stdout(),
     )?;
     if !passed {

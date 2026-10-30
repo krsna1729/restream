@@ -3,9 +3,9 @@
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
-use crate::media::engine::MediaEngine;
-use crate::media::recording::{RecordingMetadataReporter, RecordingStart};
 use restream_domain::domain::recording::RecordingSettings;
+use restream_engine::engine::MediaEngine;
+use restream_engine::recording::{RecordingMetadataReporter, RecordingStart};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -89,7 +89,7 @@ pub async fn spawn_recording_task(
     let recording_id = format!("recording_{:016x}", rand::random::<u64>());
 
     tokio::spawn(async move {
-        crate::media::recording::start_recording(
+        restream_engine::recording::start_recording(
             RecordingStart {
                 recording_id,
                 pipeline_name,
@@ -406,7 +406,7 @@ mod tests {
         let reporter = crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(
             pool.clone(),
         );
-        use crate::media::recording::RecordingMetadataEvent;
+        use restream_engine::recording::RecordingMetadataEvent;
         reporter.report(RecordingMetadataEvent::Started {
             recording_id: "recording-meta".to_string(),
             pipeline_id: "pipeline-meta".to_string(),
@@ -503,7 +503,7 @@ mod tests {
                 assert_eq!(snapshot.key, *key);
                 assert_eq!(
                     snapshot.backend,
-                    crate::media::stage_lifecycle::StageBackendKind::Recording
+                    restream_engine::stage_lifecycle::StageBackendKind::Recording
                 );
                 return;
             }

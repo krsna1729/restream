@@ -15,10 +15,9 @@ fn selected_runtime_contracts_stay_ready_for_extraction() {
         ),
     ] {
         for forbidden in [
-            "crate::media::",
             "crate::application::",
             "crate::api::",
-            "restream::media::",
+            "restream_engine::",
             "restream::application::",
             "restream::api::",
             "sqlx",

@@ -164,7 +164,7 @@ Standby GOP cache occupancy is not exposed.
 
 ### RTMP publisher quality
 
-On Linux, `src/media/tcp_stats.rs` reads `TCP_INFO` and `SO_MEMINFO` from the
+On Linux, `crates/restream-engine/src/tcp_stats.rs` reads `TCP_INFO` and `SO_MEMINFO` from the
 accepted socket about every two seconds. Fields cover RTT, receive RTT, bytes
 received, last-receive age, receive space and window, out-of-order packets,
 receive-buffer occupancy, the congestion-control algorithm, and a rate from
@@ -249,7 +249,7 @@ Sender quality:
 These are sender-side signals. They do not prove a platform accepted or played
 the stream.
 
-HLS PUT failure handling (`src/media/hls/upload.rs`, `upload_policy.rs`):
+HLS PUT failure handling (`crates/restream-engine/src/hls/upload.rs`, `upload_policy.rs`):
 
 - Each request has a 5 s timeout.
 - 5xx, 408, 425, 429, timeouts and connection failures raise
@@ -267,7 +267,7 @@ HLS PUT failure handling (`src/media/hls/upload.rs`, `upload_policy.rs`):
 
 Each fabric output's `quality` carries `deliveredBps`, `offeredBps` and
 `deliveryRatio`, computed by its shard over a 5 s window
-(`DELIVERY_WINDOW`, `src/media/egress/delivery.rs`) in the 1 s stall sweep.
+(`DELIVERY_WINDOW`, `crates/restream-engine/src/egress/delivery.rs`) in the 1 s stall sweep.
 
 - **Offered**: bytes the output's feed published (the ring's
   `published_bytes` counter).
@@ -477,7 +477,7 @@ datagrams to the same address coalesce.
   deltas for `?since=` / `Last-Event-ID` resumption, resyncs with a snapshot
   when the gap is too old or the client lags, and sends a heartbeat every
   20 s.
-- **Events**: `EventLog` (`src/media/events.rs`) keeps the last 1000 lifecycle
+- **Events**: `EventLog` (`crates/restream-engine/src/events.rs`) keeps the last 1000 lifecycle
   events in memory (`limit` defaults to 100). Types are `ingest.connected`,
   `ingest.disconnected`, `ingest.probed`, `stage.registered`,
   `stage.waitingForCapacity`, `stage.backendSpawned`, `stage.firstInput`,
@@ -681,11 +681,18 @@ transaction commits, so every stream ID is a durable database ID.
 
 ### Level filtering
 
-- `Cargo.toml` enables `tracing`'s `max_level_debug`, so `trace!` is compiled
-  out.
+- `Cargo.toml` and `crates/restream-engine/Cargo.toml` enable `tracing`'s
+  `max_level_debug`, so `trace!` is compiled out.
 - `RUST_LOG` (default `info`) filters the console and file layers.
 - SQLite history keeps every compiled `error`, `warn` and `info` event,
   independent of `RUST_LOG`.
+- Targets are module paths. The media engine logs under `restream_engine::*`
+  (for example `restream_engine::external_transcoder`,
+  `restream_engine::srt::knobs`), the shared ring, byte queue and MPEG-TS
+  crates under the fixed `restream_engine::ring_buffer`,
+  `restream_engine::byte_queue` and `restream_engine::mpegts::*` targets, and
+  the application under `restream::*`. A filter naming one crate does not
+  cover the other: `RUST_LOG=restream=debug,restream_engine=debug`.
 
 ### Level policy
 

@@ -59,7 +59,7 @@ flowchart LR
 ```
 
 "Off Tokio" on this page means off CONTROL. The media executor is a separate
-Tokio runtime with a fixed worker count (`src/media/executor.rs`).
+Tokio runtime with a fixed worker count (`crates/restream-engine/src/executor.rs`).
 
 ## Media crossings
 
@@ -67,16 +67,16 @@ Tokio runtime with a fixed worker count (`src/media/executor.rs`).
 |---|---|---|---|---|---|
 | C1 | RTMP publish: ingress owner → ring | The owner parses each message and runs `RtmpPublisherMedia` inline: sequence-header cache, timestamp mapping, input gate, GOP cache, ring publish. The CONTROL session receives lifecycle commands, the one-time `RtmpControlCommand::MediaProbe` and quality reports | lifecycle per session | no media on the control channel | **No media crossing.** |
 | C2 | Direct RTMP play: CONTROL session ↔ ingress owner | `PlayNext` request; oneshot reply with ≤ 32 `Arc<MediaPacket>` (`MEDIA_PULL_BURST_PACKETS`) in a recycled `Vec` | one round trip per burst; a burst can be one packet at the live edge | one outstanding burst per player | **Justified.** Diagnostic path, not production fan-out. It must play with ffplay/ffmpeg and must not disturb the publish path. |
-| C3 | SRT publish: ingress Owner → ring | Each payload is demuxed, gated, timestamp-mapped, GOP-cached and published on the Owner thread (`src/media/srt/ingress_media.rs`). Owner↔CONTROL bridges carry connect/auth, the one-time probe, disconnect, and a lossy quality feed | lifecycle per session | no media on the bridges | **No media crossing.** Avoid unnecessary allocations on the Owner thread; ring publication currently wraps each packet in a new `Arc<MediaPacket>`. |
+| C3 | SRT publish: ingress Owner → ring | Each payload is demuxed, gated, timestamp-mapped, GOP-cached and published on the Owner thread (`crates/restream-engine/src/srt/ingress_media.rs`). Owner↔CONTROL bridges carry connect/auth, the one-time probe, disconnect, and a lossy quality feed | lifecycle per session | no media on the bridges | **No media crossing.** Avoid unnecessary allocations on the Owner thread; ring publication currently wraps each packet in a new `Arc<MediaPacket>`. |
 | C4 | Ring → SRT egress: shared TS muxer | `start_shared_ts_muxer` runs as `MediaServiceClass::SharedTsMux` on `restream-media`. It reads the ring in bounded bursts, writes `TsChunkRing` and yields. One muxer per `(pipeline, stage key)`; with `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` > 0 a feed's outputs split across up to `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (64) muxers | per packet, once per muxer, not per output | TS ring capacity | **Justified.** Mux cost scales with feeds, not outputs. |
 | C5 | Ring → RTMP/RTMPS egress | Shards read `RingFeed` by cursor. Raw→FLV conversion is memoized per shard (`SharedRtmpPayloadCache`, 64 entries); a lagging output may reconvert after eviction | no per-packet crossing; wakes only (W1) | ring capacity; per-leaf cursor | **Justified.** |
 | C7 | Direct SRT play | The SRT ingress Owner refills each reader's `TsChunkReader` and sends through the peer; window pressure defers (≤ 32 per peer) or disconnects | per TS chunk per player | per-peer deferral bound | **No media crossing** on CONTROL. Diagnostic only; checked by the `direct-play` CI shard. |
 | C8 | Ring ↔ FFmpeg stage | `restream-ffin` pulls the source ring through `StageInputPump::into_queue_refill` (`StageInputRefill::refill`) and writes the child's stdin. `restream-ffout` demuxes stdout with `TsDemuxer` into the output ring | per packet | pipe backpressure | **No media crossing** on CONTROL. The CONTROL stage task only waits for cancel or end. |
 | C9 | Ring → HLS segmenter | TS and fMP4 segmenting run on `restream-media`. CONTROL registers the lifecycle and observes failure; dropping CONTROL cancels but lets media flush the last segment | per packet, once per pipeline or rendition | packet bursts; one open segment; store limits retained segments | **Justified.** HTTP serving stays on CONTROL. |
-| C10 | Ring → recording | `feed_recording` (`MediaServiceClass::Recording`) pulls the ring into a bounded `MemoryQueue`, yielding per burst; a guarded OS thread writes the file | per packet, once per recording | `MemoryQueue` capacity | **Justified.** Benchmarked by `benches/byte_queue_throughput.rs`. |
+| C10 | Ring → recording | `feed_recording` (`MediaServiceClass::Recording`) pulls the ring into a bounded `MemoryQueue`, yielding per burst; a guarded OS thread writes the file | per packet, once per recording | `MemoryQueue` capacity | **Justified.** Benchmarked by `crates/restream-engine/benches/byte_queue_throughput.rs`. |
 | C11 | External file ingest: child stdout → ring | The stdout pipe is detached from CONTROL and pumped as `MediaServiceClass::FileIngest`; `TsDemuxer`, timestamp continuity, gate and publish stay on `restream-media` | per read burst | 64 KiB read buffer; ring capacity | **No media crossing** on CONTROL. |
-| C12 | Source ring → audio router → output ring | `start_audio_router` runs as `MediaServiceClass::AudioRouter` on `restream-media` (`src/media/stage_runtime.rs`) | per audio packet | ring capacity | **No media crossing** on CONTROL. |
-| C13 | HLS store → HLS PUT egress | The segmenter publishes to `HlsStore`; a publication subscription wakes the HLS PUT shards directly (`engine_hls_egress_fabric.rs`). Fallback: the CONTROL Reqwest uploader (`src/media/hls/upload.rs`) when `RESTREAM_HLS_PUT_FABRIC` is off or HTTPS lacks kTLS | per segment and playlist | store retention; shard leaf capacity | **Justified.** |
+| C12 | Source ring → audio router → output ring | `start_audio_router` runs as `MediaServiceClass::AudioRouter` on `restream-media` (`crates/restream-engine/src/stage_runtime.rs`) | per audio packet | ring capacity | **No media crossing** on CONTROL. |
+| C13 | HLS store → HLS PUT egress | The segmenter publishes to `HlsStore`; a publication subscription wakes the HLS PUT shards directly (`engine_hls_egress_fabric.rs`). Fallback: the CONTROL Reqwest uploader (`crates/restream-engine/src/hls/upload.rs`) when `RESTREAM_HLS_PUT_FABRIC` is off or HTTPS lacks kTLS | per segment and playlist | store retention; shard leaf capacity | **Justified.** |
 | C14 | HTTP HLS push ingest → ring | CONTROL accepts each PUT/POST and queues the object on a two-slot channel (`OBJECT_QUEUE`) to the session's `MediaServiceClass::HlsIngest` assembler on `restream-media`, which demuxes and publishes. Playlist parsing runs on `spawn_blocking` | per object | 2 queued objects per session; per-key upload slots | **Justified.** |
 | C15 | HLS pull ingest → ring | A CONTROL fetch task downloads playlists and segments; parsing runs on `spawn_blocking`; segments feed the same assembler path as C14 | per playlist and segment | as C14 | **Justified.** |
 | C16 | Pipeline recirculation: source ring → target ring | A pipeline shard reads `RingFeed` and calls `RecirculationInputPublisher::publish` into the target pipeline's ring, sharing `Arc<MediaPacket>` | per packet, on the shard | ring capacity; shard budgets | **Justified.** No serialization. |
@@ -84,7 +84,7 @@ Tokio runtime with a fixed worker count (`src/media/executor.rs`).
 ## MoQ crossings
 
 MoQ (moq-lite and IETF MOQT via `moq-net`, hang and MSF catalogs) runs over
-Compio QUIC (`src/media/moq/`). Ingest and the local origin share the
+Compio QUIC (`crates/restream-engine/src/moq/`). Ingest and the local origin share the
 `moq-ingest` thread. Relay output (`moqt://`) runs on egress shards. No MoQ
 media runs on CONTROL.
 
@@ -132,7 +132,7 @@ second Owner lifted the per-Owner ceiling about 20%, not 2×, so
 One SRT shard (one 4 Mbit/s feed, delivery-checked) delivered every output up
 to 64 at 19–51% busy and began losing outputs at 96 (62% busy). This sets the
 SRT cold prior (64 outputs per shard) and the 60% admission ceiling in
-`src/media/egress/sizing.rs`. Cross-host qualification is open.
+`crates/restream-engine/src/egress/sizing.rs`. Cross-host qualification is open.
 
 ### CPU affinity
 

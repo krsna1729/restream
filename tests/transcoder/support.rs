@@ -5,7 +5,7 @@ use restream_core::MediaPacket;
 use restream_sync::Reader;
 
 pub(super) fn load_fixture() -> Vec<u8> {
-    let path = restream::media::test_fixtures::canonical_h264_ts_fixture()
+    let path = restream_engine::test_fixtures::canonical_h264_ts_fixture()
         .unwrap_or_else(|e| panic!("{e}"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("fixture missing at {}: {e}", path.display()))
 }
@@ -17,7 +17,7 @@ pub(super) fn load_primary_transport_packets(
     Vec<restream_core::metadata::AudioMeta>,
     Vec<MediaPacket>,
 ) {
-    restream::media::test_fixtures::primary_av_packets_for_codec(codec)
+    restream_engine::test_fixtures::primary_av_packets_for_codec(codec)
         .unwrap_or_else(|e| panic!("{e}"))
 }
 

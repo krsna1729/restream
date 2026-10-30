@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use restream::media::engine::MediaEngine;
 use restream_core::metadata::AudioMeta;
 use restream_domain::domain::stage::StageKind;
+use restream_engine::engine::MediaEngine;
 
 #[tokio::test]
 async fn replacement_video_stage_preserves_codec_hint_and_audio_tracks() {

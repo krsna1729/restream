@@ -73,7 +73,7 @@ impl TlsListener {
     fn new(tcp: TcpListener, cancel: CancellationToken) -> Result<Self, String> {
         use tokio_rustls::rustls::pki_types::pem::PemObject;
         use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-        let (cert, key) = restream::media::test_fixtures::rtmps_harness_cert_fixture()?;
+        let (cert, key) = restream_engine::test_fixtures::rtmps_harness_cert_fixture()?;
         let certs = CertificateDer::pem_file_iter(&cert)
             .and_then(Iterator::collect::<Result<Vec<_>, _>>)
             .map_err(|error| format!("HLS sink certificate {}: {error}", cert.display()))?;

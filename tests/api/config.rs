@@ -252,7 +252,7 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
     restream::infrastructure::bootstrap::initialize_auth_for_test(&auth_pool, &sessions, "admin")
         .await;
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));

@@ -2,10 +2,10 @@
 use bytes::Bytes;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
-use restream::media::input_gate::{
+use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_engine::input_gate::{
     InputForwardState, InputPacketBoundary, InputPacketGate, InputTimestampMapper,
 };
-use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 fn packet(dts: i64, composition_offset: i64) -> MediaPacket {

@@ -13,7 +13,7 @@ use super::{Alert, Evidence, Scope, Severity, blocked_output_action, stage_phase
 use crate::application::diagnosis::{
     Cause, Diagnosis, Layer, OutputSignals, ShardHealth, diagnose,
 };
-use crate::media::engine::EGRESS_PROGRESS_STALE_MS;
+use restream_engine::engine::EGRESS_PROGRESS_STALE_MS;
 
 /// `(feed id, shard index)` → health, from `egressFabricShards`.
 pub(super) type ShardHealthMap<'a> = HashMap<(&'a str, u64), ShardHealth>;

@@ -12,7 +12,7 @@ use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
-use crate::media::security::IngestSecurityService;
+use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 
 #[cfg(feature = "agent-execution")]
@@ -475,7 +475,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let engine = crate::media::engine::MediaEngine::new();
+        let engine = restream_engine::engine::MediaEngine::new();
         let egress = engine
             .register_egress("out-1", "pipe-1", "rtmp://example/live")
             .await;

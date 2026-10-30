@@ -91,8 +91,8 @@ async fn require_push_auth(auth: PushAuth, headers: &HeaderMap) -> Result<(), Re
     if valid { Ok(()) } else { Err(unauthorized()) }
 }
 
-use crate::media::hls_ingest::playlist::normalize_path;
-use crate::media::hls_ingest::{
+use restream_engine::hls_ingest::playlist::normalize_path;
+use restream_engine::hls_ingest::{
     AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectKind, ObjectOutcome,
 };
 

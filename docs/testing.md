@@ -67,15 +67,15 @@ its own, for example `cargo xtask clippy-lib` or `cargo xtask docs-audit`.
 | `frontend-e2e` (Frontend app E2E) | `npm run test:e2e` in Chromium | after `frontend` |
 | `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast` (every loom model) | every run, in parallel |
 | `concurrency-contract` (Concurrency live lifecycle proof) | `cargo xtask concurrency contract` with `--no-netns` | `master` only |
-| `fuzz-smoke` (Parser fuzz smoke) | `cargo xtask fuzz`: seeds the corpus, then every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, the xtask fuzz step or check table, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
-| `miri` (Miri) | `cargo xtask miri`: selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
-| `kani` (Kani) | `cargo xtask kani`: `cargo kani --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
-| `asan` (AddressSanitizer) | `cargo xtask asan`: selected root FFI/syscall and MPEG-TS allocation tests plus `restream-sync` and `restream-mpegts` library tests | after `test` |
+| `fuzz-smoke` (Parser fuzz smoke) | `cargo xtask fuzz`: seeds the corpus, then every target in `fuzz/` for 30 s | after `test`; pull requests touching `crates/restream-*/` (the engine included), `crates/test_harness/`, `fuzz/`, the xtask fuzz step or check table, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
+| `miri` (Miri) | `cargo xtask miri`: selected `restream-engine` pure modules and the canonical `restream-core` bit-reader tests | after `test` |
+| `kani` (Kani) | `cargo xtask kani`: `cargo kani -p restream-engine --lib -Z stubbing`; expects `KANI_PROOFS` (7) proofs and every cover satisfied | after `test` |
+| `asan` (AddressSanitizer) | `cargo xtask asan`: selected `restream-engine` FFI/syscall and MPEG-TS allocation tests, the root `runtime_info` tests, plus `restream-sync` and `restream-mpegts` library tests | after `test` |
 | `integration-build` (Transport live-harness build) | `cargo xtask build-bench`; uploads `restream` and `test_harness` | after `test` |
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
-| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress, `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
-| `docker-runtime-smoke` | `cargo xtask container smoke` on a source-built image | Dockerfile, `crates/xtask` release/container/qualify workflows, `distribution/`, seccomp tests, RTMP/SRT/egress, production `crates/restream-*/` or harness changes |
+| `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress (root or engine), `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
+| `docker-runtime-smoke` | `cargo xtask container smoke` on a source-built image | Dockerfile, `crates/xtask` release/container/qualify workflows, `distribution/`, seccomp tests, production `crates/restream-*/` (the engine's RTMP/SRT/egress included) or harness changes |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
 a nightly container smoke and the full harness shard matrix. Nightly and
@@ -102,28 +102,30 @@ probe chatter or other "expected noise". Fix or suppress it in the helper.
 
 Canonical codec implementations live in `crates/restream-core`; RTMP framing
 and session helpers live in `crates/restream-rtmp`. Their parser, property and
-pure helper tests live with those implementations. Application adapter and
-fixture/network consumer tests remain in the root. Benchmarks and fuzz
-entrypoints import their implementation owners directly.
+pure helper tests live with those implementations. Engine adapter and
+fixture/network consumer tests live in `restream-engine`; application tests
+remain in the root. Benchmarks and fuzz entrypoints import their
+implementation owners directly.
 
 Implementation ownership and test-package selection are not identical:
 
 | Changed implementation | Focused owner or consumer suite |
 |---|---|
-| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
+| `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream-engine --lib codec::tests` for retained consumer tests |
 | `crates/restream-domain/src/` | `cargo test -p restream-domain`, `cargo test --test architecture` and `cargo test -p restream --lib application::runtime_state` for the TypeScript drift test |
+| `crates/restream-engine/src/` | `cargo test -p restream-engine --lib <module>::`; the root `api_runtime_views`, `application` and `capacity` suites for engine consumers |
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
 | `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
-| `crates/restream-mpegts/src/` | `cargo test -p restream-mpegts --lib`; also `cargo test -p restream --lib media::mpegts_allocation_tests` for the allocation/ordered-output consumer guard |
-| `crates/restream-rtmp/src/` | `cargo test -p restream-rtmp --lib`; also `cargo test -p restream --lib media::rtmp::tests` for retained application/network consumers |
-| `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream --lib media::srt::` for retained consumers |
-| `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
+| `crates/restream-mpegts/src/` | `cargo test -p restream-mpegts --lib`; also `cargo test -p restream-engine --lib mpegts_allocation_tests` for the allocation/ordered-output consumer guard |
+| `crates/restream-rtmp/src/` | `cargo test -p restream-rtmp --lib`; also `cargo test -p restream-engine --lib rtmp::tests` for retained engine/network consumers |
+| `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream-engine --lib srt::` for retained consumers |
+| `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream-engine --lib moq::` for retained integration/consumer tests |
 
 For extracted-library source and manifest changes, run the owning unit suite
-plus its retained root consumer suite.
+plus its retained consumer suite.
 MPEG-TS implementation tests run in `restream-mpegts`; its allocation guard
-stays in the application test binary so the leaf library can continue to
+stays in the engine test binary so the leaf library can continue to
 forbid unsafe code without a custom test allocator. Owner suites run unfiltered
 rather than deriving a possibly empty filter from the implementation file name.
 
@@ -136,23 +138,25 @@ The package graph and runtime seams are in
 [Workspace layout](architecture.md#workspace-layout).
 
 Fixture paths and the required checked-in registry are single-sourced in
-`src/media/test_fixtures/paths.rs`, shared by leaf tests and the
-`media::test_fixtures` API. Packet/feeder fixture helpers remain
-media-owned; leaf crates do not depend on the application to find fixtures.
+`crates/restream-engine/src/test_fixtures/paths.rs`, shared by leaf tests and the
+`restream_engine::test_fixtures` API. Packet/feeder fixture helpers remain
+engine-owned; leaf crates do not depend on the engine to find fixtures.
 
-Media test helpers that root tests also call (`media::test_support`,
-`media::hls_ingest::test_support`, `media::moq::transport::test_support`)
-build under `cfg(test)` or the `test-support` Cargo feature. The root
-enables that feature only through its own dev-dependency, so `cargo test`
-and benches get the helpers and shipped builds do not.
+Engine test helpers that root tests also call (`restream_engine::test_support`,
+`restream_engine::hls_ingest::test_support`,
+`restream_engine::moq::transport::test_support`, the
+`restream_engine::config::env` overlay) build under `cfg(test)` or the
+engine's `test-support` Cargo feature. The root enables that feature only
+through its dev-dependency on `restream-engine`, so `cargo test` gets the
+helpers and shipped builds do not.
 
 
 ### Parser fuzz targets
 
 `fuzz/` holds cargo-fuzz targets for the parsers that read untrusted bytes.
 Each calls production code. Private parsers are reached through
-`media::rtmp::fuzz_entry`, `media::egress::fuzz_entry` and
-`media::moq_fuzz_entry`; these exist only under `--cfg fuzzing`. The
+`restream_engine::rtmp::fuzz_entry`, `restream_engine::egress::fuzz_entry` and
+`restream_engine::moq_fuzz_entry`; these exist only under `--cfg fuzzing`. The
 vendored moq-net's wire codecs are reached through its `fuzz` feature
 (`moq_net::fuzz`).
 
@@ -194,14 +198,14 @@ touch raw syscall and FFI memory.
 
 | CI job | Modules | Why |
 |---|---|---|
-| `miri` | Root `media::egress::tls::ktls::tests::ancillary`, `media::egress::leaf_arena`, `media::egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
-| `asan` | Root `media::egress::tls`, `media::egress::backends::compio_tcp`, `media::external_transcoder`, `media::timing`, `media::rtmp::listener`, `media::rtmp::tests`, `media::tcp_stats`, `media::mpegts_allocation_tests`, `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
+| `miri` | `restream-engine`'s `egress::tls::ktls::tests::ancillary`, `egress::leaf_arena`, `egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
+| `asan` | `restream-engine`'s `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests` (which also selects `egress::backends::rtmp::tests`), `tcp_stats`, `mpegts_allocation_tests`; the root `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
 
 `cargo xtask miri` and `cargo xtask asan` set the job's filters and
 environment on each command; the sanitizer flags never reach the xtask
-build. The named root filters, core bit-reader filter and each extracted
+build. The named engine and root filters, core bit-reader filter and each extracted
 sanitizer suite first pass `cargo xtask require-test-filters`. It fails when
-a selection contains no test. The root MPEG-TS filter retains the allocation
+a selection contains no test. The engine MPEG-TS filter retains the allocation
 and ordered packet-output guard; the complete mux/demux behavior suite runs
 separately in `restream-mpegts`, alongside the `restream-sync` unit suite.
 
@@ -236,12 +240,12 @@ that reach `VecDeque` copies and `retain` exhaust memory, so the
 symbolic. Unit tests cover `pop` skipping a stale entry. `kani::cover!`
 statements show each proof reaches its interesting branches; the job fails
 if one is unsatisfiable. Kani builds abort on panic, so the `panic = "abort"`
-guard in `src/lib.rs` skips `cfg(kani)`. A new proof raises `KANI_PROOFS` in
+guard in `crates/restream-engine/src/lib.rs` skips `cfg(kani)`. A new proof raises `KANI_PROOFS` in
 `crates/xtask/src/checks.rs`.
 
 ```sh
 cargo install --locked kani-verifier --version 0.68.0 && cargo kani setup
-cargo kani --lib -Z stubbing --harness a_key_resolves_exactly_while_its_leaf_is_live
+cargo kani -p restream-engine --lib -Z stubbing --harness a_key_resolves_exactly_while_its_leaf_is_live
 ```
 
 ## Frontend tests
@@ -600,7 +604,7 @@ RTMPS leg is RTMP ingest → Restream → RTMPS egress.
 
 ### Fixtures and artifacts
 
-Resolve committed media through `src/media/test_fixtures.rs`; add new assets to that
+Resolve committed media through `crates/restream-engine/src/test_fixtures.rs`; add new assets to that
 contract. Runs write under `.local/artifacts/<run>/` (manifest, results,
 logs, probes). These are evidence, not source: never commit them.
 
@@ -731,7 +735,7 @@ Each row is a stage boundary, its contract and the proof that enforces it.
 |---|---|---|
 | Planner → stage runtime | planned `StageKey` and `select_backend` pick the registered runtime used by outputs, graph and status | planner and `select_backend` unit tests, HLS/recording planned-key tests, a property over generated output mixes |
 | Runtime admission → registry | `ensure_stage` creates one live runtime, reuses live ones, replaces cancelled ones | stage runtime tests; `transcoder_stage_loom`, `ts_muxer_stage_loom` |
-| Control runtime → media executor | media work progresses without control scheduling; dropping a control owner does not abort finalization; old HLS cleanup cannot hit a replacement | `media::executor::tests`, `while_control_thread_is_blocked`, `control_owner_abort_flushes_final_segment`, `detached_teardown_preserves_replacement`, `aborting_control_owner_closes_media_feeder_and_writer` |
+| Control runtime → media executor | media work progresses without control scheduling; dropping a control owner does not abort finalization; old HLS cleanup cannot hit a replacement | `restream_engine::executor::tests`, `while_control_thread_is_blocked`, `control_owner_abort_flushes_final_segment`, `detached_teardown_preserves_replacement`, `aborting_control_owner_closes_media_feeder_and_writer` |
 | Source ring → stage input | starts at the right keyframe, emits selected media only, exits on EOS/cancel; a blocked child is reaped within the grace | `refill_pulls_the_ring_on_the_reading_thread_until_eos`, `refill_stops_on_cancel_while_waiting`, `cancelled_reap_releases_a_writer_blocked_on_a_stalled_child`, ring migration proptests and loom |
 | Stage input → backend | FFmpeg gets the `FfmpegStagePlan` and startup policy; capacity waits are visible and cancellable | `build_ffmpeg_stage_plan` tests (`stage_runtime.rs`), `build_stage_ffmpeg_args` tests, `tests/transcoder.rs` |
 | Backend → output normalizer | stage-local, non-negative, per-stream monotone timestamps; cached parameter sets; metrics match packets | normalizer unit tests and a proptest over interleaved packets |
@@ -767,5 +771,5 @@ brings an equal or stronger proof in the same change.
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 
 New failure evidence takes a durable form: a fixture registered in
-`src/media/test_fixtures/paths.rs`, a focused test, a harness mode writing
+`crates/restream-engine/src/test_fixtures/paths.rs`, a focused test, a harness mode writing
 `manifest.json` and `results.jsonl`, or a baseline with its replay command.

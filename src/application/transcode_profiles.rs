@@ -9,7 +9,7 @@ use tracing::{info, warn};
 pub const TRANSCODE_PROFILES_META_KEY: &str = "transcode_profiles";
 
 pub fn default_transcode_profiles() -> TranscodeProfiles {
-    crate::media::profiles::built_in_defaults()
+    restream_engine::profiles::built_in_defaults()
 }
 
 pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
@@ -38,7 +38,7 @@ pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
         }
     };
 
-    crate::media::profiles::replace_runtime_profiles(&profiles).await;
+    restream_engine::profiles::replace_runtime_profiles(&profiles).await;
 }
 
 pub async fn save_transcode_profiles(
@@ -50,7 +50,7 @@ pub async fn save_transcode_profiles(
     meta_store
         .set_meta(TRANSCODE_PROFILES_META_KEY, &json)
         .await?;
-    crate::media::profiles::replace_runtime_profiles(profiles).await;
+    restream_engine::profiles::replace_runtime_profiles(profiles).await;
     info!(
         count = profiles.len(),
         "updated profiles in meta store and runtime cache"
@@ -127,7 +127,7 @@ mod tests {
             .await
             .unwrap();
 
-        let runtime = crate::media::profiles::current_effective().await;
+        let runtime = restream_engine::profiles::current_effective().await;
         assert!(runtime.contains_key("h264"));
         assert!(runtime.contains_key("720p"));
         assert_eq!(runtime["4k60"].width, 3840);
@@ -143,7 +143,7 @@ mod tests {
 
         load_transcode_profiles(&store).await;
 
-        let runtime = crate::media::profiles::current_effective().await;
+        let runtime = restream_engine::profiles::current_effective().await;
         assert!(runtime.contains_key("h264"));
         assert!(runtime.contains_key("1080p"));
         assert_eq!(runtime["4k60"].height, 2160);

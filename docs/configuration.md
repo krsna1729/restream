@@ -26,9 +26,9 @@ The diagram shows where each kind of setting comes from and when it is read.
 ```mermaid
 flowchart LR
     env[Process environment] --> from_env["AppConfig::from_env (src/config.rs)"]
-    env --> engine["EngineConfig::from_env (src/media/config.rs)"]
-    env --> moq["MoqIngestSetting::from_env (src/media/config/moq.rs)"]
-    env --> knobs["media::srt::knobs (OnceLock)"]
+    env --> engine["EngineConfig::from_env (crates/restream-engine/src/config.rs)"]
+    env --> moq["MoqIngestSetting::from_env (crates/restream-engine/src/config/moq.rs)"]
+    env --> knobs["restream_engine::srt::knobs (OnceLock)"]
     env --> malloc["malloc_tuning::apply_from_env"]
     moq --> engine
     engine --> from_env
@@ -41,7 +41,7 @@ flowchart LR
 ```
 
 - Environment variables are read once. Changing one needs a restart.
-- Every variable goes through `env_var` in `src/media/config/env.rs`. A value that does
+- Every variable goes through `env_var` in `crates/restream-engine/src/config/env.rs`. A value that does
   not parse falls back to the default. Most numeric values are then clamped to
   the range shown below.
 - Boolean variables (`env_bool`) are true for `1`, `true`, `yes` or `on`
@@ -51,7 +51,7 @@ flowchart LR
 ## Fixed runtime values and environment variables
 
 Tables are grouped by area. "Clamp" is the range a parsed value is forced
-into. Source is `src/config.rs` for process settings and `src/media/config.rs`
+into. Source is `src/config.rs` for process settings and `crates/restream-engine/src/config.rs`
 (`EngineConfig`, embedded in `AppConfig`) for media engine settings, unless
 noted.
 
@@ -126,13 +126,13 @@ the output fails. There is no userspace-TLS fallback.
 | `RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES` | ¼ of memory limit (cgroup or host RAM) ÷ ingress owners | `0` disables | srt-rs `admission.max_window_memory_bytes` per Owner. Each publisher reserves `(flow + receive window) × 1,484` bytes. A publisher that does not fit is refused with `OVERLOAD` (1402) and counted in `ingressOwner.windowMemoryRejections`. Not a total RSS bound |
 | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` | `10000` | none | Per-output egress handshake deadline. The clock starts when the caller pool admits the request |
 | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` | `64` | `1..=4096` | Each egress Owner's caller-pool `max_in_flight`, per (shard, address family), with an equal bounded queue. A request beyond both fails and retries |
-| `RESTREAM_SRT_EGRESS_TX_CAPACITY` | `16` (`SRT_OWNER_TX_CAPACITY`, `src/media/egress/backends/srt/owner_set.rs`) | `1..=4096` | Datagrams in flight per egress family Owner |
+| `RESTREAM_SRT_EGRESS_TX_CAPACITY` | `16` (`SRT_OWNER_TX_CAPACITY`, `crates/restream-engine/src/egress/backends/srt/owner_set.rs`) | `1..=4096` | Datagrams in flight per egress family Owner |
 | `RESTREAM_SRT_EGRESS_GSO` | on | bool | Coalesce equal-length datagrams to one peer into one UDP GSO `sendmsg`. A path that rejects GSO turns it off by itself |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` | `0` (off) | `0..=10000` | When set, a new shared TS muxer shard is created as each pipeline+encoding cohort crosses this many outputs |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` | `64` | `1..=64` | Muxer shard limit; beyond it new outputs join the least-loaded shard (warning logged) |
 | `RESTREAM_TS_RING_CAPACITY` | `256` chunks | `32..=16384` | Shared SRT TS ring between muxer and socket write |
-| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`src/media/srt/knobs.rs`). Unset: 8 MiB (`DESIRED_UDP_BUF`) for ingress and egress Owner sockets |
-| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | unset | positive | Test-harness SRT sinks only (`src/media/srt/knobs.rs`); production Owner work is bounded by `OwnerServiceBudget` |
+| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`crates/restream-engine/src/srt/knobs.rs`). Unset: 8 MiB (`DESIRED_UDP_BUF`) for ingress and egress Owner sockets |
+| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | unset | positive | Test-harness SRT sinks only (`crates/restream-engine/src/srt/knobs.rs`); production Owner work is bounded by `OwnerServiceBudget` |
 
 ### HLS
 
@@ -153,7 +153,7 @@ on Reqwest (logged once). Transport comparison:
 ### MoQ
 
 MoQ ingest is off unless `RESTREAM_MOQ_INGEST_LISTEN` is set. Source:
-`src/media/config/moq.rs`.
+`crates/restream-engine/src/config/moq.rs`.
 
 | Variable | Default | Range / values | Effect |
 |---|---|---|---|
@@ -251,7 +251,7 @@ least 5, then capped by the max children value.
 #### FFmpeg
 
 FFmpeg is not bundled. The executable resolves in this order
-(`src/media/ffmpeg_binary.rs`): `FFMPEG_BIN_PATH`; the copy installed by
+(`crates/restream-engine/src/ffmpeg_binary.rs`): `FFMPEG_BIN_PATH`; the copy installed by
 `restream ffmpeg-fetch` in `.restream/runtime/ffmpeg/`; `ffmpeg` on `PATH`.
 If none is found, the server still starts; only FFmpeg-backed features fail.
 
@@ -262,7 +262,7 @@ At startup the engine lists what the resolved build provides (encoders,
 decoders, muxers, demuxers, filters, protocols, bitstream filters) and checks
 it against what each feature uses: transcoding, file ingest, recording remux,
 posters, picture and sound checks, media analysis. The lists live in
-`Feature::needs` (`src/media/ffmpeg_capabilities.rs`). A feature whose needs are
+`Feature::needs` (`crates/restream-engine/src/ffmpeg_capabilities.rs`). A feature whose needs are
 missing is logged at startup with what it lacks, reported in
 `externalTools` on `GET /api/v1/engine`, and fails when used; the rest work.
 
@@ -282,12 +282,12 @@ pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 |---|---|---|---|
 | `RESTREAM_TOKIO_WORKER_THREADS` | all CPUs up to 2, else `ceil(CPUs/3)` in `2..=8` | `>= 1` | Tokio scheduler workers (`restream-tokio`) |
 | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | `512` | `>= 1` | Tokio `spawn_blocking` capacity |
-| `RESTREAM_MEDIA_WORKERS` | `clamp(CPUs, 1, 4)` | `1..=64` | `restream-media` executor workers (`src/media/executor.rs`) |
+| `RESTREAM_MEDIA_WORKERS` | `clamp(CPUs, 1, 4)` | `1..=64` | `restream-media` executor workers (`crates/restream-engine/src/executor.rs`) |
 | `RESTREAM_MALLOC_ARENA_MAX` | `2` (provisional) | `default` or positive integer | glibc malloc arenas via `mallopt` (`src/malloc_tuning.rs`). `default` keeps glibc's policy |
 | `MALLOC_ARENA_MAX` | unset | glibc | Applied by glibc itself; wins over `RESTREAM_MALLOC_ARENA_MAX` |
 
 "CPUs" means the effective count from the CPU mask and cgroup quota
-(`HostCapacity`, `src/media/host_capacity.rs`). The effective arena setting is logged as
+(`HostCapacity`, `crates/restream-engine/src/host_capacity.rs`). The effective arena setting is logged as
 `restream.malloc.arenas`. Qualify the arena value per host
 ([capacity ramp](capacity-ramp.md)) before you treat `2` as final.
 
@@ -635,8 +635,8 @@ None of these change a production server.
 | Variable | Read by | Effect |
 |---|---|---|
 | `RESTREAM_AGENT_BASE_URL`, `RESTREAM_AGENT_SESSION_COOKIE`, `RESTREAM_AGENT_BEARER_TOKEN`, `RESTREAM_MCP_ALLOWED_ORIGINS`, `RESTREAM_MCP_VERSION_CHECK` | `src/bin/restream-mcp.rs` | MCP bridge; see [agent plane integration](agent-plane-integration.md) |
-| `RESTREAM_BENCH_SRT_SHARDS` | `src/media/config.rs`, only with the `srt-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
-| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `src/media/srt/knobs.rs` | Harness SRT sink receive budget |
+| `RESTREAM_BENCH_SRT_SHARDS` | `crates/restream-engine/src/config.rs`, only with the engine's `srt-shard-bench` feature (the root `srt-shard-bench` feature forwards it: `RESTREAM_BENCH_FEATURES=srt-shard-bench cargo xtask build-bench`) | Pins SRT shard count `1..=4` for benchmarks |
+| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `crates/restream-engine/src/srt/knobs.rs` | Harness SRT sink receive budget |
 | `RESTREAM_BUILD_GIT_COMMIT` (else `GITHUB_SHA`), `RESTREAM_BUILD_TIMESTAMP` (else `SOURCE_DATE_EPOCH`) | `build.rs` | Commit and timestamp stamped into the binary |
 | `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `crates/test_harness/` | Harness runs; see [testing](testing.md) |
 | Release and container variables (`RESTREAM_BUILD_*`, `RESTREAM_RELEASE_*`, `RESTREAM_CONTAINER_*`, `RESTREAM_SBOM_PATH`, ...) | `scripts/` | Build and release scripts; documented in each script's usage text |

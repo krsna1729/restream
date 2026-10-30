@@ -8,15 +8,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::media::engine::MediaEngine;
-use restream::media::hls_ingest::{HlsIngest, HlsIngestLimits};
-use restream::media::ingest_auth::{
+use restream_core::MediaType;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_engine::engine::MediaEngine;
+use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
+use restream_engine::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
     PipelineAccessMode,
 };
-use restream::media::security::IngestSecurityService;
-use restream_core::MediaType;
-use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_engine::security::IngestSecurityService;
 use restream_sync::RingBuffer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -92,7 +92,7 @@ async fn serve() -> Server {
 }
 
 fn fixture_path() -> std::path::PathBuf {
-    restream::media::test_fixtures::canonical_h264_ts_fixture().unwrap()
+    restream_engine::test_fixtures::canonical_h264_ts_fixture().unwrap()
 }
 
 /// Which checked-in fixture a push carries, and the Annex B NAL headers of
@@ -107,7 +107,7 @@ impl Codec {
     fn fixture(self) -> std::path::PathBuf {
         match self {
             Self::H264 => fixture_path(),
-            Self::Hevc => restream::media::test_fixtures::canonical_h265_ts_fixture().unwrap(),
+            Self::Hevc => restream_engine::test_fixtures::canonical_h265_ts_fixture().unwrap(),
         }
     }
 
@@ -228,7 +228,7 @@ async fn ffmpeg_push_reaches_the_ring(
         "http://{}/ingest/hls/{STREAM_KEY}/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new(restream::media::ffmpeg_binary::ffmpeg_bin_path())
+    let status = tokio::process::Command::new(restream_engine::ffmpeg_binary::ffmpeg_bin_path())
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
         .arg(codec.fixture())
         .args([
@@ -309,7 +309,7 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
         "http://{}/ingest/hls/{STREAM_KEY}/stream_%v/index.m3u8",
         server.address
     );
-    let status = tokio::process::Command::new(restream::media::ffmpeg_binary::ffmpeg_bin_path())
+    let status = tokio::process::Command::new(restream_engine::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-hide_banner",
             "-loglevel",

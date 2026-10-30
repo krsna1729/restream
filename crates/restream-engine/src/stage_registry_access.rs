@@ -1,0 +1,523 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use crate::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
+use crate::engine_hls::input_id_from_hls_preview_resource_id;
+use crate::engine_registries::StageRuntime;
+use crate::engine_registries::TsMuxerStage;
+use crate::pipe_metrics::PipeMetrics;
+use crate::stage_lease::StageLease;
+use crate::stage_lifecycle::{
+    StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
+};
+use crate::stage_metrics::StageMetrics;
+use crate::ts_chunk_ring::TsChunkRing;
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::runtime::stage::StageRuntimeSnapshot;
+use restream_sync::RingBuffer;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+
+impl MediaEngine {
+    pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
+            runtime.pipe_metrics = Some(metrics.clone());
+        }
+    }
+
+    pub async fn remove_pipe_metrics(&self, key: &StageKey) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
+            runtime.pipe_metrics = None;
+        }
+    }
+
+    pub async fn get_or_create_non_ring_stage_runtime(
+        &self,
+        key: StageKey,
+        initial: StagePhase,
+        backend: StageBackendKind,
+        cancel: CancellationToken,
+    ) -> (Arc<StageLifecycle>, Arc<StageMetrics>) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if let Some(runtime) = runtimes.get(&key)
+            && !runtime.cancel.is_cancelled()
+        {
+            return (runtime.lifecycle.clone(), runtime.metrics.clone());
+        }
+
+        let lifecycle = Arc::new(StageLifecycle::new_with_backend(initial, backend));
+        let metrics = Arc::new(StageMetrics::new());
+        runtimes.insert(
+            key,
+            StageRuntime {
+                ring: None,
+                cancel,
+                lifecycle: lifecycle.clone(),
+                metrics: metrics.clone(),
+                pipe_metrics: None,
+                lease: std::sync::Weak::new(),
+                lease_id: 0,
+            },
+        );
+        (lifecycle, metrics)
+    }
+
+    pub async fn get_or_create_stage_metrics(&self, key: StageKey) -> Arc<StageMetrics> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(&key).cloned() {
+            return runtime.metrics;
+        }
+        let mut metrics = self.stages.metrics.write().await;
+        metrics
+            .entry(key)
+            .or_insert_with(|| Arc::new(StageMetrics::new()))
+            .clone()
+    }
+
+    pub async fn remove_stage_metrics(&self, key: &StageKey) {
+        self.stages.metrics.write().await.remove(key);
+    }
+
+    pub async fn remove_stage_runtime(&self, key: &StageKey) {
+        self.stages.runtimes.write().await.remove(key);
+    }
+
+    /// Detached teardown must not remove a newer runtime registered at this key.
+    pub(crate) async fn remove_stage_runtime_if_current(
+        &self,
+        key: &StageKey,
+        lifecycle: &Arc<StageLifecycle>,
+    ) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if runtimes
+            .get(key)
+            .is_some_and(|runtime| Arc::ptr_eq(&runtime.lifecycle, lifecycle))
+        {
+            runtimes.remove(key);
+        }
+    }
+
+    /// The shared TS muxer for `stage_key`, and the caller's lease on it: the
+    /// muxer stops when its last lease drops.
+    pub async fn get_or_create_ts_muxer_stage(
+        self: &Arc<Self>,
+        pipeline_id: &str,
+        stage_key: &str,
+        source_ring: Arc<RingBuffer>,
+    ) -> (Arc<TsChunkRing>, StageLease) {
+        let key = format!("{}:{}", pipeline_id, stage_key);
+
+        let mut stages = self.stages.ts_muxers.write().await;
+        if let Some(stage) = stages.get(&key)
+            && !stage.muxer.cancel.is_cancelled()
+            && let Some(lease) = StageLease::upgrade(&stage.lease)
+        {
+            return (stage.muxer.clone(), lease);
+        }
+
+        let cancel = CancellationToken::new();
+        let lease = StageLease::ts_muxer(self, key.clone(), cancel.clone());
+        let shared_muxer = crate::srt::start_shared_ts_muxer(
+            pipeline_id,
+            stage_key,
+            source_ring,
+            self.clone(),
+            cancel,
+        );
+
+        stages.insert(
+            key,
+            TsMuxerStage {
+                muxer: shared_muxer.clone(),
+                lease: lease.downgrade(),
+                lease_id: lease.id(),
+            },
+        );
+        (shared_muxer, lease)
+    }
+
+    /// Last lease of a TS muxer dropped (its token is already cancelled).
+    pub(crate) async fn release_ts_muxer_stage(&self, key: &str, lease_id: u64) {
+        let mut stages = self.stages.ts_muxers.write().await;
+        if stages
+            .get(key)
+            .is_some_and(|stage| stage.lease_id == lease_id)
+        {
+            stages.remove(key);
+        }
+    }
+
+    /// Last lease of a stage runtime dropped (its token is already cancelled).
+    pub(crate) async fn release_stage_runtime(&self, key: &StageKey, lease_id: u64) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if runtimes
+            .get(key)
+            .is_none_or(|runtime| runtime.lease_id != lease_id)
+        {
+            return;
+        }
+        runtimes.remove(key);
+        // Under the runtimes lock (order: runtimes, then metrics, then
+        // lifecycles), so a concurrent ensure_stage cannot adopt these.
+        self.stages.metrics.write().await.remove(key);
+        self.stages.lifecycles.write().await.remove(key);
+        drop(runtimes);
+    }
+
+    fn srt_muxer_cohort_key(pipeline_id: &str, encoding: &str) -> String {
+        format!("{pipeline_id}\u{1f}{encoding}")
+    }
+
+    fn srt_muxer_stage_key(encoding: &str, shard_index: usize) -> String {
+        format!("{encoding}:srt-mux-shard:{shard_index}")
+    }
+
+    pub async fn assign_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) -> String {
+        let max_outputs_per_shard = self.config.srt_egress_muxer_max_outputs_per_shard;
+        if max_outputs_per_shard == 0 {
+            return encoding.to_string();
+        }
+
+        let max_shards = self.config.srt_egress_muxer_max_shards.max(1);
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let result = pools.entry(cohort_key.clone()).or_default().assign(
+            output_id,
+            attempt_id,
+            max_outputs_per_shard,
+            max_shards,
+        );
+        drop(pools);
+
+        if result.should_warn_overflow {
+            warn!(
+                pipeline_id,
+                encoding,
+                cohort_key,
+                max_outputs_per_shard,
+                max_shards,
+                shard_count = result.shard_count,
+                shard_index = result.shard_index,
+                shard_occupancy = result.shard_occupancy,
+                "SRT muxer shard cap exceeded; additional outputs are sharing existing muxers"
+            );
+        }
+
+        Self::srt_muxer_stage_key(encoding, result.shard_index)
+    }
+
+    pub async fn release_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) {
+        if self.config.srt_egress_muxer_max_outputs_per_shard == 0 {
+            return;
+        }
+
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let Some(pool) = pools.get_mut(&cohort_key) else {
+            return;
+        };
+        let Some(result) = pool.release(output_id, attempt_id) else {
+            return;
+        };
+        drop(pools);
+
+        if result.shard_empty {
+            let stage_key = Self::srt_muxer_stage_key(encoding, result.shard_index);
+            self.remove_ts_muxer_stage(pipeline_id, &stage_key).await;
+
+            let mut pools = self.stages.srt_muxer_shards.write().await;
+            if let Some(pool) = pools.get_mut(&cohort_key) {
+                pool.finish_retiring(result.shard_index);
+                if pool.is_empty() {
+                    pools.remove(&cohort_key);
+                }
+            }
+        }
+    }
+
+    async fn remove_ts_muxer_stage(&self, pipeline_id: &str, stage_key: &str) {
+        let key = format!("{}:{}", pipeline_id, stage_key);
+        let mut stages = self.stages.ts_muxers.write().await;
+        if let Some(stage) = stages.remove(&key) {
+            stage.muxer.cancel.cancel();
+        }
+    }
+
+    pub async fn get_or_create_stage_lifecycle(
+        &self,
+        key: StageKey,
+        initial: StagePhase,
+    ) -> Arc<StageLifecycle> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(&key).cloned() {
+            return runtime.lifecycle;
+        }
+        let mut lifecycles = self.stages.lifecycles.write().await;
+        lifecycles
+            .entry(key)
+            .or_insert_with(|| Arc::new(StageLifecycle::new(initial)))
+            .clone()
+    }
+
+    pub async fn get_or_create_stage_lifecycle_with_backend(
+        &self,
+        key: StageKey,
+        initial: StagePhase,
+        backend: StageBackendKind,
+    ) -> Arc<StageLifecycle> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(&key).cloned() {
+            return runtime.lifecycle;
+        }
+        let mut lifecycles = self.stages.lifecycles.write().await;
+        lifecycles
+            .entry(key)
+            .or_insert_with(|| Arc::new(StageLifecycle::new_with_backend(initial, backend)))
+            .clone()
+    }
+
+    pub async fn remove_stage_lifecycle(&self, key: &StageKey) {
+        self.stages.lifecycles.write().await.remove(key);
+    }
+
+    pub async fn stage_lifecycle_snapshot(&self, key: &StageKey) -> Option<StageLifecycleSnapshot> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(key).cloned() {
+            return Some(runtime.lifecycle.snapshot());
+        }
+        self.stages
+            .lifecycles
+            .read()
+            .await
+            .get(key)
+            .map(|lc| lc.snapshot())
+    }
+
+    async fn stage_snapshot_parts(
+        &self,
+        key: &StageKey,
+    ) -> Option<(StageLifecycleSnapshot, Arc<StageMetrics>)> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(key).cloned() {
+            return Some((runtime.lifecycle.snapshot(), runtime.metrics.clone()));
+        }
+        let lifecycle = self.stage_lifecycle_snapshot(key).await?;
+        let metrics = self
+            .stages
+            .metrics
+            .read()
+            .await
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(StageMetrics::new()));
+        Some((lifecycle, metrics))
+    }
+
+    fn build_stage_runtime_snapshot(
+        &self,
+        key: &StageKey,
+        lifecycle: StageLifecycleSnapshot,
+        metrics: Arc<StageMetrics>,
+    ) -> StageRuntimeSnapshot {
+        let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
+            lifecycle.phase,
+            StagePhase::WaitingForCapacity { .. } | StagePhase::CapacityAcquired { .. }
+        ) {
+            let semaphore = &self.runtime.external_ffmpeg_semaphore;
+            let total = Some(self.config.external_ffmpeg_permits);
+            let available = Some(semaphore.available_permits());
+            let wait_ms = lifecycle
+                .phase_started_at
+                .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
+            (total, available, wait_ms)
+        } else {
+            (None, None, None)
+        };
+
+        StageRuntimeSnapshot {
+            key: key.clone(),
+            backend: lifecycle.backend,
+            phase: lifecycle.phase.clone(),
+            backend_pid: lifecycle.backend_pid,
+            bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
+            bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
+            packets_in: metrics.packets_in.load(Ordering::Relaxed),
+            packets_out: metrics.packets_out.load(Ordering::Relaxed),
+            first_input_at: lifecycle.first_input_at,
+            first_output_at: lifecycle.first_output_at,
+            last_error: lifecycle.last_error.clone(),
+            capacity_permits_total,
+            capacity_permits_available,
+            capacity_wait_ms,
+        }
+    }
+
+    pub async fn stage_runtime_snapshot(&self, key: &StageKey) -> Option<StageRuntimeSnapshot> {
+        let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
+        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
+    }
+
+    /// Return runtime snapshots for all stages belonging to the given pipeline.
+    pub async fn pipeline_stage_runtime_snapshots(
+        &self,
+        pipeline_id: &str,
+    ) -> Vec<StageRuntimeSnapshot> {
+        let mut keys = HashSet::new();
+        {
+            let runtimes = self.stages.runtimes.read().await;
+            keys.extend(
+                runtimes
+                    .keys()
+                    .filter(|k| k.pipeline.as_str() == pipeline_id)
+                    .cloned(),
+            );
+        }
+        {
+            let lifecycles = self.stages.lifecycles.read().await;
+            keys.extend(
+                lifecycles
+                    .keys()
+                    .filter(|k| k.pipeline.as_str() == pipeline_id)
+                    .cloned(),
+            );
+        }
+
+        let mut snapshots = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(snap) = self.stage_runtime_snapshot(&key).await {
+                snapshots.push(snap);
+            }
+        }
+        snapshots
+    }
+
+    /// Returns the blocking upstream stage snapshot for an egress when its
+    /// terminal stage is not yet producing. `None` means the stage is healthy,
+    /// unknown, or already producing.
+    pub async fn egress_blocked_by_snapshot(
+        &self,
+        egress: &ActiveEgress,
+    ) -> Option<StageRuntimeSnapshot> {
+        let key = egress.terminal_stage_key.as_ref()?;
+        self.egress_blocked_by_stage_snapshot(key).await
+    }
+
+    /// Key-based variant of `egress_blocked_by_snapshot` for callers that
+    /// need to drop egress registry guards before awaiting stage registries.
+    pub async fn egress_blocked_by_stage_snapshot(
+        &self,
+        key: &StageKey,
+    ) -> Option<StageRuntimeSnapshot> {
+        let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
+        if matches!(lifecycle.phase, StagePhase::Producing) {
+            return None;
+        }
+        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
+    }
+
+    /// Returns the blocking upstream stage snapshot for an HLS preview when
+    /// any of its active preview/transcode stages are not yet producing.
+    pub async fn preview_blocked_by_snapshot(
+        &self,
+        pipeline_id: &str,
+    ) -> Option<StageRuntimeSnapshot> {
+        let mut keys: Vec<_> = self
+            .active_hls_preview_stage_keys()
+            .await
+            .into_iter()
+            .filter(|key| key.pipeline.as_str() == pipeline_id)
+            .collect();
+        keys.sort_by_key(|key| key.to_string());
+
+        for key in keys {
+            let Some((lifecycle, metrics)) = self.stage_snapshot_parts(&key).await else {
+                continue;
+            };
+            if matches!(lifecycle.phase, StagePhase::Producing) {
+                continue;
+            }
+            return Some(self.build_stage_runtime_snapshot(&key, lifecycle, metrics));
+        }
+        None
+    }
+
+    pub async fn active_hls_preview_stage_keys(&self) -> HashSet<StageKey> {
+        let preview_ids = self.hls_preview_pipeline_ids().await;
+        let active_preview_ids = {
+            let consumers = self.hls.consumers.read().await;
+            preview_ids
+                .into_iter()
+                .filter(|preview_id| {
+                    consumers
+                        .get(&hls_preview_registry_key(preview_id))
+                        .is_some_and(|consumer| !consumer.cancel_token.is_cancelled())
+                })
+                .collect::<Vec<_>>()
+        };
+        let active_codecs = self
+            .ingests
+            .active
+            .read()
+            .await
+            .iter()
+            .filter_map(|(pipeline_id, ingest)| {
+                ingest
+                    .metadata()
+                    .video
+                    .map(|video| (pipeline_id.clone(), video.codec))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let input_codecs = self
+            .ingests
+            .sessions
+            .read()
+            .await
+            .iter()
+            .filter_map(|(input_id, ingest)| {
+                ingest
+                    .metadata()
+                    .video
+                    .map(|video| (input_id.clone(), video.codec))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut needed = HashSet::new();
+
+        for pipeline_id in active_preview_ids {
+            // A passthrough preview (`<id>.hevc`) plans no stage.
+            if crate::engine_hls::preview_pipeline(&pipeline_id).1 {
+                continue;
+            }
+            let ingest_codec =
+                if let Some(input_id) = input_id_from_hls_preview_resource_id(&pipeline_id) {
+                    input_codecs.get(input_id).map(String::as_str)
+                } else {
+                    active_codecs.get(&pipeline_id).map(String::as_str)
+                };
+            let Some(plan) =
+                restream_domain::planner::plan_hls_preview_graph(&pipeline_id, ingest_codec)
+            else {
+                continue;
+            };
+
+            for stage in plan.stages {
+                if stage.kind != StageKind::Source {
+                    needed.insert(stage.key);
+                }
+            }
+        }
+
+        needed
+    }
+}
+
+#[cfg(test)]
+#[path = "stage_registry_access/registry_tests.rs"]
+mod registry_tests;

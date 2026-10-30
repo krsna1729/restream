@@ -1,0 +1,169 @@
+[package]
+name = "restream-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Builds `egress::test_driver` for the `egress_visit` benchmark.
+egress-test-driver = []
+# Benchmark-only SRT shard-count seam. Kept default-off; production builds retain the
+# CPU-derived SRT shard policy unless a benchmark explicitly opts in.
+srt-shard-bench = []
+# Media test helpers for dev builds of the crates above the engine; shipped
+# builds leave it off.
+test-support = ["dep:rcgen"]
+# TypeScript declarations for the dashboard drift test (`ts_rs::TS` derives).
+ts = ["dep:ts-rs"]
+
+[dependencies]
+restream-core = { path = "../restream-core" }
+restream-domain = { path = "../restream-domain" }
+restream-sync = { path = "../restream-sync" }
+restream-mpegts = { path = "../restream-mpegts" }
+restream-rtmp = { path = "../restream-rtmp" }
+restream-moq = { path = "../restream-moq" }
+restream-srt = { path = "../restream-srt" }
+httparse = "1.10"
+tokio = { version = "1.39", features = [
+    "fs", "io-util", "macros", "net", "process",
+    "rt-multi-thread", "signal", "sync", "time",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bytes = "1.12"
+sysinfo = "0.39"
+libc = "0.2"
+# Safe system-call wrappers (owned/borrowed fds, typed flags). The few calls it
+# does not model (TCP_INFO, kTLS crypto setup, getrusage) stay on libc.
+rustix = { version = "1.1", features = ["fs", "net", "pipe", "process", "time"] }
+futures-util = "0.3"
+rand = "0.10"
+sha2 = "0.11"
+md-5 = "0.11"
+chrono = { version = "0.4", features = ["serde"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+rml_rtmp = "0.8.0"
+arc-swap = "1"
+memchr = "2.7"
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+webpki-roots = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
+url = "2"
+# MoQ (moq-lite + hang, IETF MOQT drafts 14-22): the moq.dev drivers and media
+# conventions, pinned; Restream supplies the Compio transport. `unsend` is the
+# vendored patch (vendor/moq-net/PATCH.md) that lets the IETF entry points run
+# over that `!Send` transport.
+moq-net = { version = "=0.3.15", features = ["unsend"] }
+hang = "=0.21.16"
+# The catalog producer/consumer (hang `catalog.json` + MSF `catalog`), group
+# management and LOC framing. Restream uses only paths that spawn nothing.
+moq-mux = "=0.10.16"
+moq-loc = "=0.2.24"
+moq-msf = "=0.5.1"
+# The poll transport traits moq-net 0.3.15 drives (`moq::transport`
+# implements them over compio-quic), its waiter primitive, and the HTTP/3 +
+# WebTransport framing for browser sessions; all pinned to moq-net's versions.
+web-transport-trait = "=0.4.0"
+kio = "=0.6.2"
+web-transport-proto = "=0.6.2"
+shiguredo_mp4 = "2026.5.0"
+# srt-rs: pinned by commit (its history is in that repository). SRT ingress
+# and egress both run on `srt_transport::compio::Owner`; ingress attaches each
+# `owner_plans` entry with `Owner::listen_planned`.
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "2119264553eab8ccb4c2dfbb56214fbe2333971d" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "2119264553eab8ccb4c2dfbb56214fbe2333971d", features = ["compio"] }
+# Bounded shard command channel with both blocking and Future-based receive, so
+# a backend that owns a thread-affine completion runtime can await commands
+# alongside its own I/O without a second wake source.
+flume = { version = "0.12", default-features = false, features = ["async"] }
+# The SRT egress backend owns one Compio runtime per shard thread, so it
+# names the runtime type directly.
+# The substrate benchmark harness compares Compio UDP submission with a direct
+# io_uring baseline; production RTMP egress uses Compio TCP. MoQ (`quic`,
+# with rustls `ring` crypto) runs native QUIC on its own Compio threads;
+# `io-compat` gives its streams slice-based read/write.
+compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "ring", "io-compat"] }
+io-uring = "0.7.15"
+tracing = { version = "0.1", features = ["max_level_debug"] }
+rcgen = { version = "0.14.8", optional = true }
+ts-rs = { version = "12", optional = true }
+
+[dev-dependencies]
+# Paused-clock tests (`start_paused`, `time::advance`) only.
+tokio = { version = "1.39", features = ["test-util"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+criterion = "0.8"
+rtrb = "0.4"
+crossbeam-queue = "0.3"
+proptest = "1"
+loom = { version = "0.7", features = ["checkpoint"] }
+rcgen = "0.14.8"
+
+[[bench]]
+name = "ring_buffer"
+harness = false
+
+[[bench]]
+name = "ingest_handoff"
+harness = false
+
+[[bench]]
+name = "byte_queue_throughput"
+harness = false
+
+[[bench]]
+name = "high_performance_data_path"
+harness = false
+
+[[bench]]
+name = "hls_cost"
+harness = false
+
+[[bench]]
+name = "hls_fmp4_cost"
+harness = false
+
+[[bench]]
+name = "matrix_throughput"
+harness = false
+
+[[bench]]
+name = "codec_conversions"
+harness = false
+
+[[bench]]
+name = "moq_publish"
+harness = false
+
+[[bench]]
+name = "rtmp_serializer"
+harness = false
+
+[[bench]]
+name = "recirculation_cost"
+harness = false
+
+[[bench]]
+name = "stage_metrics"
+harness = false
+
+[[bench]]
+name = "stage_feeder"
+harness = false
+
+[[bench]]
+name = "input_gate"
+harness = false
+
+[[bench]]
+name = "egress_visit"
+harness = false
+required-features = ["egress-test-driver"]
+

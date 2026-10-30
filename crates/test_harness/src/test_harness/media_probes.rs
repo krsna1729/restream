@@ -52,7 +52,7 @@ pub(crate) const MSR_LANGUAGE_NAMES: [&str; 30] = [
 ];
 
 pub(crate) fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<PathBuf, String> {
-    restream::media::test_fixtures::bench_transport_fixture(
+    restream_engine::test_fixtures::bench_transport_fixture(
         config.video_codec,
         bitrate_label,
         config.multi_audio,
@@ -60,11 +60,11 @@ pub(crate) fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<
 }
 
 pub(crate) fn ramp_fixture() -> Result<PathBuf, String> {
-    restream::media::test_fixtures::bench_transport_fixture("h264", "4M", false)
+    restream_engine::test_fixtures::bench_transport_fixture("h264", "4M", false)
 }
 
 pub(crate) fn checked_h264_fixture() -> Result<PathBuf, String> {
-    restream::media::test_fixtures::canonical_h264_ts_fixture()
+    restream_engine::test_fixtures::canonical_h264_ts_fixture()
 }
 
 pub(crate) fn spawn_publisher_with_selection(

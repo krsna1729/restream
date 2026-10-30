@@ -13,7 +13,7 @@ moq-net's IETF MOQT entry points (`Server::accept_request` for a
 The bound exists only to fill the boxed futures and task sets the IETF
 driver is still built from (`util::MaybeSendBox`, `MaybeSendTask`,
 `MaybeBoxedExt`), which already have `!Send` forms for wasm. Restream's
-Compio QUIC/WebTransport transport (`src/media/moq/transport/`) is `!Send`
+Compio QUIC/WebTransport transport (`crates/restream-engine/src/moq/transport/`) is `!Send`
 by design: every session lives on the Compio thread that owns its
 connection. The patch lets that transport reach the IETF driver without
 making it `Send`.

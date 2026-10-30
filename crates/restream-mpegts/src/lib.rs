@@ -82,7 +82,7 @@ pub fn remux_segment_view(
 
 #[cfg(test)]
 #[allow(dead_code)]
-#[path = "../../../src/media/test_fixtures/paths.rs"]
+#[path = "../../../crates/restream-engine/src/test_fixtures/paths.rs"]
 mod test_fixtures;
 
 #[cfg(test)]

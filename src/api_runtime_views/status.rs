@@ -5,10 +5,10 @@
 
 use super::status_projection as api_view_models;
 use crate::config::AppConfig;
-use crate::media::engine::MediaEngine;
 use crate::system_sampling::{
     CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
 };
+use restream_engine::engine::MediaEngine;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -225,7 +225,7 @@ struct RtmpListenerHealthJson {
 struct SrtListenerHealthJson {
     bonding_available: bool,
     restarts: u64,
-    ingress_owner: crate::media::snapshots::SrtIngressOwnerSnapshot,
+    ingress_owner: restream_engine::snapshots::SrtIngressOwnerSnapshot,
 }
 
 #[derive(Serialize)]
@@ -255,9 +255,9 @@ pub(crate) struct EngineHealthView {
     rtmp_listener: RtmpListenerHealthJson,
     srt_listener: SrtListenerHealthJson,
     egress_fabric_shards:
-        Vec<crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
+        Vec<restream_engine::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
     /// Panics contained at a per-entity boundary since start
-    /// (`crate::media::panic_boundary`); each one ended one connection, peer or
+    /// (`restream_engine::panic_boundary`); each one ended one connection, peer or
     /// output only.
     contained_panics: u64,
     tuning: TuningHealthJson,
@@ -571,7 +571,7 @@ pub(crate) async fn health_snapshot_view(
     let host_settings_rows = host_settings_json(config, &host_settings, &nofile);
     let egress_fabric_shards = engine
         .egress_fabric_shard_statuses(
-            crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+            restream_engine::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
         )
         .await;
 
@@ -606,7 +606,7 @@ pub(crate) async fn health_snapshot_view(
             ingress_owner,
         },
         egress_fabric_shards,
-        contained_panics: crate::media::panic_boundary::contained_panics(),
+        contained_panics: restream_engine::panic_boundary::contained_panics(),
         tuning: TuningHealthJson {
             output_max_retries: config.tuning.output_max_retries,
         },
@@ -774,7 +774,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::config::AppConfig;
-    use crate::media::engine::MediaEngine;
+    use restream_engine::engine::MediaEngine;
 
     use super::host_setting_json;
 

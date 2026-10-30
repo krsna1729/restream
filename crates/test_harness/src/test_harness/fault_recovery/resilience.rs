@@ -292,7 +292,7 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
 
     let fixture_h264 = checked_h264_fixture()?;
     preflight_rtmps_ktls_capabilities(&api).await?;
-    let (rtmps_cert, rtmps_key) = restream::media::test_fixtures::rtmps_harness_cert_fixture()?;
+    let (rtmps_cert, rtmps_key) = restream_engine::test_fixtures::rtmps_harness_cert_fixture()?;
 
     let mut results: Vec<Value> = Vec::new();
 

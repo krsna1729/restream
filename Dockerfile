@@ -99,19 +99,22 @@ COPY crates/xtask/Cargo.toml crates/xtask/Cargo.toml
 COPY crates/restream-core/Cargo.toml crates/restream-core/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
+COPY crates/restream-engine/Cargo.toml crates/restream-engine/Cargo.toml
 COPY crates/restream-sync/Cargo.toml crates/restream-sync/Cargo.toml
 COPY crates/restream-mpegts/Cargo.toml crates/restream-mpegts/Cargo.toml
 COPY crates/restream-rtmp/Cargo.toml crates/restream-rtmp/Cargo.toml
 COPY crates/restream-moq/Cargo.toml crates/restream-moq/Cargo.toml
 COPY crates/restream-srt/Cargo.toml crates/restream-srt/Cargo.toml
 COPY crates/test_harness/Cargo.toml crates/test_harness/Cargo.toml
-RUN mkdir -p benches src crates/xtask/src crates/restream-core/src crates/restream-domain/src crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
+RUN mkdir -p benches src crates/xtask/src crates/restream-core/src crates/restream-domain/src crates/restream-engine/src crates/restream-engine/benches crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
+    && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("crates/restream-engine/benches/" name ".rs"); in_bench = 0 }' crates/restream-engine/Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs \
     && : > crates/xtask/src/lib.rs \
     && : > crates/restream-core/src/lib.rs \
     && : > crates/restream-domain/src/lib.rs \
     && : > crates/restream-domain/src/lib.rs \
+    && : > crates/restream-engine/src/lib.rs \
     && : > crates/restream-sync/src/lib.rs \
     && : > crates/restream-mpegts/src/lib.rs \
     && : > crates/restream-rtmp/src/lib.rs \
@@ -133,6 +136,7 @@ COPY crates/xtask/ crates/xtask/
 COPY crates/restream-core/ crates/restream-core/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-domain/ crates/restream-domain/
+COPY crates/restream-engine/ crates/restream-engine/
 COPY crates/restream-sync/ crates/restream-sync/
 COPY crates/restream-mpegts/ crates/restream-mpegts/
 COPY crates/restream-rtmp/ crates/restream-rtmp/
@@ -162,7 +166,7 @@ RUN mkdir -p /restream-state && touch /restream-state/.keep
 
 # FFmpeg is not linked into the engine; images carry the BtbN build that
 # `restream ffmpeg-fetch` installs: the same release and SHA-256 digests as
-# src/media/ffmpeg_binary.rs (tests/docker_build_recipe.rs keeps them equal).
+# crates/restream-engine/src/ffmpeg_binary.rs (tests/docker_build_recipe.rs keeps them equal).
 FROM ubuntu:24.04 AS ffmpeg-fetch
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive

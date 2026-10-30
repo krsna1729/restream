@@ -13,8 +13,8 @@ use crate::application::reconcile::{
 };
 use crate::application::runtime_state::hub::StateHub;
 use crate::config::RuntimeTuning;
-use crate::media::engine::MediaEngine;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_engine::engine::MediaEngine;
 
 #[path = "egress_task.rs"]
 mod egress_task;
@@ -117,7 +117,7 @@ impl EgressReconciler {
                             self.engine.clear_egress_retry_state(&output.id).await;
                             self.runtime_state.mark_changed();
                             warn!(
-                                correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
+                                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
                                 output_id = %output.id,
                                 output_name = %output.name,
                                 max_retries = self.tuning.output_max_retries,
@@ -126,7 +126,7 @@ impl EgressReconciler {
                         }
                         Err(err) => {
                             warn!(
-                                correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
+                                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
                                 output_id = %output.id,
                                 error = %err,
                                 "failed to record exhausted output retries in db; will retry on next tick",
@@ -162,7 +162,7 @@ impl EgressReconciler {
                 OutputStopAction::KeepRunning => {}
                 OutputStopAction::StopBecauseIngestLost => {
                     info!(
-                        correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
+                        correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
                         output_id = %output.id,
                         output_name = %output.name,
                         pipeline_id = %output.pipeline_id,
@@ -175,7 +175,7 @@ impl EgressReconciler {
                 }
                 OutputStopAction::StopRequested => {
                     info!(
-                        correlation_id = %crate::media::correlation_id::next_correlation_id("out"),
+                        correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
                         output_id = %output.id,
                         output_name = %output.name,
                         pipeline_id = %output.pipeline_id,
@@ -192,7 +192,7 @@ impl EgressReconciler {
     }
 
     async fn start(&self, output: &Output) {
-        let correlation_id = crate::media::correlation_id::next_correlation_id("out");
+        let correlation_id = restream_engine::correlation_id::next_correlation_id("out");
         info!(
             correlation_id = %correlation_id,
             output_id = %output.id,
@@ -258,7 +258,7 @@ impl EgressReconciler {
                     if let Some(sink) = self
                         .engine
                         .with_active_egress(&output.id, |egress| {
-                            crate::media::egress::leaf::EgressProgressSink {
+                            restream_engine::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
                                 metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
@@ -317,7 +317,7 @@ impl EgressReconciler {
             if let Some(sink) = self
                 .engine
                 .with_active_egress(&output.id, |egress| {
-                    crate::media::egress::leaf::EgressProgressSink {
+                    restream_engine::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
@@ -356,7 +356,7 @@ impl EgressReconciler {
             if let Some(sink) = self
                 .engine
                 .with_active_egress(&output.id, |egress| {
-                    crate::media::egress::leaf::EgressProgressSink {
+                    restream_engine::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
@@ -408,7 +408,7 @@ impl EgressReconciler {
                     if let Some(sink) = self
                         .engine
                         .with_active_egress(&output.id, |egress| {
-                            crate::media::egress::leaf::EgressProgressSink {
+                            restream_engine::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
                                 metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
@@ -447,7 +447,7 @@ impl EgressReconciler {
                     // The first call probes the kernel (sockets, setsockopt):
                     // keep it off the Tokio worker. Later calls hit the cache.
                     let available = tokio::task::spawn_blocking(
-                        crate::media::egress::tls::ktls::egress_available,
+                        restream_engine::egress::tls::ktls::egress_available,
                     )
                     .await
                     .unwrap_or(false);
@@ -466,22 +466,24 @@ impl EgressReconciler {
         let hls_put_fabric = if use_hls_put_fabric {
             let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let upload_status = Arc::new(std::sync::Mutex::new(
-                crate::media::egress::leaf::UploadStatus::default(),
+                restream_engine::egress::leaf::UploadStatus::default(),
             ));
-            let mut spec = crate::media::egress::OutputSpec {
-                id: crate::media::egress::OutputId::new(output.id.clone()),
+            let mut spec = restream_engine::egress::OutputSpec {
+                id: restream_engine::egress::OutputId::new(output.id.clone()),
                 generation: registration.attempt_id,
-                feed: crate::media::engine_hls_egress_fabric::hls_put_feed_id(&output.pipeline_id),
-                protocol: crate::media::egress::ProtocolSpec::HlsPut {
+                feed: restream_engine::engine_hls_egress_fabric::hls_put_feed_id(
+                    &output.pipeline_id,
+                ),
+                protocol: restream_engine::egress::ProtocolSpec::HlsPut {
                     url: output.url.clone(),
                 },
-                policy: crate::media::egress::LeafPolicy::default(),
+                policy: restream_engine::egress::LeafPolicy::default(),
                 progress: Default::default(),
             };
             if let Some(sink) = self
                 .engine
                 .with_active_egress(&output.id, |egress| {
-                    crate::media::egress::leaf::EgressProgressSink {
+                    restream_engine::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
@@ -537,6 +539,6 @@ impl EgressReconciler {
 pub(super) fn next_output_job_id(output_id: &str) -> String {
     format!(
         "job_{output_id}_{}",
-        crate::media::correlation_id::next_correlation_id("attempt")
+        restream_engine::correlation_id::next_correlation_id("attempt")
     )
 }

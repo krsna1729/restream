@@ -3,8 +3,8 @@
 
 use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::media::engine::MediaEngine;
 use restream_domain::domain::state::DesiredOutputState;
+use restream_engine::engine::MediaEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputRetryPolicy {

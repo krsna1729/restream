@@ -4,7 +4,7 @@
 //! **Two different faults, because `SIGSTOP` is not backpressure.** A single
 //! `SIGSTOP` test cannot cover the *backpressured-but-connected* path
 //! (`classify_stall`/`observe_stall` in
-//! `src/media/egress/policy.rs` and `src/media/egress/backends/srt.rs`): a
+//! `crates/restream-engine/src/egress/policy.rs` and `crates/restream-engine/src/egress/backends/srt.rs`): a
 //! destination that keeps the SRT connection alive but never drains
 //! application data, so the leaf sits at `LeafStallClass::Backpressured`
 //! and is closed only once it reaches `Stalled`. `SIGSTOP` on a real

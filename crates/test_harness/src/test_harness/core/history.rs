@@ -119,13 +119,13 @@ pub(crate) async fn verify_external_transcoder_history_contract(
 ) -> Result<Value, String> {
     let logs = get_logs(
         api,
-        "target=restream::media::external_transcoder&limit=200&order=desc",
+        "target=restream_engine::external_transcoder&limit=200&order=desc",
     )
     .await?;
 
     if logs.is_empty() {
         return Err(
-            "external transcoder history contract found no restream::media::external_transcoder logs"
+            "external transcoder history contract found no restream_engine::external_transcoder logs"
                 .to_string(),
         );
     }

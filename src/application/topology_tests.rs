@@ -51,12 +51,12 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
         .await
         .unwrap();
-    let (_engine, ingest) = crate::media::hls_ingest::test_support::test_ingest(
-        crate::media::hls_ingest::HlsIngestLimits::default(),
+    let (_engine, ingest) = restream_engine::hls_ingest::test_support::test_ingest(
+        restream_engine::hls_ingest::HlsIngestLimits::default(),
     );
     // A listener that accepts and never answers, so the pull task parks in
     // its first request; a closed port would log a warning on every backoff.
-    let (origin, stalled) = crate::media::hls_ingest::test_support::stalled_origin();
+    let (origin, stalled) = restream_engine::hls_ingest::test_support::stalled_origin();
     let pull = |url: String| restream_domain::domain::pipeline_input::PipelineInputSource {
         kind: restream_domain::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
         url: Some(url),
@@ -142,8 +142,8 @@ async fn a_deleted_inputs_key_state_is_released() {
     crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
         .await
         .unwrap();
-    let (_engine, ingest) = crate::media::hls_ingest::test_support::test_ingest(
-        crate::media::hls_ingest::HlsIngestLimits::default(),
+    let (_engine, ingest) = restream_engine::hls_ingest::test_support::test_ingest(
+        restream_engine::hls_ingest::HlsIngestLimits::default(),
     );
     for input_id in ["in-live", "in-gone"] {
         crate::db::create_pipeline_input(
@@ -230,7 +230,7 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
         .await
         .unwrap();
     // An input preview can key a ring; it is not a pipeline.
-    let preview = crate::media::engine_hls::input_hls_preview_resource_id("input-x");
+    let preview = restream_engine::engine_hls::input_hls_preview_resource_id("input-x");
     let _ = engine.get_or_create_pipeline(&preview).await;
 
     assert!(
@@ -353,7 +353,7 @@ fn a_deadline_makes_a_pass_due_only_once_it_is_reached() {
 
 #[test]
 fn lifecycle_events_request_the_passes_their_effects_need() {
-    use crate::media::events::EventKind;
+    use restream_engine::events::EventKind;
     let grace = std::time::Duration::from_secs(5);
     let requests = ReconcileRequests::new();
     let before = Instant::now();

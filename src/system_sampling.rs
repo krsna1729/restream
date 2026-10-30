@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use sysinfo::System;
 
 #[cfg(target_os = "linux")]
-use crate::media::host_capacity::parse_cpu_list_count;
-use crate::media::host_capacity::proc_status_value;
+use restream_engine::host_capacity::parse_cpu_list_count;
+use restream_engine::host_capacity::proc_status_value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NofileLimitSnapshot {

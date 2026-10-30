@@ -109,7 +109,7 @@ At about 50 AAC packets per second per track:
 ```
 
 Six seconds of headroom needs about 9,180 to 9,360 ring slots, under the
-16,384-slot maximum (`MAX_RING_CAPACITY` in `src/media/engine_pipeline.rs`).
+16,384-slot maximum (`MAX_RING_CAPACITY` in `crates/restream-engine/src/engine_pipeline.rs`).
 The 30 routers together inspect about 46,000 packets per second. Payload
 bytes are shared; packet objects, ring writes, metrics and notifications are
 per route.

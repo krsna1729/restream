@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 use super::super::model::{DiagResult, FileDiagnosticsContext};
 

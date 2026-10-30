@@ -8,7 +8,7 @@ async fn health_shows_registered_egress() {
         restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin")
             .await;
         let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-        let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
             &[],
         ));
@@ -357,7 +357,7 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
     restream::infrastructure::bootstrap::initialize_auth_for_test(&auth_pool, &sessions, "admin")
         .await;
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));

@@ -5,8 +5,8 @@
 
 #[test]
 fn checked_in_fixture_contract_is_satisfied() {
-    for relative_path in restream::media::test_fixtures::REQUIRED_CHECKED_IN_FIXTURES {
-        let path = restream::media::test_fixtures::checked_in_fixture(relative_path)
+    for relative_path in restream_engine::test_fixtures::REQUIRED_CHECKED_IN_FIXTURES {
+        let path = restream_engine::test_fixtures::checked_in_fixture(relative_path)
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(
             path.is_file(),
@@ -18,12 +18,12 @@ fn checked_in_fixture_contract_is_satisfied() {
 
 #[test]
 fn canonical_transport_fixtures_resolve() {
-    let h264 = restream::media::test_fixtures::canonical_h264_ts_fixture()
+    let h264 = restream_engine::test_fixtures::canonical_h264_ts_fixture()
         .unwrap_or_else(|e| panic!("{e}"));
-    let h265 = restream::media::test_fixtures::canonical_h265_ts_fixture()
+    let h265 = restream_engine::test_fixtures::canonical_h265_ts_fixture()
         .unwrap_or_else(|e| panic!("{e}"));
     let sparse =
-        restream::media::test_fixtures::sparse_gop_mp4_fixture().unwrap_or_else(|e| panic!("{e}"));
+        restream_engine::test_fixtures::sparse_gop_mp4_fixture().unwrap_or_else(|e| panic!("{e}"));
 
     assert!(h264.ends_with("test/fixtures/transport/correctness-h264.ts"));
     assert!(h265.ends_with("test/fixtures/transport/correctness-h265.ts"));
@@ -32,7 +32,7 @@ fn canonical_transport_fixtures_resolve() {
 
 #[test]
 fn bf0_marker_transport_fixtures_demux_into_packets() {
-    use restream::media::test_fixtures::{
+    use restream_engine::test_fixtures::{
         AvMarkerBframeMode, av_marker_transport_fixture_for_bframes,
     };
     use restream_mpegts::TsDemuxer;
@@ -68,7 +68,7 @@ fn bf0_marker_transport_fixtures_demux_into_packets() {
 
 #[test]
 fn h264_bf0_marker_probe_emits_startup_sequence_header() {
-    use restream::media::test_fixtures::{
+    use restream_engine::test_fixtures::{
         AvMarkerBframeMode, av_marker_transport_fixture_for_bframes,
     };
     use restream_mpegts::TsDemuxer;
@@ -110,7 +110,7 @@ fn h264_bf0_marker_probe_emits_startup_sequence_header() {
 /// workload that later optimization numbers are compared against.
 #[test]
 fn canonical_8m_bench_fixtures_carry_the_stated_payload_rate() {
-    use restream::media::test_fixtures::bench_transport_fixture;
+    use restream_engine::test_fixtures::bench_transport_fixture;
     use restream_mpegts::TsDemuxer;
 
     const TARGET_MBPS: f64 = 8.0;

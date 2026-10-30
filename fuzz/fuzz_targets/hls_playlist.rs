@@ -3,7 +3,7 @@
 //! relative URI resolution (`..`, nested variants) is explored too.
 #![no_main]
 
-use restream::media::hls_ingest::playlist::parse;
+use restream_engine::hls_ingest::playlist::parse;
 
 const PATHS: [&str; 4] = ["index.m3u8", "v0/index.m3u8", "a/b/index.m3u8", "master.m3u8"];
 

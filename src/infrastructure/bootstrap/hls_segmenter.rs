@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::media::engine::MediaEngine;
-use crate::media::stage_lease::StageLease;
+use restream_engine::engine::MediaEngine;
+use restream_engine::stage_lease::StageLease;
 
 /// Spawns the pipeline's one HLS segmenter on `ring`. The segmenter is
 /// shared by every HLS output of the pipeline and outlives the output that
@@ -14,21 +14,21 @@ use crate::media::stage_lease::StageLease;
 pub(super) fn spawn_pipeline_hls_segmenter(
     engine: Arc<MediaEngine>,
     pipeline_id: String,
-    store: Arc<crate::media::hls::HlsStore>,
+    store: Arc<restream_engine::hls::HlsStore>,
     ring: Arc<restream_sync::RingBuffer>,
     cancel: tokio_util::sync::CancellationToken,
     stage_key: restream_domain::domain::stage::StageKey,
     stages: Vec<StageLease>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let segmenter = crate::media::hls::start_hls_segmenter(
+        let segmenter = restream_engine::hls::start_hls_segmenter(
             pipeline_id.clone(),
             store,
             ring,
             None,
             engine.clone(),
             cancel.clone(),
-            crate::media::hls::HlsSegmenterStart {
+            restream_engine::hls::HlsSegmenterStart {
                 video_meta_override: None,
                 planned_stage_key: Some(stage_key),
             },

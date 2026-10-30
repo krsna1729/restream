@@ -18,7 +18,7 @@ use super::state::{
     hash_session_token, make_session_cookie, to_hex,
 };
 use crate::application::services::team_service::{BUILTIN_ADMIN_ID, BUILTIN_ADMIN_USERNAME};
-use crate::media::security::RateLimitScope;
+use restream_engine::security::RateLimitScope;
 
 #[derive(Deserialize)]
 pub struct LoginPayload {

@@ -6,8 +6,9 @@ description: Benchmark, investigate resource regressions, or optimize restream h
 # Performance Sweep
 
 Choose the requested measurement or hypothesis. Discover Criterion targets in
-`Cargo.toml` and inspect the matching `benches/` implementation; infer the
-target from the changed path when possible.
+`crates/restream-engine/Cargo.toml` (engine hot paths) and the root
+`Cargo.toml` (API) and inspect the matching `benches/` implementation; infer
+the target from the changed path when possible.
 
 ## Measurement contract
 

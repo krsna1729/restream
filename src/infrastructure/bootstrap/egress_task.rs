@@ -17,12 +17,12 @@ use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::models::JobStatus;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
-use crate::media::egress::journal::{RingFeed, TsFeed};
-use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
-use crate::media::engine::MediaEngine;
-use crate::media::secret_display::redact_url;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::domain::state::EgressPhase;
+use restream_engine::egress::journal::{RingFeed, TsFeed};
+use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
+use restream_engine::engine::MediaEngine;
+use restream_engine::secret_display::redact_url;
 
 use super::FailureTracker;
 
@@ -50,7 +50,7 @@ pub(super) struct RtmpFabricTask {
     pub(super) feed_id: FeedId,
     pub(super) feed: Arc<RingFeed>,
     pub(super) spec: OutputSpec,
-    pub(super) startup: crate::media::egress::backends::rtmp::RtmpPublishStartup,
+    pub(super) startup: restream_engine::egress::backends::rtmp::RtmpPublishStartup,
     /// See `SrtFabricTask::terminated`.
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -84,7 +84,7 @@ pub(super) struct HlsPutFabricTask {
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
     /// The leaf's per-request status, forwarded to the engine while the
     /// output runs (see `forward_upload_status`).
-    pub(super) upload_status: Arc<std::sync::Mutex<crate::media::egress::leaf::UploadStatus>>,
+    pub(super) upload_status: Arc<std::sync::Mutex<restream_engine::egress::leaf::UploadStatus>>,
 }
 
 /// What `forward_upload_status` already passed on to the engine.
@@ -102,14 +102,14 @@ pub(super) struct EgressTask {
     pub(super) url: String,
     pub(super) ring: Arc<restream_sync::RingBuffer>,
     pub(super) terminal_stage_key: restream_domain::domain::stage::StageKey,
-    pub(super) registration: crate::media::engine::EgressRegistration,
+    pub(super) registration: restream_engine::engine::EgressRegistration,
     pub(super) engine: Arc<MediaEngine>,
     pub(super) pool: SqlitePool,
     pub(super) last_failed: FailureTracker,
     /// Leases on the shared stages this output reads through: they stop
     /// when the last egress (or other consumer) using them ends. A pipeline
     /// HLS segmenter this output starts holds clones while it reads the ring.
-    pub(super) stages: Vec<crate::media::stage_lease::StageLease>,
+    pub(super) stages: Vec<restream_engine::stage_lease::StageLease>,
     pub(super) tuning: RuntimeTuning,
     pub(super) correlation_id: String,
     pub(super) job_id: String,
@@ -126,14 +126,14 @@ impl EgressTask {
     async fn record_fabric_placement(
         &self,
         feed: &FeedId,
-        outcome: &crate::media::egress::manager::ManagerCommandOutcome,
+        outcome: &restream_engine::egress::manager::ManagerCommandOutcome,
     ) {
         if let Some(shard) = outcome.placed_shard() {
             self.engine
                 .set_egress_fabric_attribution(
                     &self.output_id,
                     &self.registration,
-                    crate::media::engine::FabricSlot {
+                    restream_engine::engine::FabricSlot {
                         feed: feed.clone(),
                         shard: shard.index(),
                     },
@@ -151,7 +151,7 @@ impl EgressTask {
 
         // Held for the whole run, panics included; released (dropped) after
         // the output is unregistered, as before.
-        let mut hls_lease: Option<crate::media::engine_hls::PersistentLease> = None;
+        let mut hls_lease: Option<restream_engine::engine_hls::PersistentLease> = None;
         let panicked = std::panic::AssertUnwindSafe(async {
             match url_scheme {
                 OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
@@ -168,7 +168,7 @@ impl EgressTask {
                     if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
                         self.run_sink_fabric(fabric).await;
                     } else {
-                        crate::media::egress::backends::sink::start_sink_egress(
+                        restream_engine::egress::backends::sink::start_sink_egress(
                             self.output_id.clone(),
                             self.ring.clone(),
                             self.engine.clone(),
@@ -209,8 +209,8 @@ impl EgressTask {
                     if let Some(fabric) = self.hls_put_fabric.clone() {
                         self.run_hls_put_fabric(fabric, store).await;
                     } else if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
-                        crate::media::hls_upload::start_hls_put_upload(
-                            crate::media::hls_upload::HlsUploadStart {
+                        restream_engine::hls_upload::start_hls_put_upload(
+                            restream_engine::hls_upload::HlsUploadStart {
                                 output_id: self.output_id.clone(),
                                 pipeline_id: self.pipeline_id.clone(),
                                 target_url: self.url.clone(),
@@ -241,7 +241,7 @@ impl EgressTask {
                     } else {
                         match restream_domain::domain::output_spec::RecirculationTarget::parse(&self.url) {
                             Ok(target) => {
-                                crate::media::recirculation::start_pipeline_recirculation(
+                                restream_engine::recirculation::start_pipeline_recirculation(
                                     self.output_id.clone(),
                                     self.ring.clone(),
                                     target.pipeline_id().to_string(),
@@ -370,7 +370,7 @@ impl EgressTask {
     /// recording that as the attempt's error. Such a stage is never fed or
     /// reused again, so the attempt ends and its retry starts a new one.
     async fn own_stage_ended(&self) {
-        crate::media::stage_lease::StageLease::any_ended(&self.stages).await;
+        restream_engine::stage_lease::StageLease::any_ended(&self.stages).await;
         self.engine
             .record_egress_error_if_current(
                 &self.output_id,
@@ -553,9 +553,9 @@ impl EgressTask {
     async fn run_hls_put_fabric(
         &self,
         fabric: HlsPutFabricTask,
-        store: Arc<crate::media::hls::HlsStore>,
+        store: Arc<restream_engine::hls::HlsStore>,
     ) {
-        let feed_id = crate::media::engine_hls_egress_fabric::hls_put_feed_id(&self.pipeline_id);
+        let feed_id = restream_engine::engine_hls_egress_fabric::hls_put_feed_id(&self.pipeline_id);
         if let Err(error) = self
             .engine
             .retain_hls_put_fabric_runtime(feed_id.clone(), &store)
@@ -649,7 +649,7 @@ impl EgressTask {
     /// several landed between polls), the retry state when it changes.
     async fn forward_upload_status(
         &self,
-        status: &std::sync::Mutex<crate::media::egress::leaf::UploadStatus>,
+        status: &std::sync::Mutex<restream_engine::egress::leaf::UploadStatus>,
         forwarded: &mut ForwardedUploadStatus,
     ) {
         let (failure, retry, healthy) = {
@@ -835,7 +835,7 @@ impl EgressTask {
             .set_pipeline_target(
                 &fabric.feed_id,
                 fabric.spec.id.clone(),
-                crate::media::egress::backends::pipeline::PipelineTarget {
+                restream_engine::egress::backends::pipeline::PipelineTarget {
                     target_ring,
                     input_registration: input_registration.clone(),
                 },

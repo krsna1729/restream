@@ -9,7 +9,7 @@
 use serde::Serialize;
 
 use super::telemetry::{delivery_input, feed_delivery};
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

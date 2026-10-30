@@ -352,7 +352,7 @@ fn mpegts_diagnostics_use_the_media_mpegts_log_target() {
     let subscriber = tracing_subscriber::registry().with(
         Events(send).with_filter(
             tracing_subscriber::filter::Targets::new()
-                .with_target("restream::media::mpegts", tracing::Level::DEBUG),
+                .with_target("restream_engine::mpegts", tracing::Level::DEBUG),
         ),
     );
     tracing::subscriber::with_default(subscriber, || {
@@ -394,11 +394,11 @@ fn mpegts_diagnostics_use_the_media_mpegts_log_target() {
     });
     let events: Vec<_> = receive.try_iter().collect();
     assert!(events.contains(&(
-        "restream::media::mpegts::demux::adts",
+        "restream_engine::mpegts::demux::adts",
         tracing::Level::WARN,
     )));
     assert!(events.contains(&(
-        "restream::media::mpegts::mux",
+        "restream_engine::mpegts::mux",
         tracing::Level::ERROR,
     )));
 }

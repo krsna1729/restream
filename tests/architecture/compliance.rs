@@ -1,23 +1,23 @@
 use super::collect_rust_sources;
-use restream::media::security::IngestSecurityService;
 use restream_domain::domain::ids::OutputId;
 use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
+use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[tokio::test]
 async fn test_phase_3_routing_resolves_all_major_routes() {
-    let mock_engine = Arc::new(restream::media::engine::MediaEngine::new());
+    let mock_engine = Arc::new(restream_engine::engine::MediaEngine::new());
     let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
     restream::db::setup_database_schema(&db).await.unwrap();
 
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));
@@ -77,12 +77,16 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(cargo_toml.contains("license = \"MIT\""));
     assert!(cargo_toml.contains("repository = "));
     assert!(!cargo_toml.contains("release_max_level_"));
+    let engine_toml = include_str!("../../crates/restream-engine/Cargo.toml");
+    assert!(!engine_toml.contains("release_max_level_"));
 
     // Media codecs run only in external FFmpeg processes: the engine links no
     // native media library.
     let build_rs = include_str!("../../build.rs");
-    assert!(!cargo_toml.contains("ffmpeg-next"));
-    assert!(!cargo_toml.contains("ffmpeg-sys"));
+    for manifest in [cargo_toml, engine_toml] {
+        assert!(!manifest.contains("ffmpeg-next"));
+        assert!(!manifest.contains("ffmpeg-sys"));
+    }
     assert!(!build_rs.contains("rustc-link-arg"));
     assert!(!build_rs.contains("rustc-link-lib"));
     assert!(build_rs.contains("\"features\": features"));
@@ -90,7 +94,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     // srt-rs is pinned to one git revision for both crates, and the release
     // attribution names that same revision. Checked by value, not by a copied
     // SHA, so a repin only has to keep the two files consistent.
-    let srt_revs: Vec<&str> = cargo_toml
+    let srt_revs: Vec<&str> = engine_toml
         .lines()
         .filter(|line| line.contains("git = \"https://github.com/krsna1729/srt-rs\""))
         .map(|line| {
@@ -168,7 +172,7 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
     assert!(!graph_plan.contains("StageRuntimeManager"));
     assert!(!graph_plan.contains("tokio::time"));
 
-    let preview_graph = include_str!("../../src/media/hls/preview_graph.rs");
+    let preview_graph = include_str!("../../crates/restream-engine/src/hls/preview_graph.rs");
     assert!(preview_graph.contains("StageRuntimeManager"));
     assert!(preview_graph.contains("resolve_hls_preview_graph"));
 }
@@ -180,8 +184,7 @@ fn planner_stays_independent_of_edge_runtime_and_environment_layers() {
     let forbidden_dependencies = [
         "crate::application::",
         "restream::application::",
-        "crate::media::",
-        "restream::media::",
+        "restream_engine::",
         "crate::api::",
         "restream::api::",
         "crate::db::",
@@ -220,7 +223,7 @@ fn agent_core_stays_independent_of_edge_and_runtime_layers() {
     let forbidden_dependencies = [
         "crate::agent_plane::",
         "crate::application::",
-        "crate::media::",
+        "restream_engine::",
         "reqwest::",
         "axum::",
         "sqlx::",
@@ -260,7 +263,7 @@ fn agent_core_stays_independent_of_edge_and_runtime_layers() {
 
 #[test]
 fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
-    let srt_policy = include_str!("../../src/media/srt_policy.rs");
+    let srt_policy = include_str!("../../crates/restream-engine/src/srt_policy.rs");
     assert!(srt_policy.contains("pub struct SrtIngestPolicyEntry"));
     assert!(srt_policy.contains("pub policy: SrtPipelineIngestConfig"));
     assert!(
@@ -498,20 +501,27 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 
 #[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
-    let cargo_toml = include_str!("../../Cargo.toml");
     let mut missing_benches = Vec::new();
-    for bench in declared_benches(cargo_toml) {
-        let expected = format!("benches/{bench}.rs");
-        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(&expected)
-            .exists()
-        {
-            missing_benches.push(expected);
+    for (manifest, dir) in [
+        (include_str!("../../Cargo.toml"), ""),
+        (
+            include_str!("../../crates/restream-engine/Cargo.toml"),
+            "crates/restream-engine/",
+        ),
+    ] {
+        for bench in declared_benches(manifest) {
+            let expected = format!("{dir}benches/{bench}.rs");
+            if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(&expected)
+                .exists()
+            {
+                missing_benches.push(expected);
+            }
         }
     }
     assert!(
         missing_benches.is_empty(),
-        "Cargo.toml declares missing bench files: {missing_benches:?}"
+        "a manifest declares missing bench files: {missing_benches:?}"
     );
 
     for script in [

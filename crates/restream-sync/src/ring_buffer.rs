@@ -187,7 +187,7 @@ impl RingBuffer {
                 unit: AtomicU64::new(0),
             });
         }
-        debug!(target: "restream::media::ring_buffer", capacity, "ring buffer created");
+        debug!(target: "restream_engine::ring_buffer", capacity, "ring buffer created");
         Self {
             slots,
             write_idx: AlignedAtomicUsize {
@@ -540,10 +540,10 @@ impl RingBuffer {
         let count = tracks.len();
         if tracks.is_empty() {
             self.audio_tracks.store(None);
-            debug!(target: "restream::media::ring_buffer", "ring audio tracks cleared");
+            debug!(target: "restream_engine::ring_buffer", "ring audio tracks cleared");
         } else {
             self.audio_tracks.store(Some(Arc::new(tracks)));
-            debug!(target: "restream::media::ring_buffer", count, "ring audio tracks set");
+            debug!(target: "restream_engine::ring_buffer", count, "ring audio tracks set");
         }
         self.wake_metadata_subscribers();
     }

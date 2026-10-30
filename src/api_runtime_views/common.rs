@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::media::engine::{
+use restream_engine::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
 use restream_sync::RingBuffer;
@@ -101,8 +101,8 @@ pub(super) struct EgressRuntimeView {
     retry_backoff_ms: Option<u64>,
     next_retry_at: Option<String>,
     retry_remaining_ms: Option<u64>,
-    quality: crate::media::snapshots::PublisherQuality,
-    metrics: crate::media::stage_metrics::StageMetricsSnapshot,
+    quality: restream_engine::snapshots::PublisherQuality,
+    metrics: restream_engine::stage_metrics::StageMetricsSnapshot,
     fabric: bool,
     /// The fabric feed the output reads; with `shard_id` it names the
     /// shard in `egressFabricShards`.
@@ -235,8 +235,8 @@ pub(super) struct RecentEgressRuntimeView {
     retry_backoff_ms: Option<u64>,
     next_retry_at: Option<String>,
     retry_remaining_ms: Option<u64>,
-    quality: crate::media::snapshots::PublisherQuality,
-    metrics: crate::media::stage_metrics::StageMetricsSnapshot,
+    quality: restream_engine::snapshots::PublisherQuality,
+    metrics: restream_engine::stage_metrics::StageMetricsSnapshot,
     ended_at: Option<String>,
     ended_age_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -510,8 +510,8 @@ mod tests {
             terminal_stage_key: None,
             output_name: "out-fabric-1".to_string(),
             encoding: "source".to_string(),
-            fabric: Some(crate::media::engine::FabricSlot {
-                feed: crate::media::egress::command::FeedId::new("rtmp:pipe:source"),
+            fabric: Some(restream_engine::engine::FabricSlot {
+                feed: restream_engine::egress::command::FeedId::new("rtmp:pipe:source"),
                 shard: 2,
             }),
             resync_count: Arc::new(AtomicU64::new(3)),

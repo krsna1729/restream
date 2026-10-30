@@ -7,10 +7,10 @@ use tracing::{error, info};
 
 use crate::api::AppState;
 use crate::config::AppConfig;
-use crate::media::engine::MediaEngine;
-use crate::media::ingest_auth::PipelineAccessAuthenticator;
-use crate::media::security::IngestSecurityService;
-use crate::media::srt::SrtIngestPolicyStore;
+use restream_engine::engine::MediaEngine;
+use restream_engine::ingest_auth::PipelineAccessAuthenticator;
+use restream_engine::security::IngestSecurityService;
+use restream_engine::srt::SrtIngestPolicyStore;
 
 use super::listener_supervisor::SupervisedListener;
 
@@ -21,7 +21,7 @@ pub(super) struct RuntimeLaunch {
     pub security: Arc<IngestSecurityService>,
     pub pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     pub srt_ingest_policy_store: Arc<SrtIngestPolicyStore>,
-    pub hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
+    pub hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
     pub hls_inputs: Arc<dyn crate::application::ingest::PipelineInputLookup>,
 }
 
@@ -74,7 +74,7 @@ impl RuntimeTasks {
                 let security = security.clone();
                 let pipeline_access = pipeline_access.clone();
                 tokio::spawn(async move {
-                    crate::media::rtmp::start_rtmp_server_on_with_shutdown(
+                    restream_engine::rtmp::start_rtmp_server_on_with_shutdown(
                         pipeline_access,
                         security,
                         engine,
@@ -96,7 +96,7 @@ impl RuntimeTasks {
             rtmp_restarts,
         );
 
-        crate::media::moq::ingest::listener::launch(
+        restream_engine::moq::ingest::listener::launch(
             &config.engine.moq_ingest,
             pipeline_access.clone(),
             engine.clone(),
@@ -105,7 +105,7 @@ impl RuntimeTasks {
         .await;
 
         let srt_restarts = Arc::clone(&engine.runtime.listener_stats.restarts);
-        let srt_server = Arc::new(crate::media::srt::SrtServer::new(
+        let srt_server = Arc::new(restream_engine::srt::SrtServer::new(
             pipeline_access,
             engine,
             security,

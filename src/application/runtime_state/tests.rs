@@ -21,7 +21,7 @@ fn render_contract() -> String {
         restream_domain::domain::pipeline_input::PipelineInputRole::decl(&cfg),
         restream_domain::domain::pipeline_input::PipelineInputSourceKind::decl(&cfg),
         restream_domain::domain::pipeline_input::VariantRule::decl(&cfg),
-        crate::media::input_gate::InputForwardState::decl(&cfg),
+        restream_engine::input_gate::InputForwardState::decl(&cfg),
         PipelineGraph::decl(&cfg),
         GraphNode::decl(&cfg),
         GraphEdge::decl(&cfg),
@@ -395,7 +395,7 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
     engine
         .update_publisher_quality(
             "pipe",
-            crate::media::snapshots::PublisherQuality {
+            restream_engine::snapshots::PublisherQuality {
                 srt_bonded: Some(true),
                 ..Default::default()
             },

@@ -3,8 +3,8 @@ use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookupFuture, IngestUpdateFuture,
     IngestWriteFuture, PipelineLookupFuture,
 };
-use crate::media::security::IngestSecurityService;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_engine::security::IngestSecurityService;
 use std::collections::HashMap;
 use std::sync::Arc;
 

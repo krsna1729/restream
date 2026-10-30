@@ -14,7 +14,7 @@ use crate::alerts;
 #[cfg(feature = "agent-plane")]
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
-use crate::media::events;
+use restream_engine::events;
 
 #[cfg(feature = "agent-plane")]
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;

@@ -7,7 +7,7 @@
 //! the frame.
 #![no_main]
 
-use restream::media::moq_fuzz_entry;
+use restream_engine::moq_fuzz_entry;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let Some((length, rest)) = data.split_first_chunk::<2>() else {

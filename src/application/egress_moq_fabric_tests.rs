@@ -3,13 +3,13 @@ use super::*;
 use bytes::Bytes;
 
 use crate::application::egress::prepare_output_ring;
-use crate::media::egress::EgressFeed;
-use crate::media::moq::egress::startup::startup_video;
-use crate::media::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
 use restream_core::codec::build_avcc_sequence_header;
 use restream_core::metadata::AudioMeta;
 use restream_domain::domain::output_spec::{OutputConfig, VideoCodecKind};
 use restream_domain::domain::state::DesiredOutputState;
+use restream_engine::egress::EgressFeed;
+use restream_engine::moq::egress::startup::startup_video;
+use restream_engine::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
 use restream_moq::media::AudioConfig;
 use restream_moq::media::TrackContainer;
 use restream_moq::media::VideoCodec;
@@ -232,8 +232,8 @@ fn ca_test_directory(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn moq_ca_directory_trusted_tls_runtime_smoke() {
-    use crate::media::moq::transport;
-    use crate::media::moq::transport::test_support::{
+    use restream_engine::moq::transport;
+    use restream_engine::moq::transport::test_support::{
         LOOPBACK_CERT, LOOPBACK_SERVER_NAME, Loopback, run,
     };
     use restream_moq::tls;
@@ -279,7 +279,7 @@ async fn startup_reads_the_ca_only_from_the_configured_directory() {
     let output = test_output("pipe-ca-startup", "moqt://relay.example/live?ca=relay.pem");
 
     let mut engine = MediaEngine::new();
-    engine.config = Arc::new(crate::media::config::EngineConfig {
+    engine.config = Arc::new(restream_engine::config::EngineConfig {
         moq_ca_dir: None,
         ..Default::default()
     });
@@ -291,7 +291,7 @@ async fn startup_reads_the_ca_only_from_the_configured_directory() {
     assert!(error.contains("RESTREAM_MOQ_CA_DIR"), "{error}");
 
     let mut engine = MediaEngine::new();
-    engine.config = Arc::new(crate::media::config::EngineConfig {
+    engine.config = Arc::new(restream_engine::config::EngineConfig {
         moq_ca_dir: Some(dir.display().to_string()),
         ..Default::default()
     });

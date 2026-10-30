@@ -197,7 +197,7 @@ fn libc_component() -> Option<Value> {
 
 pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     let (sqlite_version, sqlite_source_id) = sqlite_runtime_info();
-    let srt_version = crate::media::srt::linked_srt_version();
+    let srt_version = restream_engine::srt::linked_srt_version();
     let mut native_components = vec![
         native_component(
             "srt-rs",
@@ -331,7 +331,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         },
         // The FFmpeg executables and what each FFmpeg-backed feature can use;
         // `null` until the startup check finishes.
-        "externalTools": crate::media::ffmpeg_capabilities::finished(),
+        "externalTools": restream_engine::ffmpeg_capabilities::finished(),
         "sbom": {
             "format": "CycloneDX",
             "specVersion": "1.5",

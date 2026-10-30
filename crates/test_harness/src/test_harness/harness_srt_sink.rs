@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use futures_util::future::{Either, select};
-use restream::media::srt::srt_owner_runtime::{
+use restream_engine::srt::srt_owner_runtime::{
     SRT_OWNER_WIRE_CEILING, listener_shape, production_runtime,
 };
 use srt_proto::{ConnectionEvent, Timestamp};

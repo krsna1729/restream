@@ -6,11 +6,11 @@
 use crate::application::ports::{IngestHostStore, MetaStore};
 use crate::application::recording::load_recording_settings;
 use crate::application::srt_ingest::load_global_srt_ingest_config;
-use crate::media::security::IngestSecurityService;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
+use restream_engine::security::IngestSecurityService;
 
 #[derive(Clone, Debug)]
 pub struct SettingsSnapshot {
@@ -37,7 +37,7 @@ pub async fn load_settings_snapshot(
         .unwrap_or_default();
     let recording_settings = load_recording_settings(meta_store).await;
     let srt_ingest = load_global_srt_ingest_config(meta_store, None, 16).await;
-    let transcode_profiles = crate::media::profiles::current_effective().await;
+    let transcode_profiles = restream_engine::profiles::current_effective().await;
 
     Ok(SettingsSnapshot {
         server_name,
@@ -54,8 +54,8 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::infrastructure::sqlite_ports::SqliteMetaStore;
-    use crate::media::security::IngestSecurityService;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+    use restream_engine::security::IngestSecurityService;
 
     #[tokio::test]
     async fn load_settings_snapshot_combines_db_meta_and_runtime_defaults() {

@@ -91,8 +91,25 @@ fn ci_workflow_scopes_execute_extracted_crate_changes() {
             }
         }
         for (path, docker, fuzz, moq) in [
-            ("src/media/rtmp/egress.rs", true, true, false),
-            ("src/media/egress/output.rs", true, true, true),
+            (
+                "crates/restream-engine/src/rtmp/egress.rs",
+                true,
+                true,
+                false,
+            ),
+            (
+                "crates/restream-engine/src/egress/output.rs",
+                true,
+                true,
+                true,
+            ),
+            (
+                "crates/restream-engine/src/moq/origin/mod.rs",
+                true,
+                true,
+                true,
+            ),
+            ("crates/restream-engine/Cargo.toml", true, true, false),
             ("crates/test_harness/src/main.rs", true, true, false),
             ("crates/test_harness/Cargo.toml", true, true, false),
             (

@@ -50,22 +50,22 @@ The diagram shows the shared path from each ingest to the egress readers.
 
 | Protocol | Direction | Port or setting | Source |
 |---|---|---|---|
-| RTMP | ingest | TCP `0.0.0.0:1935` (`RESTREAM_RTMP_PORT`) | `src/media/rtmp/` |
-| RTMP, RTMPS | egress | `rtmp://`, `rtmps://` output URLs | `crates/restream-rtmp/src/`, `src/media/egress/` |
-| SRT | ingest | UDP `0.0.0.0:10080` (`RESTREAM_SRT_PORT`) | `src/media/srt/` |
-| SRT call | ingest | `srtCall` pipeline input: the engine dials a remote listener | `src/media/srt/calls.rs` |
-| SRT | egress | `srt://` output URLs | `crates/restream-srt/src/`, `src/media/egress/backends/` |
-| HLS push | ingest | HTTP port 3030 (`RESTREAM_HTTP_PORT`), `/ingest/hls/` | `src/media/hls_ingest/` |
-| HLS pull | ingest | `hlsPull` pipeline input, no listener | `src/media/hls_pull.rs` |
-| HLS PUT | egress | `http://`, `https://` output URLs | `src/media/hls/` |
-| HLS preview | serving | HTTP port, `/hls/` | `src/media/hls/` |
-| MoQ | ingest and origin | UDP, off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | `src/media/moq/` |
-| MoQ | egress | `moqt://` output URLs | `src/media/moq/egress/` |
-| Recirculation | egress into ingest | `pipeline://` output URLs | `src/media/recirculation.rs` |
-| Sink | egress | `sink://` output URLs | `src/media/egress/backends/sink.rs` |
+| RTMP | ingest | TCP `0.0.0.0:1935` (`RESTREAM_RTMP_PORT`) | `crates/restream-engine/src/rtmp/` |
+| RTMP, RTMPS | egress | `rtmp://`, `rtmps://` output URLs | `crates/restream-rtmp/src/`, `crates/restream-engine/src/egress/` |
+| SRT | ingest | UDP `0.0.0.0:10080` (`RESTREAM_SRT_PORT`) | `crates/restream-engine/src/srt/` |
+| SRT call | ingest | `srtCall` pipeline input: the engine dials a remote listener | `crates/restream-engine/src/srt/calls.rs` |
+| SRT | egress | `srt://` output URLs | `crates/restream-srt/src/`, `crates/restream-engine/src/egress/backends/` |
+| HLS push | ingest | HTTP port 3030 (`RESTREAM_HTTP_PORT`), `/ingest/hls/` | `crates/restream-engine/src/hls_ingest/` |
+| HLS pull | ingest | `hlsPull` pipeline input, no listener | `crates/restream-engine/src/hls_pull.rs` |
+| HLS PUT | egress | `http://`, `https://` output URLs | `crates/restream-engine/src/hls/` |
+| HLS preview | serving | HTTP port, `/hls/` | `crates/restream-engine/src/hls/` |
+| MoQ | ingest and origin | UDP, off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | `crates/restream-engine/src/moq/` |
+| MoQ | egress | `moqt://` output URLs | `crates/restream-engine/src/moq/egress/` |
+| Recirculation | egress into ingest | `pipeline://` output URLs | `crates/restream-engine/src/recirculation.rs` |
+| Sink | egress | `sink://` output URLs | `crates/restream-engine/src/egress/backends/sink.rs` |
 
 File inputs use an FFmpeg child that writes MPEG-TS, which is demuxed into the
-same source ring (`src/media/external_file_ingest.rs`).
+same source ring (`crates/restream-engine/src/external_file_ingest.rs`).
 
 All outputs share one retry policy. A failed output is retried with capped
 exponential backoff and jitter: `RESTREAM_OUTPUT_MAX_RETRIES` (default 10),
@@ -135,7 +135,7 @@ stream key (`src/db/pipeline_input_repo.rs`). Only the selected input
 publishes into the source ring. Unselected inputs stay connected: they parse,
 probe, report metrics and can serve an input-scoped HLS preview.
 
-Each input has an `InputPacketGate` (`src/media/input_gate.rs`). It stores the
+Each input has an `InputPacketGate` (`crates/restream-engine/src/input_gate.rs`). It stores the
 forwarding state and the in-flight publication count in one atomic word.
 
 ```mermaid
@@ -150,7 +150,7 @@ stateDiagram-v2
 The diagram shows the gate states during a promotion.
 
 1. Promotion demotes the old input's gate and waits until its in-flight
-   publications drain (`src/media/engine_ingest.rs`).
+   publications drain (`crates/restream-engine/src/engine_ingest.rs`).
 2. It arms the target gate (`AwaitingKeyframe`).
 3. RTMP, SRT, MoQ and recirculation standbys keep the newest compressed GOP in
    a `StandbyGopCache` (`crates/restream-sync/src/standby_gop.rs`): 16 MiB of payload and
@@ -190,13 +190,13 @@ flowchart LR
 The diagram shows the two stage backends between rings: the external FFmpeg
 child and the in-process audio router.
 
-- **External FFmpeg** (`src/media/external_transcoder.rs`,
-  `src/media/ffmpeg/`) is the only FFmpeg stage backend. Two OS threads move
+- **External FFmpeg** (`crates/restream-engine/src/external_transcoder.rs`,
+  `crates/restream-engine/src/ffmpeg/`) is the only FFmpeg stage backend. Two OS threads move
   bytes: `restream-ffin` writes MPEG-TS to stdin, `restream-ffout` demuxes
   stdout. Tokio supervises the child only. `RESTREAM_EXTERNAL_FFMPEG_THREADS`
   sets FFmpeg threads (default 2). On stop the child gets 30 s after EOF or
   1 s after cancel, then it is killed.
-- **AudioRouter** (`src/media/audio_router.rs`) runs on the MEDIA executor.
+- **AudioRouter** (`crates/restream-engine/src/audio_router.rs`) runs on the MEDIA executor.
   It copies video and selects and reindexes audio tracks. It never decodes.
 
 The planner (`crates/restream-domain/src/planner/`) picks the stages for each output and
@@ -217,12 +217,12 @@ A stage identity is a typed `StageKey { pipeline, kind }`
 
 The audio key embeds its upstream key, so outputs with different presets or
 codecs never share audio stages. `same_encoding_outputs_share_one_transcoder_stage`
-(`src/media/engine_stage_tests/transcoder.rs`) checks that equal requests
+(`crates/restream-engine/src/engine_stage_tests/transcoder.rs`) checks that equal requests
 share one ring.
 
 ### Stage lifetime
 
-A stage lives exactly as long as its consumers (`src/media/stage_lease.rs`).
+A stage lives exactly as long as its consumers (`crates/restream-engine/src/stage_lease.rs`).
 
 - Each consumer holds a `StageLease` on every stage it reads: an egress
   attempt (`EgressTask`), an HLS preview, or an SRT play session.
@@ -241,7 +241,7 @@ A stage lives exactly as long as its consumers (`src/media/stage_lease.rs`).
 ### Video presets
 
 A preset output scales and re-encodes with the profile of that name
-(`src/media/profiles.rs`). Saved profiles override built-ins of the same
+(`crates/restream-engine/src/profiles.rs`). Saved profiles override built-ins of the same
 name. An unknown name falls back to the `h264` profile.
 
 | Built-in profile | Size | Use |
@@ -340,24 +340,24 @@ The diagram shows a successful publish, from the TCP handshake to the first
 media in the ring.
 
 - **Handshake.** `rml_rtmp` (vendored under `vendor/rml_rtmp/`) runs the
-  server handshake (`src/media/rtmp/handshake.rs`). It does not verify the C2
+  server handshake (`crates/restream-engine/src/rtmp/handshake.rs`). It does not verify the C2
   signature.
 - **Stream key.** The key is the first argument of `publish`. The `connect`
   app name is not part of the key. `releaseStream` and `FCPublish` are
   ignored.
-- **Authentication.** `authorize_publish` (`src/media/rtmp/ingest.rs`)
+- **Authentication.** `authorize_publish` (`crates/restream-engine/src/rtmp/ingest.rs`)
   requires an enabled input whose stream key matches exactly. A banned IP, a
   bad key or a second publisher on the same input is rejected with
   `NetStream.Publish.BadName`. Restream then closes the connection; the
   rejection message is not sent to the encoder.
-- **Media.** `RtmpPublisherMedia` (`src/media/rtmp/ingest_media.rs`) classifies
+- **Media.** `RtmpPublisherMedia` (`crates/restream-engine/src/rtmp/ingest_media.rs`) classifies
   FLV tags, stores sequence headers, runs the standby GOP cache and the input
   gate, and publishes `Flv` packets to the ring. Video DTS is the RTMP
   timestamp; PTS adds the signed 24-bit composition offset. Probe metadata goes
   to the control session; ordinary packets do not.
 - **Enhanced RTMP ingest** (`hvc1` FourCC) is not implemented.
 - **Play.** A `play` request with a valid key reads the active ingest's ring
-  (`src/media/rtmp/play.rs`). An invalid key or no active ingest gets
+  (`crates/restream-engine/src/rtmp/play.rs`). An invalid key or no active ingest gets
   `NetStream.Play.StreamNotFound`.
 
 | Setting | Default | Range |
@@ -417,14 +417,14 @@ The diagram shows one RTMP output from its ring to the destination socket.
   (64 entries). Video uses DTS as the RTMP timestamp; audio uses PTS. Each
   type's timestamps are kept strictly increasing.
 - **RTMPS.** Rustls completes TLS, then the session keys move to Linux kTLS
-  (`src/media/egress/tls/`). Only AES-GCM suites are offered. An unsupported
+  (`crates/restream-engine/src/egress/tls/`). Only AES-GCM suites are offered. An unsupported
   suite or a kTLS install error fails the output; there is no userspace-TLS
   fallback. After the handoff, TLS 1.3 session tickets are discarded and a
   `KeyUpdate` closes the output. `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` adds
   trust roots to the bundled web roots.
 - **Socket.** One shared Compio `TcpStream` per leaf. RX reads are 4 KiB;
   staged and in-flight TX is bounded at 64 KiB by default
-  (`src/media/egress/backends/compio_tcp/stream.rs`).
+  (`crates/restream-engine/src/egress/backends/compio_tcp/stream.rs`).
   `RESTREAM_RTMP_EGRESS_CHUNK_SIZE` sets the chunk size (default 16384,
   clamp 128–1048576).
 - **Failure.** A peer close, protocol error or TLS error removes the leaf and
@@ -460,7 +460,7 @@ The diagram shows that media stays on the owner thread; Tokio sees only
 lifecycle and probe events (dotted).
 
 - **Admission.** The resolver runs on the owner
-  (`src/media/srt/ingress_admission.rs`).
+  (`crates/restream-engine/src/srt/ingress_admission.rs`).
   An empty key is `BAD_MODE`, an unknown key `UNAUTHORIZED`, a bad crypto or
   group mode `BAD_REQUEST`. It applies the input's latency and encryption.
   Tokio then checks IP bans, pipeline authentication, duplicate publishers and
@@ -468,14 +468,14 @@ lifecycle and probe events (dotted).
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
-  (`src/media/srt/ingress_bridge.rs`). Tokio retains at most one deferred
+  (`crates/restream-engine/src/srt/ingress_bridge.rs`). Tokio retains at most one deferred
   command; a full Owner command bridge backpressures event consumption instead
   of growing a reply queue behind another Owner's topology churn. Shutdown
   delivers that accepted command before the native Owner's peer drain.
 - **Payload work.** Messages stay in packet chunks. A 64-slot owner-local work
   list holds them; a visit consumes at most 64 chunks, 16 per message, and
   retires at most 64 actions. Events keep queue order, so a disconnect never
-  overtakes queued media (`src/media/srt/ingress_owner_payload.rs`).
+  overtakes queued media (`crates/restream-engine/src/srt/ingress_owner_payload.rs`).
 - **Probe hold.** Before attach, an owner holds up to 2.5 MB per peer and
   32 MiB in total. After the probe it holds up to 4 MiB per publisher, 64 MiB
   per owner, for 2 s; overflow publishes to the current ring.
@@ -505,7 +505,7 @@ Ingest latency comes from the saved SRT ingest policy: default 250 ms, valid
 An `srtCall` input reverses the handshake: the engine is the caller.
 `converge_srt_call_inputs` writes the enabled rows into
 `engine.ingests.srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
-`src/media/srt/calls.rs`) resolves the host off the loop and sends
+`crates/restream-engine/src/srt/calls.rs`) resolves the host off the loop and sends
 `IngressCommand::Call` to Owner 0, whose caller side holds an IPv4 and an
 IPv6 socket (each bound on first use) and dials through its caller pool
 (`CALLS_IN_FLIGHT` handshakes at once, more queued). The Owner keys sessions
@@ -519,7 +519,7 @@ commands the Owner only when the bridge's one command slot is free.
 
 ### SRT Stream ID
 
-`src/media/srt_stream_id.rs` accepts these shapes (case-sensitive):
+`crates/restream-engine/src/srt_stream_id.rs` accepts these shapes (case-sensitive):
 
 ```text
 publish:<key>   publisher:<key>
@@ -572,7 +572,7 @@ The diagram shows one SRT output from its ring to the remote receiver.
 - **URL.** `srt://host:port?streamid=…&passphrase=…&pbkeylen=…&bond=…&type=…`.
   Other parameters, such as `latency`, are ignored
   (`crates/restream-srt/src/egress_connect.rs`). Restream is always the caller.
-- **Muxer.** `start_shared_ts_muxer` (`src/media/srt/shared_muxer.rs`) runs on
+- **Muxer.** `start_shared_ts_muxer` (`crates/restream-engine/src/srt/shared_muxer.rs`) runs on
   the MEDIA executor. It is keyed by pipeline and stage. With
   `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` above 0 (max 10000),
   outputs split across up to `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` muxers
@@ -580,7 +580,7 @@ The diagram shows one SRT output from its ring to the remote receiver.
 - **Owner.** Each `(shard, address family)` has at most one owner, created on
   demand: one caller UDP socket, one caller pool, one TX pool. A full window
   parks the leaf; there is no Restream transport queue
-  (`src/media/egress/backends/srt/owner_set.rs`).
+  (`crates/restream-engine/src/egress/backends/srt/owner_set.rs`).
 - **Failure.** A peer-group collision or a mixed-family bond fails the output.
   An owner fault fails that family's leaves only. Tokio notices an ended leaf
   within 250 ms, records `srt_fabric_leaf`, and the retry policy restarts it.
@@ -621,8 +621,8 @@ flowchart LR
 
 The diagram shows one uploaded object from the HTTP handler to the ring.
 
-Sources: `src/api/hls_ingest.rs`, `src/media/hls_ingest/`,
-`src/media/ingest_publisher.rs`.
+Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
+`crates/restream-engine/src/ingest_publisher.rs`.
 
 - **Objects.** `.m3u8` playlists, `.ts` segments, and fMP4 `.mp4` or `.m4s`
   objects. PUT and POST store; DELETE answers `200` and deletes nothing.
@@ -716,7 +716,7 @@ Playlists use only the shared budget and never wait for a per-key share.
 
 ### HLS pull ingest
 
-An `hlsPull` input has no listener. `HlsPullTask` (`src/media/hls_pull.rs`)
+An `hlsPull` input has no listener. `HlsPullTask` (`crates/restream-engine/src/hls_pull.rs`)
 fetches a remote live HLS origin and feeds the push session path as protocol
 `hls-pull`.
 
@@ -765,7 +765,7 @@ The diagram shows a pull feeding the same session code as a push.
   than `NONE`, and `EXT-X-BYTERANGE`, end the task.
 - **Retries.** 200 ms doubling to 5 s. After six failures in a row the pull
   waits 30 s. A segment that fails four times is skipped.
-- **Timeouts.** Connect 5 s, request 20 s (`src/media/hls_pull/fetch.rs`).
+- **Timeouts.** Connect 5 s, request 20 s (`crates/restream-engine/src/hls_pull/fetch.rs`).
 - **Logs.** URLs are logged without userinfo, query, or path segments that
   contain `=`.
 - **End.** `EXT-X-ENDLIST` ends the task after the last segment. A fatal error
@@ -801,9 +801,9 @@ The diagram shows both upload transports reading the shared segment store.
 - **Upload.** Each segment is PUT as `video/mp2t`, then the playlist as
   `application/vnd.apple.mpegurl`. The playlist lists the last three
   acknowledged segments. At most five segments wait; the oldest is dropped.
-  Restream never sends DELETE (`src/media/hls/upload_policy.rs`).
+  Restream never sends DELETE (`crates/restream-engine/src/hls/upload_policy.rs`).
 - **URL.** A `file=` query value is replaced per segment; otherwise segments
-  go next to the playlist path (`src/media/hls/upload.rs`).
+  go next to the playlist path (`crates/restream-engine/src/hls/upload.rs`).
 - **Retries.** A `2xx` acknowledges. `408`, `425`, `429`, other non-4xx
   answers and transport errors retry with 200 ms doubling to 5 s. Other `4xx`
   answers end the output. A segment retries for max(segment duration, 1 s);
@@ -858,10 +858,10 @@ The vendored `moq-net` `unsend` feature preserves the `!Send` transport owner.
 `crates/restream-moq/src/` implements media/catalog conversion helpers,
 cache budgets, tokens, URL parsing and TLS configuration builders. It is
 not just a serialization package. The root application's
-`src/media/moq/mod.rs` re-exports these helpers; live QUIC/WebTransport
-endpoints and session drivers remain in `src/media/moq/transport/`,
-`src/media/moq/ingest/`, `src/media/moq/origin/` and
-`src/media/moq/egress/`. Those root owners choose the listener or fabric
+`crates/restream-engine/src/moq/mod.rs` re-exports these helpers; live QUIC/WebTransport
+endpoints and session drivers remain in `crates/restream-engine/src/moq/transport/`,
+`crates/restream-engine/src/moq/ingest/`, `crates/restream-engine/src/moq/origin/` and
+`crates/restream-engine/src/moq/egress/`. Those root owners choose the listener or fabric
 runtime; the lower-crate dependency does not imply a task or thread handoff.
 
 | Setting | Default | Notes |
@@ -904,7 +904,7 @@ The diagram shows a publisher connection from QUIC accept to the ring.
   a supported MoQ subprotocol (else HTTP `400` and close `0x10b`). A CONNECT
   that fails to decode closes with `0x10e`. HTTP/3 frames and capsules are
   bounded to 64 KiB. The transport handshake and SETUP each have 10 s
-  (`src/media/moq/transport/`). Library drivers run on the owner, not Tokio.
+  (`crates/restream-engine/src/moq/transport/`). Library drivers run on the owner, not Tokio.
 - **Routing.** A connection with a non-empty `token` (CONNECT query or SETUP
   path query) or the subscriber role goes to the origin. Any other is a
   publisher.
@@ -940,7 +940,7 @@ The diagram shows a publisher connection from QUIC accept to the ring.
   frames in a row (a single bad frame is dropped). A catalog that hang/MSF
   refuses, or whose parser panics, ends the session as a protocol violation.
   Parser panics are counted as contained; the input is released with that
-  reason (`src/media/moq/ingest/session.rs`).
+  reason (`crates/restream-engine/src/moq/ingest/session.rs`).
 - **Shutdown.** The endpoint closes with code 0, sessions get 1 s, then the
   rest are dropped and their inputs released.
 
@@ -1037,7 +1037,7 @@ The diagram shows a dashboard preview subscribing to a pipeline.
 | `moqt://` egress | TLS 1.3 with bundled web roots plus `ca=` PEM files confined to operator-set `RESTREAM_MOQ_CA_DIR`; `insecure=1` skips chain and name checks but still verifies handshake signatures |
 
 Restream does not generate a certificate. TLS configuration builders live in
-`crates/restream-moq/src/tls.rs`; `src/media/moq/mod.rs` re-exports them for
+`crates/restream-moq/src/tls.rs`; `crates/restream-engine/src/moq/mod.rs` re-exports them for
 the root transport and session owners.
 
 ### MoQ egress
@@ -1068,7 +1068,7 @@ The diagram shows one MoQ output from its ring to the relay.
   while an unknown value is rejected.
 - **Thread.** Each output is a leaf on a MoQ fabric shard (`egress-shard-N`); its
   Compio runtime owns the connection and the session
-  (`src/media/engine_moq_egress_fabric.rs`). Startup metadata is prepared on
+  (`crates/restream-engine/src/engine_moq_egress_fabric.rs`). Startup metadata is prepared on
   Tokio; CA canonicalization, confinement checks and reads use its blocking
   pool. Custom CA reads require `RESTREAM_MOQ_CA_DIR`; absolute paths, `..`
   components and symlink escapes are refused (see [configuration](configuration.md#moq)).
@@ -1147,7 +1147,7 @@ promoted.
   stream key `pipeline:<output_id>`. If another publisher holds the input,
   the output fails with `recirculation_input_claim`.
 - **Standby.** While the target gate is not active, `RecirculationInputPublisher`
-  (`src/media/recirculation.rs`) keeps the newest GOP in a `StandbyGopCache`
+  (`crates/restream-engine/src/recirculation.rs`) keeps the newest GOP in a `StandbyGopCache`
   and publishes nothing.
 - **Promotion.** The target's promotion replays the cached GOP once, maps
   timestamps after the previous input, and copies video configuration
@@ -1160,7 +1160,7 @@ promoted.
 
 A `sink://` output (for example `sink://local/test`) reads its prepared output
 ring, including any stages its encoding needs, and discards the media.
-`SinkEngine` (`src/media/egress/backends/sink.rs`) counts payload bytes and
+`SinkEngine` (`crates/restream-engine/src/egress/backends/sink.rs`) counts payload bytes and
 units. It has no socket. Use it to load stages and the fabric without a
 destination. Errors are `sink_fabric_ensure`, `sink_fabric_dispatch` and
 `sink_fabric_leaf`.
@@ -1172,7 +1172,7 @@ and protocol state thread-affine; their Tokio control tasks carry lifecycle
 and probe work rather than per-packet media. Diagnostic direct RTMP play
 still runs on CONTROL. HTTP ingest and segment assembly use the contexts
 below. MEDIA (`restream-media`) is a separate multi-thread Tokio runtime, implemented
-in `src/media/executor.rs`, not a name for all blocking media threads.
+in `crates/restream-engine/src/executor.rs`, not a name for all blocking media threads.
 FFmpeg pipes and recording file writes have dedicated blocking I/O threads.
 Package boundaries do not change these execution owners. See
 [Architecture](architecture.md#runtime-ownership) for the runtime policy and
@@ -1187,11 +1187,11 @@ Package boundaries do not change these execution owners. See
 | MoQ ingest and origin | `moq-ingest` | Compio QUIC endpoint, sessions, origin pumps |
 | FFmpeg stage | `restream-ffin`, `restream-ffout`, FFmpeg child | pipe buffers, stage output ring |
 | Audio router, SRT TS muxer, HLS segmenters | `restream-media` | output ring, `TsChunkRing`, `HlsStore`, `Fmp4HlsStore` |
-| Recording | feed and TS muxing on `restream-media`; file writer on a dedicated OS thread | recording ring reader, TS batches and `MemoryQueue` (`src/media/recording/mod.rs`) |
+| Recording | feed and TS muxing on `restream-media`; file writer on a dedicated OS thread | recording ring reader, TS batches and `MemoryQueue` (`crates/restream-engine/src/recording/mod.rs`) |
 | Egress (RTMP, SRT, HLS PUT, MoQ, pipeline, sink) | `egress-shard-<n>` | leaf state; SRT owner per address family |
 | HLS PUT over `https` without kTLS | Reqwest uploader on Tokio | upload policy state |
-| Picture and sound checks (opt in per pipeline) | an external FFmpeg per checked pipeline; `restream-ffin` feeds it, `stream-qa-pic` and `stream-qa-snd` read it | its own source-ring reader and TS feeder; decoding happens in the child (`src/media/stream_qa/`) |
-| Stream inspector (every pipeline) | `stream-inspector`, one thread for all pipelines, once a second | per-pipeline cursor and a minute of per-track counts; reads packet headers and publish times by sequence, registers no reader, so it never holds the ring back (`src/media/stream_inspector.rs`) |
+| Picture and sound checks (opt in per pipeline) | an external FFmpeg per checked pipeline; `restream-ffin` feeds it, `stream-qa-pic` and `stream-qa-snd` read it | its own source-ring reader and TS feeder; decoding happens in the child (`crates/restream-engine/src/stream_qa/`) |
+| Stream inspector (every pipeline) | `stream-inspector`, one thread for all pipelines, once a second | per-pipeline cursor and a minute of per-track counts; reads packet headers and publish times by sequence, registers no reader, so it never holds the ring back (`crates/restream-engine/src/stream_inspector.rs`) |
 
 Rings are shared: one source ring per pipeline and one output ring per stage,
 independent of the output count.
@@ -1200,8 +1200,8 @@ independent of the output count.
 |---|---|---|
 | Standby GOP cache | 16 MiB or 2,048 packets per input | `crates/restream-sync/src/standby_gop.rs` |
 | Recording `MemoryQueue` | 512 KiB (`RESTREAM_RECORDING_QUEUE_CAPACITY`, clamp 64 KiB–16 MiB); soft limit, a write can overshoot by one batch | `crates/restream-sync/src/byte_queue.rs` |
-| HLS MPEG-TS window | `RESTREAM_HLS_MAX_SEGMENTS` (20); target duration starts at 6 s and never decreases | `src/media/hls/store.rs` |
-| HLS fMP4 window | 20 advertised, 26 kept | `src/media/hls/fmp4/store.rs` |
+| HLS MPEG-TS window | `RESTREAM_HLS_MAX_SEGMENTS` (20); target duration starts at 6 s and never decreases | `crates/restream-engine/src/hls/store.rs` |
+| HLS fMP4 window | 20 advertised, 26 kept | `crates/restream-engine/src/hls/fmp4/store.rs` |
 
 ## Output start and timestamps
 

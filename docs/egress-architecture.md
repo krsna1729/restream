@@ -1,6 +1,6 @@
 # Egress architecture
 
-Every live output runs as a leaf on the egress fabric (`src/media/egress/`).
+Every live output runs as a leaf on the egress fabric (`crates/restream-engine/src/egress/`).
 A leaf is one output's protocol state. A shard is an OS thread that owns many
 leaves and visits them under a finite budget. Each prepared feed gets its own
 small pool of shards. No output owns a thread, a Tokio media task or a private
@@ -31,21 +31,21 @@ handoff is listed in [Runtime crossings](runtime-crossings.md).
 
 `EgressTask::run` (`src/infrastructure/bootstrap/egress_task.rs`) picks the
 path by URL scheme. Each fabric output becomes an `OutputSpec` with one
-`ProtocolSpec` variant (`src/media/egress/command.rs`).
+`ProtocolSpec` variant (`crates/restream-engine/src/egress/command.rs`).
 
 | Scheme | `ProtocolSpec` | Shard backend | Feed | Transport |
 |---|---|---|---|---|
 | `rtmp://`, `rtmps://` | `Rtmp` | `RtmpShardBackend` | `RingFeed` | Compio TCP; RTMPS via Rustls then kTLS |
 | `srt://` | `Srt` | `SrtShardBackend` | `TsFeed` | `srt-rs` Compio `Owner` per address family |
 | `http://`, `https://` HLS PUT | `HlsPut` | `HlsPutShardBackend` | `HlsStore` | Compio TCP; HTTPS needs kTLS |
-| `moqt://` | `Moq` | `MoqShardBackend` | `RingFeed` | Compio QUIC (`src/media/moq/egress/`) |
+| `moqt://` | `Moq` | `MoqShardBackend` | `RingFeed` | Compio QUIC (`crates/restream-engine/src/moq/egress/`) |
 | `sink://` | `Sink` | `SinkShardBackend` | `RingFeed` | none: discards after accounting |
 | `pipeline://` | `Pipeline` | `PipelineShardBackend` | `RingFeed` | in-process publish to another pipeline |
 
 HLS PUT has one exception. It uses the fabric only when
 `RESTREAM_HLS_PUT_FABRIC` is on (default) and, for HTTPS, when kernel TLS is
 available. Otherwise the output uses the Tokio Reqwest uploader
-(`src/media/hls/upload.rs`).
+(`crates/restream-engine/src/hls/upload.rs`).
 
 ## Ownership
 
@@ -496,7 +496,7 @@ Startup logs `srt egress shard runtime ready` per shard and
 
 ## Configuration
 
-`EgressFabricConfig::from_env` (`src/media/config.rs`) parses and clamps the
+`EgressFabricConfig::from_env` (`crates/restream-engine/src/config.rs`) parses and clamps the
 `RESTREAM_EGRESS_*` variables; `validate` logs warnings for risky
 combinations but never stops startup. Variables, defaults, ranges and the
 warnings are listed in [Configuration](configuration.md#egress-fabric).
@@ -557,5 +557,5 @@ backpressure reason, quality and the termination flag.
 10. A live output never changes shard; resizing affects new outputs only.
 11. Backends are built, used and dropped on their shard thread (`!Send`).
 
-The visit cost has a micro-benchmark, `benches/egress_visit.rs`. Proof
+The visit cost has a micro-benchmark, `crates/restream-engine/benches/egress_visit.rs`. Proof
 selection is described in [Concurrency proofing](concurrency-proofing.md).

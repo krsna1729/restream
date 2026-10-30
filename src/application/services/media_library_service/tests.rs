@@ -247,8 +247,8 @@ async fn list_media_files_groups_recording_companions_and_ingest_counts() {
     std::fs::write(&converted, b"converted").unwrap();
     std::fs::write(
         &state,
-        serde_json::to_vec(&crate::media::recording::RecordingConversionState {
-            status: crate::media::recording::RecordingConversionStatus::Ready,
+        serde_json::to_vec(&restream_engine::recording::RecordingConversionState {
+            status: restream_engine::recording::RecordingConversionStatus::Ready,
             updated_at: "2026-07-09T01:02:03Z".to_string(),
             error: None,
         })

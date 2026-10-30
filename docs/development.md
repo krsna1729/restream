@@ -69,7 +69,9 @@ cargo fmt --all
   `cargo xtask <group>`; `cargo xtask help` lists the groups and their steps.
 - Use `--profile bench` instead of `--release` for local builds. Harness
   modes need `cargo xtask build-bench`, which fills `target/bench/`.
-- Benchmarks are declared in `Cargo.toml` and live in `benches/`. A measured
+- Engine benchmarks are declared in `crates/restream-engine/Cargo.toml` and
+  live in `crates/restream-engine/benches/`; the API benchmarks stay in the
+  root `Cargo.toml` and `benches/`. A measured
   change puts its numbers in its commit message.
   [High-performance data path](high-performance-data-path.md) says when a
   benchmark is required.
@@ -80,7 +82,8 @@ artifacts.
 The [workspace map](architecture.md#workspace-layout) locates implementation
 owners and distinguishes package dependencies from runtime threads. Select
 the package that owns the relevant test, not just the changed source file:
-some protocol consumer suites still run under the root `restream` package.
+engine and protocol consumer suites run under `restream-engine`, application
+suites under the root `restream` package.
 [Testing](testing.md#rust-test-suite) lists focused commands and explains
 feature-isolated `-p restream --no-default-features` invocations.
 

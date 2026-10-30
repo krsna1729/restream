@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::media::engine::MediaEngine;
 use restream_core::{MediaType, PayloadFormat};
 use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_engine::engine::MediaEngine;
 use restream_sync::Reader;
 
 use crate::support::{collect_packets_with_deadline, load_primary_transport_packets};
@@ -15,7 +15,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-hevc").await;
-        let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+        let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine.clone());
         let stage_key = StageKey::new(
             "rtmp-hevc",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
@@ -34,7 +34,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
 
         let (video, audio_tracks, mut packets) = load_primary_transport_packets("h265");
         let (_video_sequence_header, audio_sequence_header) =
-            restream::media::test_fixtures::wrap_packets_for_rtmp_ingest(
+            restream_engine::test_fixtures::wrap_packets_for_rtmp_ingest(
                 &video,
                 &audio_tracks,
                 &mut packets,

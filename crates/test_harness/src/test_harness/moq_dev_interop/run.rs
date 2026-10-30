@@ -41,7 +41,7 @@ const BROWSER_TIMEOUT: Duration = Duration::from_secs(360);
 /// The browser specs' own package, relative to the repository root.
 const BROWSER_SPEC_DIR: &str = "test/e2e/moq";
 
-/// Restream's MoQ listener settings (`src/media/config/moq.rs`).
+/// Restream's MoQ listener settings (`crates/restream-engine/src/config/moq.rs`).
 const MOQ_INGEST_LISTEN_ENV: &str = "RESTREAM_MOQ_INGEST_LISTEN";
 const MOQ_TLS_CERT_ENV: &str = "RESTREAM_MOQ_TLS_CERT";
 const MOQ_TLS_KEY_ENV: &str = "RESTREAM_MOQ_TLS_KEY";
@@ -86,9 +86,9 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
 
     let moq = pinned_bin(&MOQ_CLI).await?;
     let relay_bin = pinned_bin(&MOQ_RELAY).await?;
-    let fixture = restream::media::test_fixtures::checked_in_fixture(FIXTURE)?;
+    let fixture = restream_engine::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
-    let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg = restream_engine::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;
     let ports = TestPorts::from_env();
     let dev_ports = DevPorts::allocate();

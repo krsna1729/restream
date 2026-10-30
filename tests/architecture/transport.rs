@@ -89,9 +89,9 @@ fn production_transport_stays_on_io_uring_owners() {
         }
     };
     for root in [
-        "src/media/rtmp",
-        "src/media/srt",
-        "src/media/egress/backends",
+        "crates/restream-engine/src/rtmp",
+        "crates/restream-engine/src/srt",
+        "crates/restream-engine/src/egress/backends",
         "crates/restream-rtmp/src",
         "crates/restream-srt/src",
         "crates/restream-moq/src",
@@ -99,18 +99,24 @@ fn production_transport_stays_on_io_uring_owners() {
     ] {
         collect_rust_sources(std::path::Path::new(root), &mut inspect);
     }
-    for file in ["src/media/rtmp.rs", "src/media/srt.rs"] {
+    for file in [
+        "crates/restream-engine/src/rtmp.rs",
+        "crates/restream-engine/src/srt.rs",
+    ] {
         let source = std::fs::read_to_string(file).expect("transport module root is readable");
         inspect(std::path::Path::new(file), &source);
     }
     for (file, required) in [
-        ("src/media/rtmp/listener.rs", "DriverType::IoUring"),
         (
-            "src/media/egress/backends/compio_tcp/poller.rs",
+            "crates/restream-engine/src/rtmp/listener.rs",
             "DriverType::IoUring",
         ),
         (
-            "src/media/egress/backends/srt/owner_set.rs",
+            "crates/restream-engine/src/egress/backends/compio_tcp/poller.rs",
+            "DriverType::IoUring",
+        ),
+        (
+            "crates/restream-engine/src/egress/backends/srt/owner_set.rs",
             "production_runtime_builder",
         ),
     ] {
@@ -135,7 +141,7 @@ fn media_transport_has_no_epoll_readiness_path() {
         "TcpPollOps",
     ];
     for root in [
-        "src/media",
+        "crates/restream-engine/src",
         "crates/restream-rtmp/src",
         "crates/restream-srt/src",
         "crates/restream-moq/src",

@@ -1,13 +1,13 @@
 use super::*;
 
 /// Recording start is intentionally backdated: `Reader::new_with_keyframe_preroll`
-/// (src/media/recording/mod.rs) snaps to the most recently buffered keyframe
+/// (crates/restream-engine/src/recording/mod.rs) snaps to the most recently buffered keyframe
 /// (up to ~one GOP old) and then backs up a further fixed preroll, so decoding
 /// starts cleanly on an IDR. This is correct, by-design behavior — do not
 /// shrink this budget to "fix" a duration assertion.
 const FILE_LIVE_EDGE_START_KEYFRAME_PREROLL_DRIFT_SECS: f64 = 1.0;
 
-/// The recording drain loop (src/media/recording/mod.rs) checks cancellation
+/// The recording drain loop (crates/restream-engine/src/recording/mod.rs) checks cancellation
 /// between bursts, so a stop request is delayed by at most one in-flight
 /// `MEDIA_PULL_BURST_PACKETS` burst plus ordinary scheduler jitter under CI
 /// contention. Before that loop was made cooperative with cancellation,
@@ -268,7 +268,7 @@ async fn run_file_live_edge_case(
     let recording_mp4 =
         wait_for_new_media_file(media_dir, &before_files, ".mp4", Duration::from_secs(30)).await?;
     let recorded_analysis =
-        restream::media::file_analysis::analyze_media_file(&recording_mp4).await?;
+        restream_engine::file_analysis::analyze_media_file(&recording_mp4).await?;
 
     let expected_source_ts = recording_mp4.with_extension("ts");
     let source_retained = expected_source_ts.exists();
@@ -355,7 +355,7 @@ pub(crate) async fn file_live_edge() -> Result<Value, String> {
         &mut api,
         &ports,
         &media_dir,
-        &restream::media::test_fixtures::sparse_gop_mp4_fixture()?,
+        &restream_engine::test_fixtures::sparse_gop_mp4_fixture()?,
         "file-live-edge-optimized",
         true,
         2,
@@ -396,7 +396,7 @@ pub(crate) async fn signal_control() -> Result<Value, String> {
     let mut results = Vec::new();
     for (name, codec, multi_audio, transcode_720p) in cases {
         let fixture =
-            restream::media::test_fixtures::av_marker_transport_fixture(codec, multi_audio)?;
+            restream_engine::test_fixtures::av_marker_transport_fixture(codec, multi_audio)?;
         let capture_path = work_dir.join(format!("{name}.signal.mkv"));
         ffmpeg_control_capture(&fixture, &capture_path, duration, transcode_720p).await?;
         let started = Instant::now();

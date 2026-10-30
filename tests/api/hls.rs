@@ -139,9 +139,9 @@ async fn hls_segment_bad_name_returns_400() {
 
 #[tokio::test]
 async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
-    use restream::media::stage_lifecycle::StagePhase;
     use restream_core::metadata::VideoMeta;
     use restream_domain::domain::stage::StageKind;
+    use restream_engine::stage_lifecycle::StagePhase;
     use restream_sync::RingBuffer;
 
     let (app, _, engine) = test_app_with_engine().await;
@@ -171,14 +171,14 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let source_ring = Arc::new(RingBuffer::new(16));
-    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine.clone());
     let (handle, _lease205, _) = manager
         .ensure_stage(stage_key.clone(), source_ring, None)
         .await;
 
     // Transition stage to WaitingForCapacity
     handle.lifecycle.transition(StagePhase::WaitingForCapacity {
-        backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
+        backend: restream_engine::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
     });
 
     let resp = app
@@ -221,7 +221,7 @@ async fn file_ingest_preview_hls_serves_playlist_and_segment() {
         .await
         .expect("create pipeline");
     std::fs::copy(
-        restream::media::test_fixtures::checked_in_fixture(
+        restream_engine::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .expect("checked-in integration media fixture"),

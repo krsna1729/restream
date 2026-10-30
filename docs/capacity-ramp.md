@@ -147,7 +147,7 @@ the sender does. Do not extrapolate a loopback limit to a remote network.
 
 Upload ordering, retry and acknowledged-playlist rules are in
 [Media pipeline](media-pipeline.md) and
-[`upload_policy.rs`](../src/media/hls/upload_policy.rs).
+[`upload_policy.rs`](../crates/restream-engine/src/hls/upload_policy.rs).
 
 ## Compare builds or hosts
 

@@ -5,15 +5,15 @@ use rml_rtmp::sessions::StreamMetadata;
 
 use crate::application::egress::PreparedOutput;
 use crate::application::models::Output;
-use crate::media::egress::journal::{FeedEpoch, RingFeed};
-use crate::media::egress::policy::LeafPolicy;
-use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
-use crate::media::engine::MediaEngine;
-use crate::media::rtmp::output_ring_video_codec_kind;
-use crate::media::rtmp::resolved_output_audio_tracks;
-use crate::media::rtmp::rtmp_publish_metadata;
 use restream_core::metadata::AudioMeta;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_engine::egress::journal::{FeedEpoch, RingFeed};
+use restream_engine::egress::policy::LeafPolicy;
+use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
+use restream_engine::engine::MediaEngine;
+use restream_engine::rtmp::output_ring_video_codec_kind;
+use restream_engine::rtmp::resolved_output_audio_tracks;
+use restream_engine::rtmp::rtmp_publish_metadata;
 use restream_rtmp::should_defer_audio_until_video_ready;
 use restream_rtmp::should_send_startup_audio_sequence_header;
 use restream_rtmp::startup_video_sequence_header;
@@ -39,7 +39,7 @@ pub struct RtmpFabricStartup {
     pub defer_audio_until_video_ready: bool,
 }
 
-impl From<RtmpFabricStartup> for crate::media::egress::backends::rtmp::RtmpPublishStartup {
+impl From<RtmpFabricStartup> for restream_engine::egress::backends::rtmp::RtmpPublishStartup {
     fn from(startup: RtmpFabricStartup) -> Self {
         Self {
             enhanced_rtmp: startup.enhanced_rtmp,
@@ -145,11 +145,11 @@ mod tests {
     use super::*;
 
     use crate::application::egress::prepare_output_ring;
-    use crate::media::egress::EgressFeed;
-    use crate::media::engine::MediaEngine;
     use restream_core::metadata::AudioMeta;
     use restream_domain::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use restream_domain::domain::state::DesiredOutputState;
+    use restream_engine::egress::EgressFeed;
+    use restream_engine::engine::MediaEngine;
 
     fn test_output(pipeline_id: &str, url: &str) -> Output {
         Output {
