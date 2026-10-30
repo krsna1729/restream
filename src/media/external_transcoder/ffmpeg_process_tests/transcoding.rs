@@ -380,7 +380,7 @@ fn observed_rate_probe_transcodes_h264_aac_bitrate_fixture_before_pipe_closes() 
 
 #[test]
 fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
-    // Regression: a July 2026 H.264 startup tuning pass proved only AVC.
+    // H.264 startup tuning proven on AVC input alone does not cover HEVC.
     // HEVC SRT sources can keep stdin open indefinitely, so waiting for EOF
     // before stdout appears leaves every downstream output in
     // `waitingUpstream`. Keep this pipe-open proof beside the AVC one: the
