@@ -76,8 +76,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
         "effective startup configuration",
     );
     crate::host_tuning::warn_unmet();
-    crate::ffmpeg_binary::ffmpeg_bin_path();
-    tokio::spawn(crate::ffmpeg_capabilities::check_at_startup());
+    crate::media::ffmpeg_binary::ffmpeg_bin_path();
+    tokio::spawn(crate::media::ffmpeg_capabilities::check_at_startup());
     match crate::malloc_tuning::applied() {
         Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
         | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(
@@ -96,7 +96,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     }
     for warning in config
         .egress_fabric
-        .validate(crate::capacity::HostCapacity::get().cpus)
+        .validate(crate::media::host_capacity::HostCapacity::get().cpus)
     {
         warn!(
             event_class = "lifecycle",

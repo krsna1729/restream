@@ -81,7 +81,7 @@ pub(crate) async fn run_hls_push_duty(
     let ports = TestPorts::from_env();
     let restream_bin = default_restream_bin();
     let plan = Plan {
-        ffmpeg: restream::ffmpeg_binary::ffmpeg_bin_path().to_path_buf(),
+        ffmpeg: restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf(),
         fixture: restream::test_fixtures::canonical_h264_ts_fixture()?,
         sink_ports: sink_ports(options.total_pipelines())?,
         ports: TestPorts {

@@ -123,9 +123,9 @@ async fn remux_recording_fixture(
     settings: RecordingSettings,
 ) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     assert!(
-        crate::ffmpeg_capabilities::report()
+        crate::media::ffmpeg_capabilities::report()
             .await
-            .available(crate::ffmpeg_capabilities::Feature::RecordingRemux),
+            .available(crate::media::ffmpeg_capabilities::Feature::RecordingRemux),
         "the test host's ffmpeg must be able to remux recordings"
     );
 
@@ -171,7 +171,7 @@ async fn remux_recording_to_mp4_deletes_source_ts_when_retention_disabled() {
     );
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",
@@ -225,7 +225,7 @@ async fn remux_recording_to_mp4_keeps_source_ts_when_retention_enabled() {
     );
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",
@@ -336,7 +336,7 @@ async fn assert_remux_preserves_timestamp_continuity(retain_source_ts: bool) {
     let source_audio_span = stream_span_ms(&source_packets, MediaType::Audio);
 
     let roundtrip_ts = temp_dir.join("roundtrip.ts");
-    let status = TokioCommand::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+    let status = TokioCommand::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-y",
             "-hide_banner",

@@ -289,7 +289,7 @@ fn version_from_banner(banner: &str) -> Option<String> {
 const PROBE_WITHIN: Duration = Duration::from_secs(10);
 
 async fn tool(path: &Path) -> Tool {
-    let run = crate::ffmpeg_binary::run_tool(
+    let run = crate::media::ffmpeg_binary::run_tool(
         path,
         &["-hide_banner".into(), "-version".into()],
         PROBE_WITHIN,
@@ -317,7 +317,7 @@ async fn probe(ffmpeg: &Path, ffprobe: &Path) -> Report {
         let mut components = Components::default();
         for kind in Kind::ALL {
             let args = ["-hide_banner".to_string(), kind.flag().to_string()];
-            match crate::ffmpeg_binary::run_tool(ffmpeg, &args, PROBE_WITHIN).await {
+            match crate::media::ffmpeg_binary::run_tool(ffmpeg, &args, PROBE_WITHIN).await {
                 Ok(stdout) => components.read(kind, &String::from_utf8_lossy(&stdout)),
                 Err(error) => warn!(err = %error, "ffmpeg {} listing failed", kind.flag()),
             }
@@ -340,8 +340,8 @@ pub async fn report() -> &'static Report {
     REPORT
         .get_or_init(|| {
             probe(
-                crate::ffmpeg_binary::ffmpeg_bin_path(),
-                crate::ffmpeg_binary::ffprobe_bin_path(),
+                crate::media::ffmpeg_binary::ffmpeg_bin_path(),
+                crate::media::ffmpeg_binary::ffprobe_bin_path(),
             )
         })
         .await

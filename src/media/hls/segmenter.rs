@@ -87,7 +87,7 @@ async fn run_hls_segmenter(
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageRegistered {
+        .emit(crate::media::events::EventKind::StageRegistered {
             pipeline_id: pipeline_id.clone(),
             encoding: "hls".to_string(),
         });
@@ -159,7 +159,7 @@ async fn run_hls_segmenter(
                             let (video, audio_tracks) = loop {
                                 if cancel_token.is_cancelled() {
                                     engine.remove_stage_runtime_if_current(&hls_stage_key, &lifecycle).await;
-                                    engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
+                                    engine.runtime.event_log.emit(crate::media::events::EventKind::StageStopped {
                                         pipeline_id: pipeline_id.clone(),
                                         encoding: "hls".to_string(),
                                     });
@@ -263,7 +263,7 @@ async fn run_hls_segmenter(
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageStopped {
+        .emit(crate::media::events::EventKind::StageStopped {
             pipeline_id: pipeline_id.clone(),
             encoding: "hls".to_string(),
         });

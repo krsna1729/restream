@@ -317,7 +317,7 @@ fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Val
         .owners
         .load(Relaxed) as usize;
     serde_json::json!({
-        "cpus": crate::capacity::HostCapacity::get().cpus,
+        "cpus": crate::media::host_capacity::HostCapacity::get().cpus,
         "controlWorkers": control,
         "mediaWorkers": media,
         "rtmpIngressOwners": rtmp,

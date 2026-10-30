@@ -542,7 +542,7 @@ mod tests {
                 store.sample_codec_list()
             );
 
-            let probe = std::process::Command::new(crate::ffmpeg_binary::ffprobe_bin_path())
+            let probe = std::process::Command::new(crate::media::ffmpeg_binary::ffprobe_bin_path())
                 .args([
                     "-v",
                     "error",
@@ -563,7 +563,7 @@ mod tests {
             );
             let frames: usize = probed.rsplit(',').next().unwrap().parse().unwrap();
             assert_eq!(frames, packets.len(), "{name}: every frame decodes");
-            let decode = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+            let decode = std::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
                 .args(["-v", "error", "-xerror", "-i"])
                 .arg(&path)
                 .args(["-f", "null", "-"])

@@ -162,12 +162,12 @@ fn images_install_the_pinned_ffmpeg_build() {
     assert!(
         stage.contains(&format!(
             "releases/download/{}/",
-            restream::ffmpeg_binary::PINNED_RELEASE
+            restream::media::ffmpeg_binary::PINNED_RELEASE
         )),
         "ffmpeg-fetch stage must download the pinned release"
     );
     for (docker_arch, arch) in [("amd64", "x86_64"), ("arm64", "aarch64")] {
-        let asset = restream::ffmpeg_binary::pinned_asset(arch).expect("pinned asset");
+        let asset = restream::media::ffmpeg_binary::pinned_asset(arch).expect("pinned asset");
         let line = stage
             .lines()
             .position(|line| line.trim_start().starts_with(&format!("{docker_arch})")))

@@ -168,7 +168,7 @@ impl MediaEngine {
         let leaf_capacity = shard_config.leaf_capacity().get();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity::get(),
+            crate::media::host_capacity::HostCapacity::get(),
             reason,
             shard_config,
             |_| backend_factory(shared.clone(), max_events, leaf_capacity),

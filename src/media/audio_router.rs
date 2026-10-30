@@ -149,7 +149,7 @@ pub async fn start_audio_router(
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageStopped {
+        .emit(crate::media::events::EventKind::StageStopped {
             pipeline_id,
             encoding: stage_key.kind.to_string(),
         });

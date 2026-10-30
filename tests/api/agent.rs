@@ -179,7 +179,7 @@ async fn agent_context_returns_redacted_state_bundle() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::IngestConnected {
+        .emit(restream::media::events::EventKind::IngestConnected {
             pipeline_id: pid.clone(),
             protocol: "rtmp".to_string(),
             stream_key: raw_stream_key.to_string(),
@@ -285,7 +285,7 @@ async fn agent_investigation_returns_evidence_envelope() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::IngestConnected {
+        .emit(restream::media::events::EventKind::IngestConnected {
             pipeline_id: pid.clone(),
             protocol: "rtmp".to_string(),
             stream_key: raw_stream_key.to_string(),

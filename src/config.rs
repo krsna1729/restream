@@ -4,9 +4,10 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::capacity::{CapacityLimits, HostCapacity, LimitSource, LimitSources};
+use crate::capacity::{CapacityLimits, LimitSource, LimitSources};
 use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
+use crate::media::host_capacity::HostCapacity;
 
 mod env;
 mod moq;

@@ -365,7 +365,7 @@ async fn run_child(
         .map(String::as_str)
         .zip(groups.iter().cloned())
         .collect();
-    let mut child = tokio::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+    let mut child = tokio::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args(qa_ffmpeg_args("pipe:0", has_video, &outputs))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -541,7 +541,7 @@ mod tests {
         // Ten seconds is enough for 3 s of loudness and a few keyframes.
         let input = args.iter().position(|arg| arg == "-i").unwrap();
         args.splice(input..input, ["-t".to_string(), "10".to_string()]);
-        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        let mut child = std::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
             .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -595,7 +595,7 @@ mod tests {
             false,
             &[(&socket.path(), 0..2)],
         );
-        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        let mut child = std::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
             .args(&args)
             .stderr(Stdio::null())
             .spawn()
@@ -669,7 +669,7 @@ mod tests {
         }
         assert!(!ts.is_empty(), "the feeder muxed the enhanced tags");
 
-        let mut child = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        let mut child = std::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
             .args(qa_ffmpeg_args("pipe:0", true, &[]))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

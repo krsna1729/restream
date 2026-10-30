@@ -7,7 +7,8 @@ use super::{
     derive_external_ffmpeg_permits, effective_memory_bytes, env_optional_positive_usize,
     target_egress_fabric_shards,
 };
-use crate::capacity::{HostCapacity, LimitSource};
+use crate::capacity::LimitSource;
+use crate::media::host_capacity::HostCapacity;
 
 thread_local! {
     /// Per-test environment overrides read by `config::env_var`: `Some(value)`

@@ -127,9 +127,9 @@ fn analysis_from(probe: Probe, keyframe_times: &[f64]) -> MediaFileAnalysis {
 }
 
 pub async fn analyze_media_file(path: &Path) -> Result<MediaFileAnalysis, String> {
-    let ffprobe = crate::ffmpeg_binary::ffprobe_bin_path();
+    let ffprobe = crate::media::ffmpeg_binary::ffprobe_bin_path();
     let file = path.display().to_string();
-    let header = crate::ffmpeg_binary::run_tool(
+    let header = crate::media::ffmpeg_binary::run_tool(
         ffprobe,
         &[
             "-v",
@@ -152,7 +152,7 @@ pub async fn analyze_media_file(path: &Path) -> Result<MediaFileAnalysis, String
     if probe.streams.is_empty() {
         return Ok(analysis_from(probe, &[]));
     }
-    let packets = crate::ffmpeg_binary::run_tool(
+    let packets = crate::media::ffmpeg_binary::run_tool(
         ffprobe,
         &[
             "-v",

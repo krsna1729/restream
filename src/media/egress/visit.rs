@@ -115,7 +115,7 @@ pub(crate) fn visit_leaf<F: EgressFeed>(
         advance(cursor, readiness, budget)
     }))
     .unwrap_or_else(|payload| {
-        let detail = crate::panic_boundary::record_contained(payload.as_ref()).to_string();
+        let detail = crate::media::panic_boundary::record_contained(payload.as_ref()).to_string();
         tracing::error!(
             output_id = %common.output_id,
             %detail,

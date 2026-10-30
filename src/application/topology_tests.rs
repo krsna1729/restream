@@ -353,7 +353,7 @@ fn a_deadline_makes_a_pass_due_only_once_it_is_reached() {
 
 #[test]
 fn lifecycle_events_request_the_passes_their_effects_need() {
-    use crate::events::EventKind;
+    use crate::media::events::EventKind;
     let grace = std::time::Duration::from_secs(5);
     let requests = ReconcileRequests::new();
     let before = Instant::now();

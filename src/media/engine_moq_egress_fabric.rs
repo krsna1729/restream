@@ -196,7 +196,7 @@ impl MediaEngine {
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity::get(),
+            crate::media::host_capacity::HostCapacity::get(),
             reason,
             shard_config,
             |_shard_id| {

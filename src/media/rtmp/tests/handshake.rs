@@ -943,7 +943,7 @@ async fn a_panicking_connection_does_not_stop_the_listener() {
             pipeline_id: "pipe-contained-panic".to_string(),
         });
     let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
-    let before = crate::panic_boundary::contained_panics();
+    let before = crate::media::panic_boundary::contained_panics();
 
     let mut doomed = TcpStream::connect(addr).await.unwrap();
     super::ingest::injected_panics::mark(doomed.local_addr().unwrap());
@@ -956,7 +956,7 @@ async fn a_panicking_connection_does_not_stop_the_listener() {
     assert!(closed.is_ok(), "the panicking connection must be closed");
     // The owner closes the socket before it records the panic.
     let counted = tokio::time::timeout(Duration::from_secs(5), async {
-        while crate::panic_boundary::contained_panics() == before {
+        while crate::media::panic_boundary::contained_panics() == before {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })

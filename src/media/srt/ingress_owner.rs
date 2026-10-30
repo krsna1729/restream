@@ -588,7 +588,7 @@ impl OwnerLoop {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(media, stats))) {
             Ok(result) => Some(result),
             Err(payload) => {
-                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                let panic = crate::media::panic_boundary::record_contained(payload.as_ref());
                 error!(
                     peer = ?peer,
                     panic,

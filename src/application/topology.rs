@@ -103,10 +103,10 @@ impl ReconcileRequests {
 /// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(
     requests: &ReconcileRequests,
-    event: &crate::events::EventKind,
+    event: &crate::media::events::EventKind,
     ingest_disconnect_grace: std::time::Duration,
 ) {
-    use crate::events::EventKind;
+    use crate::media::events::EventKind;
     match event {
         EventKind::IngestDisconnected { .. } => {
             requests.wake();

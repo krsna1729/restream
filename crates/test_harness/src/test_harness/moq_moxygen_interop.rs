@@ -236,7 +236,7 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
     let relay_bin = moxygen_relay_bin()?;
     let fixture = restream::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
-    let ffmpeg = restream::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;
     let ports = TestPorts::from_env();
     let mut reserved = planned_harness_ports();

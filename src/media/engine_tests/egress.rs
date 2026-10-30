@@ -207,7 +207,7 @@ async fn egress_failure_event_survives_unregister() {
     let events = engine.runtime.event_log.recent(10, Some("pipe-1"));
     assert!(events.iter().any(|event| matches!(
         &event.kind,
-        crate::events::EventKind::EgressFailed {
+        crate::media::events::EventKind::EgressFailed {
             output_id,
             phase,
             error,

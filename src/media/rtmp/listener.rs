@@ -407,7 +407,7 @@ async fn run_compio_owner(
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => warn!(%error, %peer_addr, "error handling RTMP client"),
                         Err(payload) => {
-                            let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                            let panic = crate::media::panic_boundary::record_contained(payload.as_ref());
                             error!(
                                 %peer_addr,
                                 panic,

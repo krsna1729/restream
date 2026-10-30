@@ -341,7 +341,7 @@ async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
     )
     .await;
     let remote = server.remote;
-    let before = crate::panic_boundary::contained_panics();
+    let before = crate::media::panic_boundary::contained_panics();
 
     let mut poison = vec![0u8; CHUNK];
     poison[..super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
@@ -361,7 +361,7 @@ async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
         doomed.disconnected,
         "the panicking peer is disconnected: {doomed:?}"
     );
-    assert!(crate::panic_boundary::contained_panics() > before);
+    assert!(crate::media::panic_boundary::contained_panics() > before);
 
     let chunks = ts_chunks(400);
     let healthy = blocking(move || {
@@ -692,7 +692,7 @@ async fn an_srt_call_input_dials_a_remote_listener_and_publishes() {
     let server = TestServer::start(&[], Vec::new()).await;
     let fixture = crate::test_fixtures::canonical_h264_ts_fixture().expect("fixture");
     let port = free_port();
-    let mut listener = tokio::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+    let mut listener = tokio::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([
             "-nostdin",
             "-hide_banner",

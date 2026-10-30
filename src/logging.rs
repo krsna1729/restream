@@ -10,7 +10,6 @@
 pub mod types;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,13 +26,6 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, Layer};
 
 pub use self::types::{AppLogEntry, AppLogFilters, AppLogRow};
-
-static CORRELATION_SEQ: AtomicU64 = AtomicU64::new(1);
-
-pub fn next_correlation_id(prefix: &str) -> String {
-    let seq = CORRELATION_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("{prefix}-{seq:016x}")
-}
 
 // ── Public broadcast entry (also used by the SSE handler) ────────────────────
 

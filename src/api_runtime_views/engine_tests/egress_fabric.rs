@@ -74,7 +74,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
             failed
                 .rescale(
                     crate::config::EgressShardProfile::OutputCount,
-                    crate::capacity::HostCapacity { cpus: 1 },
+                    crate::media::host_capacity::HostCapacity { cpus: 1 },
                     crate::media::egress::runtime::ResizeReason::Observe,
                     shard_config(),
                     |_| || Ok::<_, String>(PanicBackend),

@@ -20,7 +20,7 @@ use crate::config::RuntimeTuning;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
 use crate::media::engine::MediaEngine;
-use crate::secret_display::redact_url;
+use crate::media::secret_display::redact_url;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::domain::state::EgressPhase;
 

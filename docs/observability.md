@@ -477,7 +477,7 @@ datagrams to the same address coalesce.
   deltas for `?since=` / `Last-Event-ID` resumption, resyncs with a snapshot
   when the gap is too old or the client lags, and sends a heartbeat every
   20 s.
-- **Events**: `EventLog` (`src/events.rs`) keeps the last 1000 lifecycle
+- **Events**: `EventLog` (`src/media/events.rs`) keeps the last 1000 lifecycle
   events in memory (`limit` defaults to 100). Types are `ingest.connected`,
   `ingest.disconnected`, `ingest.probed`, `stage.registered`,
   `stage.waitingForCapacity`, `stage.backendSpawned`, `stage.firstInput`,

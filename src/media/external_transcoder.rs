@@ -162,7 +162,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         observed_bitrate_bps,
     );
     info!(?args, "FFMPEG ARGS");
-    let correlation_id = crate::logging::next_correlation_id("stage");
+    let correlation_id = crate::media::correlation_id::next_correlation_id("stage");
 
     info!(
         correlation_id = %correlation_id,
@@ -175,7 +175,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         encoding
     );
 
-    let ffmpeg_bin = crate::ffmpeg_binary::ffmpeg_bin_path();
+    let ffmpeg_bin = crate::media::ffmpeg_binary::ffmpeg_bin_path();
     let mut child = match Command::new(ffmpeg_bin)
         .args(&args)
         .stdin(Stdio::piped())
@@ -204,7 +204,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
             ctx.engine
                 .runtime
                 .event_log
-                .emit(crate::events::EventKind::StageStopped {
+                .emit(crate::media::events::EventKind::StageStopped {
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
@@ -221,7 +221,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
             ctx.engine
                 .runtime
                 .event_log
-                .emit(crate::events::EventKind::StageStopped {
+                .emit(crate::media::events::EventKind::StageStopped {
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
@@ -237,7 +237,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
             ctx.engine
                 .runtime
                 .event_log
-                .emit(crate::events::EventKind::StageStopped {
+                .emit(crate::media::events::EventKind::StageStopped {
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
@@ -324,7 +324,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     ctx.engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageStopped {
+        .emit(crate::media::events::EventKind::StageStopped {
             pipeline_id: pipeline_id.clone(),
             encoding: encoding.clone(),
         });

@@ -218,7 +218,7 @@ fn rescale_is_a_noop_when_the_target_is_unchanged() {
     let touched = runtime
         .rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity { cpus: 1 },
+            crate::media::host_capacity::HostCapacity { cpus: 1 },
             crate::media::egress::runtime::ResizeReason::Remove,
             shard_config(),
             |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
@@ -308,7 +308,7 @@ fn rescale_with(
 ) -> Result<Vec<ShardId>, &'static str> {
     runtime.rescale(
         crate::config::EgressShardProfile::OutputCount,
-        crate::capacity::HostCapacity { cpus: 2 },
+        crate::media::host_capacity::HostCapacity { cpus: 2 },
         ResizeReason::Observe,
         shard_config(),
         |_| {
@@ -495,7 +495,7 @@ fn all_panicked_shards_are_isolated_before_any_replacement_can_fail() {
         let mut attempts = Vec::new();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity { cpus: 3 },
+            crate::media::host_capacity::HostCapacity { cpus: 3 },
             ResizeReason::Remove,
             shard_config(),
             |shard| {
@@ -595,7 +595,7 @@ fn pending_add_is_sized_before_placement_without_counting_replacements_twice() {
     let touched = runtime
         .rescale(
             crate::config::EgressShardProfile::SrtOutputCount,
-            crate::capacity::HostCapacity { cpus: 2 },
+            crate::media::host_capacity::HostCapacity { cpus: 2 },
             reason,
             config,
             |_| {
@@ -665,7 +665,7 @@ fn growing_the_pool_never_reconnects_a_live_output() {
     let touched = runtime
         .rescale(
             crate::config::EgressShardProfile::OutputCount,
-            crate::capacity::HostCapacity { cpus: 2 },
+            crate::media::host_capacity::HostCapacity { cpus: 2 },
             ResizeReason::Remove,
             config,
             |_| {
@@ -730,7 +730,7 @@ fn shrinking_waits_for_the_tail_to_empty_and_never_reconnects_live_outputs() {
         runtime
             .rescale(
                 crate::config::EgressShardProfile::OutputCount,
-                crate::capacity::HostCapacity { cpus: 2 },
+                crate::media::host_capacity::HostCapacity { cpus: 2 },
                 ResizeReason::Remove,
                 config,
                 |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },

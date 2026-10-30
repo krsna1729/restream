@@ -141,7 +141,7 @@ impl MediaEngine {
 
         self.runtime
             .event_log
-            .emit(crate::events::EventKind::EgressStarted {
+            .emit(crate::media::events::EventKind::EgressStarted {
                 pipeline_id: pipeline_id.to_string(),
                 output_id: output_id.to_string(),
             });
@@ -240,7 +240,7 @@ impl MediaEngine {
         if !pipeline_id.is_empty() {
             self.runtime
                 .event_log
-                .emit(crate::events::EventKind::EgressStopped {
+                .emit(crate::media::events::EventKind::EgressStopped {
                     pipeline_id,
                     output_id: output_id.to_string(),
                 });
@@ -303,7 +303,7 @@ impl MediaEngine {
         if !pipeline_id.is_empty() {
             self.runtime
                 .event_log
-                .emit(crate::events::EventKind::EgressStopped {
+                .emit(crate::media::events::EventKind::EgressStopped {
                     pipeline_id,
                     output_id: output_id.to_string(),
                 });
@@ -555,7 +555,7 @@ impl MediaEngine {
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);
-                Some(crate::events::EventKind::EgressFailed {
+                Some(crate::media::events::EventKind::EgressFailed {
                     pipeline_id,
                     output_id: output_id.to_string(),
                     phase: phase.to_string(),
@@ -587,7 +587,7 @@ impl MediaEngine {
                 egress
                     .last_error_ms
                     .store(Self::now_epoch_ms(), Ordering::Relaxed);
-                crate::events::EventKind::EgressFailed {
+                crate::media::events::EventKind::EgressFailed {
                     pipeline_id,
                     output_id: output_id.to_string(),
                     phase: phase.to_string(),

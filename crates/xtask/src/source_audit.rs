@@ -68,7 +68,7 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "src/config/env.rs",
     "src/main.rs",
     "src/lib.rs",
-    "src/ffmpeg_binary.rs",
+    "src/media/ffmpeg_binary.rs",
     "crates/restream-domain/src/planner/",
     "crates/test_harness",
     "src/bin/restream-mcp.rs",

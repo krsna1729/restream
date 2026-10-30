@@ -256,7 +256,7 @@ pub(crate) struct EngineHealthView {
     egress_fabric_shards:
         Vec<crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
     /// Panics contained at a per-entity boundary since start
-    /// (`crate::panic_boundary`); each one ended one connection, peer or
+    /// (`crate::media::panic_boundary`); each one ended one connection, peer or
     /// output only.
     contained_panics: u64,
     tuning: TuningHealthJson,
@@ -596,7 +596,7 @@ pub(crate) async fn health_snapshot_view(
             ingress_owner,
         },
         egress_fabric_shards,
-        contained_panics: crate::panic_boundary::contained_panics(),
+        contained_panics: crate::media::panic_boundary::contained_panics(),
         tuning: TuningHealthJson {
             output_max_retries: engine.config.tuning.output_max_retries,
         },

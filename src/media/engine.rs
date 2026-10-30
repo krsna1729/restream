@@ -266,7 +266,10 @@ impl MediaEngine {
             .map(|timestamp| timestamp.to_rfc3339())
     }
 
-    pub fn set_event_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<crate::events::Event>) {
+    pub fn set_event_sink(
+        &self,
+        sink: tokio::sync::mpsc::UnboundedSender<crate::media::events::Event>,
+    ) {
         self.runtime.event_log.set_sink(sink);
     }
 
@@ -274,7 +277,7 @@ impl MediaEngine {
         &self,
         limit: usize,
         pipeline_id: Option<&str>,
-    ) -> Vec<crate::events::Event> {
+    ) -> Vec<crate::media::events::Event> {
         self.runtime.event_log.recent(limit, pipeline_id)
     }
 

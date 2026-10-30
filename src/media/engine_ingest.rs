@@ -164,7 +164,7 @@ impl MediaEngine {
 
         self.runtime
             .event_log
-            .emit(crate::events::EventKind::IngestConnected {
+            .emit(crate::media::events::EventKind::IngestConnected {
                 pipeline_id: pipeline_id.to_string(),
                 protocol: protocol.to_string(),
                 stream_key: stream_key.to_string(),
@@ -504,7 +504,7 @@ impl MediaEngine {
         if !protocol.is_empty() {
             self.runtime
                 .event_log
-                .emit(crate::events::EventKind::IngestDisconnected {
+                .emit(crate::media::events::EventKind::IngestDisconnected {
                     pipeline_id: pipeline_id.to_string(),
                     protocol,
                 });
@@ -571,7 +571,7 @@ impl MediaEngine {
         if !protocol.is_empty() {
             self.runtime
                 .event_log
-                .emit(crate::events::EventKind::IngestDisconnected {
+                .emit(crate::media::events::EventKind::IngestDisconnected {
                     pipeline_id: pipeline_id.to_string(),
                     protocol,
                 });

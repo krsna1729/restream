@@ -100,7 +100,7 @@ pub fn redacted_context(
     resource_map: Value,
     graphs: Vec<Value>,
     alerts: Vec<crate::alerts::Alert>,
-    events: Vec<crate::events::Event>,
+    events: Vec<crate::media::events::Event>,
     configuration: Value,
     media: Value,
     desired_vs_actual: Value,
@@ -302,7 +302,7 @@ pub fn investigation_response(
     telemetry: Value,
     resource_map: Value,
     alerts: Vec<crate::alerts::Alert>,
-    events: Vec<crate::events::Event>,
+    events: Vec<crate::media::events::Event>,
 ) -> Value {
     let workflow = request
         .workflow

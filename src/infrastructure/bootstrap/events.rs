@@ -1,7 +1,7 @@
 use tracing::{error, info, warn};
 
-pub(super) fn persist_runtime_event(event: crate::events::Event) {
-    use crate::events::EventKind;
+pub(super) fn persist_runtime_event(event: crate::media::events::Event) {
+    use crate::media::events::EventKind;
 
     let seq = event.seq;
     match event.kind {
@@ -200,10 +200,10 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(layer);
 
         tracing::subscriber::with_default(subscriber, || {
-            persist_runtime_event(crate::events::Event {
+            persist_runtime_event(crate::media::events::Event {
                 seq: 1,
                 timestamp: chrono::Utc::now(),
-                kind: crate::events::EventKind::EgressFailed {
+                kind: crate::media::events::EventKind::EgressFailed {
                     pipeline_id: "pipe".to_string(),
                     output_id: "out".to_string(),
                     phase: "send".to_string(),

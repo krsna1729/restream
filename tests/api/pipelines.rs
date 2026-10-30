@@ -732,7 +732,7 @@ async fn v1_events_returns_envelope_and_events_array() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::IngestConnected {
+        .emit(restream::media::events::EventKind::IngestConnected {
             pipeline_id: "test-pipeline".to_string(),
             protocol: "rtmp".to_string(),
             stream_key: "key01".to_string(),
@@ -764,7 +764,7 @@ async fn v1_events_filters_by_pipeline_id() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::IngestConnected {
+        .emit(restream::media::events::EventKind::IngestConnected {
             pipeline_id: "pipe-a".to_string(),
             protocol: "rtmp".to_string(),
             stream_key: "key01".to_string(),
@@ -772,7 +772,7 @@ async fn v1_events_filters_by_pipeline_id() {
     engine
         .runtime
         .event_log
-        .emit(restream::events::EventKind::IngestConnected {
+        .emit(restream::media::events::EventKind::IngestConnected {
             pipeline_id: "pipe-b".to_string(),
             protocol: "srt".to_string(),
             stream_key: "key02".to_string(),
