@@ -26,7 +26,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
-- [Q-106 two intermittent tests](#q-106-testing-sonnet-two-tests-fail-intermittently-under-coverage)
+- [Q-106 intermittent timing tests](#q-106-testing-sonnet-three-tests-fail-intermittently-on-a-loaded-host)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
