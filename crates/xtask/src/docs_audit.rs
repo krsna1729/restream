@@ -164,7 +164,7 @@ impl Policy {
         }
     }
 }
-pub(crate) fn run(_args: &[&str]) -> WorkflowResult {
+pub(crate) fn run() -> WorkflowResult {
     let root = normalize(&crate::repo_root());
     let output = crate::workflow::output(
         Command::new("git")

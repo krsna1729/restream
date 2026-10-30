@@ -1,12 +1,18 @@
 use crate::workflow::{Error, WorkflowResult};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
-fn selected(command: &[&str], filter: &str) -> Result<usize, Error> {
-    // The original ran the command from the caller's directory.
+fn selected(
+    dir: &Path,
+    command: &[&str],
+    envs: &[(&str, &str)],
+    filter: &str,
+) -> Result<usize, Error> {
     let output = crate::workflow::output(
         Command::new(command[0])
-            .current_dir(crate::invocation_dir())
+            .current_dir(dir)
             .args(&command[1..])
+            .envs(envs.iter().copied())
             .args(["--", filter, "--list", "--format", "terse"])
             .stderr(Stdio::piped()),
     )?;
@@ -15,7 +21,16 @@ fn selected(command: &[&str], filter: &str) -> Result<usize, Error> {
         .filter(|line| line.ends_with(": test"))
         .count())
 }
+
+/// `require-test-filters`: the original ran the command from the caller's
+/// directory.
 pub(crate) fn run(args: &[&str]) -> WorkflowResult {
+    require(&crate::invocation_dir(), args, &[])
+}
+
+/// Lists the tests `<cargo test ...> -- <filter>...` selects, one filter at
+/// a time, without running them; a filter that selects no test fails.
+pub(crate) fn require(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> WorkflowResult {
     let Some(separator) = args.iter().position(|arg| *arg == "--") else {
         return Err(Error::usage(
             "usage: test-filters <cargo test ...> -- <filter>...",
@@ -29,7 +44,7 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     }
     let mut failed = false;
     for filter in &args[separator + 1..] {
-        match selected(&args[..separator], filter) {
+        match selected(dir, &args[..separator], envs, filter) {
             Ok(0) => {
                 eprintln!("filter '{filter}' selects no test");
                 failed = true;
@@ -58,7 +73,7 @@ mod tests {
     }
     #[test]
     fn actual_command_failure_is_not_a_selection() {
-        assert!(selected(&["/usr/bin/false"], "anything").is_err());
+        assert!(selected(Path::new("."), &["/usr/bin/false"], &[], "anything").is_err());
     }
     #[test]
     fn actual_command_counts_only_terse_tests() {
@@ -66,10 +81,12 @@ mod tests {
         // subprocess boundary without invoking a compiler or interpreting shell.
         assert_eq!(
             selected(
+                Path::new("."),
                 &[
                     "/usr/bin/printf",
                     "one: test\ntwo: benchmark\nthree: test\n"
                 ],
+                &[],
                 "a filter with spaces"
             )
             .unwrap(),

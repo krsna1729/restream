@@ -77,7 +77,7 @@ fn walk(
     }
     Ok(())
 }
-pub(crate) fn run(_args: &[&str]) -> WorkflowResult {
+pub(crate) fn run() -> WorkflowResult {
     let root = crate::repo_root();
     let rules: Vec<_> = RULES
         .iter()

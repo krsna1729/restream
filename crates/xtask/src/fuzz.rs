@@ -1,5 +1,6 @@
-//! Explicit corpus population; never called by ordinary fixture consumers.
-use crate::workflow::{Error, TempDir, WorkflowResult, checked};
+//! Fuzz corpus seeding and the CI fuzz smoke; never called by ordinary
+//! fixture consumers.
+use crate::workflow::{Error, TempDir, WorkflowResult, checked, output};
 use std::{
     fs,
     io::Read,
@@ -9,10 +10,8 @@ use std::{
 
 mod seeds;
 
-pub(crate) fn run(args: &[&str]) -> WorkflowResult {
-    if args != ["seed-corpus"] {
-        return Err(Error::usage("usage: cargo xtask fuzz seed-corpus"));
-    }
+/// Writes the seed corpus every target starts from.
+pub(crate) fn seed_corpus() -> WorkflowResult {
     let root = crate::repo_root();
     let fuzz = root.join("fuzz");
     let corpus = fuzz.join("corpus");
@@ -31,6 +30,34 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
         "--",
         "corpus/moq_wire",
     ]))
+}
+
+/// Runs every target `cargo +nightly fuzz list` reports for 30 s each.
+pub(crate) fn smoke() -> WorkflowResult {
+    let fuzz = crate::repo_root().join("fuzz");
+    let listed = output(
+        Command::new("cargo")
+            .current_dir(&fuzz)
+            .args(["+nightly", "fuzz", "list"]),
+    )?;
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    let targets: Vec<&str> = listed.split_whitespace().collect();
+    if targets.is_empty() {
+        return Err("cargo fuzz list reported no targets".into());
+    }
+    for target in targets {
+        eprintln!("fuzz target {target}");
+        checked(Command::new("cargo").current_dir(&fuzz).args([
+            "+nightly",
+            "fuzz",
+            "run",
+            target,
+            "--",
+            "-max_total_time=30",
+            "-timeout=5",
+        ]))?;
+    }
+    Ok(())
 }
 
 fn matching_files(dir: &Path, prefix: &str, suffix: &str) -> Result<Vec<PathBuf>, Error> {

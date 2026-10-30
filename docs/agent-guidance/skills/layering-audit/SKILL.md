@@ -45,8 +45,8 @@ Keep a boundary move behavior-preserving and run focused tests for every moved
 responsibility, then `cargo xtask source-audit`. Apply AGENTS.md contract,
 frontend, concurrency, and benchmark gates to the actual changes.
 
-For MCP/agent feature boundaries, run the `lint` CI job's
-`--no-default-features` MCP compile matrix (`.github/workflows/ci.yml`). Lower features must compile with `agent-plane` and
+For MCP/agent feature boundaries, run the `lint` group's
+`--no-default-features` MCP compile matrix (`cargo xtask lint`, defined in `crates/xtask/src/checks.rs`). Lower features must compile with `agent-plane` and
 `agent-execution` disabled; a feature graph that implicitly enables the upper
 layer does not prove isolation. Keep the `mcp-http-backend` gate beside its
 adapter module. Treat `mcp-embedded` as the intentional `mcp-core` plus

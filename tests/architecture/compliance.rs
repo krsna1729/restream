@@ -127,7 +127,12 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(deny_toml.contains("duplicate families currently come through"));
 
     let sbom_workflow = include_str!("../../.github/workflows/sbom-security.yml");
-    assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
+    assert!(sbom_workflow.contains("cargo xtask deny"));
+    let checks = include_str!("../../crates/xtask/src/checks.rs");
+    assert!(
+        checks
+            .contains(r#"cargo(&["deny", "check", "advisories", "licenses", "bans", "sources"])"#)
+    );
 
     let license = include_str!("../../LICENSE.md");
     assert!(license.contains("MIT License"));

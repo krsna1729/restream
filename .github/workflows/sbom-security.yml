@@ -123,4 +123,4 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
       - name: Run cargo deny
-        run: cargo deny check advisories licenses bans sources
+        run: cargo xtask deny

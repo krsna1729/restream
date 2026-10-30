@@ -31,10 +31,8 @@ jobs:
           rust_components: rustfmt
           node_version: '22'
           npm_ci: 'true'
-      - name: Check Rust formatting
-        run: cargo fmt --all --check
-      - name: Check TypeScript types
-        run: npx tsc -p tsconfig.json --noEmit
+      - name: Check Rust formatting and TypeScript types
+        run: cargo xtask format
 
   lint:
     name: Rust lint
@@ -46,43 +44,8 @@ jobs:
           rust_components: clippy
           system_deps_profile: base
           rust_cache: 'true'
-      - name: Run clippy for library
-        run: cargo clippy --lib -- -D warnings
-      - name: Run clippy for all targets
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run clippy for MCP-enabled release surface
-        run: |
-          cargo clippy \
-            --workspace \
-            --all-targets \
-            --features mcp-server,mcp-http-backend \
-            -- -D warnings
-      - name: Prove MCP feature matrix
-        run: |
-          # Select the product package explicitly: workspace members such as
-          # the harness otherwise re-enable its dependency's default features.
-          # Lower-layer isolation: agent-plane/agent-execution stay disabled.
-          cargo check -p restream \
-            --lib --no-default-features --features mcp-core
-          cargo check -p restream \
-            --lib --no-default-features --features mcp-server
-          cargo check -p restream \
-            --bin restream-mcp --no-default-features \
-            --features mcp-server,mcp-http-backend
-          # Compatibility combo: mcp-embedded = mcp-core + agent-plane.
-          # Must compile; must not invent an in-process MCP backend.
-          cargo check -p restream \
-            --lib --no-default-features --features mcp-embedded
-          # Agent tool list (discovery, MCP catalog, dispatch) and agent output mutations.
-          cargo test -p restream --lib --no-default-features \
-            --features mcp-embedded,agent-execution -- agent_mcp agent_service
-          # Require both compiled-out tests, not merely a passing test binary:
-          # a feature-unified build must fail this proof instead of testing enabled routes.
-          cargo xtask require-test-filters cargo test -p restream --no-default-features --test api -- \
-            agent::agent_plane_returns_404_when_feature_is_compiled_out \
-            agent::agent_context_returns_404_when_feature_is_compiled_out
-          cargo clippy -p restream --lib --test api --no-default-features -- -D warnings
-          cargo test -p restream --no-default-features --test api -- agent::
+      - name: Run clippy and prove the MCP feature matrix
+        run: cargo xtask lint
 
   architecture-guardrails:
     name: Source architecture audit
@@ -90,12 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-bootstrap
-      - name: Check source size and generated-file boundaries
-        run: cargo xtask source-audit
-      - name: Check Markdown documentation
-        run: cargo xtask docs-audit
-      - name: Check the dashboard is built from its primitives
-        run: cargo xtask frontend-style
+      - name: Audit source, Markdown and dashboard primitives
+        run: cargo xtask architecture
 
   docker-runtime-smoke:
     name: Docker runtime source-build smoke (targeted)
@@ -280,10 +239,8 @@ jobs:
           rust_cache: 'true'
       - name: Build frontend assets for Rust tests
         run: npm run build:frontend
-      - name: Check Rust test hygiene
-        run: cargo xtask test-hygiene
-      - name: Check fixture discipline
-        run: cargo xtask fixture-discipline
+      - name: Check Rust test hygiene and fixture discipline
+        run: cargo xtask unit
 
   coverage:
     name: Workspace coverage report
@@ -330,21 +287,22 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # Fuzz targets reach src/media, the extracted restream crates, and
-          # their harness/vendor dependencies. Shared manifests and toolchain
-          # changes also qualify; master pushes always fuzz.
+          # their harness/vendor dependencies. Shared manifests, toolchain
+          # changes and the xtask fuzz step and check table also qualify;
+          # master pushes always fuzz.
           if [[ "$EVENT_NAME" != "pull_request" || -z "$BASE_SHA" ]]; then
             echo "run=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/media/|src/lib\.rs$|crates/restream-[^/]+/|crates/test_harness/|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(src/media/|src/lib\.rs$|crates/restream-[^/]+/|crates/test_harness/|crates/xtask/src/(checks|fuzz)(\.rs$|/)|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.scope.outputs.run == 'false' }}
         name: Parser paths unchanged; skip fuzzing
-        run: echo "No parser, extracted crate, harness, vendor, manifest or toolchain path changed; skipping fuzzing."
+        run: echo "No parser, extracted crate, harness, fuzz step, vendor, manifest or toolchain path changed; skipping fuzzing."
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: ./.github/actions/ci-bootstrap
         with:
@@ -361,23 +319,14 @@ jobs:
           rustup toolchain install nightly --profile minimal
           cargo install cargo-fuzz --locked
       - if: ${{ steps.scope.outputs.run == 'true' }}
-        name: Run every parser target for 30 s
-        run: |
-          cargo xtask fuzz seed-corpus
-          cd fuzz
-          for target in $(cargo +nightly fuzz list); do
-            cargo +nightly fuzz run "$target" -- -max_total_time=30 -timeout=5
-          done
+        name: Seed the corpus and run every parser target for 30 s
+        run: cargo xtask fuzz
 
   miri:
     name: Miri (pure modules Miri can execute)
     runs-on: ubuntu-24.04
     needs: test
     timeout-minutes: 45
-    env:
-      MIRI_FILTERS: >-
-        media::egress::tls::ktls::tests::ancillary media::egress::leaf_arena
-        media::egress::scheduler
     steps:
       - uses: actions/checkout@v7
       # No shared Rust cache: target/miri must not land in the cache every
@@ -393,38 +342,14 @@ jobs:
         run: npm run build:frontend
       - name: Install nightly with Miri
         run: rustup toolchain install nightly --profile minimal --component miri,rust-src
-      - name: Every filter selects tests
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-          RUSTFLAGS: ''
-        run: cargo xtask require-test-filters cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
       - name: Run Miri over the selected modules
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-          PROPTEST_CASES: '8'
-          # Nightly lints must not fail the gate without a code change.
-          RUSTFLAGS: ''
-        run: cargo +nightly miri test -p restream --lib -- $MIRI_FILTERS
-      - name: Canonical codec bit reader selects tests
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-          RUSTFLAGS: ''
-        run: cargo xtask require-test-filters cargo +nightly miri test -p restream-core --lib -- codec::bits::tests
-      - name: Run canonical codec bit reader under Miri
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-          RUSTFLAGS: ''
-        run: cargo +nightly miri test -p restream-core --lib codec::bits::tests
+        run: cargo xtask miri
 
   kani:
     name: Kani (bounded proofs of egress primitives)
     runs-on: ubuntu-24.04
     needs: test
     timeout-minutes: 45
-    env:
-      # Every proof `cargo kani --lib` finds; a proof that stops compiling
-      # (a cfg typo, a moved module) must fail the job, not vanish.
-      KANI_PROOFS: '7'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-bootstrap
@@ -441,29 +366,13 @@ jobs:
           cargo install --locked kani-verifier --version 0.68.0
           cargo kani setup
       - name: Run every Kani proof
-        # No RUSTFLAGS override: Kani passes an empty one on as an argument.
-        run: |
-          cargo kani --lib -Z stubbing 2>&1 | tee kani.log
-          grep -q "Complete - $KANI_PROOFS successfully verified harnesses, 0 failures, $KANI_PROOFS total" kani.log
-          # Every cover reached (and some reported: a format change must not
-          # pass silently): a proof whose interesting branch became
-          # unreachable proves nothing about it.
-          grep -E '^ \*\* [0-9]+ of [0-9]+ cover properties satisfied' kani.log \
-            | awk '{ n++ } $2 != $4 { bad = 1 } END { exit bad || n == 0 }'
+        run: cargo xtask kani
 
   asan:
     name: AddressSanitizer (FFI and syscall modules)
     runs-on: ubuntu-24.04
     needs: test
     timeout-minutes: 60
-    env:
-      ASAN_FILTERS: >-
-        media::egress::tls media::egress::backends::compio_tcp
-        media::external_transcoder media::timing media::rtmp::listener
-        media::rtmp::tests media::tcp_stats runtime_info media::mpegts_allocation_tests
-      RUSTFLAGS: -Zsanitizer=address
-      RUSTDOCFLAGS: -Zsanitizer=address
-      ASAN_OPTIONS: detect_leaks=0
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-bootstrap
@@ -477,33 +386,8 @@ jobs:
         run: npm run build:frontend
       - name: Install nightly with rust-src
         run: rustup toolchain install nightly --profile minimal --component rust-src
-      # Rust code is instrumented (build-std, explicit target so proc-macros
-      # and build scripts are not). Leak detection stays off: it has never
-      # been baselined, and process-lifetime statics would report as leaks.
-      - name: The sanitizer flags are in effect
-        run: |
-          [[ $RUSTFLAGS == *sanitizer=address* ]] || { echo "RUSTFLAGS lost -Zsanitizer=address: $RUSTFLAGS"; exit 1; }
-      # The guard itself runs from an unsanitized stable xtask build; only the
-      # inner nightly test command it checks carries the sanitizer flags.
-      - name: Every filter selects tests
-        run: |
-          RUSTFLAGS= RUSTDOCFLAGS= cargo build -q -p xtask
-          target/debug/xtask require-test-filters cargo +nightly test -Zbuild-std \
-            --target x86_64-unknown-linux-gnu -p restream --lib -- $ASAN_FILTERS
-      - name: Run the FFI-heavy tests under ASan
-        run: >
-          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p restream --lib --
-          $ASAN_FILTERS
-      - name: Every extracted suite selects tests
-        run: |
-          for package in restream-sync restream-mpegts; do
-            target/debug/xtask require-test-filters cargo +nightly test -Zbuild-std \
-              --target x86_64-unknown-linux-gnu -p "$package" --lib -- ''
-          done
-      - name: Run extracted synchronization and MPEG-TS tests under ASan
-        run: >
-          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
-          -p restream-sync -p restream-mpegts --lib
+      - name: Run the FFI-heavy and extracted-crate tests under ASan
+        run: cargo xtask asan
 
   integration-build:
     name: Transport live-harness build
