@@ -167,7 +167,7 @@ impl MediaEngine {
         let max_events = config.tcp_poller_max_events;
         let leaf_capacity = shard_config.leaf_capacity().get();
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity::get(),
             reason,
             shard_config,

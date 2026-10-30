@@ -417,7 +417,7 @@ mod tests {
 
     async fn registered_runtime(name: &str) -> Arc<ExternalFileIngestRuntime> {
         let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
-            crate::AppConfig::default(),
+            crate::media::config::EngineConfig::default(),
         )));
         let ring_buffer = engine.get_or_create_pipeline(name).await;
         let registration = engine

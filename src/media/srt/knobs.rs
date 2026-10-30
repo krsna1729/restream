@@ -25,21 +25,23 @@ pub fn recv_budget_or(fallback: RecvBudget) -> RecvBudget {
     static VALUE: OnceLock<Option<RecvBudget>> = OnceLock::new();
     VALUE
         .get_or_init(|| {
-            resolve_recv_budget(crate::config::env_optional_positive_usize(RECV_BUDGET_ENV))
-                .inspect(|budget| {
-                    log_override(
-                        RECV_BUDGET_ENV,
-                        budget.max_datagrams,
-                        fallback.max_datagrams,
-                    );
-                })
+            resolve_recv_budget(crate::media::config::env_optional_positive_usize(
+                RECV_BUDGET_ENV,
+            ))
+            .inspect(|budget| {
+                log_override(
+                    RECV_BUDGET_ENV,
+                    budget.max_datagrams,
+                    fallback.max_datagrams,
+                );
+            })
         })
         .unwrap_or(fallback)
 }
 
 fn udp_buf_override() -> Option<usize> {
     static VALUE: LazyLock<Option<usize>> = LazyLock::new(|| {
-        crate::config::env_optional_positive_usize(UDP_BUF_ENV).inspect(|value| {
+        crate::media::config::env_optional_positive_usize(UDP_BUF_ENV).inspect(|value| {
             log_override(UDP_BUF_ENV, *value, DESIRED_UDP_BUF);
         })
     });

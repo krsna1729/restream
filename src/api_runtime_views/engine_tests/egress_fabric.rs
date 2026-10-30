@@ -73,7 +73,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
                     .adaptive(1);
             failed
                 .rescale(
-                    crate::config::EgressShardProfile::OutputCount,
+                    crate::media::config::EgressShardProfile::OutputCount,
                     crate::media::host_capacity::HostCapacity { cpus: 1 },
                     crate::media::egress::runtime::ResizeReason::Observe,
                     shard_config(),

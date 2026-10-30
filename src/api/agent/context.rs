@@ -31,6 +31,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let resource_map = crate::api_runtime_views::resource_map(
         &state.engine,
+        &state.config,
         process,
         None,
         ResourceMapOptions::summary(),

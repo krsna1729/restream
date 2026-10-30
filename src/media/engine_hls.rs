@@ -271,7 +271,7 @@ impl MediaEngine {
     }
 
     pub async fn get_or_create_hls_store(&self, pipeline_id: &str) -> Arc<HlsStore> {
-        let hls_config = crate::media::hls::HlsConfig::from_app_config(&self.config);
+        let hls_config = crate::media::hls::HlsConfig::from_engine_config(&self.config);
         let mut stores = self.hls.stores.write().await;
         stores
             .entry(pipeline_id.to_string())
@@ -281,7 +281,7 @@ impl MediaEngine {
 
     pub async fn get_or_create_hls_preview_store(&self, pipeline_id: &str) -> Arc<Fmp4HlsStore> {
         let preview_key = hls_preview_registry_key(pipeline_id);
-        let hls_config = crate::media::hls::HlsConfig::from_app_config(&self.config);
+        let hls_config = crate::media::hls::HlsConfig::from_engine_config(&self.config);
         let mut stores = self.hls.preview_stores.write().await;
         stores
             .entry(preview_key)

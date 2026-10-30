@@ -137,7 +137,10 @@ impl MediaEngine {
             self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
             if matches!(reason, crate::media::egress::runtime::ResizeReason::Add) {
                 runtime
-                    .admit_add(crate::config::EgressShardProfile::SrtOutputCount, &spec.id)
+                    .admit_add(
+                        crate::media::config::EgressShardProfile::SrtOutputCount,
+                        &spec.id,
+                    )
                     .map_err(SrtFabricDispatchError::Saturated)?;
             }
         }
@@ -189,7 +192,7 @@ impl MediaEngine {
         let budget = config.work_budget();
         let owner_settings = self.srt_owner_settings();
         runtime.forecast_feed(&feed.publication_ring());
-        let result = runtime.rescale(crate::config::EgressShardProfile::SrtOutputCount, crate::media::host_capacity::HostCapacity::get(), reason, shard_config, |_shard_id| {
+        let result = runtime.rescale(crate::media::config::EgressShardProfile::SrtOutputCount, crate::media::host_capacity::HostCapacity::get(), reason, shard_config, |_shard_id| {
             let feed = feed.clone_reader();
             let drain_timeout = shard_config.drain_timeout();
             let leaf_capacity = shard_config.leaf_capacity().get();

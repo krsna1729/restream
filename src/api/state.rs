@@ -81,16 +81,19 @@ pub struct AppStateRuntimeConfig {
     /// startup as the listener reads it: viewer grants carry it so a browser
     /// can pin a short-lived self-signed certificate.
     pub moq_certificate_sha256: Option<String>,
+    /// The process configuration, for readers of settings the engine does
+    /// not own (tuning, Tokio runtime, capacity calibration).
+    pub config: Arc<AppConfig>,
 }
 
 impl Default for AppStateRuntimeConfig {
     fn default() -> Self {
-        Self::from(&AppConfig::default())
+        Self::from(Arc::new(AppConfig::default()))
     }
 }
 
-impl From<&AppConfig> for AppStateRuntimeConfig {
-    fn from(config: &AppConfig) -> Self {
+impl From<Arc<AppConfig>> for AppStateRuntimeConfig {
+    fn from(config: Arc<AppConfig>) -> Self {
         Self {
             ingest_disconnect_grace_ms: config.tuning.ingest_disconnect_grace_ms,
             ports: PortConfig {
@@ -107,10 +110,12 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
             public_url: config.public_url.clone(),
             push_subject: config.push_subject.clone(),
             moq_certificate_sha256: config
+                .engine
                 .moq_ingest
                 .config()
                 .and_then(|moq| std::fs::read(&moq.tls_cert_path).ok())
                 .and_then(|pem| restream_moq::tls::leaf_sha256_hex(&pem)),
+            config,
         }
     }
 }
@@ -127,6 +132,8 @@ pub struct AppState {
     pub ports: PortConfig,
     /// See [`AppStateRuntimeConfig::moq_certificate_sha256`].
     pub moq_certificate_sha256: Option<String>,
+    /// See [`AppStateRuntimeConfig::config`].
+    pub config: Arc<AppConfig>,
     pub media_dir: String,
     pub db_path: String,
     srt_passphrase: Option<String>,
@@ -200,6 +207,7 @@ impl AppState {
         let share_links = Arc::new(crate::application::share::ShareLinks::new(db.clone()));
         let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
             runtime.ports.server_ports(),
+            runtime.config.tuning.output_max_retries,
         ));
         Self {
             security,
@@ -210,6 +218,7 @@ impl AppState {
             ingest_disconnect_grace_ms: runtime.ingest_disconnect_grace_ms,
             ports: runtime.ports,
             moq_certificate_sha256: runtime.moq_certificate_sha256,
+            config: runtime.config,
             media_dir: runtime.media_dir,
             db_path: runtime.db_path,
             srt_passphrase: runtime.srt_passphrase,

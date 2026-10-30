@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::config::AppConfig;
 use crate::media::engine::MediaEngine;
 use crate::media::host_capacity::HostCapacity;
 
@@ -92,7 +93,7 @@ impl OutputProtocol {
     /// CPU is not in the share. Like the other measured shares this is a
     /// prior from one host.
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
-        use crate::config::EgressShardProfile;
+        use crate::media::config::EgressShardProfile;
         match self {
             Self::Rtmp | Self::Rtmps => ingest.pps,
             Self::Moq => ingest.pps * 6.95,
@@ -379,7 +380,7 @@ pub fn diagnose(sample: FlowSample) -> FlowDiagnosis {
 /// One egress shard's measured flow: its command queue against its bound,
 /// with a non-healthy shard counted as a growing backlog and progress older
 /// than 1 s as a missed deadline. The engine's measured flow is the deepest
-/// shard's (`MediaEngine::capacity_snapshot`).
+/// shard's ([`capacity_snapshot`]).
 pub fn shard_flow(depth: f64, capacity: f64, progress_age_ms: f64, stalled: bool) -> FlowDiagnosis {
     diagnose(FlowSample {
         center: ServiceCenter::Egress,
@@ -473,131 +474,128 @@ pub struct Calibration {
     pub safe_utilization: f64,
 }
 
-impl MediaEngine {
-    /// Each live pipeline's ingest rate, by pipeline id.
-    async fn ingest_rates(&self) -> HashMap<String, IngestRate> {
-        let ingests = self.ingests.active.read().await;
-        ingests
-            .iter()
-            .map(|(pipeline_id, ingest)| {
-                let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
-                    .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
-                let pps = ingest.metrics.snapshot().packets_per_sec;
-                (pipeline_id.clone(), IngestRate { bps, pps })
-            })
-            .collect()
-    }
-
-    /// The observed workload: ingest rates, each output's fan-out of its
-    /// own pipeline, stages and the egress shard count.
-    async fn capacity_workload(&self, rates: &HashMap<String, IngestRate>) -> Workload {
-        let mut workload = Workload {
-            media_bps: rates.values().map(|rate| rate.bps as u64).sum(),
-            media_pps: rates.values().map(|rate| rate.pps as u64).sum(),
-            ..Workload::default()
-        };
-        for egress in self.egresses.active.read().await.values() {
-            let ingest = rates.get(&egress.pipeline_id).copied().unwrap_or_default();
-            workload =
-                workload.with_outputs(1, ingest, OutputProtocol::of_egress(&egress.protocol));
-        }
-        workload.stage_count = self
-            .stages
-            .runtimes
-            .read()
-            .await
-            .len()
-            .min(u32::MAX as usize) as u32;
-        workload.shard_count = self.config.egress_fabric.shards.max(1);
-        workload
-    }
-
-    fn capacity_model(&self) -> CapacityModel {
-        CapacityModel {
-            limits: self.config.capacity_limits,
-            ..CapacityModel::default()
-        }
-    }
-
-    /// The calibration every projection is priced on.
-    pub fn capacity_calibration(&self) -> Calibration {
-        let model = self.capacity_model();
-        Calibration {
-            model_version: CAPACITY_MODEL_VERSION,
-            limits: model.limits,
-            sources: self.config.capacity_sources,
-            prior_cpus: self.config.capacity_prior_cpus,
-            safe_utilization: model.safe_utilization,
-        }
-    }
-
-    /// The current workload projected onto the calibrated priors alone, with
-    /// no measured flow.
-    pub async fn capacity_priors(&self) -> CapacitySnapshot {
-        let rates = self.ingest_rates().await;
-        self.capacity_model()
-            .project(self.capacity_workload(&rates).await)
-    }
-
-    /// Observe the current runtime topology and counters without making an
-    /// admission decision. The snapshot is intentionally a control-plane
-    /// operation; no native shard hot path reads these locks.
-    pub async fn capacity_snapshot(&self) -> CapacitySnapshot {
-        let mut snapshot = self.capacity_priors().await;
-        if let Some((depth, capacity, progress_age_ms, stalled)) = self
-            .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
-            .await
-            .iter()
-            .map(|status| {
-                (
-                    f64::from(status.command_depth),
-                    f64::from(status.command_capacity),
-                    status.progress_age_ms.unwrap_or_default() as f64,
-                    !matches!(
-                        status.state,
-                        crate::media::egress::shard::EgressShardHealth::Healthy
-                    ),
-                )
-            })
-            .max_by(|left, right| left.0.total_cmp(&right.0))
-        {
-            let flow = shard_flow(depth, capacity, progress_age_ms, stalled);
-            snapshot.projected_utilization =
-                snapshot.projected_utilization.max(flow.utilization as f32);
-            snapshot.flow = flow;
-            snapshot.flow_measured = true;
-        }
-        snapshot
-    }
-
-    /// One sample of the current workload projected onto the calibrated
-    /// priors twice: as it is (`baseline`) and with the change
-    /// (`projected`). Both are priors only, so they compare like with like;
-    /// the measured flow of running shards is [`Self::capacity_snapshot`]'s,
-    /// and nothing measures a change that has not happened.
-    pub async fn capacity_scenario(
-        &self,
-        change: &ScenarioChange,
-    ) -> Result<Scenario, NoLiveIngest> {
-        let rates = self.ingest_rates().await;
-        let (rated_by, ingest) = scenario_rate(&rates, change.pipeline_id.as_deref())?;
-        let workload = self.capacity_workload(&rates).await;
-        let model = self.capacity_model();
-        let added = change.outputs;
-        let changed = Workload {
-            stage_count: workload.stage_count.saturating_add(change.stages),
-            ..workload
-                .with_outputs(added.rtmp, ingest, OutputProtocol::Rtmp)
-                .with_outputs(added.rtmps, ingest, OutputProtocol::Rtmps)
-                .with_outputs(added.srt, ingest, OutputProtocol::Srt)
-        };
-        Ok(Scenario {
-            baseline: model.project(workload),
-            projected: model.project(changed),
-            rated_by,
-            ingest,
+/// Each live pipeline's ingest rate, by pipeline id.
+async fn ingest_rates(engine: &MediaEngine) -> HashMap<String, IngestRate> {
+    let ingests = engine.ingests.active.read().await;
+    ingests
+        .iter()
+        .map(|(pipeline_id, ingest)| {
+            let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
+                .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
+            let pps = ingest.metrics.snapshot().packets_per_sec;
+            (pipeline_id.clone(), IngestRate { bps, pps })
         })
+        .collect()
+}
+
+/// The observed workload: ingest rates, each output's fan-out of its
+/// own pipeline, stages and the egress shard count.
+async fn capacity_workload(engine: &MediaEngine, rates: &HashMap<String, IngestRate>) -> Workload {
+    let mut workload = Workload {
+        media_bps: rates.values().map(|rate| rate.bps as u64).sum(),
+        media_pps: rates.values().map(|rate| rate.pps as u64).sum(),
+        ..Workload::default()
+    };
+    for egress in engine.egresses.active.read().await.values() {
+        let ingest = rates.get(&egress.pipeline_id).copied().unwrap_or_default();
+        workload = workload.with_outputs(1, ingest, OutputProtocol::of_egress(&egress.protocol));
     }
+    workload.stage_count = engine
+        .stages
+        .runtimes
+        .read()
+        .await
+        .len()
+        .min(u32::MAX as usize) as u32;
+    workload.shard_count = engine.config.egress_fabric.shards.max(1);
+    workload
+}
+
+fn capacity_model(config: &AppConfig) -> CapacityModel {
+    CapacityModel {
+        limits: config.capacity_limits,
+        ..CapacityModel::default()
+    }
+}
+
+/// The calibration every projection is priced on.
+pub fn capacity_calibration(config: &AppConfig) -> Calibration {
+    let model = capacity_model(config);
+    Calibration {
+        model_version: CAPACITY_MODEL_VERSION,
+        limits: model.limits,
+        sources: config.capacity_sources,
+        prior_cpus: config.capacity_prior_cpus,
+        safe_utilization: model.safe_utilization,
+    }
+}
+
+/// The current workload projected onto the calibrated priors alone, with
+/// no measured flow.
+pub async fn capacity_priors(engine: &MediaEngine, config: &AppConfig) -> CapacitySnapshot {
+    let rates = ingest_rates(engine).await;
+    capacity_model(config).project(capacity_workload(engine, &rates).await)
+}
+
+/// Observe the current runtime topology and counters without making an
+/// admission decision. The snapshot is intentionally a control-plane
+/// operation; no native shard hot path reads these locks.
+pub async fn capacity_snapshot(engine: &MediaEngine, config: &AppConfig) -> CapacitySnapshot {
+    let mut snapshot = capacity_priors(engine, config).await;
+    if let Some((depth, capacity, progress_age_ms, stalled)) = engine
+        .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
+        .await
+        .iter()
+        .map(|status| {
+            (
+                f64::from(status.command_depth),
+                f64::from(status.command_capacity),
+                status.progress_age_ms.unwrap_or_default() as f64,
+                !matches!(
+                    status.state,
+                    crate::media::egress::shard::EgressShardHealth::Healthy
+                ),
+            )
+        })
+        .max_by(|left, right| left.0.total_cmp(&right.0))
+    {
+        let flow = shard_flow(depth, capacity, progress_age_ms, stalled);
+        snapshot.projected_utilization =
+            snapshot.projected_utilization.max(flow.utilization as f32);
+        snapshot.flow = flow;
+        snapshot.flow_measured = true;
+    }
+    snapshot
+}
+
+/// One sample of the current workload projected onto the calibrated
+/// priors twice: as it is (`baseline`) and with the change
+/// (`projected`). Both are priors only, so they compare like with like;
+/// the measured flow of running shards is [`capacity_snapshot`]'s,
+/// and nothing measures a change that has not happened.
+pub async fn capacity_scenario(
+    engine: &MediaEngine,
+    config: &AppConfig,
+    change: &ScenarioChange,
+) -> Result<Scenario, NoLiveIngest> {
+    let rates = ingest_rates(engine).await;
+    let (rated_by, ingest) = scenario_rate(&rates, change.pipeline_id.as_deref())?;
+    let workload = capacity_workload(engine, &rates).await;
+    let model = capacity_model(config);
+    let added = change.outputs;
+    let changed = Workload {
+        stage_count: workload.stage_count.saturating_add(change.stages),
+        ..workload
+            .with_outputs(added.rtmp, ingest, OutputProtocol::Rtmp)
+            .with_outputs(added.rtmps, ingest, OutputProtocol::Rtmps)
+            .with_outputs(added.srt, ingest, OutputProtocol::Srt)
+    };
+    Ok(Scenario {
+        baseline: model.project(workload),
+        projected: model.project(changed),
+        rated_by,
+        ingest,
+    })
 }
 
 /// The ingest the scenario's outputs carry: the named pipeline's, which must

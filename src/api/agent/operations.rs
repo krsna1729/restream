@@ -676,7 +676,9 @@ async fn verify_operation(
         crate::agent_plane::new_critical_alerts(&before.critical_ids, &after_critical),
         crate::agent_plane::capacity_state(
             before.projected_utilization,
-            state.engine.capacity_priors().await.projected_utilization,
+            crate::capacity::capacity_priors(&state.engine, &state.config)
+                .await
+                .projected_utilization,
             crate::capacity::CapacityModel::default().safe_utilization,
         ),
     ];
@@ -772,7 +774,9 @@ async fn apply_baseline(
     crate::agent_execution::ApplyBaseline {
         alerts_total: alerts.len(),
         critical_ids: crate::agent_plane::critical_ids_on(&alerts, changed),
-        projected_utilization: state.engine.capacity_priors().await.projected_utilization,
+        projected_utilization: crate::capacity::capacity_priors(&state.engine, &state.config)
+            .await
+            .projected_utilization,
     }
 }
 

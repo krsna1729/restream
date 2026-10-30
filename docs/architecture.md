@@ -331,7 +331,7 @@ Ring rules:
   destination's packets.
 - A lagging reader that overflows resumes at a keyframe.
 - Capacity and overflow are owned by `crates/restream-sync/src/ring_buffer.rs`
-  and `src/config.rs`.
+  and `src/media/config.rs`.
 
 SRT outputs share one MPEG-TS packaging per feed: the shared TS mux writes
 `TsChunkRing`, and each SRT leaf keeps only its cursor and socket state.
@@ -556,7 +556,8 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
 - API handlers stay thin. Agent orchestration lives in
   `application::services::agent_service`. API modules do not start FFmpeg or
   transcoder stages.
-- Only approved owners read environment variables (mainly `src/config.rs`).
+- Only approved owners read environment variables (mainly `src/config.rs` and
+  `src/media/config/env.rs`).
 - Split files by ownership, not by size. A file near the 999-line limit is a
   sign to find the owner, not to cut it in half.
 - Measure rebuild, reuse or isolation value before proposing a new crate.

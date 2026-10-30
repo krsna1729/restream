@@ -97,7 +97,7 @@ impl RuntimeTasks {
         );
 
         crate::media::moq::ingest::listener::launch(
-            &config.moq_ingest,
+            &config.engine.moq_ingest,
             pipeline_access.clone(),
             engine.clone(),
             security.clone(),

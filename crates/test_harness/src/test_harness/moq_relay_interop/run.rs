@@ -32,7 +32,7 @@ const SHORT_READ_SECS: u64 = 10;
 const INPUT_TIMEOUT: Duration = Duration::from_secs(60);
 const RELAY_PUBLISH_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Restream's MoQ ingest listener settings (`src/config/moq.rs`).
+/// Restream's MoQ ingest listener settings (`src/media/config/moq.rs`).
 const MOQ_INGEST_LISTEN_ENV: &str = "RESTREAM_MOQ_INGEST_LISTEN";
 const MOQ_TLS_CERT_ENV: &str = "RESTREAM_MOQ_TLS_CERT";
 const MOQ_TLS_KEY_ENV: &str = "RESTREAM_MOQ_TLS_KEY";

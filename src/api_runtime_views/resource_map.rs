@@ -458,6 +458,7 @@ fn source_ring_node(ring: &Value) -> Value {
 
 pub(crate) async fn resource_map(
     engine: &MediaEngine,
+    config: &crate::config::AppConfig,
     process: ProcessResourceSnapshot,
     pipeline_id: Option<&str>,
     options: ResourceMapOptions,
@@ -586,7 +587,10 @@ pub(crate) async fn resource_map(
             .map(|stage| stage_node(stage, &child_resources)),
     );
     nodes.extend(egresses.iter().map(egress_node));
-    super::node_judgement::judge_nodes(&mut nodes, &engine.capacity_priors().await);
+    super::node_judgement::judge_nodes(
+        &mut nodes,
+        &crate::capacity::capacity_priors(engine, config).await,
+    );
 
     let srt_sender_limit = 512u64;
     let srt_sender_threads =

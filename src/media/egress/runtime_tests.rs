@@ -217,7 +217,7 @@ fn rescale_is_a_noop_when_the_target_is_unchanged() {
     // Zero outputs on a 1-CPU host: target is 1 either way.
     let touched = runtime
         .rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity { cpus: 1 },
             crate::media::egress::runtime::ResizeReason::Remove,
             shard_config(),
@@ -307,7 +307,7 @@ fn rescale_with(
     replacement: Result<Probe, &'static str>,
 ) -> Result<Vec<ShardId>, &'static str> {
     runtime.rescale(
-        crate::config::EgressShardProfile::OutputCount,
+        crate::media::config::EgressShardProfile::OutputCount,
         crate::media::host_capacity::HostCapacity { cpus: 2 },
         ResizeReason::Observe,
         shard_config(),
@@ -494,7 +494,7 @@ fn all_panicked_shards_are_isolated_before_any_replacement_can_fail() {
     for recover_one in [false, true] {
         let mut attempts = Vec::new();
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity { cpus: 3 },
             ResizeReason::Remove,
             shard_config(),
@@ -594,7 +594,7 @@ fn pending_add_is_sized_before_placement_without_counting_replacements_twice() {
     let reason = runtime.reason_for(&pending);
     let touched = runtime
         .rescale(
-            crate::config::EgressShardProfile::SrtOutputCount,
+            crate::media::config::EgressShardProfile::SrtOutputCount,
             crate::media::host_capacity::HostCapacity { cpus: 2 },
             reason,
             config,
@@ -664,7 +664,7 @@ fn growing_the_pool_never_reconnects_a_live_output() {
     let new_probe = Probe::default();
     let touched = runtime
         .rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity { cpus: 2 },
             ResizeReason::Remove,
             config,
@@ -729,7 +729,7 @@ fn shrinking_waits_for_the_tail_to_empty_and_never_reconnects_live_outputs() {
     let shrink = |runtime: &mut EgressFabricRuntime| {
         runtime
             .rescale(
-                crate::config::EgressShardProfile::OutputCount,
+                crate::media::config::EgressShardProfile::OutputCount,
                 crate::media::host_capacity::HostCapacity { cpus: 2 },
                 ResizeReason::Remove,
                 config,

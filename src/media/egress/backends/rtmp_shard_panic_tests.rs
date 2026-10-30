@@ -125,7 +125,7 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
     }
     assert_eq!(
         runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity { cpus: 1 },
             crate::media::egress::runtime::ResizeReason::Observe,
             shard_config,

@@ -20,7 +20,7 @@ async fn adapt_pipeline_ring_no_op_when_default_is_sufficient() {
 
 #[tokio::test]
 async fn source_ring_uses_engine_typed_config_capacity() {
-    let config = Arc::new(crate::AppConfig {
+    let config = Arc::new(crate::media::config::EngineConfig {
         ring_capacity: 2048,
         ..Default::default()
     });
@@ -32,7 +32,7 @@ async fn source_ring_uses_engine_typed_config_capacity() {
 
 #[tokio::test]
 async fn ts_muxer_ring_uses_engine_typed_config_capacity() {
-    let config = Arc::new(crate::AppConfig {
+    let config = Arc::new(crate::media::config::EngineConfig {
         ts_ring_capacity: 96,
         ..Default::default()
     });

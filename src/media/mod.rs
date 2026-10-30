@@ -10,6 +10,7 @@
 pub mod audio_router;
 #[forbid(unsafe_code)]
 pub mod codec;
+pub mod config;
 pub mod correlation_id;
 pub mod egress;
 pub mod engine;

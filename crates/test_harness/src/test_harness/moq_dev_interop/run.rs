@@ -41,7 +41,7 @@ const BROWSER_TIMEOUT: Duration = Duration::from_secs(360);
 /// The browser specs' own package, relative to the repository root.
 const BROWSER_SPEC_DIR: &str = "test/e2e/moq";
 
-/// Restream's MoQ listener settings (`src/config/moq.rs`).
+/// Restream's MoQ listener settings (`src/media/config/moq.rs`).
 const MOQ_INGEST_LISTEN_ENV: &str = "RESTREAM_MOQ_INGEST_LISTEN";
 const MOQ_TLS_CERT_ENV: &str = "RESTREAM_MOQ_TLS_CERT";
 const MOQ_TLS_KEY_ENV: &str = "RESTREAM_MOQ_TLS_KEY";

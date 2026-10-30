@@ -225,7 +225,7 @@ pub struct MediaEngine {
     pub file_ingests: FileIngestRegistry,
     pub stages: StageRegistry,
     pub runtime: RuntimeInfra,
-    pub config: Arc<crate::AppConfig>,
+    pub config: Arc<crate::media::config::EngineConfig>,
 }
 
 impl Default for MediaEngine {
@@ -236,10 +236,10 @@ impl Default for MediaEngine {
 
 impl MediaEngine {
     pub fn new() -> Self {
-        Self::new_with_config(Arc::new(crate::AppConfig::from_env()))
+        Self::new_with_config(Arc::new(crate::media::config::EngineConfig::from_env()))
     }
 
-    pub fn new_with_config(config: Arc<crate::AppConfig>) -> Self {
+    pub fn new_with_config(config: Arc<crate::media::config::EngineConfig>) -> Self {
         Self {
             ingests: IngestRegistry::new(),
             egresses: EgressRegistry::new(),
