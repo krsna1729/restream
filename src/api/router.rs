@@ -664,7 +664,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// reconciler wake: it enforces its own body bounds, and a segment upload is
 /// not a mutation the reconciler must converge.
 pub fn create_hls_ingest_router(
-    ingest: Arc<crate::media::hls_ingest::HlsIngest>,
+    ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
     inputs: Arc<dyn crate::application::ingest::PipelineInputLookup>,
 ) -> Router {
     apply_security_headers(Router::new().route(

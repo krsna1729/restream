@@ -1,0 +1,442 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use tokio_util::sync::CancellationToken;
+
+use crate::engine::MediaEngine;
+use crate::hls::HlsStore;
+use crate::hls_fmp4::Fmp4HlsStore;
+
+const HLS_PREVIEW_KEY_PREFIX: &str = "__preview__:";
+const INPUT_PREVIEW_RESOURCE_PREFIX: &str = "__input__:";
+
+pub(crate) fn hls_preview_registry_key(pipeline_id: &str) -> String {
+    format!("{HLS_PREVIEW_KEY_PREFIX}{pipeline_id}")
+}
+
+fn pipeline_id_from_hls_preview_registry_key(key: &str) -> Option<&str> {
+    key.strip_prefix(HLS_PREVIEW_KEY_PREFIX)
+}
+
+/// A program preview id with this suffix passes H.265 through, for a browser
+/// that decodes it; the plain id gets the shared H.264 bridge. Pipeline ids
+/// (`pipeline_<hex>`) never contain a dot.
+const HEVC_PASSTHROUGH_PREVIEW_SUFFIX: &str = ".hevc";
+
+pub(crate) fn hevc_passthrough_preview_id(pipeline_id: &str) -> String {
+    format!("{pipeline_id}{HEVC_PASSTHROUGH_PREVIEW_SUFFIX}")
+}
+
+/// The pipeline a program preview id shows, and whether it passes H.265
+/// through.
+pub fn preview_pipeline(preview_id: &str) -> (&str, bool) {
+    match preview_id.strip_suffix(HEVC_PASSTHROUGH_PREVIEW_SUFFIX) {
+        Some(pipeline_id) => (pipeline_id, true),
+        None => (preview_id, false),
+    }
+}
+
+pub fn input_hls_preview_resource_id(input_id: &str) -> String {
+    format!("{INPUT_PREVIEW_RESOURCE_PREFIX}{input_id}")
+}
+
+/// The input an input-preview resource id shows; a passthrough one
+/// (`<input>.hevc`) shows the same input.
+pub(crate) fn input_id_from_hls_preview_resource_id(resource_id: &str) -> Option<&str> {
+    resource_id
+        .strip_prefix(INPUT_PREVIEW_RESOURCE_PREFIX)
+        .map(|id| preview_pipeline(id).0)
+}
+
+/// The preview with the same source in the other form (H.264 copy versus
+/// H.265 as sent): both read one input preview ring.
+fn sibling_preview_id(preview_id: &str) -> String {
+    match preview_pipeline(preview_id) {
+        (base, true) => base.to_string(),
+        (base, false) => hevc_passthrough_preview_id(base),
+    }
+}
+
+/// Tracks HLS consumers for a pipeline. Persistent consumers (egress outputs)
+/// hold a [`PersistentLease`]. Transient consumers (browser preview) keep the
+/// segmenter alive via playlist fetch heartbeats.
+pub struct HlsConsumers {
+    /// Live [`PersistentLease`]s taken from this entry; only leases change it.
+    persistent: Arc<AtomicU64>,
+    /// Monotonic reference time.
+    pub reference_instant: Instant,
+    /// Monotonic elapsed millis since reference_instant for the last access.
+    pub last_access_ms: AtomicU64,
+    /// Cancel token for the segmenter task.
+    pub cancel_token: CancellationToken,
+}
+
+impl HlsConsumers {
+    pub fn new(cancel_token: CancellationToken) -> Self {
+        Self {
+            persistent: Arc::new(AtomicU64::new(0)),
+            reference_instant: Instant::now(),
+            last_access_ms: AtomicU64::new(0),
+            cancel_token,
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.reference_instant.elapsed().as_millis() as u64
+    }
+
+    pub fn touch(&self) {
+        self.last_access_ms.store(self.now_ms(), Ordering::Relaxed);
+    }
+
+    /// Register a persistent consumer of this entry until the lease drops.
+    pub fn lease_persistent(&self) -> PersistentLease {
+        self.persistent.fetch_add(1, Ordering::Relaxed);
+        PersistentLease {
+            count: Arc::clone(&self.persistent),
+        }
+    }
+
+    pub fn persistent_count(&self) -> u64 {
+        self.persistent.load(Ordering::Relaxed)
+    }
+
+    pub fn is_idle(&self, timeout_ms: u64) -> bool {
+        let persistent = self.persistent.load(Ordering::Relaxed);
+        if persistent > 0 {
+            return false;
+        }
+        let last = self.last_access_ms.load(Ordering::Relaxed);
+        let now = self.now_ms();
+        now.saturating_sub(last) >= timeout_ms
+    }
+}
+
+/// One persistent HLS consumer (an HLS egress output). While it lives, the
+/// segmenter entry it came from is never idle; dropping it releases exactly
+/// that registration, on that entry, once. It is not `Clone`, so there is no
+/// unmatched release, and a lease from a segmenter that has since been
+/// replaced cannot release the replacement's consumers.
+#[must_use = "dropping the lease releases the consumer at once"]
+pub struct PersistentLease {
+    count: Arc<AtomicU64>,
+}
+
+impl Drop for PersistentLease {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+impl MediaEngine {
+    /// The ingest a stage keyed by `stage_pipeline` reads: the pipeline's
+    /// live ingest, or for an input preview's stage (`__input__:<input>`)
+    /// that input's session.
+    pub(crate) async fn stage_source_ingest(
+        &self,
+        stage_pipeline: &str,
+    ) -> Option<Arc<crate::engine::ActiveIngest>> {
+        match input_id_from_hls_preview_resource_id(stage_pipeline) {
+            Some(input_id) => self.ingests.sessions.read().await.get(input_id).cloned(),
+            None => self
+                .ingests
+                .active
+                .read()
+                .await
+                .get(stage_pipeline)
+                .cloned(),
+        }
+    }
+
+    pub(crate) async fn get_input_sequence_headers(
+        &self,
+        input_id: &str,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let ingest = self.ingests.sessions.read().await.get(input_id).cloned();
+        let Some(ingest) = ingest else {
+            return (None, None);
+        };
+        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
+        (video, audio)
+    }
+
+    pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
+        let mut consumers = self.hls.consumers.write().await;
+        let already_running = consumers.contains_key(pipeline_id);
+        if !already_running {
+            let token = CancellationToken::new();
+            consumers.insert(pipeline_id.to_string(), HlsConsumers::new(token));
+        }
+        drop(consumers);
+
+        let store = self.get_or_create_hls_store(pipeline_id).await;
+        (store, already_running)
+    }
+
+    /// Ensure a browser-preview HLS segmenter is running for this pipeline.
+    /// Preview segmenters are isolated from HLS egress so preview-only H.264
+    /// conversion does not change upload/output behavior.
+    ///
+    /// Returns the cancel token for the (newly created or pre-existing)
+    /// consumer entry directly, rather than requiring a caller to re-acquire
+    /// the consumers lock afterward. A separate re-read would race a
+    /// concurrent `shutdown_hls_preview_segmenter` call, which can remove the
+    /// entry between the insert and the re-read.
+    pub async fn ensure_hls_preview_segmenter(
+        &self,
+        pipeline_id: &str,
+    ) -> (Arc<Fmp4HlsStore>, bool, CancellationToken) {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let mut consumers = self.hls.consumers.write().await;
+        let already_running = consumers.contains_key(&preview_key);
+        let cancel_token = if already_running {
+            consumers
+                .get(&preview_key)
+                .map(|c| c.cancel_token.clone())
+                .unwrap_or_else(CancellationToken::new)
+        } else {
+            let token = CancellationToken::new();
+            consumers.insert(preview_key.clone(), HlsConsumers::new(token.clone()));
+            token
+        };
+        drop(consumers);
+
+        let store = self.get_or_create_hls_preview_store(pipeline_id).await;
+        (store, already_running, cancel_token)
+    }
+
+    pub async fn touch_hls_preview(&self, pipeline_id: &str) {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let consumers = self.hls.consumers.read().await;
+        if let Some(c) = consumers.get(&preview_key) {
+            c.touch();
+        }
+    }
+
+    /// Register a persistent HLS consumer (an HLS egress output) of the
+    /// pipeline's running segmenter; `None` when no segmenter is registered.
+    pub async fn lease_hls_persistent_consumer(
+        &self,
+        pipeline_id: &str,
+    ) -> Option<PersistentLease> {
+        let consumers = self.hls.consumers.read().await;
+        consumers
+            .get(pipeline_id)
+            .map(HlsConsumers::lease_persistent)
+    }
+
+    /// Shut down an idle HLS segmenter and clean up its store.
+    pub async fn shutdown_hls_segmenter(&self, pipeline_id: &str) {
+        let mut consumers = self.hls.consumers.write().await;
+        if let Some(c) = consumers.remove(pipeline_id) {
+            c.cancel_token.cancel();
+        }
+        drop(consumers);
+        self.hls.stores.write().await.remove(pipeline_id);
+    }
+
+    pub async fn shutdown_hls_preview_segmenter(&self, pipeline_id: &str) {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let mut consumers = self.hls.consumers.write().await;
+        if let Some(c) = consumers.remove(&preview_key) {
+            c.cancel_token.cancel();
+        }
+        // The input's ring stays while its other preview form still plays.
+        let sibling_running =
+            consumers.contains_key(&hls_preview_registry_key(&sibling_preview_id(pipeline_id)));
+        drop(consumers);
+        self.hls.preview_stores.write().await.remove(&preview_key);
+        if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
+            && !sibling_running
+        {
+            self.release_input_preview_ring(input_id).await;
+        }
+    }
+
+    /// Get the cancel token for a running HLS segmenter (used to spawn the task).
+    pub async fn get_hls_cancel_token(&self, pipeline_id: &str) -> Option<CancellationToken> {
+        let consumers = self.hls.consumers.read().await;
+        consumers.get(pipeline_id).map(|c| c.cancel_token.clone())
+    }
+
+    pub async fn get_hls_preview_cancel_token(
+        &self,
+        pipeline_id: &str,
+    ) -> Option<CancellationToken> {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let consumers = self.hls.consumers.read().await;
+        consumers.get(&preview_key).map(|c| c.cancel_token.clone())
+    }
+
+    pub async fn get_or_create_hls_store(&self, pipeline_id: &str) -> Arc<HlsStore> {
+        let hls_config = crate::hls::HlsConfig::from_engine_config(&self.config);
+        let mut stores = self.hls.stores.write().await;
+        stores
+            .entry(pipeline_id.to_string())
+            .or_insert_with(|| Arc::new(HlsStore::with_config(hls_config)))
+            .clone()
+    }
+
+    pub async fn get_or_create_hls_preview_store(&self, pipeline_id: &str) -> Arc<Fmp4HlsStore> {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let hls_config = crate::hls::HlsConfig::from_engine_config(&self.config);
+        let mut stores = self.hls.preview_stores.write().await;
+        stores
+            .entry(preview_key)
+            .or_insert_with(|| Arc::new(Fmp4HlsStore::with_config(hls_config)))
+            .clone()
+    }
+
+    pub async fn get_hls_store(&self, pipeline_id: &str) -> Option<Arc<HlsStore>> {
+        let stores = self.hls.stores.read().await;
+        stores.get(pipeline_id).cloned()
+    }
+
+    pub async fn get_hls_preview_store(&self, pipeline_id: &str) -> Option<Arc<Fmp4HlsStore>> {
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let stores = self.hls.preview_stores.read().await;
+        stores.get(&preview_key).cloned()
+    }
+    pub async fn hls_pipeline_ids(&self) -> Vec<String> {
+        self.hls
+            .consumers
+            .read()
+            .await
+            .keys()
+            .filter(|key| pipeline_id_from_hls_preview_registry_key(key).is_none())
+            .cloned()
+            .collect()
+    }
+
+    pub async fn hls_preview_pipeline_ids(&self) -> Vec<String> {
+        self.hls
+            .consumers
+            .read()
+            .await
+            .keys()
+            .filter_map(|key| pipeline_id_from_hls_preview_registry_key(key).map(str::to_string))
+            .collect()
+    }
+
+    pub async fn should_shutdown_hls_segmenter(&self, pipeline_id: &str, timeout_ms: u64) -> bool {
+        let has_ingest = self.has_active_ingest(pipeline_id).await;
+        let consumers = self.hls.consumers.read().await;
+        match consumers.get(pipeline_id) {
+            Some(consumer) => !has_ingest || consumer.is_idle(timeout_ms),
+            None => false,
+        }
+    }
+
+    pub async fn should_shutdown_hls_preview_segmenter(
+        &self,
+        pipeline_id: &str,
+        timeout_ms: u64,
+    ) -> bool {
+        let has_ingest = if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
+        {
+            self.ingests.sessions.read().await.contains_key(input_id)
+        } else {
+            // A passthrough preview id names its pipeline with a suffix.
+            self.has_active_ingest(preview_pipeline(pipeline_id).0)
+                .await
+        };
+        let preview_key = hls_preview_registry_key(pipeline_id);
+        let consumers = self.hls.consumers.read().await;
+        match consumers.get(&preview_key) {
+            Some(consumer) => !has_ingest || consumer.is_idle(timeout_ms),
+            None => false,
+        }
+    }
+
+    pub async fn shutdown_all_hls_segmenters(&self) {
+        let pipeline_ids = self.hls_pipeline_ids().await;
+        for pipeline_id in pipeline_ids {
+            self.shutdown_hls_segmenter(&pipeline_id).await;
+        }
+        let preview_ids = self.hls_preview_pipeline_ids().await;
+        for pipeline_id in preview_ids {
+            self.shutdown_hls_preview_segmenter(&pipeline_id).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hls_preview_registry_key_roundtrips_through_extraction() {
+        let key = hls_preview_registry_key("abc");
+        assert_eq!(key, "__preview__:abc");
+        assert_eq!(pipeline_id_from_hls_preview_registry_key(&key), Some("abc"));
+    }
+
+    #[test]
+    fn hls_preview_registry_key_roundtrips_for_empty_pipeline_id() {
+        let key = hls_preview_registry_key("");
+        assert_eq!(pipeline_id_from_hls_preview_registry_key(&key), Some(""));
+    }
+
+    #[test]
+    fn pipeline_id_from_hls_preview_registry_key_rejects_unprefixed_key() {
+        assert_eq!(pipeline_id_from_hls_preview_registry_key("abc"), None);
+        // The prefix must anchor at the start, not just appear somewhere.
+        assert_eq!(
+            pipeline_id_from_hls_preview_registry_key("notpreview__preview__:abc"),
+            None
+        );
+    }
+
+    // A pipeline id that itself contains the preview prefix as a literal
+    // substring only has the outer, registry-added prefix stripped: the
+    // extraction is not recursive, so the caller-supplied id survives intact.
+    #[test]
+    fn hls_preview_registry_key_roundtrips_when_pipeline_id_contains_prefix() {
+        let pipeline_id = "__preview__:foo";
+        let key = hls_preview_registry_key(pipeline_id);
+        assert_eq!(key, "__preview__:__preview__:foo");
+        assert_eq!(
+            pipeline_id_from_hls_preview_registry_key(&key),
+            Some(pipeline_id)
+        );
+    }
+
+    #[test]
+    fn is_idle_treats_never_touched_consumer_as_idle_at_zero_timeout() {
+        // last_access_ms starts at 0; a fresh consumer with no persistent
+        // outputs and a zero grace timeout must be considered idle
+        // immediately, with no implicit startup grace period.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        assert!(hc.is_idle(0));
+    }
+
+    #[test]
+    fn a_held_lease_vetoes_idle_and_its_drop_releases_it() {
+        // A persistent (egress) consumer must veto idle shutdown outright,
+        // even though the heartbeat was never touched and the timeout is 0.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        let first = hc.lease_persistent();
+        let second = hc.lease_persistent();
+        drop(first);
+        assert!(!hc.is_idle(0), "one lease is still held");
+        drop(second);
+        assert_eq!(hc.persistent_count(), 0);
+        assert!(hc.is_idle(0));
+    }
+
+    // `is_idle` compares `now_ms()` against `last_access_ms` with
+    // `saturating_sub`, not plain subtraction. If `last_access_ms` is ever
+    // ahead of `now_ms()` (state corruption, or clock skew across a
+    // hypothetical restart of `reference_instant`), plain subtraction on
+    // `u64` would panic in debug builds and wrap to a huge value in release,
+    // both of which would misreport a live consumer as idle or crash the
+    // engine. The guard must instead treat "reads as behind" as "not idle".
+    #[test]
+    fn is_idle_does_not_underflow_when_last_access_is_ahead_of_now() {
+        let hc = HlsConsumers::new(CancellationToken::new());
+        hc.last_access_ms.store(u64::MAX, Ordering::Relaxed);
+        assert!(!hc.is_idle(1000));
+    }
+}

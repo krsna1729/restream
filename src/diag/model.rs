@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::media::file_analysis::MediaFileAnalysis;
+use restream_engine::file_analysis::MediaFileAnalysis;
 
 #[derive(Debug, Clone)]
 pub struct FileDiagnosticsContext {

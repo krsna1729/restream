@@ -452,7 +452,7 @@ impl TsMuxer {
         let section_len = 9 + entry_size + 4;
         if section_len > 1021 {
             error!(
-                target: "restream::media::mpegts::mux",
+                target: "restream_engine::mpegts::mux",
                 "[mpegts] PMT too large: section_len={} streams={}",
                 section_len,
                 self.streams.len()

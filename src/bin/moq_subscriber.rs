@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use restream::media::moq_subscribe_entry::{
+use restream_engine::moq_subscribe_entry::{
     SubscriberConfig, SubscriberError, SubscriberOutcome, run,
 };
 
@@ -162,7 +162,7 @@ fn exit_code(result: &Result<SubscriberOutcome, SubscriberError>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restream::media::moq_subscribe_entry::SubscriberReport;
+    use restream_engine::moq_subscribe_entry::SubscriberReport;
 
     fn outcome(error: Option<&str>) -> SubscriberOutcome {
         SubscriberOutcome {

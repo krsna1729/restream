@@ -18,7 +18,7 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use crate::application::models::Output;
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 /// Requests to the reconciler. The output pass runs only when
 /// something asked for it: a mutation or engine lifecycle event
@@ -103,10 +103,10 @@ impl ReconcileRequests {
 /// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(
     requests: &ReconcileRequests,
-    event: &crate::media::events::EventKind,
+    event: &restream_engine::events::EventKind,
     ingest_disconnect_grace: std::time::Duration,
 ) {
-    use crate::media::events::EventKind;
+    use restream_engine::events::EventKind;
     match event {
         EventKind::IngestDisconnected { .. } => {
             requests.wake();
@@ -195,7 +195,7 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
 /// Returns the inputs whose key state was released.
 pub async fn converge_ingest_key_state(
     pool: &SqlitePool,
-    ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
+    ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
 ) -> Vec<String> {
     let live: HashSet<String> = match crate::db::list_pipeline_input_ids(pool).await {
         Ok(ids) => ids,
@@ -231,7 +231,7 @@ pub async fn converge_ingest_key_state(
 /// the ring of a pipeline that is going away.
 pub async fn converge_pull_inputs(
     pool: &SqlitePool,
-    ingest: &Arc<crate::media::hls_ingest::HlsIngest>,
+    ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
 ) -> Vec<String> {
     let pulls = match crate::db::list_pull_inputs(pool).await {
         Ok(rows) => rows,
@@ -271,13 +271,13 @@ pub async fn converge_pull_inputs(
         };
         let did_start = ingest
             .ensure_pull(
-                crate::media::hls_pull::PullIdentity {
+                restream_engine::hls_pull::PullIdentity {
                     pipeline_id: input.pipeline_id.clone(),
                     input_id: input.id.clone(),
                     stream_key: input.stream_key.clone(),
                     selected: input.selected,
                 },
-                crate::media::hls_pull::PullSource {
+                restream_engine::hls_pull::PullSource {
                     url,
                     variant: input.variant_rule,
                     auth: input.source_auth.clone(),

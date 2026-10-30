@@ -12,5 +12,5 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
         reads.push(read);
         rest = next;
     }
-    restream::media::egress::fuzz_entry::http_response(reads.iter().copied());
+    restream_engine::egress::fuzz_entry::http_response(reads.iter().copied());
 });

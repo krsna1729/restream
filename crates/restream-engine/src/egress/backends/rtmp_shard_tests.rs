@@ -1,0 +1,990 @@
+use super::*;
+use crate::egress::journal::FeedEpoch;
+use crate::egress::leaf::EgressProgressSink;
+use crate::egress::policy::{LeafPolicy, WorkBudgetConfig};
+use std::sync::Arc;
+
+fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
+}
+
+fn feed() -> RingFeed {
+    RingFeed::new(
+        Arc::new(restream_sync::RingBuffer::new(4)),
+        Arc::new(FeedEpoch::new()),
+    )
+}
+
+fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(id),
+        generation,
+        feed: crate::egress::command::FeedId::new("feed"),
+        protocol: ProtocolSpec::Rtmp {
+            url: url.to_string(),
+            tls: false,
+        },
+        policy: LeafPolicy::default(),
+        progress: EgressProgressSink::default(),
+    }
+}
+
+#[test]
+fn queues_a_pending_connect_on_add() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        "rtmp://127.0.0.1:1935/live/key",
+        1,
+    )));
+
+    let pending = backend
+        .pending_connect(&OutputId::new("out-1"))
+        .expect("pending connect must be queued");
+    assert_eq!(pending.parts.host, "127.0.0.1");
+    assert_eq!(pending.parts.port, 1935);
+}
+
+#[test]
+fn invalid_url_is_rejected_without_panicking() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+
+    backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
+
+    assert!(backend.pending_connect(&OutputId::new("out-1")).is_none());
+}
+
+#[test]
+fn remove_drops_a_pending_connect() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        "rtmp://127.0.0.1:1935/live/key",
+        1,
+    )));
+    assert!(backend.pending_connect(&output_id).is_some());
+
+    backend.on_command(EgressCommand::Remove(output_id.clone()));
+    assert!(backend.pending_connect(&output_id).is_none());
+}
+
+#[test]
+fn stale_generation_resolve_completion_is_ignored() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        "rtmp://127.0.0.1:1/live/key",
+        5,
+    )));
+
+    // Completion for an older generation than the current pending connect
+    // must not consume it — a newer Update may already be in flight.
+    backend.complete_pending_connect(&output_id, 4, "127.0.0.1:1".parse().unwrap());
+
+    assert!(
+        backend.pending_connect(&output_id).is_some(),
+        "stale-generation completion must not consume the current pending connect"
+    );
+}
+
+#[test]
+fn connect_failure_drops_the_pending_connect_without_panicking() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        "rtmp://127.0.0.1:1/live/key",
+        1,
+    )));
+
+    // Port 0 in a resolved addr is not connectable; connect must fail fast
+    // instead of blocking for the full connect_timeout on an unroutable
+    // combination, and must not leave a stale pending entry behind.
+    backend.complete_pending_connect(&output_id, 1, "127.0.0.1:0".parse().unwrap());
+
+    assert!(backend.pending_connect(&output_id).is_none());
+    assert!(!backend.output_sockets.contains_key(&output_id));
+}
+
+// ---------------------------------------------------------------------------
+// Real end-to-end: shard-driven leaf reaches PublishAccepted against a real
+// rml_rtmp::sessions::ServerSession peer, proving the ready-queue +
+// per-visit poller-interest-reregistration loop actually drives the engine
+// to completion, not just that a socket gets connected.
+// ---------------------------------------------------------------------------
+
+use rml_rtmp::handshake::{
+    Handshake as PeerHandshake, HandshakeProcessResult as PeerResult, PeerType,
+};
+use rml_rtmp::sessions::{
+    ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
+};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream as StdTcpStream};
+use std::thread;
+struct ScriptedPoller {
+    ready_capacity: usize,
+    events: std::collections::VecDeque<TcpReadyLeaf>,
+}
+
+impl RtmpReadinessPoller for ScriptedPoller {
+    fn ready_capacity(&self) -> usize {
+        self.ready_capacity
+    }
+
+    fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        _key: LeafKey,
+        _generation: u64,
+        _timeout: Duration,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        let stream = StdTcpStream::connect(peer_addr).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        stream.set_nonblocking(true).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        Ok(TcpConnectAttempt::Connected(
+            super::super::compio_tcp::CompioTcpStream::from_std(stream),
+        ))
+    }
+
+    /// Completions are scripted in `events`; there is no I/O worker to start.
+    fn register_connection(
+        &mut self,
+        _fd: std::os::fd::RawFd,
+        _key: LeafKey,
+        _generation: u64,
+        _stream: &super::super::compio_tcp::CompioTcpStream,
+    ) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    fn remove(&mut self, _fd: std::os::fd::RawFd) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    /// Scripted events are not I/O completions.
+    fn completion_counts(&self) -> (u64, u64) {
+        (0, 0)
+    }
+
+    fn poll_leaves(
+        &mut self,
+        _timeout_ms: i32,
+        ready: &mut Vec<TcpReadyLeaf>,
+    ) -> Result<usize, TcpEgressPollError> {
+        ready.clear();
+        ready.extend(self.events.drain(..).take(self.ready_capacity));
+        Ok(ready.len())
+    }
+
+    /// No runtime to park in; tests drive `on_ready` directly.
+    fn wait_idle(
+        &mut self,
+        _commands: &flume::Receiver<EgressCommand>,
+        _max_wait: Duration,
+    ) -> Option<crate::egress::shard::EgressShardIdleWake> {
+        None
+    }
+}
+
+#[test]
+fn simultaneous_completions_keep_the_write_needed_by_the_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut c0c1 = [0; 1537];
+        stream.read_exact(&mut c0c1).unwrap();
+        assert_eq!(c0c1[0], 3);
+    });
+    let poller = ScriptedPoller {
+        ready_capacity: 4,
+        events: std::collections::VecDeque::new(),
+    };
+    let mut backend = RtmpShardBackend::new(poller, feed(), budget(), 4096);
+    let output_id = OutputId::new("out-simultaneous");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-simultaneous",
+        &format!("rtmp://{address}/live/key"),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, address));
+    let socket = backend.output_sockets[&output_id];
+    backend.poller.events.extend([
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: true,
+            writable: false,
+        },
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: false,
+            writable: true,
+        },
+    ]);
+
+    backend.poll_ready();
+    assert_eq!(backend.ready.len(), 1, "one visit handles both completions");
+    backend.on_ready();
+    peer.join().unwrap();
+}
+
+/// Accepts a publish request and then immediately drops the connection, so the
+/// shard observes the close. Tests that need the peer to stay connected use
+/// [`run_accepting_server_peer_until_stopped`] instead.
+fn run_accepting_server_peer(mut stream: StdTcpStream, done_tx: std::sync::mpsc::Sender<()>) {
+    run_server_peer_until_publish_accepted(&mut stream, done_tx);
+}
+
+/// Accepts a publish request, signals `done_tx`, then holds the connection open
+/// until `stop_rx` fires.
+///
+/// Tests that drive two peers to `Publishing` before asserting on shard state
+/// need this: `run_accepting_server_peer` closes as soon as it accepts, so the
+/// peer that finishes first would sit closed while the pump loop waits on the
+/// second, and a later `on_ready()` would legitimately reap that first leaf
+/// (the behavior `shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance`
+/// asserts) out from under the test.
+fn run_accepting_server_peer_until_stopped(
+    mut stream: StdTcpStream,
+    done_tx: std::sync::mpsc::Sender<()>,
+    stop_rx: std::sync::mpsc::Receiver<()>,
+) {
+    run_server_peer_until_publish_accepted(&mut stream, done_tx);
+    // Park without reading: the caller's feed is empty, so the shard writes
+    // nothing that could fill the socket buffer while we wait.
+    let _ = stop_rx.recv();
+}
+
+fn run_server_peer_until_publish_accepted(
+    stream: &mut StdTcpStream,
+    done_tx: std::sync::mpsc::Sender<()>,
+) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    let mut pending_input = remaining;
+    loop {
+        if !pending_input.is_empty() {
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    }) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                        let _ = done_tx.send(());
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let n = stream.read(&mut buf).expect("server session read");
+        assert_ne!(n, 0);
+        pending_input = buf[..n].to_vec();
+    }
+}
+
+#[test]
+fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_accepting_server_peer(stream, done_tx);
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{}/live/key", addr),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+    assert!(
+        backend.output_sockets.contains_key(&output_id)
+            || backend.connecting_by_output.contains_key(&output_id),
+        "the nonblocking connect must leave an active or connecting leaf"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shard-driven leaf never reached publish acceptance"
+        );
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    // Reaching publish acceptance consumed real completions; the shard reports
+    // them instead of a fabricated zero.
+    let mut metrics = ShardMetrics::default();
+    backend.observe_metrics(&mut metrics);
+    assert!(metrics.cqes > 0, "consumed completions must be reported");
+
+    server.join().unwrap();
+}
+
+/// Handshakes as the server, then reads the client's connect command and
+/// reports whether it advertises E-RTMP FourCC support (`fourCcList`).
+fn read_connect_advertises_fourcc_list(mut stream: StdTcpStream) -> bool {
+    use rml_rtmp::chunk_io::ChunkDeserializer;
+    use rml_rtmp::messages::RtmpMessage;
+    use rml_rtmp::rml_amf0::Amf0Value;
+
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut handshake = PeerHandshake::new(PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let mut input = loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                stream.write_all(&response_bytes).unwrap();
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                stream.write_all(&response_bytes).unwrap();
+                break remaining_bytes;
+            }
+        }
+    };
+    let mut deserializer = ChunkDeserializer::new();
+    loop {
+        while let Some(payload) = deserializer.get_next_message(&input).unwrap() {
+            input.clear();
+            match payload.to_rtmp_message().unwrap() {
+                RtmpMessage::SetChunkSize { size } => {
+                    deserializer.set_max_chunk_size(size as usize).unwrap();
+                }
+                RtmpMessage::Amf0Command {
+                    command_name,
+                    command_object: Amf0Value::Object(properties),
+                    ..
+                } if command_name == "connect" => {
+                    return properties.contains_key("fourCcList");
+                }
+                _ => {}
+            }
+        }
+        let n = stream.read(&mut buf).expect("server connect read");
+        assert_ne!(n, 0, "client closed before sending connect");
+        input = buf[..n].to_vec();
+    }
+}
+
+/// Drives one shard-owned leaf, whose startup carries `enhanced_rtmp`, until
+/// the peer has read its connect.
+fn shard_connect_advertises_fourcc_list(enhanced_rtmp: bool) -> bool {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        read_connect_advertises_fourcc_list(stream)
+    });
+
+    let startup_source = SharedRtmpPublishStartupSource::new();
+    startup_source.set(
+        OutputId::new("out-1"),
+        RtmpPublishStartup {
+            enhanced_rtmp,
+            ..RtmpPublishStartup::default()
+        },
+    );
+    let (_sender, queue) = rtmp_resolve_completion_queue(1);
+    let mut backend = RtmpShardBackend::with_runtime_components(
+        CompioTcpPoller::new(4).unwrap(),
+        feed(),
+        budget(),
+        4096,
+        crate::egress::tls::rustls_client_config(),
+        queue,
+        startup_source,
+    );
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{addr}/live/key"),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !server.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the peer never received the connect"
+        );
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server.join().unwrap()
+}
+
+#[test]
+fn only_an_enhanced_outputs_connect_advertises_fourcc_list() {
+    assert!(shard_connect_advertises_fourcc_list(true));
+    assert!(!shard_connect_advertises_fourcc_list(false));
+}
+
+#[test]
+fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
+    // `LeafCommon::pending_application_bytes` (wired up in
+    // `visit_one_ready_leaf`) is enforced by `sweep_stalled_leaves`
+    // (mirroring `SrtShardBackend`'s identical mechanism): a leaf with
+    // pending bytes and no byte/protocol progress within
+    // `LeafLimits::max_backpressure_duration` gets closed. This test
+    // drives two real leaves to `Publishing` (real handshake/negotiation
+    // against `run_accepting_server_peer` peers), then directly sets each
+    // leaf's stall-relevant state (`pending_application_bytes`,
+    // `observed_since` — both otherwise driven by real I/O timing, which
+    // would make this test slow and flaky) to deterministically simulate
+    // "genuinely stuck for a long time" on one leaf and "healthy" on the
+    // other, and asserts the sweep closes only the stuck one.
+    // Both peers must stay connected until the sweep assertions run. If a peer
+    // closed as soon as it accepted (what `run_accepting_server_peer` does),
+    // the one that finished first would sit closed while the pump loop below
+    // waits on the second, and the next `on_ready()` would reap that leaf
+    // before the test could touch it.
+    let listener_a = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr_a = listener_a.local_addr().unwrap();
+    let (done_a_tx, done_a_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_a_tx, stop_a_rx) = std::sync::mpsc::channel::<()>();
+    let server_a = thread::spawn(move || {
+        let (stream, _) = listener_a.accept().unwrap();
+        run_accepting_server_peer_until_stopped(stream, done_a_tx, stop_a_rx);
+    });
+
+    let listener_b = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr_b = listener_b.local_addr().unwrap();
+    let (done_b_tx, done_b_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_b_tx, stop_b_rx) = std::sync::mpsc::channel::<()>();
+    let server_b = thread::spawn(move || {
+        let (stream, _) = listener_b.accept().unwrap();
+        run_accepting_server_peer_until_stopped(stream, done_b_tx, stop_b_rx);
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let stuck_id = OutputId::new("stuck");
+    let healthy_id = OutputId::new("healthy");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "stuck",
+        &format!("rtmp://{}/live/key", addr_a),
+        1,
+    )));
+    backend.complete_pending_connect(&stuck_id, 1, addr_a);
+    backend.on_command(EgressCommand::Add(output_spec(
+        "healthy",
+        &format!("rtmp://{}/live/key", addr_b),
+        1,
+    )));
+    backend.complete_pending_connect(&healthy_id, 1, addr_b);
+
+    let mut a_done = false;
+    let mut b_done = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "leaves never reached publish acceptance (a_done={a_done} b_done={b_done})"
+        );
+        a_done = a_done || done_a_rx.try_recv().is_ok();
+        b_done = b_done || done_b_rx.try_recv().is_ok();
+        if a_done && b_done {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let now = std::time::Instant::now();
+    let long_ago = now - Duration::from_secs(3600);
+    {
+        let socket_ref = *backend.output_sockets.get(&stuck_id).unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
+        leaf.common.pending_application_bytes = 4096;
+        leaf.common.progress.last_byte_progress = None;
+        leaf.common.progress.last_protocol_progress = None;
+        leaf.observed_since = long_ago;
+    }
+    {
+        let socket_ref = *backend.output_sockets.get(&healthy_id).unwrap();
+        let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
+        leaf.common.pending_application_bytes = 4096;
+        leaf.common.progress.last_byte_progress = Some(now);
+        leaf.common.progress.last_protocol_progress = None;
+        leaf.observed_since = long_ago;
+    }
+
+    backend.sweep_stalled_leaves(now);
+
+    assert!(
+        !backend.output_sockets.contains_key(&stuck_id),
+        "a leaf with pending bytes and no progress for the deadline must be closed"
+    );
+    assert!(
+        backend.output_sockets.contains_key(&healthy_id),
+        "a leaf with recent byte progress must not be closed, even with the same pending bytes"
+    );
+
+    let _ = stop_a_tx.send(());
+    let _ = stop_b_tx.send(());
+    server_a.join().unwrap();
+    server_b.join().unwrap();
+}
+
+#[test]
+fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
+    // `run_accepting_server_peer` returns (and drops its socket, closing
+    // the connection) immediately after accepting the publish request.
+    // With an empty feed, nothing is ever queued to write, so only a read
+    // (the steady-state control-channel read fix) discovers the close;
+    // that must map to `VisitDecision::Close` and the shard must then
+    // actually remove the leaf from `output_sockets`/`leaves` -- proving
+    // the `Option<OutputId>` plumbing (only cloned on Close) still gets a
+    // real `OutputId` through to `remove_leaf_by_output` end to end.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_accepting_server_peer(stream, done_tx);
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{}/live/key", addr),
+        1,
+    )));
+    backend.complete_pending_connect(&output_id, 1, addr);
+
+    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < publish_deadline,
+            "leaf never reached publish acceptance"
+        );
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server.join().unwrap();
+
+    let removed_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < removed_deadline,
+            "leaf was never removed after the peer closed"
+        );
+        if !backend.output_sockets.contains_key(&output_id) {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(backend.leaves.is_empty());
+}
+
+/// Server peer that accepts connect/publish like [`run_accepting_server_peer`],
+/// signals `publish_tx` once publish is accepted, then keeps reading and
+/// signals each of the first two `VideoDataReceived` events. The second video
+/// proves media published after the feed has gone idle is still delivered.
+fn run_accepting_server_peer_reporting_video_after_idle(
+    mut stream: StdTcpStream,
+    publish_tx: std::sync::mpsc::Sender<()>,
+    video_tx: std::sync::mpsc::Sender<()>,
+) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    let mut pending_input = remaining;
+    let mut video_events = 0;
+    loop {
+        if !pending_input.is_empty() {
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    }) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                        let _ = publish_tx.send(());
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::VideoDataReceived {
+                        ..
+                    }) => {
+                        let _ = video_tx.send(());
+                        video_events += 1;
+                        if video_events == 2 {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        pending_input = buf[..n].to_vec();
+    }
+}
+
+/// Exercises the production Compio shard group and feed-wake subscription against
+/// a real RTMP peer: publish a keyframe, idle, then require another keyframe
+/// after the leaf parks. The factory must preserve its configured visit
+/// window even when shard startup is delayed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();
+    let (video_tx, video_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
+    });
+
+    let ring = Arc::new(restream_sync::RingBuffer::new(4));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let packet = |timestamp| restream_core::MediaPacket {
+        media_type: restream_core::MediaType::Video,
+        format: restream_core::PayloadFormat::Flv,
+        is_keyframe: true,
+        track_index: 0,
+        pts: timestamp,
+        dts: timestamp,
+        payload: bytes::Bytes::from_static(&[
+            0x17, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x65, 0x88,
+        ]),
+    };
+    ring.push(packet(0));
+    let startup_source = crate::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource::new();
+    let delayed_budget = budget();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let group = crate::egress::factory::spawn_rtmp_fabric_shard_group(
+        std::num::NonZeroU32::new(1).unwrap(),
+        EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(5)).unwrap(),
+        4,
+        delayed_budget,
+        4096,
+        crate::egress::tls::resolve_client_config(None).unwrap(),
+        startup_source.clone(),
+        |_| feed.clone_reader(),
+    )
+    .unwrap();
+    let manager_config = crate::egress::manager::EgressManagerConfig::new(1, 16).unwrap();
+    let mut runtime =
+        crate::egress::runtime::EgressFabricRuntime::new(manager_config, group).unwrap();
+    let wakes = crate::egress::runtime::subscribe_fabric_wakes(
+        "rtmp",
+        crate::egress::command::FeedId::new("feed"),
+        feed.publication_ring().publication_subscribers(),
+        runtime.feed_wake_handles(),
+    );
+    startup_source.set(
+        crate::egress::command::OutputId::new("out-1"),
+        crate::egress::backends::rtmp::RtmpPublishStartup::default(),
+    );
+    runtime
+        .dispatch(EgressCommand::Add(output_spec(
+            "out-1",
+            &format!("rtmp://{}/live/key", addr),
+            1,
+        )))
+        .unwrap();
+
+    let publish_accepted = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if publish_rx.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .is_ok();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let initial_video_received = video_rx.try_recv().is_ok();
+
+    ring.push(packet(33));
+
+    let video_received_after_idle = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if video_rx.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .is_ok();
+
+    drop(wakes);
+    runtime.shutdown();
+    server.join().unwrap();
+
+    assert!(publish_accepted, "RTMP peer never accepted the publish");
+    assert!(
+        initial_video_received,
+        "the pre-populated FLV keyframe never reached the RTMP peer"
+    );
+    assert!(
+        video_received_after_idle,
+        "the later FLV keyframe never reached the RTMP peer"
+    );
+}
+
+#[path = "rtmp_shard_backpressure_tests.rs"]
+mod backpressure_tests;
+
+#[path = "rtmp_shard_drain_tests.rs"]
+mod drain_tests;
+#[path = "rtmp_shard_media_tick_tests.rs"]
+mod media_tick_tests;
+#[path = "rtmp_shard_panic_tests.rs"]
+mod panic_tests;
+#[path = "rtmp_shard_reregistration_tests.rs"]
+mod reregistration_tests;
+#[path = "rtmp_shard_wake_tests.rs"]
+mod wake_tests;
+
+#[test]
+fn shard_work_queues_have_a_hard_leaf_bound() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    use crate::egress::scheduler::Push;
+
+    // The ready queue is sized to the leaf table: a one-slot shard queues
+    // one leaf, and a second distinct key is refused, not grown into.
+    assert_eq!(backend.ready.push(LeafKey::for_test(0, 0)), Push::Queued);
+    assert_eq!(backend.ready.push(LeafKey::for_test(1, 0)), Push::Full);
+    assert_eq!(backend.ready.len(), 1);
+}
+
+/// A URL the leaf cannot connect to (no stream key) ends the attempt, so the
+/// output reports a failure and retries instead of staying `sending` with
+/// no connection.
+#[test]
+fn an_unusable_url_terminates_the_leaf() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let terminated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = output_spec("out-1", "rtmp://127.0.0.1:1/live", 1);
+    let output_id = spec.id.clone();
+    spec.progress.terminated_unexpectedly = Some(std::sync::Arc::clone(&terminated));
+    backend.on_command(EgressCommand::Add(spec));
+
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(backend.pending_connect(&output_id).is_none());
+}
+
+/// A readiness event or I/O completion still naming a removed leaf must not
+/// reach the output that reuses its slot. Both outputs are generation 1 and
+/// the shard has one slot, so without slot epochs the stale event would match
+/// the new leaf exactly (same slot, same generation, often the same fd).
+#[test]
+fn a_removed_leafs_late_event_does_not_reach_the_slots_next_output() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let peers: Vec<_> = (0..2).filter_map(|_| listener.accept().ok()).collect();
+        thread::sleep(Duration::from_millis(500));
+        drop(peers);
+    });
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let url = format!("rtmp://{addr}/live/key");
+    let connect = |backend: &mut RtmpShardBackend<CompioTcpPoller>, id: &str| {
+        let spec = output_spec(id, &url, 1);
+        let output_id = spec.id.clone();
+        backend.on_command(EgressCommand::Add(spec));
+        assert!(backend.complete_pending_connect(&output_id, 1, addr));
+        for _ in 0..4 {
+            backend.on_ready();
+        }
+        *backend.output_sockets.get(&output_id).expect("connected")
+    };
+
+    let old = connect(&mut backend, "old");
+    backend.on_command(EgressCommand::Remove(OutputId::new("old")));
+    let new = connect(&mut backend, "new");
+    assert_eq!(old.key.slot(), new.key.slot(), "the one slot is reused");
+
+    let late = TcpReadyLeaf {
+        fd: new.fd,
+        key: old.key,
+        generation: 1,
+        readable: true,
+        writable: true,
+    };
+    let taken = backend.enqueue_ready(late);
+    backend.on_shutdown();
+    server.join().unwrap();
+    assert!(
+        !taken,
+        "an event for the removed leaf was taken as the new leaf's readiness"
+    );
+}

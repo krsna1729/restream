@@ -11,8 +11,7 @@ fn candidate_types_stay_independent_of_engine_and_runtime_adapters() {
         ),
     ] {
         for forbidden in [
-            "crate::media::engine",
-            "crate::media::ring_buffer",
+            "restream_engine::",
             "ffmpeg",
             "srt",
             "tokio",

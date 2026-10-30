@@ -25,14 +25,14 @@ fn main() {
         }
         if flag == "ffmpeg-fetch" {
             let channel = match args.next() {
-                None => restream::media::ffmpeg_binary::Channel::Pinned,
-                Some(arg) if arg == "--latest" => restream::media::ffmpeg_binary::Channel::Latest,
+                None => restream_engine::ffmpeg_binary::Channel::Pinned,
+                Some(arg) if arg == "--latest" => restream_engine::ffmpeg_binary::Channel::Latest,
                 Some(_) => print_usage_and_exit(),
             };
             if args.next().is_some() {
                 print_usage_and_exit();
             }
-            std::process::exit(restream::media::ffmpeg_binary::fetch(
+            std::process::exit(restream_engine::ffmpeg_binary::fetch(
                 channel,
                 &mut std::io::stdout().lock(),
             ));
@@ -64,7 +64,7 @@ fn main() {
 
     // Seed the configured FFmpeg path before any consumer can resolve it;
     // `run_app` resolves and logs the executable once logging is up.
-    restream::media::ffmpeg_binary::init(config.ffmpeg_bin_path.clone());
+    restream_engine::ffmpeg_binary::init(config.ffmpeg_bin_path.clone());
     let worker_threads = config.tokio_runtime.worker_threads;
     let max_blocking_threads = config.tokio_runtime.max_blocking_threads;
     tokio::runtime::Builder::new_multi_thread()

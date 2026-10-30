@@ -51,7 +51,7 @@ flowchart LR
   ([Egress architecture](egress-architecture.md)).
 - Recording uses `MemoryQueue` (`crates/restream-sync/src/byte_queue.rs`)
   between its media-runtime TS producer and dedicated blocking file writer
-  (`src/media/recording/mod.rs`). It is not an egress transport queue.
+  (`crates/restream-engine/src/recording/mod.rs`). It is not an egress transport queue.
 
 `restream-core` owns `MediaPacket`, metadata, frame-unit vocabulary and shared
 codec helpers. `MediaPacket` is pinned at 56 bytes by a size assertion in
@@ -96,7 +96,7 @@ and a feed publication sends at most one wake per shard
 ## Bounded transport
 
 Every queue between contexts has an explicit bound. Configurable defaults
-and environment parsing live in `src/config.rs` and `src/media/config/`; fixed
+and environment parsing live in `src/config.rs` and `crates/restream-engine/src/config/`; fixed
 structural limits live with the module that owns the structure. Each
 structure owns its overflow or backpressure policy, and they differ on
 purpose:
@@ -161,12 +161,12 @@ fallback uploader (Reqwest) also runs on CONTROL. Every crossing between
 these contexts is listed with its bound in
 [Runtime crossings](runtime-crossings.md).
 
-MEDIA is the multi-thread Tokio runtime built by `src/media/executor.rs`;
+MEDIA is the multi-thread Tokio runtime built by `crates/restream-engine/src/executor.rs`;
 it is distinct from CONTROL and from dedicated blocking I/O threads.
 Moving helpers into workspace crates does not move their callers between
 these contexts. In particular, `restream-moq` contains media/catalog,
 budget, token, URL and TLS configuration helpers, while live endpoints and
-session drivers remain under `src/media/moq/{transport,ingest,origin,egress}/`.
+session drivers remain under `crates/restream-engine/src/moq/{transport,ingest,origin,egress}/`.
 The root listener and egress-fabric code still own their Compio runtimes.
 
 The process boundary costs a process start and pipe traffic. In return it
@@ -183,10 +183,13 @@ an explicit failure-isolation gate and an owner decision.
 
 ## Measurement workflow
 
-The `[[bench]]` targets in `Cargo.toml` and their code under `benches/` are
-the benchmark inventory. Hot-path examples: `ring_buffer`, `ingest_handoff`,
+The `[[bench]]` targets in `crates/restream-engine/Cargo.toml` (engine hot
+paths, code under `crates/restream-engine/benches/`) and in the root
+`Cargo.toml` (`api_health`, `alert_tracker`, code under `benches/`) are the
+benchmark inventory. Hot-path examples: `ring_buffer`, `ingest_handoff`,
 `input_gate`, `egress_visit`, `rtmp_serializer`, `codec_conversions`,
-`byte_queue_throughput`, `stage_feeder`. Live protocol modes belong to the harness
+`byte_queue_throughput`, `stage_feeder`. `egress_visit` needs the engine's
+`egress-test-driver` feature. Live protocol modes belong to the harness
 (`cargo xtask harness`).
 
 For a hot-path change:
@@ -201,7 +204,7 @@ For a hot-path change:
 6. Put the before and after numbers, host and command in the commit message.
 
 ```sh
-cargo bench --bench egress_visit
+cargo bench -p restream-engine --bench egress_visit --features egress-test-driver
 cargo xtask build-bench
 ```
 

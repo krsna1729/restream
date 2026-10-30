@@ -1,11 +1,13 @@
 use super::*;
-use crate::media::egress::command::{EgressCommand, FeedId};
-use crate::media::egress::journal::{FeedEpoch, TsFeed};
-use crate::media::egress::manager::EgressManagerConfig;
-use crate::media::egress::runtime::EgressFabricRuntime;
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardGroup};
-use crate::media::test_support::{output_spec, shard_config};
-use crate::media::ts_chunk_ring::TsChunkRing;
+use restream_engine::egress::command::{EgressCommand, FeedId};
+use restream_engine::egress::journal::{FeedEpoch, TsFeed};
+use restream_engine::egress::manager::EgressManagerConfig;
+use restream_engine::egress::runtime::EgressFabricRuntime;
+use restream_engine::egress::shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardGroup,
+};
+use restream_engine::test_support::{output_spec, shard_config};
+use restream_engine::ts_chunk_ring::TsChunkRing;
 use std::num::NonZeroU32;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -15,13 +17,13 @@ use tokio_util::sync::CancellationToken;
 /// depend on pool growth, a later sample, or another output command.
 #[tokio::test]
 async fn every_fabric_recovers_panics_without_adaptive_observation() {
-    use crate::media::egress::journal::RingFeed;
+    use restream_engine::egress::journal::RingFeed;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct PanicBackend;
     impl EgressShardBackend for PanicBackend {
         fn on_command(&mut self, _: EgressCommand) -> EgressShardCommandEffect {
-            crate::media::test_support::with_expected_panic_suppressed(|| {
+            restream_engine::test_support::with_expected_panic_suppressed(|| {
                 panic!("scripted shard panic")
             })
         }
@@ -35,7 +37,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
     );
     let ts_ring = TsChunkRing::new(8, CancellationToken::new());
     let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
-    let store = Arc::new(crate::media::hls::HlsStore::new());
+    let store = Arc::new(restream_engine::hls::HlsStore::new());
     engine
         .retain_srt_fabric_runtime(id.clone(), &ts_feed, &ts_ring.ring)
         .await
@@ -75,9 +77,9 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
                     .adaptive(1);
             failed
                 .rescale(
-                    crate::media::config::EgressShardProfile::OutputCount,
-                    crate::media::host_capacity::HostCapacity { cpus: 1 },
-                    crate::media::egress::runtime::ResizeReason::Observe,
+                    restream_engine::config::EgressShardProfile::OutputCount,
+                    restream_engine::host_capacity::HostCapacity { cpus: 1 },
+                    restream_engine::egress::runtime::ResizeReason::Observe,
                     shard_config(),
                     |_| || Ok::<_, String>(PanicBackend),
                 )

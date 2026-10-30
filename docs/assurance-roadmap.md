@@ -72,7 +72,7 @@ checker runs.
 
 | Rung | Restream | srt-rs |
 |---|---|---|
-| 1 Language | Compio Owners are `!Send` and thread-homed. `[lints]` in `Cargo.toml` deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`. FFI-free modules carry `#[forbid(unsafe_code)]` on their `mod` declaration. `src/lib.rs` refuses `panic = "abort"` builds. | Sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`. |
+| 1 Language | Compio Owners are `!Send` and thread-homed. `[lints]` in `Cargo.toml` deny `unsafe_op_in_unsafe_fn`, `unused_must_use` and `clippy::undocumented_unsafe_blocks`. FFI-free modules carry `#[forbid(unsafe_code)]` on their `mod` declaration. `crates/restream-engine/src/lib.rs` refuses `panic = "abort"` builds. | Sans-I/O single-owner protocol core; `srt-lifecycle` forbids `unsafe`. |
 | 2 API design | Per-entity panic boundaries and admission bounds ([isolation audit](isolation-audit.md)); locks only through poison-tolerant `restream_sync::lock`. `ReadyQueue` owns membership; `LeafArena` resolves generational `LeafKey`s; `WorkBudget` debits itself; HLS persistent consumers hold a `PersistentLease`; the egress manager asks `CommandSink` for free slots. | Logical peer and caller ids, bounded caller pool, `DenseSlotArena`. |
 | 3 Ecosystem | Property tests, live fault modes, cargo-fuzz targets, narrow `miri` and `asan` jobs ([testing](testing.md#miri-and-addresssanitizer)). | proptests, cargo-fuzz, ASan in `cargo xtask ci`. |
 | 4 Model checking | Loom models in the concurrency gate; Kani proofs over `LeafArena`, `ReadyQueue` and `WorkBudget` ([testing](testing.md#kani-proofs)). | One Loom model (reuseport group); three Kani proofs over `DenseSlotArena`. |
@@ -97,24 +97,24 @@ Use the strong form wherever the weak form exists.
 
 Where Restream applies these today:
 
-- **Generations.** `LeafArena` (`src/media/egress/leaf_arena.rs`) owns every
+- **Generations.** `LeafArena` (`crates/restream-engine/src/egress/leaf_arena.rs`) owns every
   shard's leaves; a `LeafKey` carries the slot epoch, bumped on removal.
   Events and completions for a removed leaf stop resolving even when the
   slot and fd are reused. One proptest and one Kani proof check the arena;
   `a_removed_leafs_late_event_does_not_reach_the_slots_next_output` checks
   the wiring. Output-keyed pending connects (DNS, Owner admission) keep a
   spec-generation check, because the output id is their identity.
-- **Queue membership.** `ReadyQueue` (`src/media/egress/scheduler.rs`)
+- **Queue membership.** `ReadyQueue` (`crates/restream-engine/src/egress/scheduler.rs`)
   records the key each slot queued; a duplicate push is a no-op and a stale
   epoch's entry is skipped.
-- **Budgets.** `WorkBudget` (`src/media/egress/policy.rs`) keeps limits and
+- **Budgets.** `WorkBudget` (`crates/restream-engine/src/egress/policy.rs`) keeps limits and
   spent counts private; engines call `debit_bytes`/`debit_unit` and ask
   `is_exhausted()`/`remaining_bytes()`. Per-engine budget tests stay: they
   check where each engine consults the budget.
-- **Leases.** `PersistentLease` (`src/media/engine_hls.rs`) decrements on
+- **Leases.** `PersistentLease` (`crates/restream-engine/src/engine_hls.rs`) decrements on
   `Drop`.
 - **Channel depth.** `CommandSink::free_slots`
-  (`src/media/egress/manager.rs`) reads the bounded channel instead of a
+  (`crates/restream-engine/src/egress/manager.rs`) reads the bounded channel instead of a
   shadow counter.
 
 Keep tests of external behavior: RTMP serialization, libsrt interop,

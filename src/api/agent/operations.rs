@@ -903,15 +903,15 @@ mod tests {
         let state = AppState::test_new(
             crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
             pool.clone(),
-            Arc::new(crate::media::security::IngestSecurityService::new(
+            Arc::new(restream_engine::security::IngestSecurityService::new(
                 restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
             )),
-            Arc::new(crate::media::srt::SrtIngestPolicyStore::new(
+            Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
                 restream_domain::domain::srt_ingest::SrtGlobalIngestConfig::default(),
                 &[],
             )),
             Default::default(),
-            Arc::new(crate::media::engine::MediaEngine::new()),
+            Arc::new(restream_engine::engine::MediaEngine::new()),
             logs,
         );
         let request: crate::agent_core::OperationCreateRequest =

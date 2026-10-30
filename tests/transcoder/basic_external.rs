@@ -1,8 +1,8 @@
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use restream::media::external_transcoder::build_stage_ffmpeg_args;
 use restream_core::{MediaPacket, MediaType};
+use restream_engine::external_transcoder::build_stage_ffmpeg_args;
 use restream_mpegts::TsDemuxer;
 
 use super::support::load_fixture;
@@ -15,7 +15,7 @@ fn run_external_stage_args(fixture: &[u8], preset: &str) -> Vec<MediaPacket> {
         let _guard = FFMPEG_EXTRACT_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        restream::media::ffmpeg_binary::ffmpeg_bin_path()
+        restream_engine::ffmpeg_binary::ffmpeg_bin_path()
     };
     let temp_dir = temp_artifact_dir();
     let input_path = temp_dir.join("input.ts");

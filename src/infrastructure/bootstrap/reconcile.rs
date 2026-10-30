@@ -15,8 +15,8 @@ use crate::application::topology::{
 };
 use crate::config::AppConfig;
 use crate::infrastructure::sqlite_ports::SqliteMetaStore;
-use crate::media::engine::MediaEngine;
-use crate::media::recording::RecordingMetadataReporter;
+use restream_engine::engine::MediaEngine;
+use restream_engine::recording::RecordingMetadataReporter;
 
 use super::egress::EgressReconciler;
 use super::runtime::RuntimeTasks;
@@ -35,7 +35,7 @@ pub(super) struct Reconciler {
     recording_metadata: RecordingMetadataReporter,
     egress: EgressReconciler,
     requests: Arc<ReconcileRequests>,
-    hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
+    hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
 }
 
 impl Reconciler {
@@ -50,7 +50,7 @@ impl Reconciler {
         recording_metadata: RecordingMetadataReporter,
         requests: Arc<ReconcileRequests>,
         runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
-        hls_ingest: Arc<crate::media::hls_ingest::HlsIngest>,
+        hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
     ) -> Self {
         let egress =
             EgressReconciler::new(engine.clone(), pool.clone(), config.tuning, runtime_state);
@@ -262,7 +262,7 @@ impl Reconciler {
             if self
                 .engine
                 .has_recent_ingest_disconnect(
-                    crate::media::engine_hls::preview_pipeline(&pipeline_id).0,
+                    restream_engine::engine_hls::preview_pipeline(&pipeline_id).0,
                     self.config.tuning.ingest_disconnect_grace_ms,
                 )
                 .await

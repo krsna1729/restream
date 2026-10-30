@@ -31,8 +31,8 @@ the [assurance roadmap](assurance-roadmap.md).
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
-  `src/media/egress/sizing.rs`, [SRT shard capacity](runtime-crossings.md#srt-shard-capacity))
-  and `srt_egress_connect_concurrency` (`src/media/config.rs`) on a second host.
+  `crates/restream-engine/src/egress/sizing.rs`, [SRT shard capacity](runtime-crossings.md#srt-shard-capacity))
+  and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
 
@@ -41,7 +41,7 @@ the [assurance roadmap](assurance-roadmap.md).
   frozen-destination case (then a plateau), then remove the cause or
   recalibrate the 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from that attribution.
 - Files: `crates/test_harness/src/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
-  in `src/media/egress/backends/srt*.rs`.
+  in `crates/restream-engine/src/egress/backends/srt*.rs`.
 - Context: current runs pass well under the gate and the opt-in attribution
   census does not reproduce the old growth. Closing needs allocation stacks,
   live-vs-free data and feed/transport ownership snapshots that explain or
@@ -64,8 +64,8 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-033 [architecture] [opus] Run egress shards from one host-level pool instead of per-feed groups
 - Goal: shards are a host pool that serves every feed, not one group per
   (protocol, feed), without widening failure domains.
-- Files: `src/media/egress/runtime.rs`, `src/media/engine_*_egress_fabric.rs`,
-  `src/media/egress/sizing.rs`, `src/media/egress/backends/sink_shard.rs`.
+- Files: `crates/restream-engine/src/egress/runtime.rs`, `crates/restream-engine/src/engine_*_egress_fabric.rs`,
+  `crates/restream-engine/src/egress/sizing.rs`, `crates/restream-engine/src/egress/backends/sink_shard.rs`.
 - Context: a pooled prototype cut shard CPU at 16 feeds × 2 outputs by more
   than half, but an injected Owner fault failed both feeds in a shared pool
   ([per-feed shard isolation](runtime-crossings.md#per-feed-shard-isolation)).
@@ -140,7 +140,7 @@ the [assurance roadmap](assurance-roadmap.md).
   and segment boundaries; self-initializing input; validated at apply time
   with a fallback to the normal path and a stated reason.
 - Costs: capacity accounting, preview and pipeline health need an answer for
-  outputs that skip the ring; failover (`src/media/input_gate.rs`) must be
+  outputs that skip the ring; failover (`crates/restream-engine/src/input_gate.rs`) must be
   rebuilt at segment level (switch on a boundary, `EXT-X-DISCONTINUITY`,
   monotonic media sequence) or the relay must not ship.
 - Trigger: telemetry showing meaningful CPU in HLS demux plus segmenting for
@@ -153,8 +153,8 @@ the [assurance roadmap](assurance-roadmap.md).
   milliseconds of thread CPU.
 - Remaining work: `shiguredo_mp4::handle_media_segment` decodes the whole
   `moof`, and sample planning runs in the poll that first reaches it. Make
-  fMP4 parsing/planning incremental (`src/media/hls_ingest/`,
-  `src/media/ingest_publisher/`), then verify TS and fMP4 poll budgets.
+  fMP4 parsing/planning incremental (`crates/restream-engine/src/hls_ingest/`,
+  `crates/restream-engine/src/ingest_publisher/`), then verify TS and fMP4 poll budgets.
   Allocator or kernel tuning showed no repeatable tail improvement.
 - Gates: an incremental fMP4 parsing/planning regression test; release
   `hls-push-duty -- --no-netns --hls-publishers 8 --duration-secs 60
@@ -250,16 +250,16 @@ the [assurance roadmap](assurance-roadmap.md).
   `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
   (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job, and
   `a_playlist_parse_does_not_block_the_pull_task_worker`
-  (`src/media/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) and
+  (`crates/restream-engine/src/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) and
   `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
-  (`src/media/external_transcoder_tests/hevc_pipeline.rs`, output deadline)
+  (`crates/restream-engine/src/external_transcoder_tests/hevc_pipeline.rs`, output deadline)
   each failed once in a full local `--lib` run; each passes when rerun.
   Remove the timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.
 
 ### Q-107 [testing] [sonnet] matrix_throughput transcode benches deliver nothing
-- Goal: the `*_trans` cases of `benches/matrix_throughput.rs` fail with
+- Goal: the `*_trans` cases of `crates/restream-engine/benches/matrix_throughput.rs` fail with
   `pulled=0` on master. The pinned FFmpeg child
   (`.restream/runtime/ffmpeg/ffmpeg`, libx265 720p) exits with `AVERROR_EOF`
   (-541478725) because its stdin closes before it opens the MPEG-TS input;

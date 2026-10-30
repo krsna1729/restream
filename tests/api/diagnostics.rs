@@ -82,7 +82,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         "pipe-graph-life",
         StageKind::video_preset_with_codec("720p", "h264"),
     );
-    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, _lease206, _) = manager
         .ensure_stage(
             stage_key.clone(),
@@ -91,8 +91,8 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         )
         .await;
     handle.lifecycle.transition(
-        restream::media::stage_lifecycle::StagePhase::WaitingForCapacity {
-            backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
+        restream_engine::stage_lifecycle::StagePhase::WaitingForCapacity {
+            backend: restream_engine::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
         },
     );
 
@@ -163,7 +163,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
         &[AppLogEntry {
             ts: "2026-07-09T00:00:00Z".to_string(),
             level: "WARN".to_string(),
-            target: "restream::media::external_transcoder".to_string(),
+            target: "restream_engine::external_transcoder".to_string(),
             message: "[ext-transcoder] ffmpeg stderr (video:720p): synthetic warning".to_string(),
             fields: None,
             pipeline_id: Some("pipe-diagctx".to_string()),
@@ -177,7 +177,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
     engine
         .runtime
         .event_log
-        .emit(restream::media::events::EventKind::StageRegistered {
+        .emit(restream_engine::events::EventKind::StageRegistered {
             pipeline_id: "pipe-diagctx".to_string(),
             encoding: "video:720p".to_string(),
         });
@@ -287,7 +287,7 @@ async fn diagnostics_supports_active_file_ingest() {
     .unwrap();
 
     std::fs::copy(
-        restream::media::test_fixtures::sparse_gop_mp4_fixture().unwrap(),
+        restream_engine::test_fixtures::sparse_gop_mp4_fixture().unwrap(),
         media_dir.join("source.mp4"),
     )
     .unwrap();

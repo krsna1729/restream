@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use crate::media::engine::{ActiveEgress, ActiveIngest, MediaEngine};
-use crate::media::snapshots::PublisherQuality;
+use restream_engine::engine::{ActiveEgress, ActiveIngest, MediaEngine};
+use restream_engine::snapshots::PublisherQuality;
 
 use super::common::{egress_runtime_json, ingest_video_track_selection_json};
 pub(super) use super::common::{reader_snapshot_json, ring_payload_stats_json};
@@ -227,8 +227,8 @@ pub(super) fn processing_graph_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::input_gate::InputPacketGate;
-    use crate::media::stage_metrics::StageMetrics;
+    use restream_engine::input_gate::InputPacketGate;
+    use restream_engine::stage_metrics::StageMetrics;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::{Duration, Instant};
@@ -341,7 +341,7 @@ mod tests {
             first_media_ms: Arc::new(AtomicU64::new(now_ms.saturating_sub(30_000))),
             metrics: Arc::new(StageMetrics::new()),
             last_progress_ms: Arc::new(AtomicU64::new(now_ms.saturating_sub(30_000))),
-            metadata: RwLock::new(crate::media::engine::IngestMetadata {
+            metadata: RwLock::new(restream_engine::engine::IngestMetadata {
                 remote_addr: Some("127.0.0.1:9000".to_string()),
                 quality: PublisherQuality {
                     srt_recv_buf_packets: Some(8_192),

@@ -35,9 +35,9 @@ use serde::Serialize;
 
 use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 use crate::application::models::Output;
-use crate::media::engine::MediaEngine;
 use restream_domain::domain::output_spec::EgressProtocol;
 use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
+use restream_engine::engine::MediaEngine;
 
 pub use graph::{GraphEdge, GraphNode, PipelineGraph};
 pub use inputs::{IngestEndpoints, IngestUrls, InputState};
@@ -299,11 +299,11 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
     let mut shards: HashMap<String, HashMap<u32, ShardHealth>> = HashMap::new();
     for status in engine
         .egress_fabric_shard_statuses(
-            crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+            restream_engine::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
         )
         .await
     {
-        use crate::media::egress::shard::EgressShardHealth as Health;
+        use restream_engine::egress::shard::EgressShardHealth as Health;
         let health = match status.state {
             Health::Healthy => ShardHealth::Healthy,
             Health::Stalled => ShardHealth::Stalled,
@@ -399,9 +399,9 @@ struct ProjectContext<'a> {
 
 fn project_output(
     output: &Output,
-    active: Option<&crate::media::engine::ActiveEgress>,
+    active: Option<&restream_engine::engine::ActiveEgress>,
     recent_evidence: Option<&FailureEvidence>,
-    retry: Option<&crate::media::engine::EgressRetryState>,
+    retry: Option<&restream_engine::engine::EgressRetryState>,
     has_ingest: bool,
     context: &ProjectContext<'_>,
 ) -> OutputState {

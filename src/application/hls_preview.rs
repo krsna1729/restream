@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::media::engine::MediaEngine;
-use crate::media::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_engine::engine::MediaEngine;
+use restream_engine::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
 
 #[derive(Debug)]
 pub enum HlsPreviewError {
@@ -37,7 +37,7 @@ pub async fn ensure_hls_preview(
     engine: Arc<MediaEngine>,
     pipeline_id: &str,
 ) -> Result<Arc<Fmp4HlsStore>, HlsPreviewError> {
-    let source = crate::media::engine_hls::preview_pipeline(pipeline_id).0;
+    let source = restream_engine::engine_hls::preview_pipeline(pipeline_id).0;
     let has_ingest = engine.ingests.active.read().await.contains_key(source);
 
     if has_ingest {
@@ -244,7 +244,7 @@ pub async fn input_audio_init_segment(
 }
 
 fn input_preview_resource_id(input_id: &str) -> String {
-    crate::media::engine_hls::input_hls_preview_resource_id(input_id)
+    restream_engine::engine_hls::input_hls_preview_resource_id(input_id)
 }
 
 async fn preview_store(

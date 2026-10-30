@@ -1,10 +1,10 @@
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use restream::media::engine::MediaEngine;
-use restream::media::security::IngestSecurityService;
 use restream::{api, db};
 use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_engine::engine::MediaEngine;
+use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ pub async fn authenticated_app_with_engine() -> (axum::Router, SqlitePool, Strin
     let sessions = Arc::new(RwLock::new(HashSet::new()));
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let policies = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let policies = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));

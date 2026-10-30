@@ -57,7 +57,7 @@ impl From<ShareLinkRecord> for ShareLink {
 pub fn hls_pipeline_of(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("/hls/")?;
     let preview = rest.split('/').next()?;
-    let pipeline = crate::media::engine_hls::preview_pipeline(preview).0;
+    let pipeline = restream_engine::engine_hls::preview_pipeline(preview).0;
     (!pipeline.is_empty() && pipeline != "inputs").then_some(pipeline)
 }
 

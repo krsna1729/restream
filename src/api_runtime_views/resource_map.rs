@@ -4,10 +4,10 @@
 //! runtime attribution. Stage and queue memory is useful directional evidence,
 //! but the process RSS remains the authoritative measured total.
 
-use crate::media::engine::MediaEngine;
 use crate::system_sampling::{
     ChildProcessResourceSnapshot, ProcessResourceSnapshot, sample_child_process_resources,
 };
+use restream_engine::engine::MediaEngine;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -385,7 +385,7 @@ fn egress_node(egress: &Value) -> Value {
 }
 
 fn fabric_shard_node(
-    status: &crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus,
+    status: &restream_engine::engine_egress_fabric_diagnostics::EgressFabricShardStatus,
 ) -> Value {
     json!({
         "id": format!("fabric-shard:{}:{}:{}", status.protocol, status.feed_id, status.shard_index),
@@ -560,7 +560,7 @@ pub(crate) async fn resource_map(
     let shard_nodes = placed_shard_nodes(
         engine
             .egress_fabric_shard_statuses(
-                crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+                restream_engine::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
             )
             .await
             .iter()

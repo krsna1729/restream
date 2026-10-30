@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use crate::application::models::Pipeline;
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{
     SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
 };
+use restream_engine::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
 
 pub const SRT_INGEST_GLOBAL_CONFIG_META_KEY: &str = "srt_ingest_global_config";

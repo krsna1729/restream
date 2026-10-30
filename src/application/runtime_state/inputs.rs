@@ -8,11 +8,11 @@ use std::collections::{BTreeMap, HashMap};
 use serde::Serialize;
 
 use crate::config::ServerPorts;
-use crate::media::engine::MediaEngine;
-use crate::media::input_gate::InputForwardState;
 use restream_domain::domain::pipeline_input::{
     PipelineInput, PipelineInputRole, PipelineInputSourceKind, VariantRule,
 };
+use restream_engine::engine::MediaEngine;
+use restream_engine::input_gate::InputForwardState;
 
 /// Where a keyed input's publisher pushes. A pull input accepts no pushes,
 /// so it has none.

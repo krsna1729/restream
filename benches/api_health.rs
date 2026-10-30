@@ -8,11 +8,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::engine::MediaEngine;
-use restream::media::security::IngestSecurityService;
 use restream::{api, db};
 use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_engine::engine::MediaEngine;
+use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use tokio::sync::{RwLock as TokioRwLock, broadcast};
 
@@ -36,7 +36,7 @@ async fn state_with_outputs(outputs: usize) -> api::AppState {
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
         pool,
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
-        Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
             &[],
         )),

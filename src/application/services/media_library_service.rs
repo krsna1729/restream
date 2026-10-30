@@ -16,8 +16,8 @@ use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
-use crate::media::engine::MediaEngine;
-use crate::media::recording::RecordingMetadataReporter;
+use restream_engine::engine::MediaEngine;
+use restream_engine::recording::RecordingMetadataReporter;
 
 use super::error::{ServiceError, ServiceResult};
 use super::ingest_service::IngestService;
@@ -208,7 +208,9 @@ impl MediaLibraryService {
                     .file_name()
                     .map(|value| value.to_string_lossy().to_string());
                 if let Some(companion_source_name) = companion_source_name
-                    && crate::media::recording::is_recording_source_filename(&companion_source_name)
+                    && restream_engine::recording::is_recording_source_filename(
+                        &companion_source_name,
+                    )
                     && entries.contains_key(&companion_source_name)
                 {
                     continue;
@@ -237,9 +239,9 @@ impl MediaLibraryService {
                 recording_error,
             } = recording_fields(recording_meta);
 
-            if crate::media::recording::is_recording_source_filename(&name) {
+            if restream_engine::recording::is_recording_source_filename(&name) {
                 let source_path = Path::new(media_dir).join(&name);
-                let converted_name = crate::media::recording::build_mp4_path(&source_path)
+                let converted_name = restream_engine::recording::build_mp4_path(&source_path)
                     .file_name()
                     .map(|value| value.to_string_lossy().to_string())
                     .filter(|candidate| entries.contains_key(candidate));
@@ -249,18 +251,19 @@ impl MediaLibraryService {
                 if let Some(converted_name) = &converted_name {
                     consumed.insert(converted_name.clone());
                 }
-                let conversion_state = crate::media::recording::load_conversion_state(&source_path);
+                let conversion_state =
+                    restream_engine::recording::load_conversion_state(&source_path);
                 let conversion_status = if converted_entry.is_some() {
                     Some("ready".to_string())
                 } else {
                     conversion_state.as_ref().map(|state| match state.status {
-                        crate::media::recording::RecordingConversionStatus::Converting => {
+                        restream_engine::recording::RecordingConversionStatus::Converting => {
                             "converting".to_string()
                         }
-                        crate::media::recording::RecordingConversionStatus::Ready => {
+                        restream_engine::recording::RecordingConversionStatus::Ready => {
                             "ready".to_string()
                         }
-                        crate::media::recording::RecordingConversionStatus::Failed => {
+                        restream_engine::recording::RecordingConversionStatus::Failed => {
                             "failed".to_string()
                         }
                     })
@@ -336,8 +339,8 @@ impl MediaLibraryService {
     pub async fn analyze_media_file(
         &self,
         path: PathBuf,
-    ) -> Result<crate::media::file_analysis::MediaFileAnalysis, String> {
-        crate::media::file_analysis::analyze_media_file(&path).await
+    ) -> Result<restream_engine::file_analysis::MediaFileAnalysis, String> {
+        restream_engine::file_analysis::analyze_media_file(&path).await
     }
 
     /// A PNG poster of one frame of a stored file, made by the external
@@ -351,7 +354,7 @@ impl MediaLibraryService {
             .acquire()
             .await
             .map_err(|error| format!("poster queue closed: {error}"))?;
-        crate::media::poster::extract_poster(&path).await
+        restream_engine::poster::extract_poster(&path).await
     }
 
     /// Enables recording for one pipeline and starts the runtime recording task
@@ -458,12 +461,13 @@ impl MediaLibraryService {
     /// media entry, including recording companion files when present.
     pub fn delete_paths_for_media(&self, filename: &str, canonical_path: &Path) -> Vec<PathBuf> {
         let mut delete_paths = vec![canonical_path.to_path_buf()];
-        if crate::media::recording::is_recording_source_filename(filename) {
-            let converted_path = crate::media::recording::build_mp4_path(canonical_path);
+        if restream_engine::recording::is_recording_source_filename(filename) {
+            let converted_path = restream_engine::recording::build_mp4_path(canonical_path);
             if converted_path.exists() {
                 delete_paths.push(converted_path);
             }
-            let state_path = crate::media::recording::build_conversion_state_path(canonical_path);
+            let state_path =
+                restream_engine::recording::build_conversion_state_path(canonical_path);
             if state_path.exists() {
                 delete_paths.push(state_path);
             }
@@ -511,9 +515,10 @@ impl MediaLibraryService {
         destination_path: &Path,
     ) -> Result<Vec<(PathBuf, PathBuf)>, MediaRenamePlanError> {
         let mut rename_pairs = vec![(source_path.to_path_buf(), destination_path.to_path_buf())];
-        if crate::media::recording::is_recording_source_filename(filename) {
-            let source_converted = crate::media::recording::build_mp4_path(source_path);
-            let destination_converted = crate::media::recording::build_mp4_path(destination_path);
+        if restream_engine::recording::is_recording_source_filename(filename) {
+            let source_converted = restream_engine::recording::build_mp4_path(source_path);
+            let destination_converted =
+                restream_engine::recording::build_mp4_path(destination_path);
             if source_converted.exists() {
                 if destination_converted.exists() {
                     return Err(MediaRenamePlanError::ConvertedExists);
@@ -521,9 +526,9 @@ impl MediaLibraryService {
                 rename_pairs.push((source_converted, destination_converted));
             }
 
-            let source_state = crate::media::recording::build_conversion_state_path(source_path);
+            let source_state = restream_engine::recording::build_conversion_state_path(source_path);
             let destination_state =
-                crate::media::recording::build_conversion_state_path(destination_path);
+                restream_engine::recording::build_conversion_state_path(destination_path);
             if source_state.exists() {
                 if destination_state.exists() {
                     return Err(MediaRenamePlanError::ConversionStateExists);

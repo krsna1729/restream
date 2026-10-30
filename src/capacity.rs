@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::config::AppConfig;
-use crate::media::engine::MediaEngine;
-use crate::media::host_capacity::HostCapacity;
+use restream_engine::engine::MediaEngine;
+use restream_engine::host_capacity::HostCapacity;
 
 /// The projection's formula. 5: MoQ outputs cost their measured share of
 /// an RTMP output instead of the RTMP prior (4: HLS PUT, sink and pipeline
@@ -93,7 +93,7 @@ impl OutputProtocol {
     /// CPU is not in the share. Like the other measured shares this is a
     /// prior from one host.
     pub fn egress_work_pps(self, ingest: IngestRate) -> f64 {
-        use crate::media::config::EgressShardProfile;
+        use restream_engine::config::EgressShardProfile;
         match self {
             Self::Rtmp | Self::Rtmps => ingest.pps,
             Self::Moq => ingest.pps * 6.95,
@@ -553,7 +553,7 @@ pub async fn capacity_snapshot(engine: &MediaEngine, config: &AppConfig) -> Capa
                 status.progress_age_ms.unwrap_or_default() as f64,
                 !matches!(
                     status.state,
-                    crate::media::egress::shard::EgressShardHealth::Healthy
+                    restream_engine::egress::shard::EgressShardHealth::Healthy
                 ),
             )
         })

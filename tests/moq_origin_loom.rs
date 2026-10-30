@@ -1,5 +1,5 @@
 //! Loom model-checks for the MoQ origin's cross-thread hand-offs
-//! (`src/media/moq/origin/mod.rs`):
+//! (`crates/restream-engine/src/moq/origin/mod.rs`):
 //!
 //! - **Viewer cap.** `ViewerSlots::try_acquire` is a load + CAS loop that
 //!   refuses at `max`; a `ViewerSlot` drop is an `AcqRel` decrement. Listener

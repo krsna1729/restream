@@ -10,11 +10,11 @@ use std::sync::Arc;
 use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::egress::PreparedOutput;
 use crate::application::models::Output;
-use crate::media::egress::journal::RingFeed;
-use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
-use crate::media::engine::{EgressRegistration, MediaEngine};
-use crate::media::moq::egress::MoqPublishStartup;
 use restream_domain::domain::state::EgressPhase;
+use restream_engine::egress::journal::RingFeed;
+use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
+use restream_engine::engine::{EgressRegistration, MediaEngine};
+use restream_engine::moq::egress::MoqPublishStartup;
 
 use super::EgressTask;
 
@@ -57,7 +57,7 @@ pub(crate) async fn prepare_moq_fabric_task(
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(sink) = engine
         .with_active_egress(&output.id, |egress| {
-            crate::media::egress::leaf::EgressProgressSink {
+            restream_engine::egress::leaf::EgressProgressSink {
                 bytes_sent: Some(egress.bytes_sent.clone()),
                 metrics: Some(egress.metrics.clone()),
                 last_progress_ms: Some(egress.last_progress_ms.clone()),

@@ -1,0 +1,75 @@
+//! Protocol-neutral egress fabric.
+//!
+//! This module contains the architecture described in
+//! `docs/egress-architecture.md` — the only egress path for RTMP, RTMPS,
+//! SRT, sink discard, and pipeline recirculation outputs.
+//!
+//! # Module layout
+//!
+//! ```text
+//! egress/
+//!   mod.rs          — this file, re-exports and feature gate
+//!   command.rs      — EgressCommand, OutputSpec, IDs
+//!   feed.rs         — EgressFeed trait, FeedCursor, FeedRead
+//!   scheduler.rs    — ReadyQueue, ScheduleState, round-robin
+//!   policy.rs       — LeafPolicy, WorkBudget, LeafLimits
+//!   backend.rs      — ProtocolEngine trait, EngineProgress, Readiness
+//!   backends/       — concrete fabric protocol engines
+//!   leaf.rs         — LeafCommon, LeafDeadlines, ProgressState
+//!   timer.rs        — TimerWheel<K>
+//!   metrics.rs      — ShardMetrics, LeafMetrics
+//!   manager.rs      — desired output assignment and command admission
+//!   shard.rs        — fixed shard threads, supervision snapshots, wake budgets
+//!   runtime.rs      — one feed's manager and shards: sizing, panic recovery
+//!   test_driver.rs  — FakeFeed, FakeEngine, FakePoller (cfg(test) / test-only)
+//! ```
+
+pub mod backend;
+pub mod backends;
+pub mod command;
+pub mod delivery;
+pub(crate) mod factory;
+pub mod feed;
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_entry;
+pub(crate) mod http1;
+pub mod journal;
+pub mod leaf;
+pub mod leaf_arena;
+pub mod manager;
+pub mod metrics;
+pub mod policy;
+pub mod runtime;
+#[forbid(unsafe_code)]
+pub mod scheduler;
+pub mod shard;
+pub(crate) mod sizing;
+pub mod timer;
+pub mod tls;
+pub mod visit;
+
+#[cfg(any(test, feature = "egress-test-driver"))]
+#[allow(clippy::disallowed_methods)]
+pub mod test_driver;
+#[cfg(test)]
+mod visit_tests;
+
+// Re-export the stable public surface for this phase.
+pub use backend::{
+    CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
+};
+pub use backends::sink::{SinkDiscardStats, SinkEngine, SinkTransport};
+pub use command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId};
+pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
+pub use manager::{
+    DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerConfig,
+    EgressManagerConfigError, EgressManagerDispatchError, ManagerCommandOutcome,
+};
+pub use policy::{LeafLimits, LeafPolicy, WorkBudget};
+pub use shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
+    EgressShardGroup, EgressShardGroupError, EgressShardHandle, EgressShardHealth,
+    EgressShardHeartbeat, EgressShardIdleWake, EgressShardSendError, EgressShardSnapshot,
+};
+pub use visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult};

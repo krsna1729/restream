@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{IngestEndpoints, Projection, Rows, RuntimeState, StateDelta, diff, project};
 use crate::config::ServerPorts;
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 /// Deltas kept for clients that reconnect with `since`; older gaps resync
 /// from a snapshot.
@@ -135,7 +135,7 @@ impl StateHub {
         super::stamp_since(
             &current.projection,
             &mut projection,
-            crate::media::engine::MediaEngine::now_epoch_ms(),
+            restream_engine::engine::MediaEngine::now_epoch_ms(),
         );
         let mut delta = diff(&current.projection, &projection);
         if delta.is_empty() {

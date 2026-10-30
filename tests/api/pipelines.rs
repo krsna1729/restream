@@ -367,7 +367,7 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
     restream::infrastructure::bootstrap::initialize_auth_for_test(&auth_pool, &sessions, "admin")
         .await;
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));
@@ -732,7 +732,7 @@ async fn v1_events_returns_envelope_and_events_array() {
     engine
         .runtime
         .event_log
-        .emit(restream::media::events::EventKind::IngestConnected {
+        .emit(restream_engine::events::EventKind::IngestConnected {
             pipeline_id: "test-pipeline".to_string(),
             protocol: "rtmp".to_string(),
             stream_key: "key01".to_string(),
@@ -764,7 +764,7 @@ async fn v1_events_filters_by_pipeline_id() {
     engine
         .runtime
         .event_log
-        .emit(restream::media::events::EventKind::IngestConnected {
+        .emit(restream_engine::events::EventKind::IngestConnected {
             pipeline_id: "pipe-a".to_string(),
             protocol: "rtmp".to_string(),
             stream_key: "key01".to_string(),
@@ -772,7 +772,7 @@ async fn v1_events_filters_by_pipeline_id() {
     engine
         .runtime
         .event_log
-        .emit(restream::media::events::EventKind::IngestConnected {
+        .emit(restream_engine::events::EventKind::IngestConnected {
             pipeline_id: "pipe-b".to_string(),
             protocol: "srt".to_string(),
             stream_key: "key02".to_string(),
@@ -807,7 +807,7 @@ async fn a_successful_mutation_requests_a_reconcile_pass() {
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
         pool.clone(),
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
-        Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
             &[],
         )),

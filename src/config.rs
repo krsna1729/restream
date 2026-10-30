@@ -2,9 +2,9 @@
 //! Reads environment variables once at startup and stores them in a typed struct.
 
 use crate::capacity::{CapacityLimits, LimitSource, LimitSources};
-use crate::media::config::EngineConfig;
-use crate::media::config::env::{env_bool, env_present, env_u32, env_u64, env_usize, env_var};
-use crate::media::host_capacity::HostCapacity;
+use restream_engine::config::EngineConfig;
+use restream_engine::config::env::{env_bool, env_present, env_u32, env_u64, env_usize, env_var};
+use restream_engine::host_capacity::HostCapacity;
 
 /// Default location for media-library files relative to the process working directory.
 ///

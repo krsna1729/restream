@@ -53,7 +53,7 @@ impl MemoryQueue {
     }
 
     pub fn new_with_capacity(capacity: usize) -> Self {
-        debug!(target: "restream::media::byte_queue", capacity_bytes = capacity, "memory queue created");
+        debug!(target: "restream_engine::byte_queue", capacity_bytes = capacity, "memory queue created");
         Self {
             inner: Mutex::new(MemoryQueueInner {
                 buf: VecDeque::new(),
@@ -194,7 +194,7 @@ impl MemoryQueue {
         let high = self.high_water_bytes.load(Ordering::Relaxed);
         let blocked = self.blocked_writes.load(Ordering::Relaxed);
         debug!(
-            target: "restream::media::byte_queue",
+            target: "restream_engine::byte_queue",
             high_water_bytes = high,
             blocked_writes = blocked,
             "memory queue closed"

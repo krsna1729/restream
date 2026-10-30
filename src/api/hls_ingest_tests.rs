@@ -10,12 +10,12 @@ use futures_util::StreamExt as _;
 use reqwest::StatusCode;
 
 use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
-use crate::media::engine::MediaEngine;
-use crate::media::hls_ingest::test_support::{
+use restream_domain::domain::pipeline_input::{PipelineInput, PushAuth};
+use restream_engine::engine::MediaEngine;
+use restream_engine::hls_ingest::test_support::{
     INPUT_ID, PIPELINE_ID, STREAM_KEY, fmp4_video_objects, test_ingest,
 };
-use crate::media::hls_ingest::{HlsIngest, HlsIngestLimits};
-use restream_domain::domain::pipeline_input::{PipelineInput, PushAuth};
+use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
 
 struct Inputs(std::sync::RwLock<PushAuth>);
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::media::engine::MediaEngine;
-use crate::media::snapshots::PublisherQuality;
+use restream_engine::engine::MediaEngine;
+use restream_engine::snapshots::PublisherQuality;
 
 use super::model::DiagResult;
 

@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::media::engine::{ActiveIngest, MediaEngine, RecentIngestOutcome};
+use restream_engine::engine::{ActiveIngest, MediaEngine, RecentIngestOutcome};
 
 use super::common::ingest_video_track_selection_json;
 pub(super) use super::common::{
@@ -246,9 +246,9 @@ pub(super) fn pipeline_health_summary_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::engine::RecentIngestOutcome;
-    use crate::media::input_gate::InputPacketGate;
-    use crate::media::stage_metrics::StageMetrics;
+    use restream_engine::engine::RecentIngestOutcome;
+    use restream_engine::input_gate::InputPacketGate;
+    use restream_engine::stage_metrics::StageMetrics;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::{Duration, Instant};
@@ -271,7 +271,7 @@ mod tests {
             first_media_ms: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(StageMetrics::new()),
             last_progress_ms: Arc::new(AtomicU64::new(last_progress_ms)),
-            metadata: RwLock::new(crate::media::engine::IngestMetadata {
+            metadata: RwLock::new(restream_engine::engine::IngestMetadata {
                 remote_addr: Some("127.0.0.1:9000".to_string()),
                 ..Default::default()
             }),

@@ -2,8 +2,6 @@
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use restream::logging::types::AppLogEntry;
-use restream::media::engine::MediaEngine;
-use restream::media::security::IngestSecurityService;
 use restream::{api, db};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
@@ -11,6 +9,8 @@ use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
+use restream_engine::engine::MediaEngine;
+use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));
@@ -90,7 +90,7 @@ async fn test_app_with_secure_cookies() -> axum::Router {
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));
@@ -126,7 +126,7 @@ async fn authenticated_app_with_temp_media()
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));
@@ -167,7 +167,7 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
-    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+    let ingest_policy_store = Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &[],
     ));

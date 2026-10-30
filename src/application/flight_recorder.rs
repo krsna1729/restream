@@ -24,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 use crate::application::fleet_history::is_delivering;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
-use crate::media::engine::MediaEngine;
 use restream_domain::domain::state::DesiredOutputState;
+use restream_engine::engine::MediaEngine;
 
 /// How often the recorder samples: the dashboard's own sampling clock.
 pub const FLIGHT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -76,11 +76,11 @@ pub struct IngestHealth {
     /// The picture and sound checks' findings, when they run for the
     /// pipeline (absent in samples taken before they existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qa: Option<crate::media::stream_qa::StreamQa>,
+    pub qa: Option<restream_engine::stream_qa::StreamQa>,
     /// Each track's timestamps and audio/video timing over the last minute
     /// (`media::stream_inspector`), read from the source ring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeline: Option<crate::media::stream_inspector::StreamInspection>,
+    pub timeline: Option<restream_engine::stream_inspector::StreamInspection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,8 +174,8 @@ pub struct IngestProbe {
     pub loss_per_sec: Option<f64>,
     pub retrans_per_sec: Option<f64>,
     pub receive_buffer: Option<f64>,
-    pub qa: Option<crate::media::stream_qa::StreamQa>,
-    pub timeline: Option<crate::media::stream_inspector::StreamInspection>,
+    pub qa: Option<restream_engine::stream_qa::StreamQa>,
+    pub timeline: Option<restream_engine::stream_inspector::StreamInspection>,
 }
 
 /// One running egress's counters.
@@ -571,7 +571,7 @@ async fn persist(
 async fn collect_probes(
     hub: &StateHub,
     engine: &MediaEngine,
-    inspector: Option<&crate::media::stream_inspector::StreamInspector>,
+    inspector: Option<&restream_engine::stream_inspector::StreamInspector>,
 ) -> Vec<PipelineProbe> {
     let egresses: HashMap<String, EgressProbe> = engine
         .egresses
@@ -609,7 +609,7 @@ async fn collect_probes(
             )
             .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
             .filter_map(|track| {
-                crate::media::stream_inspector::aac_frame_ms(track.sample_rate)
+                restream_engine::stream_inspector::aac_frame_ms(track.sample_rate)
                     .map(|frame_ms| (track.track_index, frame_ms))
             })
             .collect();
@@ -681,7 +681,7 @@ async fn collect_probes(
             });
     }
     for (pipeline_id, ring) in source_rings.iter() {
-        watched.push(crate::media::stream_inspector::Watched {
+        watched.push(restream_engine::stream_inspector::Watched {
             pipeline_id: pipeline_id.clone(),
             ring: Arc::downgrade(ring),
             aac_frame_ms: aac_frames.remove(pipeline_id).unwrap_or_default(),
@@ -783,7 +783,7 @@ pub async fn run_flight_recorder(
     let mut tick: u32 = 0;
     // Its own OS thread reads the source rings; dropped (and stopped) with
     // this task.
-    let inspector = crate::media::stream_inspector::StreamInspector::start();
+    let inspector = restream_engine::stream_inspector::StreamInspector::start();
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,

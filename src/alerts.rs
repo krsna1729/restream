@@ -390,7 +390,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             if let Some(qa) = input.get("qa") {
                 let held = |key: &str| qa.get(key).and_then(|v| v.as_u64());
                 if let Some(ms) = held("blackForMs")
-                    && ms >= crate::media::stream_qa::BLACK_ALERT_MS
+                    && ms >= restream_engine::stream_qa::BLACK_ALERT_MS
                 {
                     alerts.push(Alert {
                         pipeline_id: Some(pipeline_id.clone()),
@@ -406,7 +406,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         )
                     });
                 } else if let Some(ms) = held("stillForMs")
-                    && ms >= crate::media::stream_qa::STILL_ALERT_MS
+                    && ms >= restream_engine::stream_qa::STILL_ALERT_MS
                 {
                     let slate = qa.get("stillIsSlate").and_then(|v| v.as_bool()) == Some(true);
                     let (id, title, summary, fix) = if slate {
@@ -439,7 +439,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     });
                 }
                 if let Some(ms) = held("silentForMs")
-                    && ms >= crate::media::stream_qa::SILENT_ALERT_MS
+                    && ms >= restream_engine::stream_qa::SILENT_ALERT_MS
                 {
                     alerts.push(Alert {
                         pipeline_id: Some(pipeline_id.clone()),
@@ -467,7 +467,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     ) else {
                         continue;
                     };
-                    if ms < crate::media::stream_qa::SILENT_ALERT_MS {
+                    if ms < restream_engine::stream_qa::SILENT_ALERT_MS {
                         continue;
                     }
                     alerts.push(Alert {

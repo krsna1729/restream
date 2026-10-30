@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use crate::application::reconcile::{RecordingAction, decide_recording_action};
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 pub fn stream_qa_enabled_meta_key(pipeline_id: &str) -> String {
     format!("stream_qa_enabled:{pipeline_id}")
@@ -29,7 +29,7 @@ pub async fn spawn_stream_qa(engine: Arc<MediaEngine>, pipeline_id: String) -> b
         return false;
     };
     tokio::spawn(async move {
-        crate::media::stream_qa::runner::run(
+        restream_engine::stream_qa::runner::run(
             engine.clone(),
             pipeline_id.clone(),
             ring,

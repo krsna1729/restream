@@ -15,7 +15,7 @@ each choice and how to change the version.
 
 | Input | Value | Owner |
 |---|---|---|
-| `restream ffmpeg-fetch` | BtbN release `autobuild-2026-09-30-13-08`: `ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1` (or `linuxarm64`), SHA-256 pinned per architecture | [src/media/ffmpeg_binary.rs](../src/media/ffmpeg_binary.rs) (`PINNED_RELEASE`, `pinned_asset`) |
+| `restream ffmpeg-fetch` | BtbN release `autobuild-2026-09-30-13-08`: `ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1` (or `linuxarm64`), SHA-256 pinned per architecture | [crates/restream-engine/src/ffmpeg_binary.rs](../crates/restream-engine/src/ffmpeg_binary.rs) (`PINNED_RELEASE`, `pinned_asset`) |
 | Container images | The same release and digests, in the `ffmpeg-fetch` stage | [Dockerfile](../Dockerfile) |
 
 Pin a month's last BtbN build: BtbN keeps those for two years and daily
@@ -28,7 +28,7 @@ not change which FFmpeg runs.
 
 External transforms, subprocess file ingest, recording remux, posters, media
 analysis and the picture and sound checks run `ffmpeg` or `ffprobe`.
-`src/media/ffmpeg_binary.rs` resolves `ffmpeg` in this order: `FFMPEG_BIN_PATH`
+`crates/restream-engine/src/ffmpeg_binary.rs` resolves `ffmpeg` in this order: `FFMPEG_BIN_PATH`
 (config, then environment), the copy installed by `restream ffmpeg-fetch`
 under `.restream/runtime/ffmpeg/`, then `ffmpeg` on `PATH`. `ffprobe`
 resolves as `FFPROBE_BIN_PATH`, then the `ffprobe` beside the resolved
@@ -41,7 +41,7 @@ features each FFmpeg component backs.
 Make one reviewed change:
 
 1. Set `PINNED_RELEASE` and the per-architecture names and SHA-256 in
-   `src/media/ffmpeg_binary.rs`, and the same values in the `Dockerfile`'s
+   `crates/restream-engine/src/ffmpeg_binary.rs`, and the same values in the `Dockerfile`'s
    `ffmpeg-fetch` stage (`tests/docker_build_recipe.rs` fails if they
    differ).
 2. Replace the saved listings in `test/fixtures/ffmpeg/` with the new

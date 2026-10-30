@@ -32,7 +32,7 @@ const SHORT_READ_SECS: u64 = 10;
 const INPUT_TIMEOUT: Duration = Duration::from_secs(60);
 const RELAY_PUBLISH_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Restream's MoQ ingest listener settings (`src/media/config/moq.rs`).
+/// Restream's MoQ ingest listener settings (`crates/restream-engine/src/config/moq.rs`).
 const MOQ_INGEST_LISTEN_ENV: &str = "RESTREAM_MOQ_INGEST_LISTEN";
 const MOQ_TLS_CERT_ENV: &str = "RESTREAM_MOQ_TLS_CERT";
 const MOQ_TLS_KEY_ENV: &str = "RESTREAM_MOQ_TLS_KEY";
@@ -113,9 +113,9 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
     let work_dir = absolute_path(&work_dir)?;
 
     let mediamtx = pinned_mediamtx_bin().await?;
-    let fixture = restream::media::test_fixtures::checked_in_fixture(FIXTURE)?;
+    let fixture = restream_engine::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
-    let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
+    let ffmpeg = restream_engine::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;
     let ports = TestPorts::from_env();
     let relay_ports = RelayPorts::allocate();

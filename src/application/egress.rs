@@ -2,16 +2,16 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::models::Output;
-use crate::media::egress::journal::{FeedEpoch, RingFeed, TsFeed};
-use crate::media::egress::policy::LeafPolicy;
-use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
-use crate::media::engine::MediaEngine;
-use crate::media::stage_lease::StageLease;
 use restream_domain::domain::output_spec::{
     EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
 };
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::planner::PlannedOutput;
+use restream_engine::egress::journal::{FeedEpoch, RingFeed, TsFeed};
+use restream_engine::egress::policy::LeafPolicy;
+use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
+use restream_engine::engine::MediaEngine;
+use restream_engine::stage_lease::StageLease;
 use restream_sync::RingBuffer;
 use std::sync::Arc;
 
@@ -278,12 +278,12 @@ pub fn recirculation_fabric_output_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::egress::EgressFeed;
     use restream_core::metadata::VideoMeta;
     use restream_domain::domain::audio_routing::AudioRouting;
     use restream_domain::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use restream_domain::domain::stage::StageKind;
     use restream_domain::domain::state::DesiredOutputState;
+    use restream_engine::egress::EgressFeed;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
         Output {
@@ -329,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn prepare_srt_fabric_feed_uses_shared_muxer_assignment_identity() {
         let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
-            crate::media::config::EngineConfig {
+            restream_engine::config::EngineConfig {
                 srt_egress_muxer_max_outputs_per_shard: 2,
                 srt_egress_muxer_max_shards: 8,
                 ..Default::default()
@@ -396,14 +396,14 @@ mod tests {
             std::time::Duration::from_millis(3_000)
         );
         match spec.protocol {
-            crate::media::egress::ProtocolSpec::Srt { url } => {
+            restream_engine::egress::ProtocolSpec::Srt { url } => {
                 assert_eq!(url, "srt://localhost:9000?mode=caller");
             }
-            crate::media::egress::ProtocolSpec::Rtmp { .. }
-            | crate::media::egress::ProtocolSpec::Sink
-            | crate::media::egress::ProtocolSpec::HlsPut { .. }
-            | crate::media::egress::ProtocolSpec::Pipeline { .. }
-            | crate::media::egress::ProtocolSpec::Moq { .. } => {
+            restream_engine::egress::ProtocolSpec::Rtmp { .. }
+            | restream_engine::egress::ProtocolSpec::Sink
+            | restream_engine::egress::ProtocolSpec::HlsPut { .. }
+            | restream_engine::egress::ProtocolSpec::Pipeline { .. }
+            | restream_engine::egress::ProtocolSpec::Moq { .. } => {
                 panic!("SRT fabric spec must carry the SRT protocol")
             }
         }
@@ -424,18 +424,18 @@ mod tests {
         assert_eq!(spec.generation, 9);
         assert_eq!(spec.feed.as_str(), "feed-source");
         match spec.protocol {
-            crate::media::egress::ProtocolSpec::Pipeline {
+            restream_engine::egress::ProtocolSpec::Pipeline {
                 target_pipeline_id,
                 target_input_id,
             } => {
                 assert_eq!(target_pipeline_id, "pipe-target");
                 assert_eq!(target_input_id, "input-backup");
             }
-            crate::media::egress::ProtocolSpec::Rtmp { .. }
-            | crate::media::egress::ProtocolSpec::Srt { .. }
-            | crate::media::egress::ProtocolSpec::HlsPut { .. }
-            | crate::media::egress::ProtocolSpec::Sink
-            | crate::media::egress::ProtocolSpec::Moq { .. } => {
+            restream_engine::egress::ProtocolSpec::Rtmp { .. }
+            | restream_engine::egress::ProtocolSpec::Srt { .. }
+            | restream_engine::egress::ProtocolSpec::HlsPut { .. }
+            | restream_engine::egress::ProtocolSpec::Sink
+            | restream_engine::egress::ProtocolSpec::Moq { .. } => {
                 panic!("recirculation spec must carry the pipeline protocol")
             }
         }
@@ -710,8 +710,8 @@ mod tests {
 
     #[tokio::test]
     async fn hevc_rtmp_selected_audio_terminal_ring_makes_progress() {
-        use crate::media::test_fixtures::bench_transport_fixture;
         use restream_core::MediaType;
+        use restream_engine::test_fixtures::bench_transport_fixture;
         use restream_mpegts::TsDemuxer;
         use restream_sync::Reader;
 

@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 bytes = "1"
 libfuzzer-sys = "0.4"
-restream = { path = ".." }
+restream-engine = { path = "../crates/restream-engine" }
 restream-core = { path = "../crates/restream-core" }
 restream-mpegts = { path = "../crates/restream-mpegts" }
 restream-rtmp = { path = "../crates/restream-rtmp" }

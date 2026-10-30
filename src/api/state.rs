@@ -22,10 +22,10 @@ use crate::application::services::{
     PipelineService, SettingsService,
 };
 use crate::config::AppConfig;
-use crate::media::engine::MediaEngine;
-use crate::media::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
-use crate::media::srt::SrtIngestPolicyStore;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_engine::engine::MediaEngine;
+use restream_engine::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
+use restream_engine::srt::SrtIngestPolicyStore;
 use sqlx::SqlitePool;
 
 use super::AppServices;

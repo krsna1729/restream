@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use sysinfo::{Disks, Networks, System};
 
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 use super::super::model::DiagResult;
 

@@ -463,7 +463,7 @@ pub async fn pipeline_moq_token_handler(
         return ApiError::from(error).into_response();
     }
     let ingest_host = state.pipeline_service.get_ingest_host().await;
-    let (token, expires_at) = crate::media::moq::origin::mint_token(&pipeline_id);
+    let (token, expires_at) = restream_engine::moq::origin::mint_token(&pipeline_id);
     Json(moq_token_response(
         &ingest_host,
         port,

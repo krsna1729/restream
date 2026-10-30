@@ -190,7 +190,7 @@ mod loom_tests {
 /// down every other test in this file rather than yielding a clean,
 /// catchable `#[should_panic]` result. The historical bug (`f679a249`) and
 /// its regression test (`write_wakeup_survives_lock_release_race` in
-/// `src/media/byte_queue.rs`) already document what the arm-after-check shape
+/// `crates/restream-engine/src/byte_queue.rs`) already document what the arm-after-check shape
 /// does; this model exists to prove the fixed shape holds, not to
 /// re-litigate the bug shape under a scheduler whose deadlock path isn't
 /// safe to assert against here.

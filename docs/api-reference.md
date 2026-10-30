@@ -219,7 +219,7 @@ Rate limits: `GET` returns
 `{ "attempts": [{ "scope", "ip", "failureCount", "banned", "banRemainingMs" }] }`.
 `POST …/reset` takes `{ "scope"?, "ip"? }` and returns
 `{ "ok": true, "removed": n }`; an unknown scope is `400`. Scopes
-(`RateLimitScope` in `src/media/security.rs`): `dashboard-login`,
+(`RateLimitScope` in `crates/restream-engine/src/security.rs`): `dashboard-login`,
 `rtmp-publish`, `srt-publish`, `srt-read`, `hls-publish`, `moq-publish`.
 
 ## Configuration and discovery
@@ -431,7 +431,7 @@ returned.
   (`MD5`, `MD5-sess`, `SHA-256`, `SHA-256-sess`; `qop=auth` or none) from then
   on, and once more on `stale=true`. A challenge offering only `auth-int`,
   `userhash` or another algorithm ends the pull with that reason
-  (`src/media/hls_pull/digest.rs`). Use `https` if the origin must not see
+  (`crates/restream-engine/src/hls_pull/digest.rs`). Use `https` if the origin must not see
   the password in the first request.
 - A signed URL or cookies the origin sets itself need no `auth`: the URL
   carries the token and the fetcher keeps a cookie jar.
@@ -613,7 +613,7 @@ other scheme is `400`:
   of the last three acknowledged segments (media sequence from 0 per
   attempt). On stop it PUTs a final playlist ending in `#EXT-X-ENDLIST`.
   The rules follow the YouTube HLS ingestion guide and the Akamai MSL HTTP
-  ingest requirements (`src/media/hls/upload_policy.rs` module doc).
+  ingest requirements (`crates/restream-engine/src/hls/upload_policy.rs` module doc).
 
 ### Output lifecycle
 
@@ -698,7 +698,7 @@ and the logging pipeline are in [Observability](observability.md#logging).
 | `level` | `info` | Minimum level: `error`, `warn`, `info`, `debug` |
 | `since` | — | RFC 3339 lower bound (inclusive) |
 | `until` | — | RFC 3339 upper bound (exclusive) |
-| `target` | — | Module prefix (`restream::media::srt`) |
+| `target` | — | Module prefix (`restream_engine::srt`) |
 | `scope` | — | `restream` (no pipeline/output), `pipeline` (pipeline, no output) or `output` |
 | `pipeline_id` | — | One pipeline |
 | `output_id` | — | One output (with `pipeline_id`) |
@@ -919,7 +919,7 @@ Operation records include `operationId`, `status`, `approval`, `request`,
 Both return `{ "enabled": bool, "active": bool }`.
 
 - The recorder writes raw MPEG-TS into the media directory
-  (`RingBuffer → TsMuxer → MemoryQueue → file writer`, `src/media/recording`).
+  (`RingBuffer → TsMuxer → MemoryQueue → file writer`, `crates/restream-engine/src/recording`).
 - A recording shorter than 5 s is deleted (`MIN_DURATION_SECS`).
 - A recording of 5 s or more is remuxed by FFmpeg into a sibling `.mp4`. The
   media library prefers the `.mp4` for playback, keeps the `.ts` for download
@@ -1001,7 +1001,7 @@ file) and `nowPlaying` (while running, the index of the playing file, else
   (`-stream_loop -1`).
 - A file that fails is skipped. The ingest stops once every file has failed
   in a row, so a list of unreadable files never respawns FFmpeg forever
-  (`next_item` in `src/media/external_file_ingest.rs`).
+  (`next_item` in `crates/restream-engine/src/external_file_ingest.rs`).
 - Files should share codecs and resolution: with `-c copy` a change
   between files reaches every destination. `liveOptimized` re-encodes each
   file to the same H.264/AAC.
@@ -1279,7 +1279,7 @@ already keeps, read once per interval on the recorder's own task.
     findings while they run; it is absent otherwise.
   - `timeline` is the stream inspector's last minute, per track, read from
     the source ring once a second on its own thread
-    (`src/media/stream_inspector.rs`); absent until it has read the ring:
+    (`crates/restream-engine/src/stream_inspector.rs`); absent until it has read the ring:
     - `tracks[]`: `media` (`video` first, then `audio`), `track`,
       `packetsPerSec`; `backwards` (DTS that went back), `jumps` (DTS that
       moved more than 1 s apart from arrival time; a network stall moves
@@ -1338,7 +1338,7 @@ Both return the state:
 
 - The checks are off unless turned on (`stream_qa_enabled:{id}` in the meta
   store). On, and while the source is live or within the reconnect grace,
-  each checked pipeline runs one external FFmpeg (`src/media/stream_qa/`;
+  each checked pipeline runs one external FFmpeg (`crates/restream-engine/src/stream_qa/`;
   no codec runs inside the engine). Its source ring is fed to FFmpeg's
   stdin as MPEG-TS on a dedicated thread.
   - FFmpeg decodes only keyframes (H.264 or H.265, over SRT or RTMP,
@@ -1412,7 +1412,7 @@ Returns `EngineHealthView`:
 
 - `egressFabricShards` covers all six fabric registries: `srt`, `rtmp`,
   `sink`, `pipeline`, `hls-put` and `moq`
-  (`src/media/engine_egress_fabric_diagnostics.rs`). It is empty when no
+  (`crates/restream-engine/src/engine_egress_fabric_diagnostics.rs`). It is empty when no
   output runs. `state` is `healthy`, `stalled`, `stopped` or `panicked`.
 - `rxBufferExhaustions` (SRT ingress and egress Owners) counts transient
   managed-buffer pressure. It is not a loss count; `rxRingDropped` and
@@ -1858,7 +1858,7 @@ The stream key is the credential. It is checked before any body byte is read,
 under the `hls-publish` rate-limit scope; no session cookie is used. These
 routes sit in `create_hls_ingest_router`, outside the 4 MiB API limit and the
 reconciler wake; their own limits apply (`HlsIngestLimits` in
-`src/media/hls_ingest.rs`).
+`crates/restream-engine/src/hls_ingest.rs`).
 
 | Status | Meaning |
 |---|---|

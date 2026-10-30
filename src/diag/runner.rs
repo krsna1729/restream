@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 use super::checks::{
     check_active_outputs, check_engine_status, check_file_ingest_runtime, check_file_source,

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::media::engine::MediaEngine;
 use restream_core::MediaType;
 use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_engine::engine::MediaEngine;
 use restream_sync::Reader;
 
 use crate::support::{collect_packets_with_deadline, load_primary_transport_packets};
@@ -15,7 +15,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-h264").await;
-        let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+        let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine.clone());
         let stage_key = StageKey::new("rtmp-h264", StageKind::source());
         let (handle, _lease203, is_new) = manager
             .ensure_stage(stage_key.clone(), source.clone(), None)
@@ -30,13 +30,13 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
             .unwrap();
 
         let (video, audio_tracks, mut packets) = load_primary_transport_packets("h264");
-        let (video_sh, audio_sh) = restream::media::test_fixtures::wrap_packets_for_rtmp_ingest(
+        let (video_sh, audio_sh) = restream_engine::test_fixtures::wrap_packets_for_rtmp_ingest(
             &video,
             &audio_tracks,
             &mut packets,
         );
         packets.truncate(100);
-        let expected_packets = restream::media::test_fixtures::count_ts_feedable_packets(
+        let expected_packets = restream_engine::test_fixtures::count_ts_feedable_packets(
             &video,
             &audio_tracks,
             &packets,

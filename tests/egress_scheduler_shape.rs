@@ -10,8 +10,8 @@
 
 use std::time::Instant;
 
-use restream::media::egress::leaf_arena::{LeafArena, LeafKey};
-use restream::media::egress::scheduler::{Push, ReadyQueue, ScheduleState};
+use restream_engine::egress::leaf_arena::{LeafArena, LeafKey};
+use restream_engine::egress::scheduler::{Push, ReadyQueue, ScheduleState};
 
 fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
     let mut leaves = LeafArena::with_capacity(population);

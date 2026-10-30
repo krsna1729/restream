@@ -2,7 +2,7 @@
 //! H.264 and H.265 NAL headers.
 #![no_main]
 
-use restream::media::codec::frame_captions;
+use restream_engine::codec::frame_captions;
 use restream_core::PayloadFormat;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {

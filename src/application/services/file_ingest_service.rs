@@ -15,8 +15,8 @@ use crate::application::ingest::{
 };
 use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
-use crate::media::engine::MediaEngine;
-use crate::media::external_file_ingest::{
+use restream_engine::engine::MediaEngine;
+use restream_engine::external_file_ingest::{
     ExternalFileIngestRuntime, ExternalFileIngestSource, start_external_file_ingest,
 };
 

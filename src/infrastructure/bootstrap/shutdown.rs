@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 pub(super) fn spawn_signal_watcher() -> CancellationToken {
     let shutdown = CancellationToken::new();

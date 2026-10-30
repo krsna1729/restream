@@ -35,7 +35,7 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
         ],
     ),
     ("tooling", &["crates/xtask/*.rs"]),
-    ("benchmark", &["benches/*.rs"]),
+    ("benchmark", &["benches/*.rs", "crates/*/benches/*.rs"]),
     ("integration-test", &["tests/*.rs"]),
     (
         "dedicated-test",
@@ -65,10 +65,10 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
 /// `path:line:text` hit, as the original `grep -v` chain did.
 const ENV_VAR_OWNERS: &[&str] = &[
     "src/config.rs",
-    "src/media/config/env.rs",
+    "crates/restream-engine/src/config/env.rs",
     "src/main.rs",
     "src/lib.rs",
-    "src/media/ffmpeg_binary.rs",
+    "crates/restream-engine/src/ffmpeg_binary.rs",
     "crates/restream-domain/src/planner/",
     "crates/test_harness",
     "src/bin/restream-mcp.rs",
@@ -91,6 +91,7 @@ const PRODUCTION_ROOTS: &[&str] = &[
     "src",
     "crates/restream-core",
     "crates/restream-domain",
+    "crates/restream-engine",
     "crates/restream-sync",
     "crates/restream-mpegts",
     "crates/restream-rtmp",
@@ -104,12 +105,12 @@ pub(crate) fn run() -> StepResult {
     let production_files = files_under(PRODUCTION_ROOTS)?;
     let media_files: Vec<_> = production_files
         .iter()
-        .filter(|path| path.starts_with("src/media") || path.starts_with("crates"))
+        .filter(|path| path.starts_with("crates"))
         .cloned()
         .collect();
 
     failed |= report(
-        "forbidden imports in src/media/ and production crates",
+        "forbidden imports in production crates",
         "Media and production modules must not import api types",
         "No forbidden imports found.",
         grep_files(&media_files, |line| line.contains("use crate::api")),
@@ -308,16 +309,23 @@ mod tests {
         for (path, class) in [
             ("build.rs", "build-script"),
             ("benches/api_health.rs", "benchmark"),
+            ("crates/restream-engine/benches/ring_buffer.rs", "benchmark"),
             ("tests/api/health.rs", "integration-test"),
             ("crates/test_harness/src/main.rs", "harness"),
             (
                 "crates/test_harness/src/test_harness/modes/fault.rs",
                 "harness",
             ),
-            ("src/media/engine_tests.rs", "dedicated-test"),
-            ("src/media/engine_tests/egress_fabric.rs", "dedicated-test"),
+            (
+                "crates/restream-engine/src/engine_tests.rs",
+                "dedicated-test",
+            ),
+            (
+                "crates/restream-engine/src/engine_tests/egress_fabric.rs",
+                "dedicated-test",
+            ),
             ("src/api/tests.rs", "dedicated-test"),
-            ("src/media/engine.rs", "production"),
+            ("crates/restream-engine/src/engine.rs", "production"),
             ("test/frontend/x.test.mjs", "frontend-test"),
             ("web/ts/core/api.ts", "frontend-production"),
             ("crates/xtask/src/main.rs", "tooling"),

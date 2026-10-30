@@ -67,12 +67,12 @@ flowchart LR
 | MoQ | QUIC or WebTransport listener; off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | moq-lite or IETF MOQT; hang/MSF catalogs, LOC/legacy/CMAF media |
 | File | FFmpeg child reads a media-library file | MPEG-TS on a pipe |
 
-Outputs are `ProtocolSpec` values (`src/media/egress/command.rs`): `Rtmp`
+Outputs are `ProtocolSpec` values (`crates/restream-engine/src/egress/command.rs`): `Rtmp`
 (with `tls` for RTMPS), `Srt`, `HlsPut`, `Moq`, `Sink` (discard, for load
 tests) and `Pipeline` (publish into another pipeline's input). Recording and
 HLS preview also read the rings; they are not fabric outputs. The MoQ origin
 serves pipelines to direct subscribers from the MoQ ingest thread
-(`media::moq::origin`). `moq-net` drives moq-lite and IETF MOQT sessions on
+(`restream_engine::moq::origin`). `moq-net` drives moq-lite and IETF MOQT sessions on
 the existing `!Send` owner. `moq-mux` supplies dual hang/MSF catalogs and
 write-through grouping; published LOC frames share one allocation across
 subscribers and broadcast cache byte budgets follow recent group sizes.
@@ -103,11 +103,11 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines ten packages: the `restream` application, seven
-library crates under `crates/restream-*`, and the `test_harness` and `xtask`
-command packages. They share one `Cargo.lock`; all are default workspace
-members. These are source and compilation boundaries, not separate services
-or additional thread families.
+The root `Cargo.toml` defines eleven packages: the `restream` application,
+eight library crates under `crates/restream-*`, and the `test_harness` and
+`xtask` command packages. They share one `Cargo.lock`; all are default
+workspace members. These are source and compilation boundaries, not separate
+services or additional thread families.
 
 Arrows below are direct workspace dependencies from the manifests. External
 dependencies and runtime interactions are not edges in this graph.
@@ -115,8 +115,10 @@ dependencies and runtime interactions are not edges in this graph.
 ```mermaid
 flowchart TD
     Harness["test_harness"] --> App["restream: src/"]
+    Harness --> Engine
     Harness --> Domain
     Harness --> Sync
+    App --> Engine["restream-engine"]
     App --> Core["restream-core"]
     App --> Domain["restream-domain"]
     App --> Sync["restream-sync"]
@@ -124,6 +126,13 @@ flowchart TD
     App --> Rtmp["restream-rtmp"]
     App --> Srt["restream-srt"]
     App --> Moq["restream-moq"]
+    Engine --> Core
+    Engine --> Domain
+    Engine --> Sync
+    Engine --> Ts
+    Engine --> Rtmp
+    Engine --> Srt
+    Engine --> Moq
     Domain --> Core
     Sync --> Core
     Ts --> Core
@@ -134,11 +143,12 @@ flowchart TD
     Xtask["xtask: no workspace dependencies"]
 ```
 
-The harness imports the root library plus the domain vocabulary and the
-poison-tolerant lock helpers; it does not directly depend on the core package. `xtask` invokes repository commands and tools rather than
-linking the application. The root application still depends on all seven
-libraries, so checking a leaf package does not validate its downstream
-integration.
+The harness imports the root library and the engine plus the domain
+vocabulary and the poison-tolerant lock helpers; it does not directly depend
+on the core package. `xtask` invokes repository commands and tools rather than
+linking the application. The root application depends on the engine and on
+the seven libraries below it, so checking a leaf package does not validate its
+downstream integration.
 
 ### Package boundaries and runtime seams
 
@@ -155,28 +165,34 @@ integration.
   dedicated runtime.
 - **Protocol utilities:** `restream-mpegts` owns container mux/demux.
   `restream-rtmp` owns RTMP session/encoding state, FLV handling and payload
-  caches; listener admission and the Compio socket drivers stay in the root.
+  caches; listener admission and the Compio socket drivers stay in the engine.
   `restream-srt` owns call/connect specifications, address-family helpers,
   send outcomes and statistics; it depends on the Compio-enabled `srt-transport`.
-  The root owns the SRT listeners, admission and egress Owner lifecycle.
+  The engine owns the SRT listeners, admission and egress Owner lifecycle.
 - **MoQ helpers:** `restream-moq` owns catalog/media conversion, budgets,
   tokens, URLs and TLS/QUIC configuration builders. It has Compio/QUIC,
   `moq-net`, `hang`, Reqwest and `tokio-rustls` dependencies; it is not a
   dependency-free wire codec. The actual endpoints, transport/session drivers,
-  ingest, origin and egress lifecycle remain in `src/media/moq/`. A
+  ingest, origin and egress lifecycle remain in `crates/restream-engine/src/moq/`. A
   `tokio-rustls` dependency used for rustls configuration does not move QUIC
   sockets onto Tokio.
+- **Media engine:** `restream-engine` (`crates/restream-engine/src/`, library
+  `restream_engine`) owns `MediaEngine`, pipeline admission, stages, input
+  selection, shard lifecycle, thread-affine transport integration, the
+  engine's `EngineConfig`, and the checked-in test fixtures. It depends on
+  every library above and on no HTTP or persistence crate (`axum` is a
+  test-only dependency; no `sqlx`). Its `test-support` feature builds the
+  media test helpers for dependents' tests, `ts` the TypeScript export
+  derives, and `egress-test-driver` / `srt-shard-bench` the benchmark seams.
 - **Application integration:** `src/api/` owns HTTP/authentication and SSE.
   `src/application/` owns orchestration and `reconcile.rs`; `src/db/` owns SQL.
   `src/infrastructure/` owns bootstrap, service wiring and adapters.
-  `src/media/` retains pipeline admission, stages, input selection, shard
-  lifecycle and thread-affine transport integration.
 
 Application callers, benchmarks and fuzz targets import shared types and
 protocol helpers directly from their owning crates. There are no forwarding
-`media::packet`, `media::ring_buffer`, `media::byte_queue` or `media::mpegts`
-modules. `src/media/codec/` retains application TS conversion and caption
-adapters; the RTMP, SRT and MoQ application modules retain endpoint admission,
+`restream_engine::packet`, `ring_buffer`, `byte_queue` or `mpegts`
+modules. `crates/restream-engine/src/codec/` retains application TS conversion and caption
+adapters; the RTMP, SRT and MoQ engine modules retain endpoint admission,
 transport ownership and lifecycle integration.
 Implementation tests live with their owning crates; application and live
 consumer tests remain in the root. [Testing](testing.md#rust-test-suite)
@@ -236,7 +252,7 @@ flowchart TD
 | Egress fabric | `egress-shard-<n>` | grows with load, at most `clamp(C, 2, 8)` per fabric | `RESTREAM_EGRESS_SHARDS` (ceiling) | one fabric per feed and protocol (per HLS store for HLS PUT); RTMP/RTMPS, SRT, HLS PUT and MoQ shards each run a Compio runtime |
 | OS threads | `restream-ffin`, `restream-ffout`, recording writer, resolvers | per stage or per fabric | — | blocking FFmpeg pipes, disk writes, DNS |
 
-`C` is the host's CPU count from `HostCapacity` (`src/media/host_capacity.rs`): the
+`C` is the host's CPU count from `HostCapacity` (`crates/restream-engine/src/host_capacity.rs`): the
 affinity mask and root cgroup `cpu.max` quota, read once at boot.
 `/metrics/system` reports it as `hostCapacity`. The full list of runtime
 variables is in [Configuration](configuration.md).
@@ -259,7 +275,7 @@ Ownership rules:
   is no fallback to Tokio or epoll.
 - **HLS PUT** runs on egress-fabric shards by default.
   `RESTREAM_HLS_PUT_FABRIC=0` uploads from Tokio with Reqwest instead. Both
-  use one upload policy (`media/hls/upload_policy.rs`).
+  use one upload policy (`crates/restream-engine/src/hls/upload_policy.rs`).
 - **No pinning.** Restream does not pin thread families to CPUs. CPU and
   NUMA placement is a deployment choice.
 
@@ -331,7 +347,7 @@ Ring rules:
   destination's packets.
 - A lagging reader that overflows resumes at a keyframe.
 - Capacity and overflow are owned by `crates/restream-sync/src/ring_buffer.rs`
-  and `src/media/config.rs`.
+  and `crates/restream-engine/src/config.rs`.
 
 SRT outputs share one MPEG-TS packaging per feed: the shared TS mux writes
 `TsChunkRing`, and each SRT leaf keeps only its cursor and socket state.
@@ -376,7 +392,7 @@ demuxes stdout (`TsDemuxer`) into the stage ring.
 
 Each consumer (egress, HLS preview, SRT player) holds a `StageLease` on every
 stage it reads. The last lease to drop stops the stage
-(`src/media/stage_lease.rs`). Stage identity is owned by
+(`crates/restream-engine/src/stage_lease.rs`). Stage identity is owned by
 `crates/restream-domain/src/domain/stage.rs`; do not rebuild its keys in another layer.
 
 ## Lifecycle and recovery
@@ -514,7 +530,7 @@ flowchart TD
     Api --> Media
     Infra --> App
     Infra --> Db["db"]
-    App --> Media["media"]
+    App --> Media["media: restream-engine"]
     App --> Db
     Media --> Planner["planner"]
     Media --> Runtime["runtime"]
@@ -530,7 +546,7 @@ flowchart TD
 | `domain` | IDs, validation, typed configuration, shared vocabulary | SQL, HTTP shapes, sockets, runtime registries |
 | `application` | Workflows across persistence and runtime; ports (`application::ports`) | HTTP transport, packet processing |
 | `db` | Schema-aware queries and row mapping | Runtime policy, orchestration |
-| `media` | Protocols, packet transforms, hot-path storage, media lifecycle | API JSON, persistence |
+| `media` (`restream-engine`) | Protocols, packet transforms, hot-path storage, media lifecycle | API JSON, persistence |
 | `api` | Authentication, request validation, HTTP and SSE responses | Persistence policy, media internals |
 | `infrastructure` | SQLite adapters, service wiring, bootstrap tasks | Domain policy |
 | `agent_core` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
@@ -549,15 +565,16 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
   axum, sqlx, Tokio or the environment.
 - `runtime/graph.rs`, `runtime/output.rs` and `runtime/stage.rs` do not import
   `media`, `application`, `api`, sqlx, axum or `serde_json`.
-- `media` does not import `api`. `db` does not import `application`.
-  `application` does not use axum.
+- `media` is the `restream-engine` crate: it depends on no root module, so
+  it cannot import `api`, `application`, `db` or `config` (Cargo enforces it).
+  `db` does not import `application`. `application` does not use axum.
 - `agent_core` does not import `agent_plane`, `application`, `media`,
   Reqwest, axum or sqlx.
 - API handlers stay thin. Agent orchestration lives in
   `application::services::agent_service`. API modules do not start FFmpeg or
   transcoder stages.
 - Only approved owners read environment variables (mainly `src/config.rs` and
-  `src/media/config/env.rs`).
+  `crates/restream-engine/src/config/env.rs`).
 - Split files by ownership, not by size. A file near the 999-line limit is a
   sign to find the owner, not to cut it in half.
 - Measure rebuild, reuse or isolation value before proposing a new crate.
@@ -588,20 +605,20 @@ describes where their callers execute.
 | `src/db/` | SQLite schema and repositories |
 | `crates/restream-domain/src/planner/` | Pure stage-graph planning |
 | `crates/restream-domain/src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
-| `src/media/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
+| `crates/restream-engine/src/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
 | `crates/restream-core/src/` | Shared packet/metadata descriptors and canonical codec parsing/conversion |
-| `crates/restream-sync/src/`, `src/media/ts_chunk_ring.rs` | Bounded packet and byte transport |
+| `crates/restream-sync/src/`, `crates/restream-engine/src/ts_chunk_ring.rs` | Bounded packet and byte transport |
 | `crates/restream-mpegts/src/` | MPEG-TS mux/demux, tables, audio framing and probing |
 | `crates/restream-rtmp/src/` | RTMP session/encoding state, FLV helpers, payload caches and URL parsing |
 | `crates/restream-srt/src/` | SRT call/connect specifications, address-family helpers, send outcomes and statistics |
 | `crates/restream-moq/src/` | MoQ media/catalog helpers, budgets, tokens, URLs and TLS/QUIC configuration builders |
-| `src/media/rtmp.rs`, `src/media/rtmp/`, `src/media/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
-| `src/media/hls_ingest/`, `src/media/hls_pull/`, `src/media/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
-| `src/media/moq/` | MoQ endpoints, Compio transport/session drivers, ingest, origin and egress lifecycle |
-| `src/media/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |
-| `src/media/hls/`, `src/media/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
-| `src/media/external_transcoder/`, `src/media/ffmpeg/`, `src/media/audio_router.rs` | FFmpeg child stages, native audio track selection |
-| `src/media/executor.rs` | MEDIA executor |
+| `crates/restream-engine/src/rtmp.rs`, `crates/restream-engine/src/rtmp/`, `crates/restream-engine/src/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
+| `crates/restream-engine/src/hls_ingest/`, `crates/restream-engine/src/hls_pull/`, `crates/restream-engine/src/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
+| `crates/restream-engine/src/moq/` | MoQ endpoints, Compio transport/session drivers, ingest, origin and egress lifecycle |
+| `crates/restream-engine/src/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |
+| `crates/restream-engine/src/hls/`, `crates/restream-engine/src/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
+| `crates/restream-engine/src/external_transcoder/`, `crates/restream-engine/src/ffmpeg/`, `crates/restream-engine/src/audio_router.rs` | FFmpeg child stages, native audio track selection |
+| `crates/restream-engine/src/executor.rs` | MEDIA executor |
 | `src/agent_plane/`, `src/agent_execution.rs`, `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
 | `web/ts/` | Dashboard and control room source; `public/` is generated |
 | `crates/test_harness/src/` | Integration scenarios, peers and live qualification |

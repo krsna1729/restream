@@ -331,7 +331,7 @@ async fn persisting_writes_each_pipelines_newest_sample_and_prunes_past_retentio
 fn stream_check_findings_ride_on_the_ingest_and_older_rows_still_read() {
     let recorder = FlightRecorder::started_at(0, 10);
     let mut checked = ingest("in", 1_000);
-    checked.qa = Some(crate::media::stream_qa::StreamQa {
+    checked.qa = Some(restream_engine::stream_qa::StreamQa {
         picture_checked_ms: Some(900),
         black_since_ms: Some(400),
         ..Default::default()
@@ -389,7 +389,7 @@ fn an_ffmpeg_stage_reads_as_its_lag_and_the_share_of_time_its_input_was_blocked(
 #[test]
 fn the_inspection_rides_on_the_ingest_sample() {
     let recorder = FlightRecorder::started_at(0, 10);
-    let inspection = crate::media::stream_inspector::StreamInspection {
+    let inspection = restream_engine::stream_inspector::StreamInspection {
         window_sec: 60.0,
         ..Default::default()
     };

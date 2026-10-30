@@ -149,7 +149,7 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
     engine
         .update_publisher_quality(
             "pipe",
-            crate::media::snapshots::PublisherQuality {
+            restream_engine::snapshots::PublisherQuality {
                 ms_rtt: Some(42.0),
                 ..Default::default()
             },

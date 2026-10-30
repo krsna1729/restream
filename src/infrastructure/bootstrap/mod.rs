@@ -45,7 +45,7 @@ use tracing::{info, warn};
 
 use crate::config::AppConfig;
 use crate::db;
-use crate::media::engine::MediaEngine;
+use restream_engine::engine::MediaEngine;
 
 pub async fn run_app(config: Arc<AppConfig>) {
     layout::set_rlimit(config.tuning.nofile_limit);
@@ -76,8 +76,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
         "effective startup configuration",
     );
     crate::host_tuning::warn_unmet();
-    crate::media::ffmpeg_binary::ffmpeg_bin_path();
-    tokio::spawn(crate::media::ffmpeg_capabilities::check_at_startup());
+    restream_engine::ffmpeg_binary::ffmpeg_bin_path();
+    tokio::spawn(restream_engine::ffmpeg_capabilities::check_at_startup());
     match crate::malloc_tuning::applied() {
         Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
         | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(
@@ -97,7 +97,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     for warning in config
         .engine
         .egress_fabric
-        .validate(crate::media::host_capacity::HostCapacity::get().cpus)
+        .validate(restream_engine::host_capacity::HostCapacity::get().cpus)
     {
         warn!(
             event_class = "lifecycle",
@@ -113,7 +113,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
     let sec_config =
         crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
-    let security = Arc::new(crate::media::security::IngestSecurityService::new(
+    let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
     let pipeline_store =
@@ -138,7 +138,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     err = %error,
                     "pipeline catalog error initializing SRT ingest policy store"
                 );
-                crate::media::srt::SrtIngestPolicyStore::new(
+                restream_engine::srt::SrtIngestPolicyStore::new(
                     crate::application::srt_ingest::load_global_srt_ingest_config(
                         &meta_store,
                         config.srt_passphrase.clone(),
@@ -217,11 +217,11 @@ pub async fn run_app(config: Arc<AppConfig>) {
     // Created before the reconciler because the reconciler converges HLS
     // pull inputs through it; the router gets the same registry from the
     // runtime launch below.
-    let hls_ingest = crate::media::hls_ingest::HlsIngest::new(
+    let hls_ingest = restream_engine::hls_ingest::HlsIngest::new(
         engine.clone(),
         ingest_authenticator.clone(),
         security.clone(),
-        crate::media::hls_ingest::HlsIngestLimits::default(),
+        restream_engine::hls_ingest::HlsIngestLimits::default(),
     );
 
     let reconciler = reconcile::Reconciler::new(

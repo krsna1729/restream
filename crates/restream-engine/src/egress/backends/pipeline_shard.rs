@@ -1,0 +1,283 @@
+//! Pipeline recirculation fabric shard backend: wires [`PipelineEngine`]
+//! into [`EgressShardBackend`], so recirculation runs on shard OS threads
+//! rather than the per-output `tokio::spawn` task of
+//! `crate::recirculation::start_pipeline_recirculation`.
+//! Structurally this mirrors `SinkShardBackend` closely
+//! (same no-socket, `FeedWake`-is-the-only-readiness-signal shape — see
+//! that module's doc comment) with one addition: a pipeline leaf needs its
+//! claimed target ring and `IngestRegistration` *before* it can be added,
+//! and claiming a target input is an async, fallible `MediaEngine` call —
+//! not something a shard-thread `on_command` handler may do. The
+//! application layer resolves it and hands it off through
+//! [`PipelineTargetSource`], the same seam RTMP's publish-startup
+//! snapshot uses for the identical reason.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use crate::egress::backend::{CloseReason, ProtocolEngine, Readiness};
+use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
+use crate::egress::journal::RingFeed;
+use crate::egress::leaf::LeafCommon;
+use crate::egress::leaf_arena::{LeafArena, LeafKey};
+use crate::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
+use crate::egress::scheduler::{ReadyQueue, VisitDecision};
+use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::egress::visit::{EngineVisit, EngineVisitResult};
+
+use super::pipeline::{PipelineEngine, PipelineTarget, PipelineTransport};
+
+/// Ready leaves drained per `on_media_tick` — see `SinkShardBackend`'s
+/// identical constant for why this can be generous (no I/O per visit).
+const MEDIA_TICK_VISIT_BUDGET: usize = 256;
+
+pub(crate) trait PipelineTargetSource {
+    fn take_target(&mut self, output_id: &OutputId) -> Option<PipelineTarget>;
+}
+
+/// Never supplies a target — every `Add` is rejected. Used by backend tests
+/// that bypass the application-layer target source.
+#[derive(Debug, Default)]
+pub(crate) struct EmptyPipelineTargetSource;
+
+impl PipelineTargetSource for EmptyPipelineTargetSource {
+    fn take_target(&mut self, _output_id: &OutputId) -> Option<PipelineTarget> {
+        None
+    }
+}
+
+/// Real source backed by a shared map: the application layer claims the
+/// target input (async, fallible — see
+/// `EgressTask::run_pipeline_fabric`), then calls [`Self::set`] before
+/// dispatching `EgressCommand::Add` for that output. One instance is
+/// shared (cloned) across every shard of a fabric runtime.
+#[derive(Clone, Default)]
+pub(crate) struct SharedPipelineTargetSource {
+    pending: Arc<Mutex<HashMap<OutputId, PipelineTarget>>>,
+}
+
+impl SharedPipelineTargetSource {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn set(&self, output_id: OutputId, target: PipelineTarget) {
+        restream_sync::lock::lock(&self.pending).insert(output_id, target);
+    }
+
+    /// Drop a claimed target once its output is genuinely removed (not
+    /// just moved between shards by `EgressFabricRuntime::rescale`, which
+    /// relies on `take_target` staying non-destructive) -- mirrors
+    /// `SharedRtmpPublishStartupSource::remove`, called from
+    /// `dispatch_pipeline_fabric_command` on `EgressCommand::Remove`.
+    pub(crate) fn remove(&self, output_id: &OutputId) {
+        restream_sync::lock::lock(&self.pending).remove(output_id);
+    }
+}
+
+impl PipelineTargetSource for SharedPipelineTargetSource {
+    // Non-destructive (peek + clone), matching
+    // `SharedRtmpPublishStartupSource::take_startup`: `EgressFabricRuntime::rescale`
+    // can move a just-added output to a different shard (Remove on the old
+    // shard, fresh Add on the new one) before it ever publishes, and a
+    // destructive take here would leave that second `Add` with nothing to
+    // claim -- the leaf would be silently rejected
+    // (`"pipeline fabric leaf rejected: no target available"`). The
+    // application layer, not the shard thread, owns releasing the claimed
+    // target input (see `PipelineEngine::close`'s doc comment), so leaving
+    // the entry in place until the output is genuinely removed is safe.
+    fn take_target(&mut self, output_id: &OutputId) -> Option<PipelineTarget> {
+        restream_sync::lock::lock(&self.pending)
+            .get(output_id)
+            .cloned()
+    }
+}
+
+struct PipelineFabricLeaf {
+    common: LeafCommon,
+    engine: PipelineEngine<RingFeed>,
+    transport: PipelineTransport,
+}
+
+impl PipelineFabricLeaf {
+    fn visit_ready(
+        &mut self,
+        generation: u64,
+        feed: &RingFeed,
+        budget: WorkBudget,
+    ) -> EngineVisitResult {
+        EngineVisit {
+            generation,
+            common: &mut self.common,
+            engine: &mut self.engine,
+            transport: &mut self.transport,
+            readiness: Readiness::WRITABLE,
+            feed,
+            budget,
+        }
+        .run()
+    }
+}
+
+pub(crate) struct PipelineShardBackend<S = EmptyPipelineTargetSource>
+where
+    S: PipelineTargetSource,
+{
+    feed: RingFeed,
+    budget_config: WorkBudgetConfig,
+    target_source: S,
+    leaves: LeafArena<PipelineFabricLeaf>,
+    output_leaves: HashMap<OutputId, LeafKey>,
+    ready: ReadyQueue,
+}
+
+impl<S> PipelineShardBackend<S>
+where
+    S: PipelineTargetSource,
+{
+    pub(crate) fn new(feed: RingFeed, budget: WorkBudgetConfig, target_source: S) -> Self {
+        Self {
+            feed,
+            budget_config: budget,
+            target_source,
+            leaves: LeafArena::with_capacity(0),
+            output_leaves: HashMap::new(),
+            ready: ReadyQueue::new(),
+        }
+        .with_leaf_capacity(crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = LeafArena::with_capacity(capacity);
+        self.ready = ReadyQueue::with_capacity(capacity);
+        self
+    }
+
+    fn add_leaf(&mut self, spec: OutputSpec) {
+        let output_id = spec.id.clone();
+        if !self.output_leaves.contains_key(&output_id) && self.leaves.is_full() {
+            tracing::warn!(
+                output_id = %output_id,
+                "pipeline fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
+        let Some(target) = self.target_source.take_target(&output_id) else {
+            tracing::warn!(output_id = %output_id, "pipeline fabric leaf rejected: no target available");
+            return;
+        };
+        if let Some(previous) = self.output_leaves.remove(&output_id) {
+            self.remove_leaf_key(previous);
+        }
+        let progress = spec.progress.clone();
+        let common = LeafCommon::new(
+            spec.id,
+            spec.generation,
+            spec.feed,
+            LeafLimits::from_policy(&spec.policy),
+        )
+        .with_progress_sink(spec.progress);
+        let Some(key) = self.leaves.insert_with(|_| PipelineFabricLeaf {
+            common,
+            engine: PipelineEngine::default(),
+            transport: PipelineTransport::new(target),
+        }) else {
+            progress.mark_terminated_unexpectedly();
+            return;
+        };
+        self.output_leaves.insert(output_id, key);
+        self.enqueue(key);
+    }
+
+    fn enqueue(&mut self, key: LeafKey) {
+        if self.leaves.get(key).is_some() {
+            self.ready.push(key);
+        }
+    }
+
+    fn remove_leaf_by_output(&mut self, output_id: &OutputId) {
+        if let Some(key) = self.output_leaves.remove(output_id) {
+            self.remove_leaf_key(key);
+        }
+    }
+
+    fn remove_leaf_key(&mut self, key: LeafKey) {
+        self.ready.remove(key);
+        if let Some(mut leaf) = self.leaves.remove(key) {
+            leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
+        }
+    }
+
+    /// The only readiness signal this backend has — see the module doc.
+    fn enqueue_all_leaves(&mut self) {
+        let ready = &mut self.ready;
+        for (key, _) in self.leaves.iter() {
+            ready.push(key);
+        }
+    }
+
+    fn drain_ready_leaves(&mut self) {
+        for _ in 0..MEDIA_TICK_VISIT_BUDGET {
+            let Some(key) = self.ready.pop() else {
+                return;
+            };
+            let Some(leaf) = self.leaves.get_mut(key) else {
+                continue;
+            };
+            let generation = leaf.common.generation;
+            let budget = self.budget_config.new_visit();
+            let result = leaf.visit_ready(generation, &self.feed, budget);
+            let decision = match result {
+                EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
+                EngineVisitResult::Visited(outcome) => outcome.decision,
+            };
+            match decision {
+                VisitDecision::Continue => self.enqueue(key),
+                VisitDecision::Suspend => {}
+                VisitDecision::Close => {
+                    self.output_leaves.retain(|_, queued| *queued != key);
+                    self.remove_leaf_key(key);
+                }
+            }
+        }
+    }
+}
+
+impl<S> EgressShardBackend for PipelineShardBackend<S>
+where
+    S: PipelineTargetSource + Send + 'static,
+{
+    fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+        match command {
+            EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
+                if matches!(spec.protocol, ProtocolSpec::Pipeline { .. }) {
+                    self.add_leaf(spec);
+                }
+            }
+            EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) => {
+                self.remove_leaf_by_output(&output_id);
+            }
+            EgressCommand::FeedWake => self.enqueue_all_leaves(),
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
+        }
+        EgressShardCommandEffect::Continue
+    }
+
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
+        self.drain_ready_leaves();
+        EgressShardCommandEffect::Continue
+    }
+
+    fn on_shutdown(&mut self) {
+        self.ready.clear();
+        for mut leaf in self.leaves.drain() {
+            leaf.engine
+                .close(&mut leaf.transport, CloseReason::ShardShutdown);
+        }
+        self.output_leaves.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests;

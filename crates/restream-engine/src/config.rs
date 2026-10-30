@@ -1,0 +1,565 @@
+//! The engine's configuration: the media settings, egress fabric, SRT/RTMP
+//! listener and MoQ ingest settings, read once at startup from the
+//! environment. `AppConfig` embeds it.
+
+use std::num::NonZeroU32;
+use std::time::Duration;
+
+use crate::egress::policy::WorkBudgetConfig;
+use crate::egress::shard::EgressShardConfig;
+use crate::host_capacity::HostCapacity;
+
+pub mod env;
+mod moq;
+use env::{env_bool, env_u32, env_u64, env_usize, env_var};
+pub use moq::{MoqIngestConfig, MoqIngestSetting};
+
+const EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EgressFabricConfig {
+    pub shards: u32,
+    pub command_channel_capacity: usize,
+    pub command_batch_budget: usize,
+    pub readiness_batch_budget: usize,
+    pub timer_batch_budget: usize,
+    pub max_leaves_per_shard: usize,
+    pub idle_wait_ms: u64,
+    /// Maximum event batch size for the RTMP/RTMPS Compio TCP readiness poller.
+    /// SRT egress is driven by its Compio `Owner`.
+    pub tcp_poller_max_events: usize,
+    pub visit_max_units: usize,
+    pub visit_max_bytes: usize,
+    pub visit_max_us: u64,
+    pub max_pending_bytes: usize,
+    pub drain_timeout_ms: u64,
+    /// Upload HTTP/HTTPS HLS outputs from egress-fabric shards (the
+    /// default) or, with `RESTREAM_HLS_PUT_FABRIC=0`, from the Reqwest
+    /// uploader on Tokio. Over HTTPS the shards match Reqwest's CPU with
+    /// about a fifth of its p99 segment lag (docs/capacity-ramp.md).
+    pub hls_put_fabric: bool,
+}
+
+impl Default for EgressFabricConfig {
+    fn default() -> Self {
+        Self {
+            shards: HostCapacity::get().egress_shards_per_pool(),
+            command_channel_capacity: 1024,
+            command_batch_budget: 32,
+            readiness_batch_budget: 64,
+            timer_batch_budget: 64,
+            max_leaves_per_shard: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            idle_wait_ms: 25,
+            tcp_poller_max_events: 1024,
+            visit_max_units: 32,
+            visit_max_bytes: 256 * 1024,
+            visit_max_us: 2_000,
+            max_pending_bytes: 256 * 1024,
+            drain_timeout_ms: crate::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
+                .as_millis() as u64,
+            hls_put_fabric: true,
+        }
+    }
+}
+
+#[cfg(feature = "srt-shard-bench")]
+const SRT_BENCH_SHARDS_ENV: &str = "RESTREAM_BENCH_SRT_SHARDS";
+
+/// Benchmark-only exact SRT shard override. Invalid values are ignored here;
+/// an operator setting one owns validating it. Keeping
+/// parsing in the product config makes the feature seam explicit and leaves
+/// every default build on the production CPU-derived policy.
+fn srt_bench_shard_override() -> Option<u32> {
+    #[cfg(feature = "srt-shard-bench")]
+    let shards = env_var(SRT_BENCH_SHARDS_ENV)
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (1..=4).contains(value));
+    #[cfg(not(feature = "srt-shard-bench"))]
+    let shards = None;
+    shards
+}
+
+impl EgressFabricConfig {
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            shards: env_u32("RESTREAM_EGRESS_SHARDS", defaults.shards).clamp(1, 1024),
+            command_channel_capacity: env_usize(
+                "RESTREAM_EGRESS_COMMAND_CAPACITY",
+                defaults.command_channel_capacity,
+            )
+            .clamp(1, 65_536),
+            command_batch_budget: env_usize(
+                "RESTREAM_EGRESS_COMMAND_BATCH",
+                defaults.command_batch_budget,
+            )
+            .clamp(1, 4096),
+            readiness_batch_budget: env_usize(
+                "RESTREAM_EGRESS_READY_BATCH",
+                defaults.readiness_batch_budget,
+            )
+            .clamp(1, 4096),
+            timer_batch_budget: env_usize(
+                "RESTREAM_EGRESS_TIMER_BATCH",
+                defaults.timer_batch_budget,
+            )
+            .clamp(1, 4096),
+            max_leaves_per_shard: env_usize(
+                "RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD",
+                defaults.max_leaves_per_shard,
+            )
+            .clamp(1, 1_000_000),
+            idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
+                .clamp(1, 1_000),
+            tcp_poller_max_events: env_usize(
+                "RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS",
+                defaults.tcp_poller_max_events,
+            )
+            .clamp(1, 65_536),
+            visit_max_units: env_usize("RESTREAM_EGRESS_VISIT_MAX_UNITS", defaults.visit_max_units)
+                .clamp(1, 4096),
+            visit_max_bytes: env_usize("RESTREAM_EGRESS_VISIT_MAX_BYTES", defaults.visit_max_bytes)
+                .clamp(188, 16 * 1024 * 1024),
+            visit_max_us: env_u64("RESTREAM_EGRESS_VISIT_MAX_US", defaults.visit_max_us)
+                .clamp(1, 1_000_000),
+            max_pending_bytes: env_usize(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES",
+                defaults.max_pending_bytes,
+            )
+            .clamp(1, 16 * 1024 * 1024),
+            drain_timeout_ms: env_u64(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS",
+                defaults.drain_timeout_ms,
+            )
+            .clamp(1, 60_000),
+            hls_put_fabric: env_bool("RESTREAM_HLS_PUT_FABRIC").unwrap_or(defaults.hls_put_fabric),
+        }
+    }
+
+    /// SRT starts small, exactly like RTMP; the benchmark seam can pin a count.
+    pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
+        NonZeroU32::new(srt_bench_shard_override().unwrap_or(1))
+            .expect("egress fabric shard count is clamped nonzero")
+    }
+
+    /// Cross-field sanity checks the per-field clamps in `from_env` can't
+    /// express on their own — every value here already passed its own
+    /// clamp, but a *combination* of individually-valid values can still be
+    /// a real misconfiguration. Returns human-readable warnings; callers
+    /// log them at startup. Never fatal — a client should be able to fix
+    /// these by adjusting env vars and restarting, not have the process
+    /// refuse to start over a value it could simply warn about.
+    pub fn validate(&self, effective_cpus: usize) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        if self.max_pending_bytes < self.visit_max_bytes {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES ({}) is smaller than RESTREAM_EGRESS_VISIT_MAX_BYTES ({}) \
+                 — a single visit can hand a leaf more pending bytes than the limit allows, so backpressure/\
+                 stall detection may trigger even under normal operation",
+                self.max_pending_bytes, self.visit_max_bytes
+            ));
+        }
+
+        let effective_cpus = u32::try_from(effective_cpus.max(1)).unwrap_or(u32::MAX);
+        if self.shards > effective_cpus.saturating_mul(4) {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_SHARDS ({}) is more than 4x this host's effective CPU count ({effective_cpus}) \
+                 — more shard threads than cores usually costs CPU without buying throughput",
+                self.shards
+            ));
+        }
+
+        if self.drain_timeout_ms < 50 {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS ({}) is under 50ms — most leaves will not get a real \
+                 chance to flush queued bytes before being force-closed on shutdown or removal",
+                self.drain_timeout_ms
+            ));
+        }
+
+        if self.command_batch_budget > self.command_channel_capacity {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_COMMAND_BATCH ({}) is larger than RESTREAM_EGRESS_COMMAND_CAPACITY ({}) \
+                 — the batch budget can never be reached, a full channel drain always empties before hitting it",
+                self.command_batch_budget, self.command_channel_capacity
+            ));
+        }
+
+        warnings
+    }
+
+    pub(crate) fn shard_config(&self) -> EgressShardConfig {
+        EgressShardConfig::new(
+            self.command_channel_capacity,
+            self.command_batch_budget,
+            self.readiness_batch_budget,
+            self.timer_batch_budget,
+            Duration::from_millis(self.idle_wait_ms),
+        )
+        .expect("egress fabric shard config is clamped nonzero")
+        .with_leaf_capacity(self.max_leaves_per_shard)
+        .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
+    }
+
+    pub(crate) fn work_budget(&self) -> WorkBudgetConfig {
+        WorkBudgetConfig::new(
+            self.visit_max_units,
+            self.visit_max_bytes,
+            Duration::from_micros(self.visit_max_us),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EngineConfig {
+    pub egress_fabric: EgressFabricConfig,
+    pub rtmp_backlog: u32,
+    pub rtmp_max_connections: usize,
+    /// Number of parallel RTMP ingress Compio owner threads on the listening port.
+    /// Connection limit and parser budget are split evenly between them.
+    pub rtmp_ingress_owners: usize,
+    /// Largest inbound RTMP message a publisher may declare; longer ones are
+    /// rejected before their payload is buffered.
+    pub rtmp_max_message_bytes: usize,
+    /// Bytes all RTMP ingest parsers together may hold before messages
+    /// complete; the connection that would exceed it is rejected.
+    pub rtmp_ingest_parser_budget_bytes: usize,
+    pub rtmp_handshake_timeout_ms: u64,
+    /// Connections one client (an IPv4 address or an IPv6 /64) may hold at
+    /// once, so one client cannot take every slot of `rtmp_max_connections`.
+    pub rtmp_max_connections_per_ip: usize,
+    /// Time after the handshake within which a client must start publishing
+    /// (or playing); until then it holds a slot without having authenticated.
+    pub rtmp_preauth_timeout_ms: u64,
+    pub rtmp_preauth_buffer_bytes: usize,
+    pub rtmp_stream_buffer_bytes: usize,
+    pub rtmp_egress_chunk_size: u32,
+    pub recording_queue_capacity: usize,
+    pub hls_min_segment_ms: f64,
+    pub hls_segment_capacity_bytes: usize,
+    pub hls_max_segments: usize,
+    pub recording_threads: Option<u32>,
+    pub ts_ring_capacity: usize,
+    pub ring_headroom_secs: f64,
+    pub ring_capacity: usize,
+    pub transcoder_ring_capacity: usize,
+    pub external_ffmpeg_permits: usize,
+    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR scale:
+    /// a burst of 600-700 concurrent handshakes to one peer reliably completes
+    /// within ~3-9s but not the old 3s default, so attempts past 3s paid a full
+    /// retry/backoff cycle. 10s cleared the same burst with zero failures
+    /// (SRT egress scale investigation, git history:
+    /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
+    /// characterized"). Not scale-tested past 700 in one pipeline.
+    pub srt_connect_timeout_ms: u64,
+    pub srt_egress_muxer_max_outputs_per_shard: usize,
+    pub srt_egress_muxer_max_shards: usize,
+    /// `max_in_flight` of each SRT egress Owner's bounded caller pool: the
+    /// transport's connect admission. One value applies per (shard, address
+    /// family) Owner; the pool queues up to the same number of further
+    /// requests and refuses beyond that. Decouples handshake concurrency from
+    /// output count so a mass output-creation burst queues in the Owner's
+    /// bounded pool instead of opening every handshake at once. Per-Owner,
+    /// not engine-wide: total in-flight connects scale with shard count x
+    /// active families.
+    pub srt_egress_connect_concurrency: usize,
+    /// Datagrams in flight per SRT egress family Owner (its TX pool and lane
+    /// count): the per-shard SRT send window.
+    pub srt_egress_tx_capacity: usize,
+    /// Whether SRT egress Owners coalesce equal-length datagrams to one peer
+    /// into UDP GSO sends. On by default; off sends one `sendmsg` per datagram.
+    pub srt_egress_gso: bool,
+    /// SRT ingress Owner threads sharing the listener port (`SO_REUSEPORT`
+    /// members; bonded legs relocate to their group's Owner). 1 is one Owner
+    /// on one socket.
+    pub srt_ingress_owners: usize,
+    /// Peers one client IP may hold on the SRT listener (srt-rs
+    /// `admission.max_peers_per_ip`), so one client cannot take every slot.
+    pub srt_max_peers_per_ip: usize,
+    /// Payload bytes the windows of one ingress Owner's established peers
+    /// may reserve together (srt-rs `admission.max_window_memory_bytes`;
+    /// each peer reserves `(flow + receive window) × 1,484` bytes). `None`
+    /// is no budget.
+    pub srt_ingress_window_memory_bytes: Option<u64>,
+    pub rtmps_extra_trust_roots_pem_path: Option<String>,
+    /// Operator directory that confines `moqt://…?ca=` reads
+    /// (`RESTREAM_MOQ_CA_DIR`). `None` denies custom CA reads.
+    pub moq_ca_dir: Option<String>,
+    pub moq_ingest: MoqIngestSetting,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        let cpus = HostCapacity::get().cpus;
+        let derived_permits =
+            derive_external_ffmpeg_permits(cpus, 2.min(cpus.saturating_sub(1)), 2, usize::MAX);
+
+        Self {
+            egress_fabric: EgressFabricConfig::default(),
+            rtmp_backlog: 1024,
+            rtmp_max_connections: 512,
+            rtmp_ingress_owners: 1,
+            rtmp_max_message_bytes: 8 * 1024 * 1024,
+            rtmp_ingest_parser_budget_bytes: 256 * 1024 * 1024,
+            rtmp_handshake_timeout_ms: 10_000,
+            rtmp_max_connections_per_ip: 64,
+            rtmp_preauth_timeout_ms: 10_000,
+            rtmp_preauth_buffer_bytes: 128 * 1024,
+            rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
+            rtmp_egress_chunk_size: 16 * 1024,
+            recording_queue_capacity: 512 * 1024,
+            hls_min_segment_ms: 1.0,
+            hls_segment_capacity_bytes: 8 * 1024 * 1024,
+            hls_max_segments: 20,
+            recording_threads: None,
+            ts_ring_capacity: 256,
+            ring_headroom_secs: 6.0,
+            ring_capacity: 1024,
+            transcoder_ring_capacity: 512,
+            external_ffmpeg_permits: derived_permits,
+            srt_connect_timeout_ms: 10_000,
+            srt_egress_muxer_max_outputs_per_shard: 0,
+            srt_egress_muxer_max_shards: 64,
+            srt_egress_connect_concurrency: 64,
+            srt_egress_tx_capacity: crate::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+            srt_egress_gso: true,
+            srt_ingress_owners: 1,
+            srt_max_peers_per_ip: 64,
+            srt_ingress_window_memory_bytes: None,
+            rtmps_extra_trust_roots_pem_path: None,
+            moq_ca_dir: None,
+            moq_ingest: MoqIngestSetting::Off,
+        }
+    }
+}
+
+impl EngineConfig {
+    pub fn from_env() -> Self {
+        let moq_ingest = MoqIngestSetting::from_env();
+        let egress_fabric = EgressFabricConfig::from_env();
+        let cpus = HostCapacity::get().cpus;
+        let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
+        let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
+        let rtmp_ingress_owners = env_usize("RESTREAM_RTMP_INGRESS_OWNERS", 1).clamp(1, 64);
+        let rtmp_max_message_bytes = env_usize("RESTREAM_RTMP_MAX_MESSAGE_BYTES", 8 * 1024 * 1024)
+            .clamp(64 * 1024, 0x00FF_FFFF);
+        let rtmp_ingest_parser_budget_bytes = env_usize(
+            "RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES",
+            256 * 1024 * 1024,
+        )
+        .clamp(rtmp_max_message_bytes, 16 * 1024 * 1024 * 1024);
+        let rtmp_handshake_timeout_ms =
+            env_u64("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", 10_000).clamp(100, 300_000);
+        let rtmp_max_connections_per_ip =
+            env_usize("RESTREAM_RTMP_MAX_CONNECTIONS_PER_IP", 64).clamp(1, rtmp_max_connections);
+        let rtmp_preauth_timeout_ms =
+            env_u64("RESTREAM_RTMP_PREAUTH_TIMEOUT_MS", 10_000).clamp(100, 300_000);
+        let rtmp_preauth_buffer_bytes = env_usize("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", 128 * 1024)
+            .clamp(16 * 1024, 1024 * 1024);
+        let rtmp_stream_buffer_bytes =
+            env_usize("RESTREAM_RTMP_STREAM_BUFFER_BYTES", 8 * 1024 * 1024)
+                .clamp(128 * 1024, 64 * 1024 * 1024);
+        let rtmp_egress_chunk_size =
+            env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 16 * 1024).clamp(128, 1024 * 1024);
+        let recording_queue_capacity = env_usize("RESTREAM_RECORDING_QUEUE_CAPACITY", 512 * 1024)
+            .clamp(64 * 1024, 16 * 1024 * 1024);
+
+        let hls_min_segment_ms = env_u64("RESTREAM_HLS_MIN_SEGMENT_MS", 1000) as f64 / 1000.0;
+        let hls_segment_capacity_bytes =
+            env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", 8 * 1024 * 1024).max(188);
+        let hls_max_segments = env_usize("RESTREAM_HLS_MAX_SEGMENTS", 20).max(1);
+
+        let recording_threads =
+            env_var("RESTREAM_RECORDING_FFMPEG_THREADS").and_then(|v| v.parse::<u32>().ok());
+        let ts_ring_capacity = env_usize("RESTREAM_TS_RING_CAPACITY", 256).clamp(32, 16384);
+        let ring_headroom_secs = env_var("RESTREAM_RING_HEADROOM_SECS")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(6.0)
+            .clamp(0.1, 60.0);
+        let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
+        let transcoder_ring_capacity =
+            env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
+        let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 10_000);
+        let srt_egress_muxer_max_outputs_per_shard =
+            env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD", 0).min(10_000);
+        let srt_egress_muxer_max_shards =
+            env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
+        let srt_egress_connect_concurrency =
+            env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
+        let srt_egress_tx_capacity = env_usize(
+            "RESTREAM_SRT_EGRESS_TX_CAPACITY",
+            crate::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+        )
+        .clamp(1, 4096);
+        let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
+        let srt_ingress_owners = env_usize("RESTREAM_SRT_INGRESS_OWNERS", 1).clamp(1, cpus.max(1));
+        let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
+        // A quarter of the memory this process may use (the container's
+        // limit when there is one), split across the ingress Owners (each
+        // checks its own); 0 turns the budget off.
+        let host = sysinfo::System::new_with_specifics(
+            sysinfo::RefreshKind::nothing()
+                .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+        );
+        let memory = effective_memory_bytes(
+            host.total_memory(),
+            host.cgroup_limits().map(|limits| limits.total_memory),
+        );
+        let srt_ingress_window_memory_bytes = Some(env_u64(
+            "RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES",
+            memory / 4 / srt_ingress_owners as u64,
+        ))
+        .filter(|&bytes| bytes > 0);
+        let rtmps_extra_trust_roots_pem_path = env_var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM");
+        let moq_ca_dir = env_var("RESTREAM_MOQ_CA_DIR").filter(|value| !value.is_empty());
+
+        // Calculate external_ffmpeg_permits:
+        let permits = if let Some(value) = env_var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
+            && let Some(v) = value.parse::<usize>().ok().filter(|&v| v >= 1)
+        {
+            v
+        } else {
+            let reserve = env_var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(2)
+                .min(cpus.saturating_sub(1));
+            let per_child = env_var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(2)
+                .max(1);
+            let hard_cap = env_var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            derive_external_ffmpeg_permits(cpus, reserve, per_child, hard_cap)
+        };
+
+        Self {
+            egress_fabric,
+            rtmp_backlog,
+            rtmp_max_connections,
+            rtmp_ingress_owners,
+            rtmp_max_message_bytes,
+            rtmp_ingest_parser_budget_bytes,
+            rtmp_handshake_timeout_ms,
+            rtmp_max_connections_per_ip,
+            rtmp_preauth_timeout_ms,
+            rtmp_preauth_buffer_bytes,
+            rtmp_stream_buffer_bytes,
+            rtmp_egress_chunk_size,
+            recording_queue_capacity,
+            hls_min_segment_ms,
+            hls_segment_capacity_bytes,
+            hls_max_segments,
+            recording_threads,
+            ts_ring_capacity,
+            ring_headroom_secs,
+            ring_capacity,
+            transcoder_ring_capacity,
+            external_ffmpeg_permits: permits,
+            srt_connect_timeout_ms,
+            srt_egress_muxer_max_outputs_per_shard,
+            srt_egress_muxer_max_shards,
+            srt_egress_connect_concurrency,
+            srt_egress_tx_capacity,
+            srt_egress_gso,
+            srt_ingress_owners,
+            srt_max_peers_per_ip,
+            srt_ingress_window_memory_bytes,
+            rtmps_extra_trust_roots_pem_path,
+            moq_ca_dir,
+            moq_ingest,
+        }
+    }
+}
+
+/// The media executor worker threads override (`RESTREAM_MEDIA_WORKERS`).
+pub fn media_executor_workers_env() -> Option<usize> {
+    env_optional_positive_usize("RESTREAM_MEDIA_WORKERS").map(|v| v.clamp(1, 64))
+}
+
+/// Per-poll `getrusage` in the media executor metrics
+/// (`RESTREAM_MEDIA_POLL_USAGE`); a diagnostic, off unless set truthy.
+pub fn media_poll_usage_env() -> bool {
+    env_bool("RESTREAM_MEDIA_POLL_USAGE").unwrap_or(false)
+}
+
+/// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
+/// means "leave the caller default alone".
+pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
+    env_var(name)
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value >= 1)
+}
+
+/// Startup priors only. Both transports use the same runtime service-demand
+/// controller; SRT's prior reserves more CPU per output than RTMP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressShardProfile {
+    OutputCount,
+    SrtOutputCount,
+}
+
+impl EgressShardProfile {
+    pub fn outputs_per_shard(self) -> u32 {
+        match self {
+            Self::OutputCount => 128,
+            // Delivery checked at 4.8 Mbit/s/output: one shard delivered 64,
+            // began degrading at 96 and collapsed at 128 on the reference VPS.
+            Self::SrtOutputCount => 64,
+        }
+    }
+
+    pub(crate) fn shard_override(self) -> Option<u32> {
+        match self {
+            Self::SrtOutputCount => srt_bench_shard_override(),
+            Self::OutputCount => None,
+        }
+    }
+}
+
+/// Symmetric output-count startup law, capped by available shard parallelism.
+pub(crate) fn target_egress_fabric_shards(
+    profile: EgressShardProfile,
+    output_count: usize,
+    effective_cpus: usize,
+) -> u32 {
+    let cpu_max = HostCapacity {
+        cpus: effective_cpus,
+    }
+    .egress_shards_per_pool();
+    if let Some(requested) = profile.shard_override() {
+        return requested;
+    }
+    let by_outputs = u32::try_from(output_count)
+        .unwrap_or(u32::MAX)
+        .div_ceil(profile.outputs_per_shard())
+        .max(1);
+    by_outputs.clamp(1, cpu_max)
+}
+
+/// The memory this process may use: the host's RAM, or the cgroup's
+/// (container's) limit when that is lower.
+fn effective_memory_bytes(host: u64, cgroup: Option<u64>) -> u64 {
+    cgroup.map_or(host, |limit| limit.min(host))
+}
+
+fn derive_external_ffmpeg_permits(
+    cpus: usize,
+    reserve: usize,
+    per_child: usize,
+    hard_cap: usize,
+) -> usize {
+    let cpu_budgeted = cpus
+        .saturating_sub(reserve)
+        .max(1)
+        .div_ceil(per_child.max(1))
+        .max(1);
+    cpu_budgeted
+        .max(EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR)
+        .min(hard_cap)
+        .max(1)
+}
+
+#[cfg(test)]
+mod tests;
