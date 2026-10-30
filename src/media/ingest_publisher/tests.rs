@@ -67,7 +67,7 @@ fn published_since(ring: &RingBuffer, start: usize) -> Vec<Arc<MediaPacket>> {
 }
 
 fn fixture() -> Vec<u8> {
-    let path = crate::test_fixtures::canonical_h264_ts_fixture().expect("the TS fixture");
+    let path = crate::media::test_fixtures::canonical_h264_ts_fixture().expect("the TS fixture");
     std::fs::read(path).expect("the fixture reads")
 }
 

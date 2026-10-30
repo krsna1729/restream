@@ -243,7 +243,9 @@ impl EgressShardBackend for PanicOnAdd {
         if self.panics
             && matches!(&command, EgressCommand::Add(spec) if spec.id.as_str().starts_with("boom"))
         {
-            crate::test_support::with_expected_panic_suppressed(|| panic!("scripted shard panic"));
+            crate::media::test_support::with_expected_panic_suppressed(|| {
+                panic!("scripted shard panic")
+            });
         }
         self.backend.on_command(command)
     }

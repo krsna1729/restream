@@ -183,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn canonical_fixture_reports_2_second_gop() {
         let fixture =
-            crate::test_fixtures::canonical_h264_ts_fixture().expect("fixture should exist");
+            crate::media::test_fixtures::canonical_h264_ts_fixture().expect("fixture should exist");
         let analysis = analyze_media_file(&fixture)
             .await
             .expect("analysis should succeed");
@@ -197,7 +197,8 @@ mod tests {
 
     #[tokio::test]
     async fn sparse_fixture_reports_sparse_gop() {
-        let fixture = crate::test_fixtures::sparse_gop_mp4_fixture().expect("fixture should exist");
+        let fixture =
+            crate::media::test_fixtures::sparse_gop_mp4_fixture().expect("fixture should exist");
         let analysis = analyze_media_file(&fixture)
             .await
             .expect("analysis should succeed");

@@ -118,7 +118,7 @@ fn repo_root() -> PathBuf {
     // relative to the repository even when the fixture directory is absent.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|root| root.join("src/test_fixtures/paths.rs").is_file())
+        .find(|root| root.join("src/media/test_fixtures/paths.rs").is_file())
         .expect("canonical fixture path source must be inside the repository")
         .to_path_buf()
 }

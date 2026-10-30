@@ -526,7 +526,7 @@ mod tests {
     /// colour bars and each of its 16 tracks as a loudness.
     #[test]
     fn ffmpeg_turns_the_fixture_into_pictures_and_a_loudness() {
-        let path = crate::test_fixtures::checked_in_fixture(
+        let path = crate::media::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .unwrap();
@@ -585,7 +585,7 @@ mod tests {
     /// A clip whose second track is silent: the checks name that track.
     #[test]
     fn ffmpeg_finds_the_silent_second_track() {
-        let path = crate::test_fixtures::checked_in_fixture(
+        let path = crate::media::test_fixtures::checked_in_fixture(
             "test/fixtures/stream-qa/tone-then-silent-track.mp4",
         )
         .unwrap();
@@ -632,7 +632,7 @@ mod tests {
         use std::io::Write;
 
         let (video, _, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+            crate::media::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
         let video_packets: Vec<&MediaPacket> = packets
             .iter()
             .filter(|p| p.media_type == MediaType::Video)

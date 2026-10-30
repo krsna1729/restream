@@ -114,9 +114,10 @@ mod tests {
     }
 
     fn thumbnail(name: &str) -> Vec<u8> {
-        let path =
-            crate::test_fixtures::checked_in_fixture(&format!("test/fixtures/stream-qa/{name}"))
-                .unwrap();
+        let path = crate::media::test_fixtures::checked_in_fixture(&format!(
+            "test/fixtures/stream-qa/{name}"
+        ))
+        .unwrap();
         std::fs::read(path).unwrap()
     }
 

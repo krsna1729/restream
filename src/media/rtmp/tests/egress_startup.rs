@@ -2,10 +2,10 @@
 fn startup_video_sequence_header_builds_enhanced_hevc_header() {
     let ring = Arc::new(RingBuffer::new(1024));
     ring.set_codec_hint("hevc");
-    let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+    let fixture = crate::media::test_fixtures::av_marker_transport_fixture_for_bframes(
         "h265",
         false,
-        crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        crate::media::test_fixtures::AvMarkerBframeMode::Bf0,
     )
     .expect("checked-in HEVC BF0 fixture");
     let bytes = std::fs::read(fixture).expect("read HEVC BF0 fixture");

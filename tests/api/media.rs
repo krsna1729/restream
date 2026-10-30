@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn media_analysis_reports_sparse_checked_in_fixture() {
     let (app, cookie, temp_dir, _pool) = authenticated_app_with_temp_media().await;
-    let fixture = restream::test_fixtures::sparse_gop_mp4_fixture()
+    let fixture = restream::media::test_fixtures::sparse_gop_mp4_fixture()
         .expect("checked-in sparse GOP fixture should exist");
     let target = temp_dir.join("sparse-gop-5s.mp4");
     tokio::fs::copy(&fixture, &target).await.unwrap();
@@ -34,7 +34,7 @@ async fn media_analysis_reports_sparse_checked_in_fixture() {
 #[tokio::test]
 async fn a_media_poster_is_a_png_revalidated_by_its_etag() {
     let (app, cookie, temp_dir, _pool) = authenticated_app_with_temp_media().await;
-    let fixture = restream::test_fixtures::sparse_gop_mp4_fixture()
+    let fixture = restream::media::test_fixtures::sparse_gop_mp4_fixture()
         .expect("checked-in sparse GOP fixture should exist");
     tokio::fs::copy(&fixture, temp_dir.join("clip.mp4"))
         .await

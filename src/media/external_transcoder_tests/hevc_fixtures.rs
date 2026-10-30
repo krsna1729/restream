@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() {
     let (video, audio_tracks, mut packets) =
-        crate::test_fixtures::primary_av_packets_for_codec("h265")
+        crate::media::test_fixtures::primary_av_packets_for_codec("h265")
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
@@ -98,7 +98,7 @@ async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() 
 #[tokio::test]
 async fn external_h264_stage_emits_live_packets_for_single_audio_hevc_fixture() {
     let (video, audio_tracks, mut packets) =
-        crate::test_fixtures::primary_av_packets_for_codec("h265")
+        crate::media::test_fixtures::primary_av_packets_for_codec("h265")
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
@@ -191,7 +191,7 @@ async fn external_h264_stage_emits_live_packets_for_single_audio_hevc_fixture() 
 #[tokio::test]
 async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixture() {
     let (video, audio_tracks, mut packets) =
-        crate::test_fixtures::primary_av_packets_for_codec("h265")
+        crate::media::test_fixtures::primary_av_packets_for_codec("h265")
             .expect("single-audio HEVC fixture");
     let continuation = packets
         .iter()
@@ -280,7 +280,7 @@ async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixtu
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
     let (video, audio_tracks, mut packets) =
-        crate::test_fixtures::primary_av_packets_for_codec("h265")
+        crate::media::test_fixtures::primary_av_packets_for_codec("h265")
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
@@ -376,7 +376,7 @@ async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
 
 #[test]
 fn feeder_remuxed_single_audio_hevc_fixture_decodes_as_ts_file() {
-    let (video, audio_tracks, packets) = crate::test_fixtures::primary_av_packets_for_codec("h265")
+    let (video, audio_tracks, packets) = crate::media::test_fixtures::primary_av_packets_for_codec("h265")
         .expect("single-audio HEVC fixture");
     let mut feeder = TsPacketFeeder::new(
         Some(&video),

@@ -311,11 +311,11 @@ mod tests {
         };
         // Warm: first read fills the reusable unit vector.
         engine.advance(writable(), &feed, &mut cursor, generous(), &mut send);
-        crate::test_alloc::begin();
+        crate::media::test_alloc::begin();
         for _ in 0..30 {
             engine.advance(writable(), &feed, &mut cursor, generous(), &mut send);
         }
-        let allocations = crate::test_alloc::end();
+        let allocations = crate::media::test_alloc::end();
         assert_eq!(
             allocations, 0,
             "{allocations} allocations in 30 steady-state visits"

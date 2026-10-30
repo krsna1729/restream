@@ -271,7 +271,7 @@ fn audio_for_ts_into_reuses_buffer() {
 /// composition offset, as enhanced RTMP tags made by the egress converter.
 fn enhanced_hevc_fixture_tags() -> (bytes::Bytes, Vec<u8>, Vec<u8>, Vec<u8>) {
     use restream_core::MediaType;
-    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+    let (_, _, packets) = crate::media::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
     let mut video = packets.iter().filter(|p| p.media_type == MediaType::Video);
     let keyframe = video.next().filter(|p| p.is_keyframe).unwrap();
     let header = build_hevc_enhanced_rtmp_sequence_header(&keyframe.payload).unwrap();

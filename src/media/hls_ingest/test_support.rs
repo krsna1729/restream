@@ -11,12 +11,12 @@ use crate::media::ingest_auth::{
 use crate::media::security::IngestSecurityService;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 
-pub(crate) const STREAM_KEY: &str = "hls-key";
-pub(crate) const PIPELINE_ID: &str = "pipe-hls";
-pub(crate) const INPUT_ID: &str = "input-hls";
+pub const STREAM_KEY: &str = "hls-key";
+pub const PIPELINE_ID: &str = "pipe-hls";
+pub const INPUT_ID: &str = "input-hls";
 
 /// Accepts only [`STREAM_KEY`], for HLS publish only.
-pub(crate) struct OneKey;
+pub struct OneKey;
 
 impl PipelineAccessAuthenticator for OneKey {
     fn authenticate<'a>(
@@ -42,7 +42,7 @@ impl PipelineAccessAuthenticator for OneKey {
 /// Accepts [`STREAM_KEY`] until [`RevocableKey::revoke`] is called, so a test
 /// can authorize an upload and then change the input's row before the body it
 /// was authorized for arrives.
-pub(crate) struct RevocableKey {
+pub struct RevocableKey {
     revoked: std::sync::atomic::AtomicBool,
     /// Every client address the authenticator was asked about, in order, so a
     /// test can check the key a caller passes: the security layer bans and rate
@@ -51,7 +51,7 @@ pub(crate) struct RevocableKey {
 }
 
 impl RevocableKey {
-    pub(crate) fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
             revoked: std::sync::atomic::AtomicBool::new(false),
             seen_client_ips: std::sync::Mutex::new(Vec::new()),
@@ -59,12 +59,12 @@ impl RevocableKey {
     }
 
     /// The row changed: the key no longer resolves.
-    pub(crate) fn revoke(&self) {
+    pub fn revoke(&self) {
         self.revoked
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub(crate) fn seen_client_ips(&self) -> Vec<String> {
+    pub fn seen_client_ips(&self) -> Vec<String> {
         restream_sync::lock::lock(&self.seen_client_ips).clone()
     }
 }
@@ -99,7 +99,7 @@ impl PipelineAccessAuthenticator for RevocableKey {
 /// from several inputs at once. A session is opened only for a key that still
 /// resolves to the input the caller authorized, so a test that dispatches for
 /// a second input needs a key that resolves to it.
-pub(crate) struct IndexedKeys;
+pub struct IndexedKeys;
 
 impl PipelineAccessAuthenticator for IndexedKeys {
     fn authenticate<'a>(
@@ -134,12 +134,12 @@ impl PipelineAccessAuthenticator for IndexedKeys {
     }
 }
 
-pub(crate) fn test_ingest(limits: HlsIngestLimits) -> (Arc<MediaEngine>, Arc<HlsIngest>) {
+pub fn test_ingest(limits: HlsIngestLimits) -> (Arc<MediaEngine>, Arc<HlsIngest>) {
     test_ingest_with(limits, Arc::new(OneKey))
 }
 
 /// The same ingest with the caller's own access double.
-pub(crate) fn test_ingest_with(
+pub fn test_ingest_with(
     limits: HlsIngestLimits,
     access: Arc<dyn PipelineAccessAuthenticator>,
 ) -> (Arc<MediaEngine>, Arc<HlsIngest>) {
@@ -153,7 +153,7 @@ pub(crate) fn test_ingest_with(
     (engine, ingest)
 }
 
-pub(crate) fn authenticated() -> AuthenticatedPipeline {
+pub fn authenticated() -> AuthenticatedPipeline {
     AuthenticatedPipeline {
         id: PIPELINE_ID.to_string(),
         input_id: INPUT_ID.to_string(),
@@ -167,7 +167,7 @@ pub(crate) fn authenticated() -> AuthenticatedPipeline {
 /// stay quiet (`cargo xtask test-hygiene`).
 ///
 /// The caller aborts the returned task when the test ends.
-pub(crate) fn stalled_origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+pub fn stalled_origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a stalled origin");
     let addr = listener
         .local_addr()
@@ -189,7 +189,7 @@ pub(crate) fn stalled_origin() -> (std::net::SocketAddr, tokio::task::JoinHandle
 /// The first keyframe of a canonical fixture, as Annex B: it carries the
 /// parameter sets a sample entry is built from.
 fn fixture_keyframe(codec: &str) -> Vec<u8> {
-    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec(codec)
+    let (_, _, packets) = crate::media::test_fixtures::primary_av_packets_for_codec(codec)
         .unwrap_or_else(|error| panic!("the canonical {codec} fixture demuxes: {error}"));
     packets
         .into_iter()
@@ -248,7 +248,7 @@ fn fmp4_segment(
 
 /// An fMP4 init segment and `segments` media segments of `frames` samples
 /// each, from the canonical H.264 fixture's parameter sets.
-pub(crate) fn fmp4_video_objects(segments: usize, frames: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
+pub fn fmp4_video_objects(segments: usize, frames: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
     use shiguredo_mp4::bitstream::h264::{
         H264SampleEntryConfig, LengthSize, build_avc1_box_from_annexb,
     };
@@ -269,7 +269,7 @@ pub(crate) fn fmp4_video_objects(segments: usize, frames: usize) -> (Vec<u8>, Ve
 }
 
 /// An `EXT-X-MAP` playlist listing `paths` from `first`, ended (ENDLIST).
-pub(crate) fn fmp4_playlist(first: u64, paths: &[&str], ended: bool) -> String {
+pub fn fmp4_playlist(first: u64, paths: &[&str], ended: bool) -> String {
     let mut playlist = format!(
         "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{first}\n\
          #EXT-X-MAP:URI=\"init.mp4\"\n"
@@ -285,7 +285,7 @@ pub(crate) fn fmp4_playlist(first: u64, paths: &[&str], ended: bool) -> String {
 
 /// The same media segment with its `mdat` payload removed: its `moof` walks
 /// and claims samples the object no longer carries.
-pub(crate) fn emptied_mdat(segment: &[u8]) -> Vec<u8> {
+pub fn emptied_mdat(segment: &[u8]) -> Vec<u8> {
     let mut offset = 0usize;
     while offset + 8 <= segment.len() {
         let size = u32::from_be_bytes(segment[offset..offset + 4].try_into().unwrap()) as usize;
@@ -305,7 +305,7 @@ pub(crate) fn emptied_mdat(segment: &[u8]) -> Vec<u8> {
 
 /// An fMP4 init segment of one Opus audio track: a codec this ingest
 /// refuses ("fMP4 audio codec Opus is not supported; AAC only").
-pub(crate) fn fmp4_opus_init() -> Vec<u8> {
+pub fn fmp4_opus_init() -> Vec<u8> {
     use shiguredo_mp4::TrackKind;
     use shiguredo_mp4::bitstream::opus::{ChannelCount, OpusSampleEntryConfig, build_opus_box};
     use shiguredo_mp4::boxes::SampleEntry;

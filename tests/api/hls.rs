@@ -221,7 +221,7 @@ async fn file_ingest_preview_hls_serves_playlist_and_segment() {
         .await
         .expect("create pipeline");
     std::fs::copy(
-        restream::test_fixtures::checked_in_fixture(
+        restream::media::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .expect("checked-in integration media fixture"),

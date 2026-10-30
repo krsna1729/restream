@@ -142,7 +142,7 @@ pgrep -a -x cargo
 
 - Passing test logs should stay quiet: no warnings, panic text, FFmpeg probe chatter, or stale-binary drift.
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
-- Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`. Prefer checked-in fixtures over inline media generation.
+- Resolve media through `src/media/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`. Prefer checked-in fixtures over inline media generation.
 - Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
 - `cargo xtask test-hygiene` runs in CI (Rust unit hygiene and fixtures); suppress expected noise at the test helper, not in CI.
 - Scale and capacity runs are performance measurement and stay local: `cargo xtask capacity-ramp`, serially, on an idle host.

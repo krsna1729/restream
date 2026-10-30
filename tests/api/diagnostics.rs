@@ -287,7 +287,7 @@ async fn diagnostics_supports_active_file_ingest() {
     .unwrap();
 
     std::fs::copy(
-        restream::test_fixtures::sparse_gop_mp4_fixture().unwrap(),
+        restream::media::test_fixtures::sparse_gop_mp4_fixture().unwrap(),
         media_dir.join("source.mp4"),
     )
     .unwrap();

@@ -9,9 +9,9 @@ use restream_srt::egress_engine::SrtSendResult;
 use std::time::Duration;
 
 fn allocations_in(work: impl FnOnce()) -> usize {
-    crate::test_alloc::begin();
+    crate::media::test_alloc::begin();
     work();
-    crate::test_alloc::end()
+    crate::media::test_alloc::end()
 }
 
 /// Restream's own per-batch scratch is reused: draining empty Owner event

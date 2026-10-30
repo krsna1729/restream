@@ -265,7 +265,8 @@ fn flv_avc_with_two_byte_lengths_is_rewritten_to_four() {
 
 #[test]
 fn enhanced_flv_hevc_records_its_hvcc_and_slices_coded_frames() {
-    let sets = fixture_parameter_sets(crate::test_fixtures::canonical_h265_ts_fixture().unwrap());
+    let sets =
+        fixture_parameter_sets(crate::media::test_fixtures::canonical_h265_ts_fixture().unwrap());
     let header = build_hevc_enhanced_rtmp_sequence_header(&sets).unwrap();
     let mut converter = converter(Some(VideoCodec::H265), None);
     convert(

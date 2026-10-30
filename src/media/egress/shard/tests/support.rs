@@ -153,7 +153,7 @@ impl EgressShardBackend for ScriptBackend {
             Self::Blocking(backend) => backend.on_command(command),
             Self::Probe(backend) => backend.on_command(command),
             Self::ReadyFlood(backend) => backend.on_command(command),
-            Self::Panic => crate::test_support::with_expected_panic_suppressed(|| {
+            Self::Panic => crate::media::test_support::with_expected_panic_suppressed(|| {
                 panic!("scripted shard panic")
             }),
         }

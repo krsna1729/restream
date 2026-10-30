@@ -12,8 +12,8 @@ use restream::media::ingest_publisher::{
 /// unit as `data_path/mpegts_demux_drain`, so the difference is the
 /// publisher's own cost.
 fn bench_ts_publisher(c: &mut Criterion) {
-    let fixture_path =
-        restream::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+    let fixture_path = restream::media::test_fixtures::canonical_h264_ts_fixture()
+        .unwrap_or_else(|e| panic!("{e}"));
     let fixture = std::fs::read(&fixture_path)
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture_path.display()));
     let runtime = tokio::runtime::Builder::new_current_thread()

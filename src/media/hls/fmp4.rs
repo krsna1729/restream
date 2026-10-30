@@ -474,7 +474,7 @@ mod tests {
     fn hevc_sources_package_as_hvc1_fmp4_that_ffmpeg_decodes() {
         use restream_core::codec;
         let (video, _, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+            crate::media::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
         let video_packets: Vec<&MediaPacket> = packets
             .iter()
             .filter(|packet| packet.media_type == MediaType::Video)

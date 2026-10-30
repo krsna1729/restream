@@ -1,5 +1,7 @@
 //! Loopback QUIC fixtures over real compio-quic endpoints, for the transport
-//! tests and the MoQ ingest/egress/origin tests.
+//! tests and the MoQ ingest/egress/origin tests. With the `test-support`
+//! feature they also build for dependents' tests, which nothing in this
+//! crate's own non-test build calls; hence the per-item `dead_code` allows.
 
 use std::net::SocketAddr;
 use std::sync::LazyLock;
@@ -15,10 +17,12 @@ use restream_moq::tls;
 use restream_srt::address_family::AddressFamily;
 
 /// The server name the loopback certificate is issued for.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const LOOPBACK_SERVER_NAME: &str = "localhost";
 
 /// A self-signed `localhost` certificate every loopback fixture shares:
 /// (certificate PEM, key PEM).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) static LOOPBACK_CERT: LazyLock<(Vec<u8>, Vec<u8>)> = LazyLock::new(|| {
     let certified = rcgen::generate_simple_self_signed(vec![LOOPBACK_SERVER_NAME.to_owned()])
         .expect("self-signed certificate");
@@ -29,6 +33,7 @@ pub(crate) static LOOPBACK_CERT: LazyLock<(Vec<u8>, Vec<u8>)> = LazyLock::new(||
 });
 
 /// A listener on an ephemeral loopback port offering `alpns`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn loopback_server(alpns: &[&str]) -> (Endpoint, SocketAddr) {
     let (cert, key) = &*LOOPBACK_CERT;
     let config = tls::server_config(alpns, cert, key).expect("loopback server TLS");
@@ -40,11 +45,13 @@ pub(crate) async fn loopback_server(alpns: &[&str]) -> (Endpoint, SocketAddr) {
 }
 
 /// A client TLS configuration offering `alpns` and trusting [`LOOPBACK_CERT`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn loopback_client_tls(alpns: &[&str]) -> ClientConfig {
     tls::client_config(alpns, Some(&LOOPBACK_CERT.0), false).expect("loopback client TLS")
 }
 
 /// Runs `test` on a fresh Compio runtime, failing it after 30 s.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn run<F: Future>(test: F) -> F::Output {
     compio::runtime::Runtime::new()
         .expect("compio runtime")
@@ -57,12 +64,14 @@ pub(crate) fn run<F: Future>(test: F) -> F::Output {
 
 /// A listener offering [`SERVER_ALPNS`] and a client endpoint, both on
 /// loopback. Keep it alive as long as the sessions it made.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct Loopback {
     pub(crate) server: Endpoint,
     pub(crate) client: Endpoint,
     pub(crate) addr: SocketAddr,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl Loopback {
     pub(crate) async fn new() -> Self {
         let (server, addr) = loopback_server(&SERVER_ALPNS).await;

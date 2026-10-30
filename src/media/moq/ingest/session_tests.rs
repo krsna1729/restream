@@ -433,7 +433,7 @@ fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
 /// as a protocol violation instead of unwinding the session task.
 #[test]
 fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
-    let end = crate::test_support::with_expected_panic_suppressed(|| {
+    let end = crate::media::test_support::with_expected_panic_suppressed(|| {
         crate::media::moq::transport::test_support::run(first_catalog(
             std::future::poll_fn(
                 |_| -> std::task::Poll<hang::Result<Option<hang::Catalog>>> {

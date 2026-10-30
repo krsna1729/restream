@@ -1,7 +1,7 @@
 #[test]
 fn feeder_remuxed_single_audio_hevc_fixture_transcodes_as_file_input() {
     let (video, audio_tracks, packets) =
-        crate::test_fixtures::primary_av_packets_for_codec("h265")
+        crate::media::test_fixtures::primary_av_packets_for_codec("h265")
             .expect("single-audio HEVC fixture");
     let mut feeder = TsPacketFeeder::new(
         Some(&video),
@@ -57,7 +57,7 @@ fn feeder_remuxed_single_audio_hevc_fixture_transcodes_as_file_input() {
 #[test]
 fn feeder_remuxed_h264_marker_fixture_transcodes_as_file_input() {
     let path =
-        crate::test_fixtures::av_marker_transport_fixture("h264", false).expect("marker path");
+        crate::media::test_fixtures::av_marker_transport_fixture("h264", false).expect("marker path");
     let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
     let mut demuxer = TsDemuxer::new();
     let mut packets = Vec::new();
@@ -159,10 +159,10 @@ fn feeder_remuxed_h264_marker_fixture_transcodes_as_file_input() {
 
 #[test]
 fn feeder_remuxed_h264_marker_fixture_transcodes_as_live_pipe_input() {
-    let path = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+    let path = crate::media::test_fixtures::av_marker_transport_fixture_for_bframes(
         "h264",
         false,
-        crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        crate::media::test_fixtures::AvMarkerBframeMode::Bf0,
     )
     .expect("marker path");
     let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
@@ -261,7 +261,7 @@ fn observed_rate_probe_transcodes_h264_aac_bitrate_fixture_before_pipe_closes() 
     // had parsed AAC channel/sample-rate parameters. Derive the same rate
     // Restream observes from retained packets and keep stdin open while
     // proving that the dynamic budget emits output.
-    let path = crate::test_fixtures::bench_transport_fixture("h264", "1.5M", false)
+    let path = crate::media::test_fixtures::bench_transport_fixture("h264", "1.5M", false)
         .expect("1.5 Mbps H.264/AAC fixture");
     let file_bytes = std::fs::read(&path).expect("read bitrate fixture");
     let mut demuxer = TsDemuxer::new();
@@ -385,7 +385,7 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     // before stdout appears leaves every downstream output in
     // `waitingUpstream`. Keep this pipe-open proof beside the AVC one: the
     // probe and mux settings must produce H.264 bytes while HEVC is live.
-    let path = crate::test_fixtures::canonical_ts_fixture("h265")
+    let path = crate::media::test_fixtures::canonical_ts_fixture("h265")
         .expect("single-audio HEVC fixture path");
     let file_bytes = std::fs::read(&path).expect("read HEVC fixture");
     let mut demuxer = TsDemuxer::new();

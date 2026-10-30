@@ -22,7 +22,7 @@ async fn a_panic_in_one_session_ends_only_that_session_and_releases_its_input() 
     ingest
         .clone()
         .supervise_session("pipe-a".to_string(), panicking, async {
-            crate::test_support::with_expected_panic_suppressed(|| {
+            crate::media::test_support::with_expected_panic_suppressed(|| {
                 panic!("a session bug");
             })
         })

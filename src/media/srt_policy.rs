@@ -247,7 +247,7 @@ mod tests {
         // Simulate a panic on another writer while it holds the lock; the
         // guard's Drop marks the RwLock poisoned on unwind.
         let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::test_support::with_expected_panic_suppressed(|| {
+            crate::media::test_support::with_expected_panic_suppressed(|| {
                 let _guard = store.inner.write().unwrap();
                 panic!("simulated writer panic while holding the lock");
             });

@@ -424,7 +424,8 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let (video, audio_tracks, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         let video_packets = packets
             .iter()
             .filter(|packet| packet.media_type == MediaType::Video)
@@ -593,7 +594,8 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let (video, audio_tracks, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         let keyframes = packets
             .iter()
             .filter(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)

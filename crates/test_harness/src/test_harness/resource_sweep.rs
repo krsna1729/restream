@@ -516,7 +516,7 @@ async fn start_resource_sweep_stack(
         .kill_on_drop(true);
     // The fixture certificate the HTTPS HLS sink and the MediaMTX RTMPS
     // listener present, trusted as the generic harness spawn does.
-    let (cert, _) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
+    let (cert, _) = restream::media::test_fixtures::rtmps_harness_cert_fixture()?;
     let cert = std::path::absolute(&cert).map_err(|e| e.to_string())?;
     restream_cmd.env("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM", cert);
     apply_srt_listener_env(&mut restream_cmd, &env.srt_crypto);

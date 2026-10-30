@@ -6,7 +6,7 @@ use std::path::PathBuf;
 mod mixed_manifest_loader;
 pub(crate) use mixed_manifest_loader::*;
 
-use restream::test_fixtures::AvMarkerBframeMode;
+use restream::media::test_fixtures::AvMarkerBframeMode;
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::output_spec::RtmpOutputMode;
 

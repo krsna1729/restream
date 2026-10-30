@@ -81,7 +81,7 @@ pub(crate) async fn start_restream_child_opts(
     std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(log_path).map_err(|e| e.to_string())?;
     let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let (rtmps_cert, _) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
+    let (rtmps_cert, _) = restream::media::test_fixtures::rtmps_harness_cert_fixture()?;
     let mut command = command_with_optional_cgroup(bin, &format!("restream-{}", ports.http));
     command
         .env("RESTREAM_HTTP_PORT", ports.http.to_string())

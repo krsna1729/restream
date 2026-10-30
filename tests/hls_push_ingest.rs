@@ -92,7 +92,7 @@ async fn serve() -> Server {
 }
 
 fn fixture_path() -> std::path::PathBuf {
-    restream::test_fixtures::canonical_h264_ts_fixture().unwrap()
+    restream::media::test_fixtures::canonical_h264_ts_fixture().unwrap()
 }
 
 /// Which checked-in fixture a push carries, and the Annex B NAL headers of
@@ -107,7 +107,7 @@ impl Codec {
     fn fixture(self) -> std::path::PathBuf {
         match self {
             Self::H264 => fixture_path(),
-            Self::Hevc => restream::test_fixtures::canonical_h265_ts_fixture().unwrap(),
+            Self::Hevc => restream::media::test_fixtures::canonical_h265_ts_fixture().unwrap(),
         }
     }
 

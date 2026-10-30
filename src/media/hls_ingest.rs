@@ -13,8 +13,8 @@ mod ordering;
 mod pacing;
 mod registry;
 mod session;
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

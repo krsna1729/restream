@@ -828,8 +828,8 @@ impl HlsIngest {
     /// Seed an applied init for a test, as a session that applied one leaves
     /// it. A caller that needs to hold the key state takes it with `key_state`
     /// first; this seeds through the same entry.
-    #[cfg(test)]
-    pub(crate) fn seed_applied_init_for_tests(&self, input_id: &str) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn seed_applied_init_for_tests(&self, input_id: &str) {
         let key = self.key_state(input_id);
         restream_sync::lock::lock(&key.init).set(
             0,

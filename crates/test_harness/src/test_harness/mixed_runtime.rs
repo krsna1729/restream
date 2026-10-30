@@ -21,7 +21,7 @@ pub(crate) async fn start_mixed_restream(env: &MixedEnv) -> Result<Child, String
 }
 
 pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String> {
-    let (cert, key) = restream::test_fixtures::rtmps_harness_cert_fixture()?;
+    let (cert, key) = restream::media::test_fixtures::rtmps_harness_cert_fixture()?;
     std::fs::write(
         &env.mediamtx_config,
         format!(

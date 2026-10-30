@@ -516,7 +516,7 @@ pub(crate) async fn moq_impairment(args: &[String]) -> Result<Value, String> {
     let work_dir = absolute_path(&work_dir)?;
     let report_path = work_dir.join("report.json");
 
-    let fixture = restream::test_fixtures::checked_in_fixture(FIXTURE)?;
+    let fixture = restream::media::test_fixtures::checked_in_fixture(FIXTURE)?;
     let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;
     let ports = TestPorts::from_env();

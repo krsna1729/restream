@@ -436,7 +436,7 @@ fn stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
 fn reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
     use super::super::ingress_test_support::topology_pmt;
 
-    let fixture = crate::test_fixtures::av_marker_transport_fixture("h264", true).unwrap();
+    let fixture = crate::media::test_fixtures::av_marker_transport_fixture("h264", true).unwrap();
     let fixture = std::fs::read(fixture).unwrap();
     let chunks: Vec<_> = fixture
         .chunks(CHUNK)
@@ -578,9 +578,9 @@ fn coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
                 .any(|p| p.media_type == MediaType::Video)
         );
         let fixture = if codec == "h264" {
-            crate::test_fixtures::canonical_h264_ts_fixture().unwrap()
+            crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap()
         } else {
-            crate::test_fixtures::canonical_h265_ts_fixture().unwrap()
+            crate::media::test_fixtures::canonical_h265_ts_fixture().unwrap()
         };
         let mut demux = TsDemuxer::new();
         demux.feed(&std::fs::read(fixture).unwrap());

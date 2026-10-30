@@ -386,8 +386,9 @@ impl EgressFabricRuntime {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn snapshots(&self) -> Vec<EgressShardSnapshot> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn snapshots(&self) -> Vec<EgressShardSnapshot> {
         self.group.snapshots()
     }
 

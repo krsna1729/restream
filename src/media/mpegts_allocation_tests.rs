@@ -22,11 +22,11 @@ fn continuing_a_partial_packet_reuses_its_staging_buffer() {
         feed_pair();
     }
 
-    crate::test_alloc::begin();
+    crate::media::test_alloc::begin();
     for _ in 0..8 {
         feed_pair();
     }
-    let allocations = crate::test_alloc::end();
+    let allocations = crate::media::test_alloc::end();
     assert_eq!(
         allocations, 0,
         "{allocations} allocations in 8 partial-packet feeds; the staging buffer must be reused"
@@ -36,7 +36,7 @@ fn continuing_a_partial_packet_reuses_its_staging_buffer() {
     // including the final PES emitted by flush and a pending tail on empty
     // feeds. Packet counts alone would miss reordered/corrupted payloads.
     let fixture =
-        crate::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+        crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
     let ts_data = std::fs::read(&fixture).unwrap_or_else(|e| panic!("{e}"));
     let mut whole = TsDemuxer::new();
     whole.feed(&ts_data);

@@ -6,8 +6,8 @@ use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_mpegts::{TsDemuxer, TsMuxer};
 
 fn bench_mpegts_demux_drain(c: &mut Criterion) {
-    let fixture_path =
-        restream::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+    let fixture_path = restream::media::test_fixtures::canonical_h264_ts_fixture()
+        .unwrap_or_else(|e| panic!("{e}"));
     let fixture = std::fs::read(&fixture_path)
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture_path.display()));
 
@@ -58,8 +58,8 @@ fn bench_mpegts_demux_drain(c: &mut Criterion) {
 }
 
 fn bench_mpegts_resync(c: &mut Criterion) {
-    let fixture_path =
-        restream::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+    let fixture_path = restream::media::test_fixtures::canonical_h264_ts_fixture()
+        .unwrap_or_else(|e| panic!("{e}"));
     let fixture = std::fs::read(&fixture_path)
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture_path.display()));
 
@@ -89,8 +89,8 @@ fn bench_mpegts_resync(c: &mut Criterion) {
 }
 
 fn bench_mpegts_mux(c: &mut Criterion) {
-    let fixture_path =
-        restream::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+    let fixture_path = restream::media::test_fixtures::canonical_h264_ts_fixture()
+        .unwrap_or_else(|e| panic!("{e}"));
     let fixture = std::fs::read(&fixture_path)
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture_path.display()));
 

@@ -129,7 +129,7 @@ async fn remux_recording_fixture(
         "the test host's ffmpeg must be able to remux recordings"
     );
 
-    let fixture = crate::test_fixtures::canonical_h264_ts_fixture()
+    let fixture = crate::media::test_fixtures::canonical_h264_ts_fixture()
         .expect("checked-in TS fixture should exist");
     let temp_dir =
         std::env::temp_dir().join(format!("recording-remux-test-{}", rand::random::<u64>()));
@@ -328,7 +328,7 @@ async fn assert_remux_preserves_timestamp_continuity(retain_source_ts: bool) {
     let (temp_dir, source, mp4_path, state_path) =
         remux_recording_fixture(RecordingSettings { retain_source_ts }).await;
 
-    let fixture = crate::test_fixtures::canonical_h264_ts_fixture()
+    let fixture = crate::media::test_fixtures::canonical_h264_ts_fixture()
         .expect("checked-in TS fixture should exist");
     let source_packets = demux_ts_file(&fixture);
     assert_continuous_monotonic_dts(&source_packets, "source TS");

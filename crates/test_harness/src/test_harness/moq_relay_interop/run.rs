@@ -113,7 +113,7 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
     let work_dir = absolute_path(&work_dir)?;
 
     let mediamtx = pinned_mediamtx_bin().await?;
-    let fixture = restream::test_fixtures::checked_in_fixture(FIXTURE)?;
+    let fixture = restream::media::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
     let ffmpeg = restream::media::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
     let tls = InteropTls::generate(&work_dir.join("tls")).await?;

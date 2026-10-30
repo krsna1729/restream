@@ -672,7 +672,8 @@ pub(super) async fn accept(conn: Connection) -> Result<Accepted, TransportError>
 /// The client half: SETTINGS both ways, then CONNECT `url` offering
 /// `protocols`. Restream dials native QUIC only; tests use this to play the
 /// browser.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn connect(
     conn: Connection,
     url: url::Url,

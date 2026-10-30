@@ -209,7 +209,7 @@ async fn raw_connect(
 fn malformed_connect_headers_are_rejected_without_a_panic() {
     // The overflow panics inside the contained decode; keep its expected
     // panic message out of the passing log.
-    crate::test_support::with_expected_panic_suppressed(|| {
+    crate::media::test_support::with_expected_panic_suppressed(|| {
         run(async {
             let loopback = Loopback::new().await;
             // HEADERS whose QPACK prefix integer overflows: web-transport-proto's

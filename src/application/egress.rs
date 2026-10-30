@@ -710,7 +710,7 @@ mod tests {
 
     #[tokio::test]
     async fn hevc_rtmp_selected_audio_terminal_ring_makes_progress() {
-        use crate::test_fixtures::bench_transport_fixture;
+        use crate::media::test_fixtures::bench_transport_fixture;
         use restream_core::MediaType;
         use restream_mpegts::TsDemuxer;
         use restream_sync::Reader;
