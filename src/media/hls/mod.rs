@@ -35,14 +35,14 @@ use std::sync::Arc;
 #[cfg(test)]
 use bytes::Bytes;
 
-use crate::domain::stage::StageKey;
-#[cfg(test)]
-use crate::domain::stage::StageKind;
 #[cfg(test)]
 use crate::media::engine::MediaEngine;
 #[cfg(test)]
 use restream_core::MediaType;
 use restream_core::metadata::VideoMeta;
+use restream_domain::domain::stage::StageKey;
+#[cfg(test)]
+use restream_domain::domain::stage::StageKind;
 #[cfg(test)]
 use restream_sync::RingBuffer;
 

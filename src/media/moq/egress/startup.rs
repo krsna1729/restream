@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
-use crate::domain::output_spec::VideoCodecKind;
 use crate::media::egress::command::OutputId;
 use crate::media::engine::MediaEngine;
 use crate::media::rtmp::{output_ring_video_codec_kind, resolved_output_audio_tracks};
 use restream_core::codec::build_aac_sequence_header;
 use restream_core::codec::parse_avcc_config;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::output_spec::VideoCodecKind;
 use restream_moq::media::AudioConfig;
 use restream_moq::media::TrackContainer;
 use restream_moq::media::VideoCodec;

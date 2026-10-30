@@ -542,7 +542,7 @@ The transport owns protocol state and UDP sockets.
 ### Ingest latency and encryption
 
 - Global `srtIngest.latencyMs`: default `250` ms, range `20..=8000`
-  (`src/domain/srt_ingest.rs`). A pipeline's `srtIngestPolicy.latencyMs`
+  (`crates/restream-domain/src/domain/srt_ingest.rs`). A pipeline's `srtIngestPolicy.latencyMs`
   overrides it.
 - Restream offers this as the listener's peer latency. A caller can propose
   more, so the negotiated delay can be larger.

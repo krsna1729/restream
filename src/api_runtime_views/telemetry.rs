@@ -4,10 +4,10 @@
 //! runtime layer continues to own the underlying counters and registries.
 
 use super::telemetry_projection as api_view_models;
-use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_metrics::StageMetrics;
+use restream_domain::domain::stage::StageKey;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -387,10 +387,10 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.jain == Some(1.0)));
     }
-    use crate::domain::stage::{StageKey, StageKind};
     use crate::media::pipe_metrics::PipeMetrics;
     use crate::media::stage_lifecycle::StagePhase;
     use crate::media::stage_runtime::StageRuntimeManager;
+    use restream_domain::domain::stage::{StageKey, StageKind};
     use restream_sync::RingBuffer;
     use std::sync::Arc;
 

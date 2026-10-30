@@ -111,6 +111,7 @@ Implementation ownership and test-package selection are not identical:
 | Changed implementation | Focused owner or consumer suite |
 |---|---|
 | `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream --lib media::codec::tests` for retained consumer tests |
+| `crates/restream-domain/src/` | `cargo test -p restream-domain`, `cargo test --test architecture` and `cargo test -p restream --lib application::runtime_state` for the TypeScript drift test |
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
 | `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |

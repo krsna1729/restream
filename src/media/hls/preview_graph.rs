@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lease::StageLease;
 use crate::media::stage_runtime::StageRuntimeManager;
-use crate::planner::plan_hls_preview_graph;
-use crate::runtime::graph::StageGraphPlan;
 use restream_core::metadata::VideoMeta;
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::planner::plan_hls_preview_graph;
+use restream_domain::runtime::graph::StageGraphPlan;
 use restream_sync::RingBuffer;
 
 /// Resolved HLS preview graph.

@@ -9,8 +9,8 @@ use crate::application::models::Output;
 use crate::application::runtime_state::graph::{
     GraphNode, GraphRuntime, NodeSource, pipeline_graph,
 };
-use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::stage::StageKey;
 use std::collections::HashMap;
 
 pub(crate) async fn processing_graph(
@@ -24,13 +24,15 @@ pub(crate) async fn processing_graph(
         .collect();
     let runtime = GraphRuntime::read(engine, &[pipeline_id]).await;
     let graph = pipeline_graph(pipeline_id, &pipeline_outputs, &runtime);
-    let lifecycle_snapshots: HashMap<StageKey, crate::runtime::stage::StageRuntimeSnapshot> =
-        engine
-            .pipeline_stage_runtime_snapshots(pipeline_id)
-            .await
-            .into_iter()
-            .map(|snapshot| (snapshot.key.clone(), snapshot))
-            .collect();
+    let lifecycle_snapshots: HashMap<
+        StageKey,
+        restream_domain::runtime::stage::StageRuntimeSnapshot,
+    > = engine
+        .pipeline_stage_runtime_snapshots(pipeline_id)
+        .await
+        .into_iter()
+        .map(|snapshot| (snapshot.key.clone(), snapshot))
+        .collect();
 
     // Each registry map is read into owned data and released before the
     // next is taken, never nested: a reader holding one map while waiting

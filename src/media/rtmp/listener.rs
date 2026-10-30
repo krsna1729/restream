@@ -522,13 +522,13 @@ fn bind_rtmp_listener(
 #[cfg(test)]
 mod tests {
     use super::{bind_rtmp_listener_with_backlog, owner_share, start_rtmp_server_on_with_shutdown};
-    use crate::domain::ingest_security::IngestSecurityConfig;
     use crate::media::engine::MediaEngine;
     use crate::media::ingest_auth::{
         AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessFuture,
         PipelineAccessMode,
     };
     use crate::media::security::IngestSecurityService;
+    use restream_domain::domain::ingest_security::IngestSecurityConfig;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

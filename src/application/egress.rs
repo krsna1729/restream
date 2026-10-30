@@ -2,16 +2,16 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::models::Output;
-use crate::domain::output_spec::{
-    EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
-};
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::egress::journal::{FeedEpoch, RingFeed, TsFeed};
 use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lease::StageLease;
-use crate::planner::PlannedOutput;
+use restream_domain::domain::output_spec::{
+    EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
+};
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::planner::PlannedOutput;
 use restream_sync::RingBuffer;
 use std::sync::Arc;
 
@@ -62,13 +62,13 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         output.url.as_str(),
     );
     let plan = if url_scheme.is_hls_family() {
-        crate::planner::plan_hls_output_graph(
+        restream_domain::planner::plan_hls_output_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             &planned_output,
         )
     } else {
-        crate::planner::plan_pipeline_graph(
+        restream_domain::planner::plan_pipeline_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             std::slice::from_ref(&planned_output),
@@ -278,12 +278,12 @@ pub fn recirculation_fabric_output_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::audio_routing::AudioRouting;
-    use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
-    use crate::domain::stage::StageKind;
-    use crate::domain::state::DesiredOutputState;
     use crate::media::egress::EgressFeed;
     use restream_core::metadata::VideoMeta;
+    use restream_domain::domain::audio_routing::AudioRouting;
+    use restream_domain::domain::output_spec::{OutputConfig, RtmpOutputMode};
+    use restream_domain::domain::stage::StageKind;
+    use restream_domain::domain::state::DesiredOutputState;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
         Output {

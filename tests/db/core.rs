@@ -1,8 +1,5 @@
-use restream::{
-    db::{self, JobStatusRecord},
-    domain::output_spec::OutputConfig,
-    domain::state::DesiredOutputState,
-};
+use restream::db::{self, JobStatusRecord};
+use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputState};
 
 pub(super) async fn test_pool() -> sqlx::SqlitePool {
     let pool = db::create_pool("sqlite::memory:").await.unwrap();

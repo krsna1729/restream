@@ -3,9 +3,9 @@
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
-use crate::domain::recording::RecordingSettings;
 use crate::media::engine::MediaEngine;
 use crate::media::recording::{RecordingMetadataReporter, RecordingStart};
+use restream_domain::domain::recording::RecordingSettings;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -84,7 +84,7 @@ pub async fn spawn_recording_task(
     let cancel_token_for_task = cancel_token.clone();
     let engine_for_task = engine.clone();
     let pipeline_id_for_cleanup = pipeline_id.clone();
-    let recording_plan = crate::planner::plan_recording_graph(&pipeline_id);
+    let recording_plan = restream_domain::planner::plan_recording_graph(&pipeline_id);
     let stage_key = recording_plan.terminal_stage;
     let recording_id = format!("recording_{:016x}", rand::random::<u64>());
 
@@ -158,9 +158,9 @@ pub async fn apply_recording_commands(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
-    use crate::domain::ids::RecordingId;
-    use crate::domain::stage::StageKey;
-    use crate::domain::state::RecordingPhase;
+    use restream_domain::domain::ids::RecordingId;
+    use restream_domain::domain::stage::StageKey;
+    use restream_domain::domain::state::RecordingPhase;
     use sqlx::SqlitePool;
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -314,7 +314,7 @@ mod tests {
         assert!(engine.is_recording_active("pipeline-launch").await);
         let planned_key = StageKey::new(
             "pipeline-launch",
-            crate::domain::stage::StageKind::recording(),
+            restream_domain::domain::stage::StageKind::recording(),
         );
         wait_for_recording_stage_snapshot(&engine, &planned_key).await;
         let runtime = engine

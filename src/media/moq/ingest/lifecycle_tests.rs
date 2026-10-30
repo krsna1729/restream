@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
-use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessError, PipelineAccessFuture, PipelineAccessMode,
 };
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 
 const STREAM_KEY: &str = "moq-key";
 const PIPELINE_ID: &str = "pipe-moq";

@@ -9,12 +9,12 @@ use tracing::warn;
 use super::super::HlsSegmenterStart;
 use super::rendition::{AudioRenditionState, VideoRenditionState};
 use super::store::Fmp4HlsStore;
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use restream_core::MediaType;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
 pub async fn start_hls_fmp4_segmenter(

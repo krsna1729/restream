@@ -1,7 +1,7 @@
 use super::*;
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::stage_runtime::StageRuntimeManager;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 use std::sync::Arc;
 

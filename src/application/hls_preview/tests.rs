@@ -7,12 +7,12 @@ use crate::application::hls_preview::{
     estimate_hls_master_bandwidth, master_playlist, merge_hls_codec_lists, parse_h264_level_idc,
     parse_h265_level_tenths, primary_playlist, quote_hls_attr, video_segment,
 };
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 use crate::media::stage_runtime::StageRuntimeManager;
 use bytes::Bytes;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 
 #[tokio::test]

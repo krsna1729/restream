@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+use restream_domain::domain::stage::{StageKey, StageKind};
 
 fn test_key() -> StageKey {
     StageKey::new("pipe-a", StageKind::source())

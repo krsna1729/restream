@@ -103,7 +103,7 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines nine packages: the `restream` application, six
+The root `Cargo.toml` defines ten packages: the `restream` application, seven
 library crates under `crates/restream-*`, and the `test_harness` and `xtask`
 command packages. They share one `Cargo.lock`; all are default workspace
 members. These are source and compilation boundaries, not separate services
@@ -115,12 +115,16 @@ dependencies and runtime interactions are not edges in this graph.
 ```mermaid
 flowchart TD
     Harness["test_harness"] --> App["restream: src/"]
+    Harness --> Domain
+    Harness --> Sync
     App --> Core["restream-core"]
+    App --> Domain["restream-domain"]
     App --> Sync["restream-sync"]
     App --> Ts["restream-mpegts"]
     App --> Rtmp["restream-rtmp"]
     App --> Srt["restream-srt"]
     App --> Moq["restream-moq"]
+    Domain --> Core
     Sync --> Core
     Ts --> Core
     Rtmp --> Core
@@ -130,9 +134,9 @@ flowchart TD
     Xtask["xtask: no workspace dependencies"]
 ```
 
-The harness imports the root library; it does not directly depend on the core
-or sync packages. `xtask` invokes repository commands and tools rather than
-linking the application. The root application still depends on all six
+The harness imports the root library plus the domain vocabulary and the
+poison-tolerant lock helpers; it does not directly depend on the core package. `xtask` invokes repository commands and tools rather than
+linking the application. The root application still depends on all seven
 libraries, so checking a leaf package does not validate its downstream
 integration.
 
@@ -141,6 +145,10 @@ integration.
 - **Media vocabulary:** `restream-core` owns `MediaPacket`, metadata, frame
   units, `VideoCodecKind` and canonical codec parsers/converters. Its external
   dependencies are `bytes`, `serde` and `memchr`; it has no network runtime.
+- **Domain and planning:** `restream-domain` owns the `domain` vocabulary
+  (IDs, desired state, output specs, stage identity), the `runtime` state
+  contracts and the pure `planner`. It depends on core, `serde` and `url`;
+  its `ts` feature adds the dashboard TypeScript export derives.
 - **Shared transport:** `restream-sync` owns the packet `RingBuffer`, readers,
   subscriber wakes and recording `MemoryQueue`. It depends on core types,
   ArcSwap and Tokio synchronization utilities; its package boundary is not a
@@ -346,7 +354,7 @@ Outputs with the same typed stage identity share one stage. A stage owns its
 output ring and lifecycle token. Each destination owns its own connection and
 sender state.
 
-Stage kinds are `StageKind` values (`src/domain/stage.rs`).
+Stage kinds are `StageKind` values (`crates/restream-domain/src/domain/stage.rs`).
 `planner::select_backend` picks how each one runs:
 
 | Stage | Runs as |
@@ -369,7 +377,7 @@ demuxes stdout (`TsDemuxer`) into the stage ring.
 Each consumer (egress, HLS preview, SRT player) holds a `StageLease` on every
 stage it reads. The last lease to drop stops the stage
 (`src/media/stage_lease.rs`). Stage identity is owned by
-`src/domain/stage.rs`; do not rebuild its keys in another layer.
+`crates/restream-domain/src/domain/stage.rs`; do not rebuild its keys in another layer.
 
 ## Lifecycle and recovery
 
@@ -575,10 +583,10 @@ describes where their callers execute.
 | `src/infrastructure/` | Service wiring, SQLite adapters and notification transports |
 | `src/api/` | Router, authentication, REST and SSE handlers, HLS push upload, embedded assets |
 | `src/application/` | Control-plane workflows, `reconcile.rs`, persistence ports and topology requests |
-| `src/domain/` | IDs, `state.rs`, pipeline inputs, output specs, stage identity and validation |
+| `crates/restream-domain/src/domain/` | IDs, `state.rs`, pipeline inputs, output specs, stage identity and validation |
 | `src/db/` | SQLite schema and repositories |
-| `src/planner/` | Pure stage-graph planning |
-| `src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
+| `crates/restream-domain/src/planner/` | Pure stage-graph planning |
+| `crates/restream-domain/src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
 | `src/media/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
 | `crates/restream-core/src/` | Shared packet/metadata descriptors and canonical codec parsing/conversion |
 | `crates/restream-sync/src/`, `src/media/ts_chunk_ring.rs` | Bounded packet and byte transport |

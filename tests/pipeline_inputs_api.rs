@@ -743,7 +743,7 @@ async fn changing_an_inputs_source_kind_ends_the_session_the_old_kind_held() {
 
 #[tokio::test]
 async fn push_auth_api_is_write_only_preserved_replaced_and_cleared() {
-    use restream::domain::pipeline_input::PushAuth;
+    use restream_domain::domain::pipeline_input::PushAuth;
     let (app, pool, cookie) = authenticated_app().await;
     let pipeline_id = create_pipeline(&app, &cookie).await;
     let (status, body) = post_input(&app, &cookie, &pipeline_id,

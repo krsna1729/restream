@@ -1,5 +1,4 @@
 use super::*;
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::stage_runtime::{build_ffmpeg_stage_plan, wait_for_stage_metadata};
@@ -7,6 +6,7 @@ use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
 use restream_core::MediaType;
 use restream_core::metadata::AudioMeta;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_mpegts::TsDemuxer;
 use restream_sync::{DtsEnforcer, Reader, RingBuffer};
 use tokio_util::sync::CancellationToken;

@@ -1,11 +1,11 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use crate::domain::state::EgressStatus;
 use crate::media::snapshots::{
     EgressDiagSnapshot, FileIngestDependencySnapshot, HlsDependencySnapshot, IngestDiagSnapshot,
     RingBufferDiagSnapshot, SrtListenerDiagSnapshot,
 };
+use restream_domain::domain::state::EgressStatus;
 
 use super::engine::{
     ActiveEgress, EGRESS_PROGRESS_STALE_MS, MediaEngine, hls_preview_registry_key,

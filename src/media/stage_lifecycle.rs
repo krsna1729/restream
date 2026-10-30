@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-pub use crate::domain::state::{StageBackendKind, StagePhase};
+pub use restream_domain::domain::state::{StageBackendKind, StagePhase};
 
 // A panic while holding `StageLifecycle::inner` (e.g. from an unrelated bug
 // elsewhere in the same critical section) must not permanently disable

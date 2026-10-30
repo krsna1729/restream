@@ -407,7 +407,7 @@ async fn media_library_uses_recording_metadata_for_file_rows() {
     )
     .await
     .unwrap();
-    let recording_id = restream::domain::ids::RecordingId::from("rec-meta-1");
+    let recording_id = restream_domain::domain::ids::RecordingId::from("rec-meta-1");
     db::create_recording(
         &pool,
         &recording_id,

@@ -27,8 +27,9 @@ use super::{agent_health_snapshot, pipeline_input_is_on, queries::build_agent_pl
 use crate::{
     alerts,
     application::services::agent_service::{AgentOutputMutation, AgentOutputMutationOutcome},
-    domain::{output_spec::OutputConfig, state::DesiredOutputState},
 };
+#[cfg(feature = "agent-execution")]
+use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputState};
 
 #[cfg(feature = "agent-execution")]
 pub async fn agent_operation_create_handler(
@@ -833,7 +834,7 @@ mod tests {
     #[cfg(feature = "agent-execution")]
     use super::validate_output_fields;
     #[cfg(feature = "agent-execution")]
-    use crate::domain::output_spec::{OutputConfig, OutputVideoCodec};
+    use restream_domain::domain::output_spec::{OutputConfig, OutputVideoCodec};
 
     #[cfg(feature = "agent-execution")]
     #[test]
@@ -899,10 +900,10 @@ mod tests {
             crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
             pool.clone(),
             Arc::new(crate::media::security::IngestSecurityService::new(
-                crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
+                restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
             )),
             Arc::new(crate::media::srt::SrtIngestPolicyStore::new(
-                crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+                restream_domain::domain::srt_ingest::SrtGlobalIngestConfig::default(),
                 &[],
             )),
             Default::default(),

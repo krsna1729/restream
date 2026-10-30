@@ -290,8 +290,8 @@ pub(crate) async fn output_status(
                 &egress.started_at,
             );
 
-            let explanation = crate::runtime::output::OutputRuntimeExplanation {
-                output_id: crate::domain::ids::OutputId::new(&egress.output_id),
+            let explanation = restream_domain::runtime::output::OutputRuntimeExplanation {
+                output_id: restream_domain::domain::ids::OutputId::new(&egress.output_id),
                 output_name: egress.output_name.clone(),
                 encoding: egress.encoding.clone(),
                 url: egress.target_url.clone(),

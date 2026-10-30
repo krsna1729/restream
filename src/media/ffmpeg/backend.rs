@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
+use restream_domain::domain::stage::StageKey;
 
 /// Execution context passed to every FFmpeg stage.
 #[derive(Clone)]

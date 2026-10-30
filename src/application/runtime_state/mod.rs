@@ -35,9 +35,9 @@ use serde::Serialize;
 
 use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 use crate::application::models::Output;
-use crate::domain::output_spec::EgressProtocol;
-use crate::domain::state::{DesiredOutputState, EgressPhase};
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::output_spec::EgressProtocol;
+use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
 
 pub use graph::{GraphEdge, GraphNode, PipelineGraph};
 pub use inputs::{IngestEndpoints, IngestUrls, InputState};
@@ -221,7 +221,7 @@ pub struct Rows<'a> {
     pub pipelines: &'a [crate::db::PipelineRecord],
     pub outputs: &'a [Output],
     /// In list order: by pipeline, the primary first, backups by age.
-    pub inputs: &'a [crate::domain::pipeline_input::PipelineInput],
+    pub inputs: &'a [restream_domain::domain::pipeline_input::PipelineInput],
     pub endpoints: &'a IngestEndpoints,
 }
 
@@ -328,7 +328,7 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>) -> Projection {
     let mut blocked = HashMap::new();
     for key in terminal_keys {
         if let Some(stage) = engine.egress_blocked_by_stage_snapshot(&key).await {
-            let phase = crate::runtime::stage::phase_name(&stage.phase).to_string();
+            let phase = restream_domain::runtime::stage::phase_name(&stage.phase).to_string();
             blocked.insert(key, (stage.key.to_string(), phase));
         }
     }
@@ -393,7 +393,7 @@ struct ProjectContext<'a> {
     /// Feed id -> shard index -> health.
     shards: &'a HashMap<String, HashMap<u32, ShardHealth>>,
     /// Terminal stages not producing: key -> (blocking stage, phase).
-    blocked: &'a HashMap<crate::domain::stage::StageKey, (String, String)>,
+    blocked: &'a HashMap<restream_domain::domain::stage::StageKey, (String, String)>,
     max_retries: u64,
 }
 

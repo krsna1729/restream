@@ -11,8 +11,6 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::engine_registries::StageRuntime;
 use crate::media::ffmpeg::backend::StageRunContext;
@@ -25,8 +23,10 @@ use crate::media::ffmpeg::stage_plan::{
 use crate::media::stage_lease::StageLease;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
-use crate::runtime::stage::StageRuntimeSnapshot;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::audio_routing::{AudioRouting, parse_audio_operation};
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 
 /// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
@@ -65,7 +65,7 @@ impl StageRuntimeManager {
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (StageHandle, StageLease, bool) {
-        let backend_kind = crate::planner::select_backend(&key.kind);
+        let backend_kind = restream_domain::planner::select_backend(&key.kind);
         let mut lifecycle = self
             .engine
             .get_or_create_stage_lifecycle_with_backend(
@@ -178,7 +178,7 @@ impl StageRuntimeManager {
         include_audio: bool,
     ) {
         let key = handle.key.clone();
-        let backend = crate::planner::select_backend(&key.kind);
+        let backend = restream_domain::planner::select_backend(&key.kind);
 
         if let Some(audio_op) = key.kind.audio_operation()
             && backend == StageBackendKind::AudioRouter

@@ -4,10 +4,12 @@ use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
-use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::startup_policy;
+use restream_domain::domain::audio_routing::{
+    AudioRouting, parse_audio_operation, parse_audio_routing,
+};
+use restream_domain::domain::output_spec::{StagePresetSpec, VideoCodecKind};
 
 /// A Tokio child pipe as a blocking `File`, for a dedicated I/O thread.
 pub(crate) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {

@@ -5,13 +5,13 @@ use bytes::BytesMut;
 use tokio_util::sync::CancellationToken;
 
 use super::{HlsSegmenterStart, HlsStore};
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use restream_core::MediaType;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::MEDIA_PULL_BURST_PACKETS;
 use restream_sync::{Reader, RingBuffer};
 

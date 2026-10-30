@@ -1,6 +1,6 @@
 use super::hub::{DELTA_HISTORY, Since, StateHub};
 use super::*;
-use crate::domain::output_spec::OutputConfig;
+use restream_domain::domain::output_spec::OutputConfig;
 use ts_rs::TS;
 
 const GENERATED: &str = "web/ts/core/generated/runtime-state.ts";
@@ -18,9 +18,9 @@ fn render_contract() -> String {
         inputs::VideoDescriptor::decl(&cfg),
         inputs::AudioDescriptor::decl(&cfg),
         IngestUrls::decl(&cfg),
-        crate::domain::pipeline_input::PipelineInputRole::decl(&cfg),
-        crate::domain::pipeline_input::PipelineInputSourceKind::decl(&cfg),
-        crate::domain::pipeline_input::VariantRule::decl(&cfg),
+        restream_domain::domain::pipeline_input::PipelineInputRole::decl(&cfg),
+        restream_domain::domain::pipeline_input::PipelineInputSourceKind::decl(&cfg),
+        restream_domain::domain::pipeline_input::VariantRule::decl(&cfg),
         crate::media::input_gate::InputForwardState::decl(&cfg),
         PipelineGraph::decl(&cfg),
         GraphNode::decl(&cfg),
@@ -33,7 +33,7 @@ fn render_contract() -> String {
         crate::application::diagnosis::Layer::decl(&cfg),
         crate::application::diagnosis::Cause::decl(&cfg),
         DesiredOutputState::decl(&cfg),
-        crate::domain::output_spec::EgressProtocol::decl(&cfg),
+        restream_domain::domain::output_spec::EgressProtocol::decl(&cfg),
         EgressPhase::decl(&cfg),
         crate::capacity::CapacitySnapshot::decl(&cfg),
         crate::capacity::ServiceCenter::decl(&cfg),
@@ -126,7 +126,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
                 id: id.to_string(),
                 pipeline_id: "pipe".to_string(),
                 name: id.to_string(),
-                protocol: crate::domain::output_spec::EgressProtocol::Rtmp,
+                protocol: restream_domain::domain::output_spec::EgressProtocol::Rtmp,
                 shard: None,
                 stage: None,
                 desired: DesiredOutputState::Running,
@@ -400,9 +400,9 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
         .register_recording("pipe")
         .await
         .expect("no recording runs yet");
-    let stage = crate::domain::stage::StageKey::new(
+    let stage = restream_domain::domain::stage::StageKey::new(
         "pipe",
-        crate::domain::stage::StageKind::video_preset("720p"),
+        restream_domain::domain::stage::StageKind::video_preset("720p"),
     );
     engine
         .register_egress_attempt_with_meta(

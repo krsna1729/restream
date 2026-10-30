@@ -3,7 +3,7 @@
 //! persisted profile set into the runtime cache used by the media layer.
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
-use crate::domain::transcode_profile::TranscodeProfiles;
+use restream_domain::domain::transcode_profile::TranscodeProfiles;
 use tracing::{info, warn};
 
 pub const TRANSCODE_PROFILES_META_KEY: &str = "transcode_profiles";
@@ -62,7 +62,7 @@ pub async fn save_transcode_profiles(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
-    use crate::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
+    use restream_domain::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
     use std::sync::Mutex;
 
     struct FakeMetaStore {

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::api_view_models;
 use crate::application::services::ServiceError;
 use crate::application::srt_ingest::serialize_persisted_srt_ingest_policy;
-use crate::domain::srt_ingest::SrtPipelineIngestConfig;
+use restream_domain::domain::srt_ingest::SrtPipelineIngestConfig;
 
 use super::error::ApiError;
 use super::file_ingest::{

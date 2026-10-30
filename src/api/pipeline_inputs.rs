@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::domain::pipeline_input::{
+use restream_domain::domain::pipeline_input::{
     HeaderPair, PipelineInput, PipelineInputSource, PipelineInputSourceKind, PullAuth, PushAuth,
     VariantRule,
 };

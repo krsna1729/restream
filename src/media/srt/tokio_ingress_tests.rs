@@ -5,8 +5,8 @@ use std::task::{Context, Waker};
 use super::super::ingress_media::ProbeIdentity;
 use super::super::ingress_test_support::{direct, plain, run_caller};
 use super::*;
-use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::media::snapshots::ListenerSocketStats;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
 // LogicalPeerId is deliberately opaque. Mint one through a real native
 // handshake rather than forging an ID or exposing protocol internals.

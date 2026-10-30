@@ -155,7 +155,7 @@ pub(crate) fn processing_graph_stage_node(
     node_type: impl Into<String>,
     label: impl Into<String>,
     stage_key: impl Into<String>,
-    lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+    lifecycle: Option<&restream_domain::runtime::stage::StageRuntimeSnapshot>,
     active: bool,
     metrics: Option<serde_json::Value>,
     pipe_metrics: Option<serde_json::Value>,

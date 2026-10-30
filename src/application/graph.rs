@@ -1,9 +1,9 @@
 //! Application-owned desired graph planning for API and diagnostics read models.
 
 use crate::application::models::Output;
-use crate::domain::output_spec::OutputUrlScheme;
-use crate::planner::PlannedOutput;
-use crate::runtime::graph::StageGraphPlan;
+use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::planner::PlannedOutput;
+use restream_domain::runtime::graph::StageGraphPlan;
 
 pub struct DesiredPipelineGraphs {
     pub aggregate: StageGraphPlan,
@@ -16,16 +16,20 @@ pub fn desired_pipeline_graphs(
     outputs: &[Output],
 ) -> DesiredPipelineGraphs {
     let planned_outputs = outputs.iter().map(planned_output).collect::<Vec<_>>();
-    let aggregate =
-        crate::planner::plan_pipeline_graph(pipeline_id, ingest_codec, &planned_outputs, false);
+    let aggregate = restream_domain::planner::plan_pipeline_graph(
+        pipeline_id,
+        ingest_codec,
+        &planned_outputs,
+        false,
+    );
     let outputs = outputs
         .iter()
         .map(|output| {
             let planned = planned_output(output);
             if OutputUrlScheme::from_url(&output.url).is_hls_family() {
-                crate::planner::plan_hls_output_graph(pipeline_id, ingest_codec, &planned)
+                restream_domain::planner::plan_hls_output_graph(pipeline_id, ingest_codec, &planned)
             } else {
-                crate::planner::plan_pipeline_graph(
+                restream_domain::planner::plan_pipeline_graph(
                     pipeline_id,
                     ingest_codec,
                     std::slice::from_ref(&planned),
@@ -49,9 +53,9 @@ fn planned_output(output: &Output) -> PlannedOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ids::OutputId;
-    use crate::domain::state::DesiredOutputState;
-    use crate::runtime::graph::GraphRole;
+    use restream_domain::domain::ids::OutputId;
+    use restream_domain::domain::state::DesiredOutputState;
+    use restream_domain::runtime::graph::GraphRole;
 
     fn test_output(id: &str, url: &str) -> Output {
         Output {
@@ -62,7 +66,7 @@ mod tests {
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
             retries_exhausted: false,
-            config: crate::domain::output_spec::OutputConfig::source(),
+            config: restream_domain::domain::output_spec::OutputConfig::source(),
         }
     }
 

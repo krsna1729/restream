@@ -17,12 +17,12 @@ use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::models::JobStatus;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
-use crate::domain::output_spec::OutputUrlScheme;
-use crate::domain::state::EgressPhase;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
 use crate::media::engine::MediaEngine;
 use crate::secret_display::redact_url;
+use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::domain::state::EgressPhase;
 
 use super::FailureTracker;
 
@@ -101,7 +101,7 @@ pub(super) struct EgressTask {
     pub(super) pipeline_id: String,
     pub(super) url: String,
     pub(super) ring: Arc<restream_sync::RingBuffer>,
-    pub(super) terminal_stage_key: crate::domain::stage::StageKey,
+    pub(super) terminal_stage_key: restream_domain::domain::stage::StageKey,
     pub(super) registration: crate::media::engine::EgressRegistration,
     pub(super) engine: Arc<MediaEngine>,
     pub(super) pool: SqlitePool,
@@ -239,7 +239,7 @@ impl EgressTask {
                     if let Some(fabric) = self.pipeline_fabric.as_ref().cloned() {
                         self.run_pipeline_fabric(fabric).await;
                     } else {
-                        match crate::domain::output_spec::RecirculationTarget::parse(&self.url) {
+                        match restream_domain::domain::output_spec::RecirculationTarget::parse(&self.url) {
                             Ok(target) => {
                                 crate::media::recirculation::start_pipeline_recirculation(
                                     self.output_id.clone(),

@@ -432,8 +432,9 @@ fn scan(
 ) {
     let write_idx = ring.get_write_idx();
     let capacity = ring.capacity();
-    let hevc = crate::domain::output_spec::VideoCodecKind::from_codec_name(ring.codec_hint_str())
-        == crate::domain::output_spec::VideoCodecKind::Hevc;
+    let hevc = restream_domain::domain::output_spec::VideoCodecKind::from_codec_name(
+        ring.codec_hint_str(),
+    ) == restream_domain::domain::output_spec::VideoCodecKind::Hevc;
     let readable_from = write_idx.saturating_sub(capacity - capacity / 4);
     if *next < readable_from {
         timeline.skipped((readable_from - *next) as u64);

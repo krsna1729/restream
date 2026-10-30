@@ -6,11 +6,11 @@
 use crate::application::ports::{IngestHostStore, MetaStore};
 use crate::application::recording::load_recording_settings;
 use crate::application::srt_ingest::load_global_srt_ingest_config;
-use crate::domain::ingest_security::IngestSecurityConfig;
-use crate::domain::recording::RecordingSettings;
-use crate::domain::srt_ingest::SrtGlobalIngestConfig;
-use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
+use restream_domain::domain::recording::RecordingSettings;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_domain::domain::transcode_profile::TranscodeProfiles;
 
 #[derive(Clone, Debug)]
 pub struct SettingsSnapshot {
@@ -53,9 +53,9 @@ pub async fn load_settings_snapshot(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use crate::infrastructure::sqlite_ports::SqliteMetaStore;
     use crate::media::security::IngestSecurityService;
+    use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 
     #[tokio::test]
     async fn load_settings_snapshot_combines_db_meta_and_runtime_defaults() {

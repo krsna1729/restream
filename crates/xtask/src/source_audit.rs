@@ -69,7 +69,7 @@ const ENV_VAR_OWNERS: &[&str] = &[
     "src/main.rs",
     "src/lib.rs",
     "src/ffmpeg_binary.rs",
-    "src/planner/",
+    "crates/restream-domain/src/planner/",
     "crates/test_harness",
     "src/bin/restream-mcp.rs",
     "tests/",
@@ -90,6 +90,7 @@ const API_STAGE_STARTS: &[&str] = &[
 const PRODUCTION_ROOTS: &[&str] = &[
     "src",
     "crates/restream-core",
+    "crates/restream-domain",
     "crates/restream-sync",
     "crates/restream-mpegts",
     "crates/restream-rtmp",

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::stage_runtime::StageRuntimeManager;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 
 use super::spawn_pipeline_hls_segmenter;

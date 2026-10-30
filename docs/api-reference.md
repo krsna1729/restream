@@ -568,11 +568,11 @@ Create and update body (unknown fields are `400`):
 - Explicit H.265 is `400` for legacy RTMP and HLS outputs. Enhanced RTMP,
   SRT and MoQ carry H.264 and H.265; sink and pipeline outputs follow the
   source. A preset with `codec: auto` encodes H.264 for legacy RTMP, HLS and
-  MoQ (`ProtocolCapabilities` in `src/domain/output_spec/config.rs`).
+  MoQ (`ProtocolCapabilities` in `crates/restream-domain/src/domain/output_spec/config.rs`).
 - A `pipeline://` output must use source video and passthrough audio; its
   target and cycle freedom are checked before it is saved.
 
-URL schemes (`OutputUrlScheme` in `src/domain/output_spec/protocol.rs`); any
+URL schemes (`OutputUrlScheme` in `crates/restream-domain/src/domain/output_spec/protocol.rs`); any
 other scheme is `400`:
 
 | Scheme | Egress | `protocol` label |

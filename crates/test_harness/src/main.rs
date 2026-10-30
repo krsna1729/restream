@@ -8,8 +8,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, put};
 use bytes::Bytes;
 use chrono::Utc;
-use restream::domain::audio_routing::{AudioRouting, is_audio_operation, parse_audio_operation};
-use restream::domain::output_spec::{
+use restream_domain::domain::audio_routing::{
+    AudioRouting, is_audio_operation, parse_audio_operation,
+};
+use restream_domain::domain::output_spec::{
     OutputConfig, OutputUrlScheme, OutputVideoCodec, OutputVideoConfig, RtmpOutputMode,
 };
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
@@ -153,8 +155,8 @@ fn planned_mixed_stage_count(
     case: MixedInputCase,
     duplicates_per_output: usize,
 ) -> MixedStageCount {
-    use restream::domain::stage::StageKind;
-    use restream::planner::{PlannedOutput, plan_pipeline_graph};
+    use restream_domain::domain::stage::StageKind;
+    use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 
     let outputs = mixed_output_cases_for_input(case)
         .iter()

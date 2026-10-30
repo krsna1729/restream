@@ -580,7 +580,10 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
     let ring = Arc::new(RingBuffer::new(512));
     let cancel = CancellationToken::new();
     let _cancel_cleanup = cancel.clone().drop_guard();
-    let stage_key = StageKey::new("writer-failure", crate::domain::stage::StageKind::Recording);
+    let stage_key = StageKey::new(
+        "writer-failure",
+        restream_domain::domain::stage::StageKind::Recording,
+    );
     let (lifecycle, _) = engine
         .get_or_create_non_ring_stage_runtime(
             stage_key.clone(),

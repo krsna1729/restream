@@ -2,13 +2,13 @@
 //! applies time-based bans after exceeding the threshold. Protects RTMP/SRT
 //! stream key brute-force attempts.
 
-use crate::domain::ingest_security::IngestSecurityConfig;
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 
 #[derive(Clone, Copy)]
 pub enum RateLimitScope {

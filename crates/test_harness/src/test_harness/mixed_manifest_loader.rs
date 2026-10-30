@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::{LazyLock, OnceLock};
 
-use restream::domain::stage::StageKind;
-use restream::planner::{PlannedOutput, plan_pipeline_graph};
+use restream_domain::domain::stage::StageKind;
+use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 use serde::Deserialize;
 
 use super::*;

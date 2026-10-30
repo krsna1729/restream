@@ -1,10 +1,10 @@
 use super::collect_rust_sources;
-use restream::domain::ids::OutputId;
-use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
-use restream::domain::output_spec::OutputConfig;
-use restream::domain::srt_ingest::SrtGlobalIngestConfig;
-use restream::domain::state::{DesiredOutputState, EgressPhase};
 use restream::media::security::IngestSecurityService;
+use restream_domain::domain::ids::OutputId;
+use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
 use sqlx::SqlitePool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -154,7 +154,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
 
 #[test]
 fn hls_preview_runtime_execution_stays_out_of_planner() {
-    let planner_mod = include_str!("../../src/planner/mod.rs");
+    let planner_mod = include_str!("../../crates/restream-domain/src/planner/mod.rs");
     assert!(
         !planner_mod.contains("mod hls_preview")
             && !planner_mod.contains("pub mod hls_preview")
@@ -163,7 +163,7 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
         "planner root may re-export pure HLS preview planning, but not runtime execution"
     );
 
-    let graph_plan = include_str!("../../src/planner/graph_plan.rs");
+    let graph_plan = include_str!("../../crates/restream-domain/src/planner/graph_plan.rs");
     assert!(graph_plan.contains("pub fn plan_hls_preview_graph"));
     assert!(!graph_plan.contains("StageRuntimeManager"));
     assert!(!graph_plan.contains("tokio::time"));
@@ -175,7 +175,8 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
 
 #[test]
 fn planner_stays_independent_of_edge_runtime_and_environment_layers() {
-    let planner_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/planner");
+    let planner_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/restream-domain/src/planner");
     let forbidden_dependencies = [
         "crate::application::",
         "restream::application::",
@@ -608,7 +609,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
 
 #[tokio::test]
 async fn test_phase_8_dependency_aware_output_status_resolution() {
-    use restream::runtime::output::OutputRuntimeExplanation;
+    use restream_domain::runtime::output::OutputRuntimeExplanation;
 
     let explanation = OutputRuntimeExplanation {
         output_id: OutputId::from("out-1".to_string()),

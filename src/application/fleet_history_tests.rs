@@ -125,7 +125,7 @@ fn output(
         id: String::new(),
         pipeline_id: "pipe".to_string(),
         name: String::new(),
-        protocol: crate::domain::output_spec::EgressProtocol::Rtmp,
+        protocol: restream_domain::domain::output_spec::EgressProtocol::Rtmp,
         shard: None,
         stage: None,
         desired,

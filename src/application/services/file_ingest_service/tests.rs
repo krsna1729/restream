@@ -209,15 +209,15 @@ impl PipelineInputLookup for StaticPipelineStore {
     ) -> crate::application::ingest::PipelineInputLookupFuture<'a> {
         Box::pin(async move {
             Ok((self.pipeline.stream_key == stream_key).then(|| {
-                crate::domain::pipeline_input::PipelineInput {
+                restream_domain::domain::pipeline_input::PipelineInput {
                     id: "input-primary".to_string(),
                     pipeline_id: self.pipeline.id.clone(),
                     label: "Primary".to_string(),
                     stream_key: stream_key.to_string(),
-                    role: crate::domain::pipeline_input::PipelineInputRole::Primary,
+                    role: restream_domain::domain::pipeline_input::PipelineInputRole::Primary,
                     enabled: true,
                     selected: true,
-                    ..crate::domain::pipeline_input::PipelineInput::keyed_default()
+                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
                 }
             }))
         })

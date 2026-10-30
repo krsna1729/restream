@@ -1,10 +1,9 @@
 use super::core::test_pool;
 use restream::{
     db,
-    domain::output_spec::OutputConfig,
-    domain::state::DesiredOutputState,
     logging::types::{AppLogEntry, AppLogFilters},
 };
+use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputState};
 
 fn app_log_entry(
     ts: &str,

@@ -199,7 +199,7 @@ child and the in-process audio router.
 - **AudioRouter** (`src/media/audio_router.rs`) runs on the MEDIA executor.
   It copies video and selects and reindexes audio tracks. It never decodes.
 
-The planner (`src/planner/`) picks the stages for each output and
+The planner (`crates/restream-domain/src/planner/`) picks the stages for each output and
 `application::egress::prepare_output_ring` (`src/application/egress.rs`)
 wires the ring. A `source` output with no codec or audio change reads the
 source ring directly.
@@ -207,7 +207,7 @@ source ring directly.
 ### Stage keys
 
 A stage identity is a typed `StageKey { pipeline, kind }`
-(`src/domain/stage.rs`). Its display form is the key below.
+(`crates/restream-domain/src/domain/stage.rs`). Its display form is the key below.
 
 | Stage | Key | Example |
 |---|---|---|
@@ -270,7 +270,7 @@ FFmpeg audio routes copy video.
 `codec:auto` keeps the input codec when the output protocol carries it.
 Otherwise it takes the protocol default. An explicit codec the protocol
 cannot carry is rejected before it is saved
-(`src/domain/output_spec/config.rs`).
+(`crates/restream-domain/src/domain/output_spec/config.rs`).
 
 | Output | Video codecs | H.265 source with `codec:auto` |
 |---|---|---|
@@ -498,7 +498,7 @@ lifecycle and probe events (dotted).
 
 Ingest latency comes from the saved SRT ingest policy: default 250 ms, valid
 20–8000 ms. A passphrase is 10–79 bytes; key length is 16, 24 or 32
-(`src/domain/srt_ingest.rs`).
+(`crates/restream-domain/src/domain/srt_ingest.rs`).
 
 ### SRT call inputs
 

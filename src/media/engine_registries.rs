@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicI64, AtomicU64};
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::StageKey;
 use crate::events::EventLog;
 use crate::media::egress::FeedId;
 use crate::media::egress::runtime::{EgressFabricRuntime, FeedWakeSubscription};
@@ -30,6 +29,7 @@ use crate::media::snapshots::{ListenerSocketStats, RtmpListenerStats};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
+use restream_domain::domain::stage::StageKey;
 use restream_sync::RingBuffer;
 
 pub struct IngestRegistry {

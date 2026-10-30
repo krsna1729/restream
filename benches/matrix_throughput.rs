@@ -1,10 +1,10 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use restream::domain::stage::{StageKey, StageKind};
 use restream::media::codec::{audio_for_ts, video_for_ts};
 use restream::media::engine::MediaEngine;
 use restream::media::hls::HlsSegmenterStart;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType};
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_mpegts::TsMuxer;
 use restream_sync::{DtsEnforcer, Reader, RingBuffer};
 use std::hint::black_box;

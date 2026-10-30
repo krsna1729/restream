@@ -19,9 +19,9 @@ use super::upload_policy::{
     backlog_dropped_message, backoff, dropped_message, phase, rejected_message,
     status_failure_message,
 };
-use crate::domain::stage::StageKey;
-use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
+use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::state::EgressPhase;
 
 const HLS_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// The end-of-stream playlist after a stop gets this long, once.

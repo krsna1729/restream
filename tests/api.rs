@@ -1,16 +1,16 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
-use restream::domain::output_spec::OutputConfig;
-use restream::domain::srt_ingest::SrtGlobalIngestConfig;
-use restream::domain::stage::{StageKey, StageKind};
-use restream::domain::state::{DesiredOutputState, EgressPhase};
 use restream::logging::types::AppLogEntry;
 use restream::media::engine::MediaEngine;
 use restream::media::security::IngestSecurityService;
 use restream::{api, db};
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::sync::Arc;

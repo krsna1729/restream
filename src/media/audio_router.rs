@@ -3,10 +3,10 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::domain::audio_routing::AudioRouting;
-use crate::domain::stage::StageKey;
 use restream_core::metadata::AudioMeta;
 use restream_core::{MediaPacket, MediaType};
+use restream_domain::domain::audio_routing::AudioRouting;
+use restream_domain::domain::stage::StageKey;
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower};
 
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.

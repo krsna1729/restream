@@ -6,9 +6,9 @@
 
 use super::tests::{fixture, published, send_pull, wait_for_ring};
 use super::*;
-use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, stalled_origin, test_ingest};
 use crate::media::hls_pull::{PullIdentity, PullSource};
+use restream_domain::domain::pipeline_input::{PullAuth, VariantRule};
 
 fn pull_source(url: &str) -> PullSource {
     PullSource {

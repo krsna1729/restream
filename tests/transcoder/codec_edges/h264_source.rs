@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::domain::stage::{StageKey, StageKind};
 use restream::media::engine::MediaEngine;
 use restream_core::MediaType;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::Reader;
 
 use crate::support::{collect_packets_with_deadline, load_primary_transport_packets};

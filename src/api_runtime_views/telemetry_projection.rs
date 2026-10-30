@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use crate::domain::stage::StageKey;
 use crate::media::engine::ActiveIngest;
+use restream_domain::domain::stage::StageKey;
 use restream_sync::RingBuffer;
 
 pub(super) use super::common::{
@@ -36,7 +36,7 @@ pub(super) fn stage_telemetry_row_json(
     pipe_metrics: Option<serde_json::Value>,
     active: Option<bool>,
     payload_stats: Option<serde_json::Value>,
-    lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+    lifecycle: Option<&restream_domain::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let mut value = serde_json::json!({
         "stageKey": key.to_string(),
@@ -203,7 +203,7 @@ pub(super) fn single_stage_telemetry_json(
     key: &StageKey,
     metrics: serde_json::Value,
     pipe_metrics: Option<serde_json::Value>,
-    lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
+    lifecycle: Option<&restream_domain::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let mut value = stage_telemetry_row_json(key, metrics, pipe_metrics, None, None, lifecycle);
     value["generatedAt"] = serde_json::Value::String(generated_at);
@@ -213,7 +213,7 @@ pub(super) fn single_stage_telemetry_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::stage::StageKind;
+    use restream_domain::domain::stage::StageKind;
 
     #[test]
     fn stage_row_includes_optional_fields() {

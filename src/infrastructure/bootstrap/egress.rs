@@ -13,8 +13,8 @@ use crate::application::reconcile::{
 };
 use crate::application::runtime_state::hub::StateHub;
 use crate::config::RuntimeTuning;
-use crate::domain::output_spec::OutputUrlScheme;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::output_spec::OutputUrlScheme;
 
 #[path = "egress_task.rs"]
 mod egress_task;
@@ -393,7 +393,7 @@ impl EgressReconciler {
             // rather than an `unwrap_err()`, so a future refactor that
             // breaks this coupling degrades to the working (if
             // non-fabric) recirculation path instead of a panic.
-            match crate::domain::output_spec::RecirculationTarget::parse(&output.url) {
+            match restream_domain::domain::output_spec::RecirculationTarget::parse(&output.url) {
                 Ok(target) => {
                     let feed = crate::application::egress::prepare_recirculation_fabric_feed(
                         output, &prepared,

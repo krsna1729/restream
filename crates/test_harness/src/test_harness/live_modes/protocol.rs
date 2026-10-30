@@ -37,14 +37,14 @@ async fn start_local_mediamtx(
 
 async fn install_bframe_transcode_profiles(api: &RampApi) -> Result<(), String> {
     let settings = api.get_json("/api/v1/settings").await?;
-    let mut profiles: restream::domain::transcode_profile::TranscodeProfiles =
+    let mut profiles: restream_domain::domain::transcode_profile::TranscodeProfiles =
         serde_json::from_value(settings["transcodeProfiles"].clone())
             .map_err(|error| format!("parse transcode profiles: {error}"))?;
 
     for (name, bframes) in [("h264_bf0", 0usize), ("h264_bf2", 2usize)] {
         profiles.insert(
             name.to_string(),
-            restream::domain::transcode_profile::TranscodeProfile {
+            restream_domain::domain::transcode_profile::TranscodeProfile {
                 preset: "veryfast".to_string(),
                 tune: String::new(),
                 crf: 23,

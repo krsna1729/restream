@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::StageKey;
-use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 pub(crate) use crate::media::engine_hls::hls_preview_registry_key;
 use crate::media::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
@@ -16,6 +14,8 @@ use crate::media::snapshots::PublisherQuality;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::stage_metrics::StageMetricsSnapshot;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 use restream_sync::RingBuffer;
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
@@ -320,7 +320,7 @@ impl MediaEngine {
     }
 
     pub(crate) fn egress_protocol_from_url(url: &str) -> &'static str {
-        crate::domain::output_spec::EgressProtocol::from_url(url).as_str()
+        restream_domain::domain::output_spec::EgressProtocol::from_url(url).as_str()
     }
 
     pub(crate) fn graph_protocol_label(protocol: &str) -> String {

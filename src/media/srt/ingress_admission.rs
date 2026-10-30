@@ -15,8 +15,8 @@ use srt_transport::advanced::admission::{
 };
 use srt_transport::{GroupConfig, ListenerEncryptionConfig, ListenerPeerPolicy, PolicyOverride};
 
-use crate::domain::srt_ingest::ResolvedSrtCrypto;
 use crate::media::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
+use restream_domain::domain::srt_ingest::ResolvedSrtCrypto;
 
 use super::srt_policy::SrtIngestPolicyStore;
 
@@ -153,8 +153,8 @@ fn receiver_group_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtPipelineIngestConfig};
     use crate::media::srt::SrtIngestPolicyEntry;
+    use restream_domain::domain::srt_ingest::{SrtGlobalIngestConfig, SrtPipelineIngestConfig};
     use srt_proto::handshake::SRTGROUP_MASK;
 
     const RECEIVER: u32 = 0x00C0_FFEE;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::audio_routing::AudioRouting;
+use restream_domain::domain::audio_routing::AudioRouting;
 
 #[test]
 fn plan_rejects_unknown_pipeline_and_bad_url() {
@@ -116,7 +116,7 @@ fn plan_rejects_unsupported_output_codec_for_legacy_rtmp() {
             monitoring_url: None,
             config: Some(
                 OutputConfig::preset("720p")
-                    .with_video_codec(crate::domain::output_spec::OutputVideoCodec::Hevc),
+                    .with_video_codec(restream_domain::domain::output_spec::OutputVideoCodec::Hevc),
             ),
             desired_state: Some("running".to_string()),
         }],

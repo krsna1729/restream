@@ -3,15 +3,15 @@ fn selected_runtime_contracts_stay_ready_for_extraction() {
     for (name, source) in [
         (
             "runtime/graph.rs",
-            include_str!("../../src/runtime/graph.rs"),
+            include_str!("../../crates/restream-domain/src/runtime/graph.rs"),
         ),
         (
             "runtime/output.rs",
-            include_str!("../../src/runtime/output.rs"),
+            include_str!("../../crates/restream-domain/src/runtime/output.rs"),
         ),
         (
             "runtime/stage.rs",
-            include_str!("../../src/runtime/stage.rs"),
+            include_str!("../../crates/restream-domain/src/runtime/stage.rs"),
         ),
     ] {
         for forbidden in [
@@ -36,7 +36,7 @@ fn selected_runtime_contracts_stay_ready_for_extraction() {
 
 #[test]
 fn runtime_module_has_no_upward_compatibility_facades() {
-    let runtime_mod = include_str!("../../src/runtime/mod.rs");
+    let runtime_mod = include_str!("../../crates/restream-domain/src/runtime/mod.rs");
 
     assert!(
         !runtime_mod.contains("pub mod snapshots"),

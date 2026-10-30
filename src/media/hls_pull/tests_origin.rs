@@ -19,9 +19,9 @@ use super::fetch::{
     AuthScope, FetchError, RequestAuth, build_client, fetch_small, pump_body, send,
 };
 use super::*;
-use crate::domain::pipeline_input::{PullAuth, VariantRule};
 use crate::media::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, STREAM_KEY, test_ingest};
 use restream_core::MediaType;
+use restream_domain::domain::pipeline_input::{PullAuth, VariantRule};
 use tracing_subscriber::layer::SubscriberExt as _;
 
 /// A tiny origin: exact paths on `/live`, recording every request's path (with

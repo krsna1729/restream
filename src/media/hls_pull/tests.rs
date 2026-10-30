@@ -10,10 +10,10 @@ use super::fetch::{log_url, redirect_refusal};
 use super::namespace::{live_start, map_name};
 use super::tests_origin::{AUDIO_MASTER, CapturedMessages, source};
 use super::*;
-use crate::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use crate::media::hls_ingest::playlist;
 use crate::media::hls_ingest::playlist::Playlist;
 use crate::media::hls_ingest::test_support::authenticated;
+use restream_domain::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use tracing_subscriber::layer::SubscriberExt as _;
 
 /// Parse a remote playlist the way a pull from a private source does: the

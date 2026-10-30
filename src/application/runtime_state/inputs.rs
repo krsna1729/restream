@@ -8,11 +8,11 @@ use std::collections::{BTreeMap, HashMap};
 use serde::Serialize;
 
 use crate::config::ServerPorts;
-use crate::domain::pipeline_input::{
-    PipelineInput, PipelineInputRole, PipelineInputSourceKind, VariantRule,
-};
 use crate::media::engine::MediaEngine;
 use crate::media::input_gate::InputForwardState;
+use restream_domain::domain::pipeline_input::{
+    PipelineInput, PipelineInputRole, PipelineInputSourceKind, VariantRule,
+};
 
 /// Where a keyed input's publisher pushes. A pull input accepts no pushes,
 /// so it has none.
@@ -195,7 +195,7 @@ pub(super) async fn project_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::pipeline_input::PushAuth;
+    use restream_domain::domain::pipeline_input::PushAuth;
 
     #[tokio::test]
     async fn push_auth_runtime_exposes_state_not_credentials_or_urls() {

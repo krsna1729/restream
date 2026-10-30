@@ -4,8 +4,8 @@
 //! handlers may serialize them directly while their JSON contract still matches
 //! the application shape.
 
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::state::DesiredOutputState;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 

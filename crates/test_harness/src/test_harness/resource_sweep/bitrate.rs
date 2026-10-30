@@ -217,13 +217,13 @@ async fn install_bitrate_controlled_720p_profile(
     multiplier: f64,
 ) -> Result<(), String> {
     let settings = api.get_json("/api/v1/settings").await?;
-    let mut profiles: restream::domain::transcode_profile::TranscodeProfiles =
+    let mut profiles: restream_domain::domain::transcode_profile::TranscodeProfiles =
         serde_json::from_value(settings["transcodeProfiles"].clone())
             .map_err(|error| format!("parse transcode profiles: {error}"))?;
     let target_bps = (bitrate.mbps * 1_000_000.0 * multiplier).round() as i64;
     profiles.insert(
         "720p".to_string(),
-        restream::domain::transcode_profile::TranscodeProfile {
+        restream_domain::domain::transcode_profile::TranscodeProfile {
             preset: "ultrafast".to_string(),
             tune: "zerolatency".to_string(),
             crf: 23,

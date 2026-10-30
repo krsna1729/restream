@@ -275,7 +275,7 @@ async fn no_segments_error(engine: Arc<MediaEngine>, pipeline_id: &str) -> HlsPr
         .await
         .map(|cause| HlsPreviewBlockedCause {
             stage: cause.key.to_string(),
-            phase: crate::runtime::stage::phase_name(&cause.phase).to_string(),
+            phase: restream_domain::runtime::stage::phase_name(&cause.phase).to_string(),
         });
     HlsPreviewReadError::NoSegments { blocked_by }
 }

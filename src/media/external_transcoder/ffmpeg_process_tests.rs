@@ -1,7 +1,7 @@
 use super::*;
-use crate::domain::transcode_profile::TranscodeProfile;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use proptest::prelude::*;
+use restream_domain::domain::transcode_profile::TranscodeProfile;
 use restream_mpegts::TsDemuxer;
 use std::sync::{Mutex, MutexGuard};
 

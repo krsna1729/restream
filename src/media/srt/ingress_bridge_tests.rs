@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use srt_transport::compio::Owner;
 
-use crate::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
 use super::ingress_admission::ReceiverGroupId;
 use super::ingress_owner::{IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle};

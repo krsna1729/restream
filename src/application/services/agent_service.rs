@@ -16,9 +16,9 @@ use crate::media::security::IngestSecurityService;
 use sqlx::SqlitePool;
 
 #[cfg(feature = "agent-execution")]
-use crate::domain::output_spec::OutputConfig;
+use restream_domain::domain::output_spec::OutputConfig;
 #[cfg(feature = "agent-execution")]
-use crate::domain::state::DesiredOutputState;
+use restream_domain::domain::state::DesiredOutputState;
 
 const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
 
@@ -311,9 +311,9 @@ impl AgentService {
 mod tests {
     use super::*;
     use crate::application::models::JobStatus;
-    use crate::domain::output_spec::OutputConfig;
-    use crate::domain::state::DesiredOutputState;
     use crate::infrastructure::service_wiring::SqliteServiceFactory;
+    use restream_domain::domain::output_spec::OutputConfig;
+    use restream_domain::domain::state::DesiredOutputState;
 
     #[tokio::test]
     async fn agent_service_loads_context_catalog_from_storage() {
@@ -364,7 +364,7 @@ mod tests {
             .unwrap();
 
         let security = IngestSecurityService::new(
-            crate::domain::ingest_security::IngestSecurityConfig::default(),
+            restream_domain::domain::ingest_security::IngestSecurityConfig::default(),
         );
         let service = SqliteServiceFactory::new(&pool).agent_service();
         let catalog = service.load_context_catalog(&security).await;

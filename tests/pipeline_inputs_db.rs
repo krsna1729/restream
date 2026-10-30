@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream::db;
-use restream::domain::pipeline_input::{
+use restream_domain::domain::pipeline_input::{
     PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth, PushAuth,
     VariantRule,
 };
@@ -181,7 +181,7 @@ async fn pull_input_round_trips_every_source_field() {
             url: Some("https://origin.example/live/master.m3u8".to_string()),
             variant_rule: VariantRule::LowestBandwidth,
             auth: PullAuth::Headers {
-                headers: vec![restream::domain::pipeline_input::HeaderPair {
+                headers: vec![restream_domain::domain::pipeline_input::HeaderPair {
                     name: "x-api-token".to_string(),
                     value: "shh".to_string(),
                 }],
@@ -201,7 +201,7 @@ async fn pull_input_round_trips_every_source_field() {
     assert_eq!(
         created.source_auth,
         PullAuth::Headers {
-            headers: vec![restream::domain::pipeline_input::HeaderPair {
+            headers: vec![restream_domain::domain::pipeline_input::HeaderPair {
                 name: "x-api-token".to_string(),
                 value: "shh".to_string(),
             }],

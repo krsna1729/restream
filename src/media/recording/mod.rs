@@ -8,14 +8,14 @@
 //! ends we optionally remux the completed `.ts` into `.mp4` via the configured
 //! FFmpeg subprocess when that binary exposes the MP4 muxer.
 
-use crate::domain::recording::RecordingSettings;
-use crate::domain::stage::StageKey;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::startup_policy;
 use restream_core::MediaPacket;
+use restream_domain::domain::recording::RecordingSettings;
+use restream_domain::domain::stage::StageKey;
 use restream_mpegts::TsServiceMetadata;
 use restream_sync::byte_queue::MemoryQueue;
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};

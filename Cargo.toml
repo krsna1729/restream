@@ -12,6 +12,7 @@ resolver = "3"
 members = [
     "crates/xtask",
     "crates/restream-core",
+    "crates/restream-domain",
     "crates/restream-sync",
     "crates/restream-mpegts",
     "crates/restream-rtmp",
@@ -53,6 +54,7 @@ srt-shard-bench = []
 
 [dependencies]
 restream-core = { path = "crates/restream-core" }
+restream-domain = { path = "crates/restream-domain" }
 restream-sync = { path = "crates/restream-sync" }
 restream-mpegts = { path = "crates/restream-mpegts" }
 restream-rtmp = { path = "crates/restream-rtmp" }
@@ -157,6 +159,7 @@ rcgen = "0.14.8"
 # Generates the TypeScript contract of typed API payloads (test-only; the
 # drift test in application::runtime_state compares the checked-in file).
 ts-rs = "12"
+restream-domain = { path = "crates/restream-domain", features = ["ts"] }
 
 [[bin]]
 name = "restream-mcp"

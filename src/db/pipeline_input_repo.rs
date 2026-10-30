@@ -1,4 +1,4 @@
-use crate::domain::pipeline_input::{
+use restream_domain::domain::pipeline_input::{
     PipelineInput, PipelineInputRole, PipelineInputSource, PipelineInputSourceKind, PullAuth,
     PushAuth, VariantRule,
 };

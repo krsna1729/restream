@@ -8,13 +8,13 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::StageKey;
-use crate::domain::state::{EgressPhase, EgressStatus};
 use crate::media::engine::{
     ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
 use crate::media::snapshots::PublisherQuality;
 use crate::media::stage_metrics::StageMetrics;
+use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::state::{EgressPhase, EgressStatus};
 
 impl MediaEngine {
     pub async fn with_active_egress<R>(

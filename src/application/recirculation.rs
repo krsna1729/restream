@@ -1,8 +1,8 @@
 use crate::application::models::Output;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::{ServiceError, ServiceResult};
-use crate::domain::output_spec::RecirculationTarget;
-use crate::domain::pipeline_input::PipelineInput;
+use restream_domain::domain::output_spec::RecirculationTarget;
+use restream_domain::domain::pipeline_input::PipelineInput;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 
@@ -158,9 +158,9 @@ mod tests {
         PipelineLookupFuture, PipelineStore, PipelineStoreError, PipelineUpdateFuture,
     };
     use crate::application::services::PipelineService;
-    use crate::domain::output_spec::OutputConfig;
-    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
-    use crate::domain::state::DesiredOutputState;
+    use restream_domain::domain::output_spec::OutputConfig;
+    use restream_domain::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+    use restream_domain::domain::state::DesiredOutputState;
     use std::sync::Arc;
 
     struct ReadOnlyInputStore {
@@ -215,7 +215,7 @@ mod tests {
             _pipeline_id: &'a str,
             _label: &'a str,
             _stream_key: &'a str,
-            _source: crate::domain::pipeline_input::PipelineInputSource,
+            _source: restream_domain::domain::pipeline_input::PipelineInputSource,
         ) -> crate::application::pipeline_inputs::InputWriteFuture<'a> {
             Box::pin(async move {
                 Err(
@@ -232,7 +232,7 @@ mod tests {
             _input_id: &'a str,
             _label: &'a str,
             _enabled: bool,
-            _source: crate::domain::pipeline_input::PipelineInputSource,
+            _source: restream_domain::domain::pipeline_input::PipelineInputSource,
         ) -> crate::application::pipeline_inputs::InputUpdateFuture<'a> {
             Box::pin(async move {
                 Err(

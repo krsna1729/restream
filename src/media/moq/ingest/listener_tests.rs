@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use bytes::Bytes;
 
 use super::*;
-use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessError, PipelineAccessFuture, PipelineAccessMode,
 };
@@ -15,6 +14,7 @@ use crate::media::moq::egress::publish::HangBroadcast;
 use crate::media::moq::transport::test_support::{
     LOOPBACK_CERT, LOOPBACK_SERVER_NAME, loopback_client_tls, run,
 };
+use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_moq::media::AudioConfig;
 use restream_moq::media::LocBuffer;
 use restream_moq::media::TrackContainer;

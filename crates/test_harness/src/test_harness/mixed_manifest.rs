@@ -6,9 +6,9 @@ use std::path::PathBuf;
 mod mixed_manifest_loader;
 pub(crate) use mixed_manifest_loader::*;
 
-use restream::domain::output_spec::OutputConfig;
-use restream::domain::output_spec::RtmpOutputMode;
 use restream::test_fixtures::AvMarkerBframeMode;
+use restream_domain::domain::output_spec::OutputConfig;
+use restream_domain::domain::output_spec::RtmpOutputMode;
 
 /// Input transport family for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -636,8 +636,8 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restream::domain::stage::StageKind;
-    use restream::planner::{PlannedOutput, plan_pipeline_graph};
+    use restream_domain::domain::stage::StageKind;
+    use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 
     fn planned_stage_count_from_graph(
         case: MixedInputCase,

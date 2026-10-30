@@ -16,8 +16,8 @@ use crate::application::diagnosis::Layer;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
 use crate::capacity::CapacitySnapshot;
-use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
+use restream_domain::domain::state::DesiredOutputState;
 
 /// How often the sampler takes a sample.
 pub const FLEET_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);

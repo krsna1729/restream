@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use crate::application::models::Pipeline;
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::domain::pipeline_input::PipelineInput;
-use crate::domain::srt_ingest::{
+use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
+use restream_domain::domain::pipeline_input::PipelineInput;
+use restream_domain::domain::srt_ingest::{
     SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
 };
-use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
 
 pub const SRT_INGEST_GLOBAL_CONFIG_META_KEY: &str = "srt_ingest_global_config";
@@ -116,7 +116,8 @@ pub fn srt_ingest_policy_entries(
         // The policy store answers a publishing SRT peer by stream key, and a
         // pull input accepts no peer: its key must not resolve there.
         .filter(|input| {
-            input.source_kind == crate::domain::pipeline_input::PipelineInputSourceKind::Keyed
+            input.source_kind
+                == restream_domain::domain::pipeline_input::PipelineInputSourceKind::Keyed
         })
         .filter_map(|input| {
             let policy = policies.get(input.pipeline_id.as_str())?;
@@ -160,8 +161,10 @@ mod tests {
     use crate::application::ports::{
         MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
     };
-    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole, PipelineInputSource};
-    use crate::domain::srt_ingest::{
+    use restream_domain::domain::pipeline_input::{
+        PipelineInput, PipelineInputRole, PipelineInputSource,
+    };
+    use restream_domain::domain::srt_ingest::{
         DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
     };
 
@@ -418,7 +421,7 @@ mod tests {
                 input_source: None,
                 srt_ingest_policy: Some(
                     serialize_persisted_srt_ingest_policy(
-                        &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
+                        &restream_domain::domain::srt_ingest::SrtPipelineIngestConfig::default(),
                     )
                     .unwrap(),
                 ),
@@ -477,7 +480,7 @@ mod tests {
                 input_source: None,
                 srt_ingest_policy: Some(
                     serialize_persisted_srt_ingest_policy(
-                        &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
+                        &restream_domain::domain::srt_ingest::SrtPipelineIngestConfig::default(),
                     )
                     .unwrap(),
                 ),
@@ -568,7 +571,8 @@ mod tests {
                 role: PipelineInputRole::Backup,
                 enabled: true,
                 selected: false,
-                source_kind: crate::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
+                source_kind:
+                    restream_domain::domain::pipeline_input::PipelineInputSourceKind::HlsPull,
                 source_url: Some("http://origin.example/master.m3u8".to_string()),
                 ..PipelineInput::keyed_default()
             },
