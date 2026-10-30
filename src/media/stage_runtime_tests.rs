@@ -94,7 +94,7 @@ async fn ensure_stage_replaces_cancelled_runtime() {
 
 #[tokio::test]
 async fn ensure_stage_uses_engine_typed_transcoder_ring_capacity() {
-    let config = Arc::new(crate::AppConfig {
+    let config = Arc::new(crate::media::config::EngineConfig {
         transcoder_ring_capacity: 768,
         ..Default::default()
     });

@@ -146,7 +146,7 @@ async fn active_hls_preview_stage_keys_include_h264_segmenter() {
 async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 
-    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+    let engine = MediaEngine::new_with_config(Arc::new(crate::media::config::EngineConfig {
         external_ffmpeg_permits: 3,
         ..Default::default()
     }));

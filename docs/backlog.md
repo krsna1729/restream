@@ -31,7 +31,7 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
   `src/media/egress/sizing.rs`, [SRT shard capacity](runtime-crossings.md#srt-shard-capacity))
-  and `srt_egress_connect_concurrency` (`src/config.rs`) on a second host.
+  and `srt_egress_connect_concurrency` (`src/media/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
 

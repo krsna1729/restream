@@ -98,7 +98,7 @@ async fn egress_registration_stores_terminal_stage_key() {
 async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 
-    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+    let engine = MediaEngine::new_with_config(Arc::new(crate::media::config::EngineConfig {
         external_ffmpeg_permits: 3,
         ..Default::default()
     }));

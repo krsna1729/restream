@@ -580,10 +580,12 @@ mod tests {
     }
 
     async fn exercise_owner_shutdown(owners: usize, abort_control: bool) {
-        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-            rtmp_ingress_owners: owners,
-            ..crate::AppConfig::default()
-        })));
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+            crate::media::config::EngineConfig {
+                rtmp_ingress_owners: owners,
+                ..crate::media::config::EngineConfig::default()
+            },
+        )));
         let shutdown = CancellationToken::new();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(start_rtmp_server_on_with_shutdown(

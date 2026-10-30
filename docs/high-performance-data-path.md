@@ -96,7 +96,7 @@ and a feed publication sends at most one wake per shard
 ## Bounded transport
 
 Every queue between contexts has an explicit bound. Configurable defaults
-and environment parsing live in `src/config.rs` and `src/config/`; fixed
+and environment parsing live in `src/config.rs` and `src/media/config/`; fixed
 structural limits live with the module that owns the structure. Each
 structure owns its overflow or backpressure policy, and they differ on
 purpose:

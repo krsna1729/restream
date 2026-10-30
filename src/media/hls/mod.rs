@@ -79,7 +79,7 @@ impl Default for HlsConfig {
 }
 
 impl HlsConfig {
-    pub fn from_app_config(config: &crate::AppConfig) -> Self {
+    pub fn from_engine_config(config: &crate::media::config::EngineConfig) -> Self {
         Self {
             min_segment_secs: config.hls_min_segment_ms,
             segment_capacity: config.hls_segment_capacity_bytes,
@@ -387,15 +387,15 @@ mod tests {
     }
 
     #[test]
-    fn hls_config_maps_from_app_config() {
-        let app_config = crate::AppConfig {
+    fn hls_config_maps_from_engine_config() {
+        let engine_config = crate::media::config::EngineConfig {
             hls_min_segment_ms: 0.5,
             hls_segment_capacity_bytes: 524_288,
             hls_max_segments: 9,
-            ..crate::AppConfig::default()
+            ..crate::media::config::EngineConfig::default()
         };
 
-        let cfg = HlsConfig::from_app_config(&app_config);
+        let cfg = HlsConfig::from_engine_config(&engine_config);
 
         assert_eq!(cfg.min_segment_secs, 0.5);
         assert_eq!(cfg.segment_capacity, 524_288);

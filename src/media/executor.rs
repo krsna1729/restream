@@ -451,14 +451,14 @@ pub(crate) fn snapshot(services: bool) -> MediaExecutorSnapshot {
 
 /// Returns the worker thread count configured for restream-media.
 pub(crate) fn configured_workers() -> usize {
-    crate::config::media_executor_workers_env()
+    crate::media::config::media_executor_workers_env()
         .unwrap_or_else(|| crate::media::host_capacity::HostCapacity::get().media_workers())
 }
 
 /// Whether each poll also reads `getrusage(RUSAGE_THREAD)`
 /// (`RESTREAM_MEDIA_POLL_USAGE`), read once. A diagnostic: two more
 /// syscalls per poll for the user/system split and page faults.
-static POLL_USAGE: LazyLock<bool> = LazyLock::new(crate::config::media_poll_usage_env);
+static POLL_USAGE: LazyLock<bool> = LazyLock::new(crate::media::config::media_poll_usage_env);
 
 fn poll_usage() -> bool {
     *POLL_USAGE

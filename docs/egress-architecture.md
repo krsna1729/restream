@@ -496,7 +496,7 @@ Startup logs `srt egress shard runtime ready` per shard and
 
 ## Configuration
 
-`EgressFabricConfig::from_env` (`src/config.rs`) parses and clamps the
+`EgressFabricConfig::from_env` (`src/media/config.rs`) parses and clamps the
 `RESTREAM_EGRESS_*` variables; `validate` logs warnings for risky
 combinations but never stops startup. Variables, defaults, ranges and the
 warnings are listed in [Configuration](configuration.md#egress-fabric).

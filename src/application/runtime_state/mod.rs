@@ -228,7 +228,7 @@ pub struct Rows<'a> {
 /// Projects every entity from its rows and the engine's runtime maps. Each
 /// engine map is read once, so the projection is consistent per map and
 /// costs one pass over the outputs.
-pub async fn project(engine: &MediaEngine, rows: &Rows<'_>) -> Projection {
+pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: u32) -> Projection {
     let Rows {
         pipelines,
         outputs,
@@ -335,7 +335,7 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>) -> Projection {
     let context = ProjectContext {
         shards: &shards,
         blocked: &blocked,
-        max_retries: u64::from(engine.config.tuning.output_max_retries),
+        max_retries: u64::from(output_max_retries),
     };
 
     let mut projection = Projection::default();

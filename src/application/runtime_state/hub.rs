@@ -65,6 +65,8 @@ pub struct StateHub {
     changes: AtomicU64,
     /// The listener ports inputs' publish URLs name.
     ports: ServerPorts,
+    /// The retry budget each output's state reports.
+    output_max_retries: u32,
 }
 
 /// When the last rebuild completed, and the marked-change count it read
@@ -86,14 +88,18 @@ impl LastRefresh {
 }
 
 impl StateHub {
-    pub fn new(ports: ServerPorts) -> Self {
+    pub fn new(ports: ServerPorts, output_max_retries: u32) -> Self {
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        Self::with_epoch(format!("{started:x}-{:x}", std::process::id()), ports)
+        Self::with_epoch(
+            format!("{started:x}-{:x}", std::process::id()),
+            ports,
+            output_max_retries,
+        )
     }
 
-    pub fn with_epoch(epoch: String, ports: ServerPorts) -> Self {
+    pub fn with_epoch(epoch: String, ports: ServerPorts, output_max_retries: u32) -> Self {
         Self {
             refreshing: Mutex::new(LastRefresh::default()),
             current: Mutex::new(Current {
@@ -106,6 +112,7 @@ impl StateHub {
             changed: Notify::new(),
             changes: AtomicU64::new(0),
             ports,
+            output_max_retries,
         }
     }
 
@@ -270,7 +277,8 @@ impl StateHub {
             inputs: &inputs,
             endpoints: &endpoints,
         };
-        self.publish(project(engine, &rows).await).await;
+        self.publish(project(engine, &rows, self.output_max_retries).await)
+            .await;
         *last = LastRefresh {
             at: Some(Instant::now()),
             changes,

@@ -18,7 +18,14 @@ async fn test_health_snapshot(
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
 ) -> serde_json::Value {
-    crate::api_runtime_views::health_snapshot(engine, pipeline_ids, recording_enabled, 0).await
+    crate::api_runtime_views::health_snapshot(
+        engine,
+        &crate::AppConfig::default(),
+        pipeline_ids,
+        recording_enabled,
+        0,
+    )
+    .await
 }
 
 async fn test_health_snapshot_with_disconnect_grace(
@@ -29,6 +36,7 @@ async fn test_health_snapshot_with_disconnect_grace(
 ) -> serde_json::Value {
     crate::api_runtime_views::health_snapshot(
         engine,
+        &crate::AppConfig::default(),
         pipeline_ids,
         recording_enabled,
         disconnect_grace_ms,
@@ -37,7 +45,14 @@ async fn test_health_snapshot_with_disconnect_grace(
 }
 
 async fn test_health_summary_snapshot(engine: &MediaEngine) -> serde_json::Value {
-    crate::api_runtime_views::health_summary_snapshot(engine, &[], &HashMap::new(), 0).await
+    crate::api_runtime_views::health_summary_snapshot(
+        engine,
+        &crate::AppConfig::default(),
+        &[],
+        &HashMap::new(),
+        0,
+    )
+    .await
 }
 
 #[path = "engine_tests/egress.rs"]

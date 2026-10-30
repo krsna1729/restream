@@ -26,10 +26,12 @@ The diagram shows where each kind of setting comes from and when it is read.
 ```mermaid
 flowchart LR
     env[Process environment] --> from_env["AppConfig::from_env (src/config.rs)"]
-    env --> moq["MoqIngestSetting::from_env (src/config/moq.rs)"]
+    env --> engine["EngineConfig::from_env (src/media/config.rs)"]
+    env --> moq["MoqIngestSetting::from_env (src/media/config/moq.rs)"]
     env --> knobs["media::srt::knobs (OnceLock)"]
     env --> malloc["malloc_tuning::apply_from_env"]
-    moq --> from_env
+    moq --> engine
+    engine --> from_env
     from_env --> boot["infrastructure::bootstrap"]
     db[(SQLite meta store)] --> settings["settings / ingest_security load"]
     settings --> boot
@@ -39,7 +41,7 @@ flowchart LR
 ```
 
 - Environment variables are read once. Changing one needs a restart.
-- Every variable goes through `env_var` in `src/config.rs`. A value that does
+- Every variable goes through `env_var` in `src/media/config/env.rs`. A value that does
   not parse falls back to the default. Most numeric values are then clamped to
   the range shown below.
 - Boolean variables (`env_bool`) are true for `1`, `true`, `yes` or `on`
@@ -49,7 +51,9 @@ flowchart LR
 ## Fixed runtime values and environment variables
 
 Tables are grouped by area. "Clamp" is the range a parsed value is forced
-into. Source is `src/config.rs` unless noted.
+into. Source is `src/config.rs` for process settings and `src/media/config.rs`
+(`EngineConfig`, embedded in `AppConfig`) for media engine settings, unless
+noted.
 
 ### Server, ports and paths
 
@@ -149,7 +153,7 @@ on Reqwest (logged once). Transport comparison:
 ### MoQ
 
 MoQ ingest is off unless `RESTREAM_MOQ_INGEST_LISTEN` is set. Source:
-`src/config/moq.rs`.
+`src/media/config/moq.rs`.
 
 | Variable | Default | Range / values | Effect |
 |---|---|---|---|
@@ -631,7 +635,7 @@ None of these change a production server.
 | Variable | Read by | Effect |
 |---|---|---|
 | `RESTREAM_AGENT_BASE_URL`, `RESTREAM_AGENT_SESSION_COOKIE`, `RESTREAM_AGENT_BEARER_TOKEN`, `RESTREAM_MCP_ALLOWED_ORIGINS`, `RESTREAM_MCP_VERSION_CHECK` | `src/bin/restream-mcp.rs` | MCP bridge; see [agent plane integration](agent-plane-integration.md) |
-| `RESTREAM_BENCH_SRT_SHARDS` | `src/config.rs`, only with the `srt-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
+| `RESTREAM_BENCH_SRT_SHARDS` | `src/media/config.rs`, only with the `srt-shard-bench` feature | Pins SRT shard count `1..=4` for benchmarks |
 | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `src/media/srt/knobs.rs` | Harness SRT sink receive budget |
 | `RESTREAM_BUILD_GIT_COMMIT` (else `GITHUB_SHA`), `RESTREAM_BUILD_TIMESTAMP` (else `SOURCE_DATE_EPOCH`) | `build.rs` | Commit and timestamp stamped into the binary |
 | `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `crates/test_harness/` | Harness runs; see [testing](testing.md) |

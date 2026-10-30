@@ -16,6 +16,7 @@ use crate::application::diagnosis::Layer;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
 use crate::capacity::CapacitySnapshot;
+use crate::config::AppConfig;
 use crate::media::engine::MediaEngine;
 use restream_domain::domain::state::DesiredOutputState;
 
@@ -237,6 +238,7 @@ pub async fn run_fleet_sampler(
     hub: Arc<StateHub>,
     pool: SqlitePool,
     engine: Arc<MediaEngine>,
+    config: Arc<AppConfig>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
@@ -251,7 +253,7 @@ pub async fn run_fleet_sampler(
             _ = ticks.tick() => {}
         }
         hub.refresh_on_demand(&pool, &engine).await;
-        let capacity = engine.capacity_snapshot().await;
+        let capacity = crate::capacity::capacity_snapshot(&engine, &config).await;
         let at_ms = MediaEngine::now_epoch_ms();
         let mut sample = hub
             .read(|projection| take_fleet_sample(at_ms, projection.outputs.values(), &capacity))

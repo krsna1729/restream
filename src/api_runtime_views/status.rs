@@ -4,6 +4,7 @@
 //! HLS activity without pushing those JSON concerns back into `MediaEngine`.
 
 use super::status_projection as api_view_models;
+use crate::config::AppConfig;
 use crate::media::engine::MediaEngine;
 use crate::system_sampling::{
     CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
@@ -149,7 +150,7 @@ fn cpu_capacity_settings(snapshot: &CpuCapacitySnapshot) -> Vec<HostSettingRow> 
 }
 
 fn host_settings_json(
-    engine: &MediaEngine,
+    config: &AppConfig,
     snapshot: &HostSettingsSnapshot,
     nofile: &NofileLimitJson,
 ) -> Vec<HostSettingRow> {
@@ -160,7 +161,7 @@ fn host_settings_json(
             "runtime.nofile",
             "Open file descriptors",
             nofile.soft,
-            engine.config.tuning.nofile_limit,
+            config.tuning.nofile_limit,
             "fds",
             nofile_detail,
         ),
@@ -193,14 +194,14 @@ fn host_settings_json(
         host_info_setting_json(
             "runtime.tokio.worker_threads",
             "Tokio async workers",
-            serde_json::json!(engine.config.tokio_runtime.worker_threads),
+            serde_json::json!(config.tokio_runtime.worker_threads),
             "threads",
             "async scheduler worker count; too many workers increased migrations and cache misses in MSR profiling",
         ),
         host_info_setting_json(
             "runtime.tokio.max_blocking_threads",
             "Tokio blocking thread cap",
-            serde_json::json!(engine.config.tokio_runtime.max_blocking_threads),
+            serde_json::json!(config.tokio_runtime.max_blocking_threads),
             "threads",
             "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint",
         ),
@@ -333,17 +334,26 @@ pub(crate) async fn output_status(
 /// agent context, observability) that read it as a tree.
 pub(crate) async fn health_snapshot(
     engine: &MediaEngine,
+    config: &AppConfig,
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
 ) -> serde_json::Value {
     api_view_models::to_json(
-        &health_snapshot_view(engine, pipeline_ids, recording_enabled, disconnect_grace_ms).await,
+        &health_snapshot_view(
+            engine,
+            config,
+            pipeline_ids,
+            recording_enabled,
+            disconnect_grace_ms,
+        )
+        .await,
     )
 }
 
 pub(crate) async fn health_snapshot_view(
     engine: &MediaEngine,
+    config: &AppConfig,
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
@@ -557,8 +567,8 @@ pub(crate) async fn health_snapshot_view(
     }
 
     let host_settings = sample_host_settings();
-    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, host_settings.nofile);
-    let host_settings_rows = host_settings_json(engine, &host_settings, &nofile);
+    let nofile = nofile_limit_json(config.tuning.nofile_limit, host_settings.nofile);
+    let host_settings_rows = host_settings_json(config, &host_settings, &nofile);
     let egress_fabric_shards = engine
         .egress_fabric_shard_statuses(
             crate::media::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
@@ -598,13 +608,14 @@ pub(crate) async fn health_snapshot_view(
         egress_fabric_shards,
         contained_panics: crate::media::panic_boundary::contained_panics(),
         tuning: TuningHealthJson {
-            output_max_retries: engine.config.tuning.output_max_retries,
+            output_max_retries: config.tuning.output_max_retries,
         },
     }
 }
 
 pub(crate) async fn health_summary_snapshot(
     engine: &MediaEngine,
+    config: &AppConfig,
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
@@ -745,8 +756,8 @@ pub(crate) async fn health_summary_snapshot(
     }
 
     let host_settings = sample_host_settings();
-    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, host_settings.nofile);
-    let host_settings_rows = host_settings_json(engine, &host_settings, &nofile);
+    let nofile = nofile_limit_json(config.tuning.nofile_limit, host_settings.nofile);
+    let host_settings_rows = host_settings_json(config, &host_settings, &nofile);
     let summary = EngineHealthSummarySnapshotJson {
         status: "ready",
         pipelines: &pipelines_json,
@@ -762,6 +773,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::config::AppConfig;
     use crate::media::engine::MediaEngine;
 
     use super::host_setting_json;
@@ -799,6 +811,7 @@ mod tests {
         let health = tokio::spawn(async move {
             super::health_summary_snapshot(
                 &health_engine,
+                &AppConfig::default(),
                 &["pipeline".to_string()],
                 &HashMap::new(),
                 0,
@@ -829,6 +842,7 @@ mod tests {
         let health = tokio::spawn(async move {
             super::health_snapshot(
                 &health_engine,
+                &AppConfig::default(),
                 &["pipeline".to_string()],
                 &HashMap::new(),
                 0,

@@ -2,7 +2,7 @@
 //! state stream instead of polling `/inputs` and `/graph` relies on.
 
 use super::hub::{Since, StateHub};
-use super::tests::{output, ports, project_rows};
+use super::tests::{max_retries, output, ports, project_rows};
 use super::*;
 use restream_domain::domain::pipeline_input::PipelineInputSource;
 
@@ -70,7 +70,7 @@ async fn deltas_after(hub: &StateHub, held: &RuntimeState) -> Vec<std::sync::Arc
 async fn inputs_follow_rows_and_sessions_but_not_counters() {
     let pool = database().await;
     let engine = MediaEngine::new();
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     crate::db::create_pipeline(&pool, "pipe", "P", "key-main", None, None)
         .await
         .unwrap();
@@ -208,7 +208,7 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
 async fn a_deleted_pipeline_takes_its_inputs_and_graph_with_it() {
     let pool = database().await;
     let engine = MediaEngine::new();
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     for (id, key) in [("pipe", "key-a"), ("other", "key-b")] {
         crate::db::create_pipeline(&pool, id, id, key, None, None)
             .await
@@ -307,7 +307,7 @@ async fn a_keyed_input_names_its_moq_url_only_while_moq_ingest_is_on() {
         engine: &MediaEngine,
         ports: crate::config::ServerPorts,
     ) -> IngestUrls {
-        let hub = StateHub::new(ports);
+        let hub = StateHub::new(ports, max_retries());
         hub.refresh(pool, engine).await;
         hub.snapshot().await.inputs[0].ingest_urls.clone().unwrap()
     }

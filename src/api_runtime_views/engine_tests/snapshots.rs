@@ -335,7 +335,7 @@ async fn health_snapshot_exposes_runtime_limit_and_rtmp_listener_errors() {
     assert_eq!(snapshot["rtmpListener"]["fdExhaustionErrors"], 3);
     assert_eq!(
         snapshot["runtimeLimits"]["nofile"]["configured"],
-        engine.config.tuning.nofile_limit
+        crate::AppConfig::default().tuning.nofile_limit
     );
     let host_settings = snapshot["hostSettings"]
         .as_array()

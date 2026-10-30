@@ -566,11 +566,13 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
     use std::sync::Arc;
 
     const PIPELINE: &str = "pipeline-review-handoff";
-    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-        ring_capacity: 8,
-        ring_headroom_secs: 5.0,
-        ..Default::default()
-    })));
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+        crate::media::config::EngineConfig {
+            ring_capacity: 8,
+            ring_headroom_secs: 5.0,
+            ..Default::default()
+        },
+    )));
     let server = TestServer::start_with_engine(
         &["review-handoff"],
         vec![plain("review-handoff")],

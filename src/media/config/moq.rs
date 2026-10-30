@@ -125,7 +125,7 @@ impl MoqIngestSetting {
         self.config().map(|config| config.listen.port())
     }
 
-    pub(super) fn summary(&self) -> serde_json::Value {
+    pub(crate) fn summary(&self) -> serde_json::Value {
         match self {
             Self::Off => serde_json::json!({ "ingest": "off" }),
             Self::On(config) => serde_json::json!({

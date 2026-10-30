@@ -129,7 +129,7 @@ fn replacement_ring_resets_forecast_counter_even_if_new_counter_is_larger() {
 
 #[test]
 fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
-    let profile = crate::config::EgressShardProfile::SrtOutputCount;
+    let profile = crate::media::config::EgressShardProfile::SrtOutputCount;
     let probes = [Probe::default()];
     let mut runtime = super::tests::roomy_runtime(&probes).0;
     let ring = RingBuffer::new(8);
@@ -166,7 +166,7 @@ fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
 
 #[test]
 fn admission_holds_every_shard_under_the_ceiling() {
-    let profile = crate::config::EgressShardProfile::SrtOutputCount;
+    let profile = crate::media::config::EgressShardProfile::SrtOutputCount;
     let probes = [Probe::default(), Probe::default()];
     let mut runtime = EgressFabricRuntime::new(
         EgressManagerConfig::new(2, 1024)

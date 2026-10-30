@@ -97,7 +97,7 @@ impl EgressFabricRuntime {
     /// ceiling, whatever the pool's average.
     pub(crate) fn admit_add(
         &self,
-        profile: crate::config::EgressShardProfile,
+        profile: crate::media::config::EgressShardProfile,
         output_id: &crate::media::egress::command::OutputId,
     ) -> Result<(), Saturated> {
         let shard = self.manager.assign_output(output_id);
@@ -266,7 +266,7 @@ impl EgressFabricRuntime {
     /// success, for logging.
     pub(crate) fn rescale<B, E, F, G>(
         &mut self,
-        profile: crate::config::EgressShardProfile,
+        profile: crate::media::config::EgressShardProfile,
         host: crate::media::host_capacity::HostCapacity,
         reason: ResizeReason,
         shard_config: EgressShardConfig,
@@ -327,7 +327,7 @@ impl EgressFabricRuntime {
                 }
             }
         } else {
-            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
+            crate::media::config::target_egress_fabric_shards(profile, outputs, host.cpus)
         }
         .max(1) as usize;
 

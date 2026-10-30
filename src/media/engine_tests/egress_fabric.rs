@@ -538,12 +538,12 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     // flake as the earlier SRT multi-feed shard-pool regression.
     // `shards: 1` also matches `target_egress_fabric_shards(OutputCount, 0, _)`,
     // so the first Add does not shrink the pool.
-    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-        egress_fabric: crate::config::EgressFabricConfig {
+    let engine = MediaEngine::new_with_config(Arc::new(crate::media::config::EngineConfig {
+        egress_fabric: crate::media::config::EgressFabricConfig {
             shards: 1,
-            ..crate::config::EgressFabricConfig::default()
+            ..crate::media::config::EgressFabricConfig::default()
         },
-        ..crate::AppConfig::default()
+        ..crate::media::config::EngineConfig::default()
     }));
     let feed_id = FeedId::new("feed-engine-pipeline-dispatch");
     let source_ring = Arc::new(restream_sync::RingBuffer::new(8));

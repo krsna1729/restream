@@ -279,7 +279,7 @@ async fn startup_reads_the_ca_only_from_the_configured_directory() {
     let output = test_output("pipe-ca-startup", "moqt://relay.example/live?ca=relay.pem");
 
     let mut engine = MediaEngine::new();
-    engine.config = Arc::new(crate::AppConfig {
+    engine.config = Arc::new(crate::media::config::EngineConfig {
         moq_ca_dir: None,
         ..Default::default()
     });
@@ -291,7 +291,7 @@ async fn startup_reads_the_ca_only_from_the_configured_directory() {
     assert!(error.contains("RESTREAM_MOQ_CA_DIR"), "{error}");
 
     let mut engine = MediaEngine::new();
-    engine.config = Arc::new(crate::AppConfig {
+    engine.config = Arc::new(crate::media::config::EngineConfig {
         moq_ca_dir: Some(dir.display().to_string()),
         ..Default::default()
     });

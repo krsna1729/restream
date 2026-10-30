@@ -56,6 +56,7 @@ async fn agent_health_snapshot(
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
     let health = crate::api_runtime_views::health_snapshot(
         &state.engine,
+        &state.config,
         pipeline_ids,
         &recording_enabled,
         0,

@@ -139,6 +139,7 @@ pub async fn agent_investigation_handler(
     let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let resource_map = crate::api_runtime_views::resource_map(
         &state.engine,
+        &state.config,
         process,
         request.pipeline_id.as_deref(),
         ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),

@@ -29,11 +29,11 @@ async fn get_hls_cancel_token_returns_some_after_ensure() {
 
 #[tokio::test]
 async fn hls_stores_use_engine_typed_config() {
-    let config = Arc::new(crate::AppConfig {
+    let config = Arc::new(crate::media::config::EngineConfig {
         hls_min_segment_ms: 0.25,
         hls_segment_capacity_bytes: 256 * 1024,
         hls_max_segments: 7,
-        ..crate::AppConfig::default()
+        ..crate::media::config::EngineConfig::default()
     });
     let engine = Arc::new(MediaEngine::new_with_config(config));
 

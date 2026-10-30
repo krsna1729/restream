@@ -328,11 +328,13 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_srt_fabric_feed_uses_shared_muxer_assignment_identity() {
-        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-            srt_egress_muxer_max_outputs_per_shard: 2,
-            srt_egress_muxer_max_shards: 8,
-            ..Default::default()
-        })));
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+            crate::media::config::EngineConfig {
+                srt_egress_muxer_max_outputs_per_shard: 2,
+                srt_egress_muxer_max_shards: 8,
+                ..Default::default()
+            },
+        )));
         let mut first = test_output(
             "pipe-srt-fabric-feed",
             OutputConfig::source(),

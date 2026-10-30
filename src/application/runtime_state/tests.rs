@@ -61,6 +61,11 @@ fn generated_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GENERATED)
 }
 
+/// The retry budget the projection reports: the default tuning's.
+pub(super) fn max_retries() -> u32 {
+    crate::RuntimeTuning::default().output_max_retries
+}
+
 pub(super) fn ports() -> crate::config::ServerPorts {
     crate::AppConfig::default().ports
 }
@@ -81,7 +86,7 @@ pub(super) async fn project_rows(
         inputs: &[],
         endpoints: &endpoints,
     };
-    project(engine, &rows).await
+    project(engine, &rows, max_retries()).await
 }
 
 /// The checked-in TypeScript contract matches the Rust types.
@@ -146,7 +151,7 @@ fn projection_with(outputs: &[(&str, Convergence)]) -> Projection {
 
 #[tokio::test]
 async fn a_change_advances_the_revision_with_only_the_changed_entities() {
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     let first = hub
         .publish(projection_with(&[
             ("a", Convergence::Starting),
@@ -182,7 +187,7 @@ async fn a_change_advances_the_revision_with_only_the_changed_entities() {
 /// snapshot: a client that keeps up never needs another fetch.
 #[tokio::test]
 async fn deltas_after_a_revision_rebuild_the_current_state() {
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     hub.publish(projection_with(&[("a", Convergence::Starting)]))
         .await;
     let seen = hub.snapshot().await;
@@ -223,7 +228,7 @@ async fn deltas_after_a_revision_rebuild_the_current_state() {
 
 #[tokio::test]
 async fn a_client_behind_the_history_or_from_another_run_resyncs() {
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     for round in 0..(DELTA_HISTORY + 2) {
         let convergence = if round % 2 == 0 {
             Convergence::Starting
@@ -258,14 +263,14 @@ async fn a_client_behind_the_history_or_from_another_run_resyncs() {
 /// run's state: the epoch in the token forces a snapshot.
 #[tokio::test]
 async fn a_resume_from_another_server_run_resyncs_even_below_its_revision() {
-    let before = StateHub::with_epoch("run-a".to_string(), ports());
+    let before = StateHub::with_epoch("run-a".to_string(), ports(), max_retries());
     before
         .publish(projection_with(&[("a", Convergence::Starting)]))
         .await;
     let held = before.snapshot().await;
     assert_eq!(held.revision, 1);
 
-    let after = StateHub::with_epoch("run-b".to_string(), ports());
+    let after = StateHub::with_epoch("run-b".to_string(), ports(), max_retries());
     for convergence in [
         Convergence::Starting,
         Convergence::Converged,
@@ -454,7 +459,7 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     let pool = crate::db::create_pool(&url).await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = std::sync::Arc::new(MediaEngine::new());
-    let hub = std::sync::Arc::new(StateHub::new(ports()));
+    let hub = std::sync::Arc::new(StateHub::new(ports(), max_retries()));
     let stop = tokio_util::sync::CancellationToken::new();
     let projector = tokio::spawn(hub::run_projector(
         hub.clone(),
@@ -530,7 +535,7 @@ async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = MediaEngine::new();
-    let hub = StateHub::new(ports());
+    let hub = StateHub::new(ports(), max_retries());
     let pipelines = async |hub: &StateHub| hub.snapshot().await.pipelines.len();
 
     crate::db::create_pipeline(&pool, "pipe", "P", "key", None, None)

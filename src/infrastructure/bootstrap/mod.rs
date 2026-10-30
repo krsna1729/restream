@@ -69,9 +69,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
         db_path = %config.db_path,
         media_dir = %config.media_dir,
         log_dir = %config.log_dir,
-        external_ffmpeg_permits = config.external_ffmpeg_permits,
+        external_ffmpeg_permits = config.engine.external_ffmpeg_permits,
         ffmpeg_threads = ?config.ffmpeg_threads,
-        recording_threads = ?config.recording_threads,
+        recording_threads = ?config.engine.recording_threads,
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
@@ -95,6 +95,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         None => {}
     }
     for warning in config
+        .engine
         .egress_fabric
         .validate(crate::media::host_capacity::HostCapacity::get().cpus)
     {
@@ -164,7 +165,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
     .await;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
 
-    let engine = Arc::new(MediaEngine::new_with_config(config.clone()));
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+        config.engine.clone(),
+    )));
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
     let ingest_authenticator = Arc::new(
@@ -192,7 +195,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         sessions,
         engine.clone(),
         logging_handles.broadcast_tx.clone(),
-        crate::api::state::AppStateRuntimeConfig::from(config.as_ref()),
+        crate::api::state::AppStateRuntimeConfig::from(config.clone()),
     ));
 
     let requests = state.reconcile.clone();
@@ -246,6 +249,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         state.runtime_state.clone(),
         pool.clone(),
         engine.clone(),
+        config.clone(),
         crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
         projector_stop.clone(),
     ));

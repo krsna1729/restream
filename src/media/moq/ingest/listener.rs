@@ -27,7 +27,7 @@ use tracing::{debug, error, info};
 
 use super::session::{SessionLimits, publish};
 use super::{MoqIngestServer, TokioLifecycle};
-use crate::config::{MoqIngestConfig, MoqIngestSetting};
+use crate::media::config::{MoqIngestConfig, MoqIngestSetting};
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::PipelineAccessAuthenticator;
 use crate::media::moq::origin::{Origin, request_token};

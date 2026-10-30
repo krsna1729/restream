@@ -4,10 +4,10 @@
 // test module.
 
 fn engine_with_admission_limits(per_client: usize, preauth_ms: u64) -> Arc<MediaEngine> {
-    let config = crate::AppConfig {
+    let config = crate::media::config::EngineConfig {
         rtmp_max_connections_per_ip: per_client,
         rtmp_preauth_timeout_ms: preauth_ms,
-        ..crate::AppConfig::default()
+        ..crate::media::config::EngineConfig::default()
     };
     Arc::new(MediaEngine::new_with_config(Arc::new(config)))
 }

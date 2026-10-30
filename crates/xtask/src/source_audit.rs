@@ -65,7 +65,7 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
 /// `path:line:text` hit, as the original `grep -v` chain did.
 const ENV_VAR_OWNERS: &[&str] = &[
     "src/config.rs",
-    "src/config/env.rs",
+    "src/media/config/env.rs",
     "src/main.rs",
     "src/lib.rs",
     "src/media/ffmpeg_binary.rs",

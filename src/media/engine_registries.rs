@@ -580,12 +580,12 @@ pub struct RuntimeInfra {
 
 impl Default for RuntimeInfra {
     fn default() -> Self {
-        Self::new(&crate::AppConfig::default())
+        Self::new(&crate::media::config::EngineConfig::default())
     }
 }
 
 impl RuntimeInfra {
-    pub fn new(config: &crate::AppConfig) -> Self {
+    pub fn new(config: &crate::media::config::EngineConfig) -> Self {
         let external_ffmpeg_permits = config.external_ffmpeg_permits;
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),

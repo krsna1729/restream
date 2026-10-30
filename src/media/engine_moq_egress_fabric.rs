@@ -138,8 +138,10 @@ impl MediaEngine {
             let source = inputs.0.clone();
             self.rescale_moq_fabric(feed_id, runtime, inputs, reason);
             if matches!(reason, ResizeReason::Add)
-                && let Err(saturated) =
-                    runtime.admit_add(crate::config::EgressShardProfile::OutputCount, &spec.id)
+                && let Err(saturated) = runtime.admit_add(
+                    crate::media::config::EgressShardProfile::OutputCount,
+                    &spec.id,
+                )
             {
                 source.remove(&spec.id);
                 return Err(MoqFabricDispatchError::Saturated(saturated));
@@ -195,7 +197,7 @@ impl MediaEngine {
         let budget = config.work_budget();
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::media::config::EgressShardProfile::OutputCount,
             crate::media::host_capacity::HostCapacity::get(),
             reason,
             shard_config,

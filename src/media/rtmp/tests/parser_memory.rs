@@ -24,10 +24,10 @@ impl PipelineAccessAuthenticator for PipelinePerKeyAuthenticator {
 }
 
 fn engine_with_ingest_limits(max_message: usize, budget: usize) -> Arc<MediaEngine> {
-    let config = crate::AppConfig {
+    let config = crate::media::config::EngineConfig {
         rtmp_max_message_bytes: max_message,
         rtmp_ingest_parser_budget_bytes: budget,
-        ..crate::AppConfig::default()
+        ..crate::media::config::EngineConfig::default()
     };
     Arc::new(MediaEngine::new_with_config(Arc::new(config)))
 }

@@ -65,7 +65,7 @@ enum Resolution {
     Missing(Option<String>),
 }
 
-/// Records the configured path from [`crate::AppConfig`]. Call once at
+/// Records the configured path (`FFMPEG_BIN_PATH`). Call once at
 /// startup before any consumer calls [`ffmpeg_bin_path`]; the server then
 /// resolves it after logging starts so the outcome is logged.
 pub fn init(configured: Option<String>) {

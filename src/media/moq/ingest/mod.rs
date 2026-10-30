@@ -2,7 +2,7 @@
 //! QUIC or WebTransport (moq-lite + hang) and it feeds a keyed pipeline
 //! input, as an RTMP, SRT or HLS push does.
 //!
-//! Off unless `RESTREAM_MOQ_INGEST_LISTEN` is set ([`crate::config::MoqIngestSetting`]).
+//! Off unless `RESTREAM_MOQ_INGEST_LISTEN` is set ([`crate::media::config::MoqIngestSetting`]).
 //! Ownership follows SRT ingest: the endpoint, every connection, frame
 //! conversion and the ring push run on the "moq-ingest" thread with its own
 //! Compio runtime ([`listener`], [`session`], [`media`]); Tokio owns
