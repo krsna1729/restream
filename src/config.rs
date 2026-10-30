@@ -16,7 +16,7 @@ pub use moq::{MoqIngestConfig, MoqIngestSetting};
 /// Default location for media-library files relative to the process working directory.
 ///
 /// Keep this as the single source of truth: tests and harness fallbacks use the same
-/// value so they cannot silently recreate the legacy repository-root `media/` directory.
+/// value so they cannot silently create a repository-root `media/` directory.
 pub const DEFAULT_MEDIA_DIR: &str = ".restream/media";
 const EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR: usize = 5;
 
@@ -134,24 +134,21 @@ impl RuntimeTuning {
     }
 }
 
-#[cfg(feature = "wi37-shard-bench")]
-const WI37_SRT_SHARDS_ENV: &str = "RESTREAM_WI37_SRT_SHARDS";
+#[cfg(feature = "srt-shard-bench")]
+const SRT_BENCH_SHARDS_ENV: &str = "RESTREAM_BENCH_SRT_SHARDS";
 
 /// Benchmark-only exact SRT shard override. Invalid values are ignored here;
 /// an operator setting one owns validating it. Keeping
 /// parsing in the product config makes the feature seam explicit and leaves
 /// every default build on the production CPU-derived policy.
-fn wi37_srt_shard_override() -> Option<u32> {
-    #[cfg(feature = "wi37-shard-bench")]
-    {
-        return env_var(WI37_SRT_SHARDS_ENV)
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .filter(|value| (1..=4).contains(value));
-    }
-    #[cfg(not(feature = "wi37-shard-bench"))]
-    {
-        None
-    }
+fn srt_bench_shard_override() -> Option<u32> {
+    #[cfg(feature = "srt-shard-bench")]
+    let shards = env_var(SRT_BENCH_SHARDS_ENV)
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (1..=4).contains(value));
+    #[cfg(not(feature = "srt-shard-bench"))]
+    let shards = None;
+    shards
 }
 
 impl EgressFabricConfig {
@@ -213,7 +210,7 @@ impl EgressFabricConfig {
 
     /// SRT starts small, exactly like RTMP; the benchmark seam can pin a count.
     pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
-        NonZeroU32::new(wi37_srt_shard_override().unwrap_or(1))
+        NonZeroU32::new(srt_bench_shard_override().unwrap_or(1))
             .expect("egress fabric shard count is clamped nonzero")
     }
 
@@ -493,7 +490,7 @@ impl EgressShardProfile {
 
     pub(crate) fn shard_override(self) -> Option<u32> {
         match self {
-            Self::SrtOutputCount => wi37_srt_shard_override(),
+            Self::SrtOutputCount => srt_bench_shard_override(),
             Self::OutputCount => None,
         }
     }

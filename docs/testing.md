@@ -670,7 +670,7 @@ the child PID. RSS and ring payload alone cannot separate live heap from
 allocator retention; pair them with an allocation profiler. The 64 MiB growth
 limit stays unchanged until
 [Q-026](backlog.md#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
-attributes the historical growth.
+attributes the RSS growth it guards against.
 
 Two more modes qualify SRT egress:
 

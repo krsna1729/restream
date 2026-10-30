@@ -41,8 +41,8 @@ fn read_hvcc_array(record: &[u8], offset: usize) -> (u8, &[u8], usize) {
 
 /// SPS/PPS lists the AVCDecoderConfigurationRecord cannot express (more
 /// than 31 SPS, more than 255 PPS, or a NALU longer than 65,535 bytes) are
-/// refused. They used to be written with wrapped counts or lengths, so the
-/// record sent to every RTMP destination no longer matched its own bytes.
+/// refused: written with wrapped counts or lengths, the record sent to every
+/// RTMP destination would not match its own bytes.
 #[test]
 fn avcc_sequence_header_refuses_parameter_sets_it_cannot_encode() {
     let sps = [0x67, 0x64, 0x00, 0x28, 0xAC];
@@ -67,7 +67,7 @@ fn avcc_sequence_header_refuses_parameter_sets_it_cannot_encode() {
     assert_eq!(parse_avcc_config(&header[5..]).1, annexb(&max));
 }
 
-/// A NALU length width outside 1..=4 converts nothing. Width 0 used to read
+/// A NALU length width outside 1..=4 converts nothing: width 0 must not read
 /// a four-byte length from a shorter body and panic on the index.
 #[test]
 fn avcc_to_annexb_ignores_an_impossible_length_width() {

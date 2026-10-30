@@ -281,7 +281,7 @@ fn a_closed_generation_abandons_a_pending_handshake_and_frees_the_slot() {
 /// while its PMT changes; the ingress Owner/control seam updates the ring,
 /// and the real QUIC origin closes the already-attached viewer's generation.
 #[test]
-fn q098_same_session_srt_pmt_changes_replace_live_origin_generations() {
+fn same_session_srt_pmt_changes_replace_live_origin_generations() {
     use crate::media::srt::ingress_test_support::TopologyPublisher;
 
     const PIPELINE: &str = "pipeline-topology";
@@ -338,7 +338,7 @@ fn q098_same_session_srt_pmt_changes_replace_live_origin_generations() {
         assert!(first.is_closed());
         wait_for_no_viewers(&first).await;
         assert_eq!(origin.viewers(PIPELINE), 0);
-        let catalog = q098_published_catalog(&second).await;
+        let catalog = published_catalog(&second).await;
         assert!(catalog.video.renditions.is_empty());
         assert!(!catalog.audio.renditions.is_empty());
         let ring = engine.ingests.pipelines.read().await[PIPELINE].clone();
@@ -351,14 +351,14 @@ fn q098_same_session_srt_pmt_changes_replace_live_origin_generations() {
         publisher.send(true, true, 2);
         let third = wait_for_generation(&origin, PIPELINE, 3).await;
         assert!(second.is_closed());
-        let catalog = q098_published_catalog(&third).await;
+        let catalog = published_catalog(&third).await;
         assert!(!catalog.video.renditions.is_empty());
         assert!(!catalog.audio.renditions.is_empty());
 
         publisher.send(true, false, 3);
         let fourth = wait_for_generation(&origin, PIPELINE, 4).await;
         assert!(third.is_closed());
-        let catalog = q098_published_catalog(&fourth).await;
+        let catalog = published_catalog(&fourth).await;
         assert!(!catalog.video.renditions.is_empty());
         assert!(catalog.audio.renditions.is_empty());
         let metadata = engine
@@ -377,7 +377,7 @@ fn q098_same_session_srt_pmt_changes_replace_live_origin_generations() {
     tokio.block_on(publisher.stop());
 }
 
-async fn q098_published_catalog(served: &Served) -> hang::Catalog {
+async fn published_catalog(served: &Served) -> hang::Catalog {
     compio::time::timeout(Duration::from_secs(3), async {
         let mut track = served
             .probe
@@ -396,7 +396,7 @@ async fn q098_published_catalog(served: &Served) -> hang::Catalog {
 }
 
 #[test]
-fn q098_review_initial_empty_srt_pmt_clears_retained_ring_and_closes_origin() {
+fn initial_empty_srt_pmt_clears_retained_ring_and_closes_origin() {
     use crate::media::srt::ingress_test_support::TopologyPublisher;
 
     const PIPELINE: &str = "pipeline-topology";

@@ -127,7 +127,7 @@ pub(super) struct ResourceSweepEnv {
     pub(super) ingest_counts: Vec<usize>,
     pub(super) egress_counts: Vec<usize>,
     /// Publisher fixture bitrate label (`RESOURCE_SWEEP_BITRATE`, default
-    /// `1.5M`). The WI3.4 packet-rate contract runs the `8M` workload.
+    /// `1.5M`). The packet-rate contract runs the `8M` workload.
     pub(super) bitrate: String,
     pub(super) scenario_filter: Option<HashSet<String>>,
     pub(super) lifecycle: ResourceSweepLifecycle,

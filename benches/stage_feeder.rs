@@ -1,4 +1,4 @@
-//! Benchmarks for the shared TS packet feeder introduced in Phase 1.
+//! Benchmarks for the shared TS packet feeder.
 //!
 //! Run:
 //!   cargo bench --bench stage_feeder --profile bench-dev

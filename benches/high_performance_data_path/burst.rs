@@ -162,7 +162,7 @@ fn bench_burst_mux_write(c: &mut Criterion) {
         });
     });
 
-    // --- AFTER (Q-009): mux directly into the accumulator, no per-packet
+    // --- AFTER: mux directly into the accumulator, no per-packet
     // scratch buffer and no memmove of each packet's TS bytes into ts_batch.
     // This is the production shape after the queue→TsMux copy elimination.
     group.bench_function("batch_mux_into_write", |b| {

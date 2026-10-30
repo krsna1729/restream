@@ -674,7 +674,7 @@ pub fn create_hls_ingest_router(
     .with_state(super::hls_ingest::HlsIngestState { ingest, inputs })
 }
 
-/// Every persisted change reaches the reconciler (Q-040): it runs an output
+/// Every persisted change reaches the reconciler: it runs an output
 /// pass only when asked, so a successful mutating request asks, whichever
 /// handler served it.
 async fn wake_reconciler_after_mutation(

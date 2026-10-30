@@ -11,8 +11,8 @@ Verdicts:
   is worth its cost.
 - **No media crossing**: media stays on one context; only lifecycle or
   telemetry crosses.
-- **Open**: plausibly material at scale; the measurement reference that
-  decides it is named.
+- **Open**: plausibly material at scale; the measurement that decides it is
+  named.
 
 ## Contents
 
@@ -21,7 +21,7 @@ Verdicts:
 - [MoQ crossings](#moq-crossings)
 - [Control and wake crossings](#control-and-wake-crossings)
 - [Observability crossings](#observability-crossings)
-- [Measurement references](#measurement-references)
+- [Measurements](#measurements)
 
 ## Execution contexts
 
@@ -83,10 +83,10 @@ Tokio runtime with a fixed worker count (`src/media/executor.rs`).
 
 ## MoQ crossings
 
-MoQ phase 1 uses moq-lite (`moq-net`) with the hang catalog over Compio QUIC
-(`src/media/moq/`). Ingest and the local origin share the `moq-ingest`
-thread. Relay output (`moqt://`) runs on egress shards. No MoQ media runs on
-CONTROL.
+MoQ (moq-lite and IETF MOQT via `moq-net`, hang and MSF catalogs) runs over
+Compio QUIC (`src/media/moq/`). Ingest and the local origin share the
+`moq-ingest` thread. Relay output (`moqt://`) runs on egress shards. No MoQ
+media runs on CONTROL.
 
 | # | Crossing | Mechanism | Rate | Bound | Verdict |
 |---|---|---|---|---|---|
@@ -116,23 +116,33 @@ CONTROL.
 | O1 | API → host and process sampling (`/metrics/system`, status, resource map, agent context) | One long-lived sampler (`system_sampling::sampled_system`) refreshes host CPU (a real delta), memory, and only Restream and its children (`/proc/self/task/*/children`). If child lists cannot be read it refreshes all processes with minimal fields. Sampling runs on the requesting CONTROL worker | **Justified.** |
 | O2 | API observation cost (health, telemetry) | `/api/v1/engine/health` serializes typed views with no `Value` tree; `sample_host_settings` is cached for 15 s. Telemetry endpoints and the summary view still build `serde_json::Value` trees (`egress_runtime_json`), so their cost grows with output count. The capacity harness reads one fixed-shape `GET /api/v1/measure` per sample instead. The API reads what shards publish and sends no shard commands | **Open.** Remaining cost is payload size per output; `benches/api_health.rs` measures it. |
 
-## Measurement references
+## Measurements
 
 Numbers that set a current default or decision. The full data is in the
 commit that recorded it.
 
-- **M4** One SRT ingress Owner costs about 1.8% of a core per 8 Mbit/s
-  publisher. A second Owner lifted the per-Owner ceiling about 20%, not 2×,
-  so `RESTREAM_SRT_INGRESS_OWNERS` defaults to 1.
-- **M6** One SRT shard (one 4 Mbit/s feed, delivery-checked) delivered every
-  output up to 64 at 19–51% busy and began losing outputs at 96 (62% busy).
-  This sets the SRT cold prior (64 outputs per shard) and the 60% admission
-  ceiling in `src/media/egress/sizing.rs`. Cross-host qualification is open.
-- **M7** Pinning CONTROL, MEDIA and hot threads to separate CPUs doubled
-  shard run-queue wait for about 10% less process CPU, so threads keep
-  shared affinity (`cargo xtask harness-segregated` reproduces the
-  split arm).
-- **M8** Each extra SRT feed adds about 5% shard CPU, 2.4 threads and 15 MB,
-  against about 0.7% shard CPU per extra output on one feed. A host-level
-  shared SRT pool cut that cost but let one Owner fault fail several feeds,
-  so production keeps one shard group per feed.
+### SRT ingress Owner cost
+
+One SRT ingress Owner costs about 1.8% of a core per 8 Mbit/s publisher. A
+second Owner lifted the per-Owner ceiling about 20%, not 2×, so
+`RESTREAM_SRT_INGRESS_OWNERS` defaults to 1.
+
+### SRT shard capacity
+
+One SRT shard (one 4 Mbit/s feed, delivery-checked) delivered every output up
+to 64 at 19–51% busy and began losing outputs at 96 (62% busy). This sets the
+SRT cold prior (64 outputs per shard) and the 60% admission ceiling in
+`src/media/egress/sizing.rs`. Cross-host qualification is open.
+
+### CPU affinity
+
+Pinning CONTROL, MEDIA and hot threads to separate CPUs doubled shard
+run-queue wait for about 10% less process CPU, so threads keep shared affinity
+(`cargo xtask harness-segregated` reproduces the split arm).
+
+### Per-feed shard isolation
+
+Each extra SRT feed adds about 5% shard CPU, 2.4 threads and 15 MB, against
+about 0.7% shard CPU per extra output on one feed. A host-level shared SRT pool
+cut that cost but let one Owner fault fail several feeds, so production keeps
+one shard group per feed.

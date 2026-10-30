@@ -794,7 +794,7 @@ async fn v1_events_filters_by_pipeline_id() {
     assert_eq!(events[0]["pipelineId"].as_str().unwrap(), "pipe-a");
 }
 
-/// The reconciler runs an output pass only when asked (Q-040): every
+/// The reconciler runs an output pass only when asked: every
 /// successful mutating request asks; reads and rejected requests do not.
 #[tokio::test]
 async fn a_successful_mutation_requests_a_reconcile_pass() {

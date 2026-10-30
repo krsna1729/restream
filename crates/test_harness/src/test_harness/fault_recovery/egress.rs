@@ -589,7 +589,7 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
 /// dead destination rather than a connected-but-non-reading one — the
 /// harness has no raw SRT listener to hold a connection open without
 /// reading, but a dead destination is an equally valid bad-neighbor shape
-/// (one of the Phase 0 baseline manifest rows) and, like a stalled peer,
+/// (one of the destination-isolation cases) and, like a stalled peer,
 /// exercises the same isolation property: one leaf's failure must not slow
 /// or stop its shard siblings.
 async fn fault_srt_egress_dead_sink_isolation_under_many_outputs(

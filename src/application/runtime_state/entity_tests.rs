@@ -1,4 +1,4 @@
-//! Inputs and graphs in the runtime state (Q-050): what a client reading the
+//! Inputs and graphs in the runtime state: what a client reading the
 //! state stream instead of polling `/inputs` and `/graph` relies on.
 
 use super::hub::{Since, StateHub};

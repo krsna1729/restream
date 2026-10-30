@@ -192,7 +192,7 @@ pub(super) async fn sample_resource_window(
         let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
         let rss_kb = read_proc_status_kb_checked(stack.restream_pid, "VmRSS", &env.restream_log)?;
         let rollup = read_smaps_rollup(stack.restream_pid)?;
-        // One fixed-shape snapshot per sample (Q-037): the full telemetry and
+        // One fixed-shape snapshot per sample: the full telemetry and
         // health payloads cost enough Restream CPU to bias the measurement.
         let measure = stack.api.get_json("/api/v1/measure").await?;
         let system = stack.api.get_json("/metrics/system?view=summary").await?;
@@ -394,13 +394,11 @@ pub(super) fn read_proc_stat_ticks(pid: u32) -> Result<u64, String> {
 }
 
 /// Cumulative context-switch counters from `/proc/<pid>/status`, sampled and
-/// diffed the same way `read_proc_stat_ticks` diffs CPU ticks. Closes the
-/// "context-switch/allocator instrumentation" gap noted throughout Phase 5's
-/// live captures (egress migration record, git history) — a directly observable
-/// proxy for the thread-topology/allocator-contention tradeoffs found there
-/// (more concurrently active OS threads doing the same work show up here as
-/// more switches, the same signature `perf`'s `try_to_wake_up`/`futex`
-/// self-time showed for the fabric variant specifically).
+/// diffed the same way `read_proc_stat_ticks` diffs CPU ticks: a directly
+/// observable proxy for thread-topology/allocator contention (more
+/// concurrently active OS threads doing the same work show up here as more
+/// switches, the same signature `perf` shows as `try_to_wake_up`/`futex`
+/// self-time).
 struct ProcCtxtSwitches {
     voluntary: u64,
     nonvoluntary: u64,

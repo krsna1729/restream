@@ -1,4 +1,4 @@
-// Client of the revisioned runtime state (Q-042): one snapshot, then deltas
+// Client of the revisioned runtime state: one snapshot, then deltas
 // applied in revision order. A gap (a delta that does not follow the held
 // revision) means events were missed; the client reconnects from its last
 // revision, and the server answers with the missing deltas or a snapshot.

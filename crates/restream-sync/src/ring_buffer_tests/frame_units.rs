@@ -69,7 +69,7 @@ fn configuration_generation_changes_only_with_the_bytes_and_per_track() {
 }
 
 #[test]
-fn q098_track_removal_clears_current_config_but_not_historical_frame_identity() {
+fn track_removal_clears_current_config_but_not_historical_frame_identity() {
     let ring = RingBuffer::new(8);
     ring.set_codec_hint("h264");
     ring.set_video_parameter_sets(vec![1, 2, 3]);

@@ -369,8 +369,7 @@ starts with one shard.
   ceiling.
 
 The SRT prior and the 60% ceiling come from a delivery-checked single-shard
-test (see [Runtime crossings](runtime-crossings.md#measurement-references),
-M6).
+test (see [SRT shard capacity](runtime-crossings.md#srt-shard-capacity)).
 
 ## Failure containment
 

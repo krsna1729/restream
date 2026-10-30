@@ -201,8 +201,8 @@ fn rows<'a>(executor: &'a Value, list: &str) -> impl Iterator<Item = &'a Value> 
 /// The media executor's per-class rows over the rated window, for the
 /// classes that polled in it. `perMinutePerSession` divides the window's
 /// polls above 1, 4 and 16 ms of thread CPU by the window's minutes and by
-/// the class's active services at the end (the Q-074 gate's unit: for
-/// `hlsIngest`, one service is one HLS session).
+/// the class's active services at the end (the HLS session poll-budget
+/// gate's unit: for `hlsIngest`, one service is one HLS session).
 pub(crate) fn executor_class_windows(start: &Value, end: &Value, window_secs: f64) -> Vec<Value> {
     rows(end, "classes")
         .filter_map(|end_row| {

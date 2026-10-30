@@ -10,10 +10,10 @@ const SHRINK_DWELL: Duration = Duration::from_secs(300);
 /// Consecutive unhealthy windows that count as trouble, not a blip.
 const BLIP_WINDOWS: u32 = 3;
 const REFERENCE_FEED_BPS: f64 = 4.8e6;
-/// One SRT shard (4 Mbit/s feed, runtime-crossings M6) delivered 64 outputs
-/// at 19–51 % busy, lost outputs at 96 (92/96 delivered, 62 % busy) and
-/// collapsed at 128 (0/128, 89 % busy): a saturated shard starves every
-/// output on it.
+/// One SRT shard (4 Mbit/s feed, runtime-crossings "SRT shard capacity")
+/// delivered 64 outputs at 19–51 % busy, lost outputs at 96 (92/96 delivered,
+/// 62 % busy) and collapsed at 128 (0/128, 89 % busy): a saturated shard
+/// starves every output on it.
 /// No shard is given an output that would put it above this.
 pub(crate) const ADMIT_CEILING: f64 = 0.60;
 

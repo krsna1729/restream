@@ -3,9 +3,9 @@
 //! A Raw feed (SRT/TS ingest, transcoder output) carries Annex B video and
 //! ADTS audio; every RTMP output must send AVCC/HVCC video and raw AAC. The
 //! converted bytes depend only on the packet and the output's enhanced-HEVC
-//! mode, never on per-output state, yet each output used to convert (and then
-//! copy) every packet itself: at 100 outputs of one 8 Mbit/s SRT ingest that
-//! was ~11% of Restream CPU, 100x the necessary work.
+//! mode, never on per-output state; converting (and then copying) every
+//! packet per output costs ~11% of Restream CPU at 100 outputs of one
+//! 8 Mbit/s SRT ingest, 100x the necessary work.
 //!
 //! All outputs on one egress shard read the same feed within a few units of
 //! each other, so the shard thread keeps the most recent conversions in a
@@ -117,7 +117,7 @@ impl RtmpPayloadCache {
     }
 }
 
-/// Exactly what an output used to compute inline: the production Annex B /
+/// The per-packet conversion an output needs: the production Annex B /
 /// ADTS conversion, written straight into the buffer that becomes the shared
 /// `Bytes` (no intermediate copy).
 fn convert_raw(packet: &MediaPacket, enhanced_hevc: bool) -> Option<Bytes> {

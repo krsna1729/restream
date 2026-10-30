@@ -1,10 +1,7 @@
 //! Sink fabric shard backend: wires [`SinkEngine`] into
-//! [`EgressShardBackend`] on real shard OS threads — the production
-//! counterpart to the test-only `SinkHarnessBackend`
-//! (`src/media/egress/shard/tests/sink.rs`), which already proved
-//! `SinkEngine` is schedulable on a shard but was never wired into
-//! `EgressManager`/`EgressCommand` dispatch (see
-//! the egress migration record (git history) Phase 4a status).
+//! [`EgressShardBackend`] on real shard OS threads, reached through
+//! `EgressManager`/`EgressCommand` dispatch — the production counterpart to
+//! the test-only `SinkHarnessBackend` (`src/media/egress/shard/tests/sink.rs`).
 //!
 //! Unlike SRT/RTMP, a sink leaf has no socket and no poller: discarding
 //! costs no I/O, so a leaf is always conceptually "writable." That means

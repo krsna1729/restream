@@ -194,7 +194,7 @@ async function getAggregateAlerts(
   );
 }
 
-/** The fleet's sampled signals (Q-064) taken from `since` through `until`
+/** The fleet's sampled signals taken from `since` through `until`
  * (each optional: every kept one, up to now), oldest first. */
 async function getFleetHistory(
   options: { since?: Date; until?: Date } = {},
@@ -372,7 +372,7 @@ function buildLogsStreamUrl(options: BuildLogsStreamUrlOptions = {}): string {
 }
 
 /**
- * Runtime state stream (Q-042); `since` (`<epoch>.<revision>`) resumes after
+ * Runtime state stream; `since` (`<epoch>.<revision>`) resumes after
  * that revision of that server run.
  */
 export function buildRuntimeStateStreamUrl(since?: string): string {

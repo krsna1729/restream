@@ -1,8 +1,8 @@
 use super::*;
 
-// M2: get_hls_cancel_token must return None (not panic) when no HLS
-// segmenter is registered for the pipeline. The reconciler's HLS egress
-// path replaced an unwrap() with a None guard after this was identified.
+// get_hls_cancel_token must return None (not panic) when no HLS
+// segmenter is registered for the pipeline; the reconciler's HLS egress
+// path relies on that None guard.
 #[tokio::test]
 async fn get_hls_cancel_token_returns_none_with_no_segmenter() {
     let engine = Arc::new(MediaEngine::new());
@@ -13,7 +13,7 @@ async fn get_hls_cancel_token_returns_none_with_no_segmenter() {
     );
 }
 
-// M2 (continued): after ensure_hls_segmenter registers a segmenter, the
+// After ensure_hls_segmenter registers a segmenter, the
 // token must be Some — confirming the None case above is not a permanent failure.
 #[tokio::test]
 async fn get_hls_cancel_token_returns_some_after_ensure() {
@@ -274,8 +274,8 @@ async fn hls_persistent_lease_is_none_when_no_segmenter_is_registered() {
 /// An output's registration belongs to the segmenter entry it was taken
 /// from. When that segmenter shuts down and a new one starts for the same
 /// pipeline, releasing the old registration must not release a consumer of
-/// the new one: it used to, because release looked the entry up by
-/// pipeline id, so the new segmenter went idle under a live HLS output.
+/// the new one: a release that looked the entry up by pipeline id would
+/// leave the new segmenter idle under a live HLS output.
 #[tokio::test]
 async fn releasing_a_lease_from_a_replaced_segmenter_keeps_the_new_one_busy() {
     let engine = Arc::new(MediaEngine::new());
@@ -299,4 +299,4 @@ async fn releasing_a_lease_from_a_replaced_segmenter_keeps_the_new_one_busy() {
     assert!(!entry.is_idle(0), "the new output still holds its lease");
 }
 
-// ── Matrix routing with synthetic packets (Phase 0 re-tier) ─────
+// ── Matrix routing with synthetic packets ─────

@@ -700,7 +700,7 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
 
 // ── Regression tests for Round 10 audit fixes ────────────────────────────────
 
-// M1: list_sessions must return Err (not Ok([])) when the DB fails. The
+// list_sessions must return Err (not Ok([])) when the DB fails. The
 // reconciler's session-prune logic skips retain() on Err — if this returned
 // Ok([]) instead, every active session would be wiped from memory.
 #[tokio::test]
@@ -812,7 +812,7 @@ async fn file_backed_pool_enables_wal_and_survives_concurrent_writers() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-// M5: NULL legacy encoding in DB must not cause a decode failure. A row with
+// A NULL `encoding` column in DB must not cause a decode failure. A row with
 // encoding=NULL falls back to the `config` column's default (source).
 
 #[tokio::test]

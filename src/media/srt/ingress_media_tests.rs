@@ -111,7 +111,7 @@ fn media_received_before_admission_is_replayed_on_attach() {
     assert_eq!(stats.media_payloads.load(Ordering::Relaxed), 600);
 }
 
-/// Review finding 2: when earlier peers fill the Owner-wide admission cap, a
+/// When earlier peers fill the Owner-wide admission cap, a
 /// newly arriving peer still keeps its first payloads (its PAT/PMT and codec
 /// data); the largest queue gives up room instead.
 #[test]
@@ -171,7 +171,7 @@ fn a_peer_over_its_own_quota_drops_its_own_oldest_payloads() {
     assert_eq!(media.unattached_bytes, 0);
 }
 
-/// Review finding 3: the first-probe boundary as a contract. Packets completed
+/// The first-probe boundary as a contract. Packets completed
 /// by the payload that yields the probe are published to the current ring;
 /// later packets are held. When Tokio adapts the ring the way
 /// `adapt_pipeline_ring` does (a continuing ring seeded with the old ring's
@@ -226,7 +226,7 @@ fn the_first_probe_boundary_and_ring_migration_are_ordered() {
     assert_eq!(stats.media_probe_hold_overflows.load(Ordering::Relaxed), 0);
 }
 
-/// Review finding 1: many publishers waiting on Tokio at once stay inside the
+/// Many publishers waiting on Tokio at once stay inside the
 /// per-publisher and Owner-wide byte budgets; the overflow outcome publishes
 /// held media to the current ring, counted, instead of growing.
 #[test]
@@ -395,7 +395,7 @@ fn a_replay_that_unwinds_leaves_no_bytes_charged() {
 }
 
 #[test]
-fn q098_stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
+fn stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
     use super::super::ingress_test_support::topology_chunks;
 
     let stats = SrtIngressOwnerStats::default();
@@ -433,7 +433,7 @@ fn q098_stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session()
 }
 
 #[test]
-fn q098_reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
+fn reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
     use super::super::ingress_test_support::topology_pmt;
 
     let fixture = crate::test_fixtures::av_marker_transport_fixture("h264", true).unwrap();
@@ -492,7 +492,7 @@ fn q098_reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
 }
 
 #[test]
-fn q098_hold_empty_topology_releases_batch_allocations_with_their_credits() {
+fn hold_empty_topology_releases_batch_allocations_with_their_credits() {
     use super::super::ingress_test_support::{topology_chunks, topology_pmt};
 
     let stats = SrtIngressOwnerStats::default();
@@ -514,7 +514,7 @@ fn q098_hold_empty_topology_releases_batch_allocations_with_their_credits() {
 }
 
 #[test]
-fn q098_hold_topology_updates_keep_the_outstanding_absolute_deadline() {
+fn hold_topology_updates_keep_the_outstanding_absolute_deadline() {
     use super::super::ingress_test_support::{topology_chunks, topology_pmt};
 
     let stats = SrtIngressOwnerStats::default();
@@ -558,7 +558,7 @@ fn q098_hold_topology_updates_keep_the_outstanding_absolute_deadline() {
 }
 
 #[test]
-fn q098_review_coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
+fn coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
     use super::super::ingress_test_support::topology_pmt_typed;
     use restream_mpegts::TsMuxer;
 

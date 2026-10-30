@@ -233,10 +233,9 @@ impl RtmpFabricLeaf {
     }
 
     /// Sample sender-side TCP quality (RTT, retransmits, cwnd, pacing rate,
-    /// congestion algorithm) for the once-per-second stall sweep — the same
-    /// `TCP_INFO`/`SO_MEMINFO` mechanism and cadence legacy RTMP egress used
-    /// for its own quality reporting, and the same conversion `rtmp/ingest.rs`
-    /// already uses on the receive side. Returns `None` when `TCP_INFO` is
+    /// congestion algorithm) for the once-per-second stall sweep via
+    /// `TCP_INFO`/`SO_MEMINFO`, with the same conversion `rtmp/ingest.rs`
+    /// uses on the receive side. Returns `None` when `TCP_INFO` is
     /// unavailable (non-Linux, or the getsockopt call itself failed); the
     /// caller should leave the previously published quality in place then.
     fn sample_quality(

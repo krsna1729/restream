@@ -77,8 +77,6 @@ impl fmt::Display for ShardId {
 // ---------------------------------------------------------------------------
 
 /// Protocol-specific connection parameters carried with an `OutputSpec`.
-///
-/// Extended as more protocols migrate onto the fabric.
 #[derive(Debug, Clone)]
 pub enum ProtocolSpec {
     /// Plain or TLS RTMP egress.

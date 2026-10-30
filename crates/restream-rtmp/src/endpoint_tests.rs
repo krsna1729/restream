@@ -39,10 +39,10 @@ fn parse_rtmp_url_standard_forms() {
     assert!(parse_rtmp_url("rtmp://host/noapp").is_none());
 }
 
-// --- Regression: issue #5 (Round 5) — IPv6 RTMP URL parsing ---
-// Before the fix, `host_port.find(':')` landed inside the IPv6 brackets
-// (first `:` in `[::1]:1935` is at position 2, inside the brackets),
-// causing the host to be parsed as `[` and port parsing to fail.
+// --- IPv6 RTMP URL parsing ---
+// `host_port.find(':')` would land inside the IPv6 brackets (first `:` in
+// `[::1]:1935` is at position 2), parsing the host as `[` and failing the
+// port.
 #[test]
 fn parse_rtmp_url_ipv6_literal() {
     let result = parse_rtmp_url("rtmp://[::1]:1935/live/mykey");

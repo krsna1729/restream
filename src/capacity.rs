@@ -83,8 +83,8 @@ impl OutputProtocol {
     ///
     /// MoQ costs 6.95 RTMP outputs: the median of three paired repeats
     /// (6.834, 6.921, 7.275), rounded up to 0.05, measured as Restream CPU
-    /// per added output from 20 to 120 outputs of a 4.7 Mbit/s H.264 source
-    /// (Q-088). Every output is its own publisher session with a
+    /// per added output from 20 to 120 outputs of a 4.7 Mbit/s H.264 source.
+    /// Every output is its own publisher session with a
     /// continuously subscribed receiver through the whole window, so the
     /// price includes its QUIC/TLS connection and per-object stream writes.
     /// The local moq-relay and the subscribers are separate processes; their
@@ -226,15 +226,10 @@ impl HostCapacity {
     }
 
     /// Egress fabric shard threads scale with host cores instead of a flat
-    /// constant. A live legacy-vs-fabric `perf` comparison at a combined
-    /// 1,140 RTMP + 60 SRT workload (the egress migration record (git
-    /// history) Phase 5) measured the previous flat default of 4 costing
-    /// fabric ~12% more avg CPU and ~23% more peak CPU than legacy on a
-    /// 6-CPU host; raising the shard count toward the host's own core count
-    /// closed the avg-CPU gap entirely (fabric ~2% *below* legacy) and shrank
-    /// the peak gap to ~3.5%, across three repeated live captures at each of
-    /// shards=2, 4, and 6 — while preserving fabric's ~12-15% lower RSS
-    /// throughout. This is the ceiling of one shard pool: `clamp(C, 2, 8)`.
+    /// constant. On a 6-CPU host at a
+    /// combined 1,140 RTMP + 60 SRT workload, a flat 4 shards cost ~12% more
+    /// avg CPU and ~23% more peak CPU than shards matched to the core count,
+    /// measured across three live `perf` captures at shards=2, 4, and 6. This is the ceiling of one shard pool: `clamp(C, 2, 8)`.
     pub fn egress_shards_per_pool(self) -> u32 {
         self.cpus.clamp(2, 8) as u32
     }

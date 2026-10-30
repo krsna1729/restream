@@ -609,7 +609,7 @@ pub async fn outputs_update_handler(
     Ok(Json(output_response_body("Output updated", &updated)).into_response())
 }
 
-/// Deletes one output; the reconciler then stops its egress (Q-039).
+/// Deletes one output; the reconciler then stops its egress.
 pub async fn outputs_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

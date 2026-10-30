@@ -276,7 +276,7 @@ impl AgentService {
                         "output '{output_id}' not found on pipeline '{pipeline_id}'"
                     ));
                 }
-                // The reconciler stops the egress of the deleted row (Q-039).
+                // The reconciler stops the egress of the deleted row.
                 requests.wake();
                 Ok(AgentOutputMutationOutcome::Removed(previous))
             }

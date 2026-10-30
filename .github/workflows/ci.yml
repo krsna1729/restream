@@ -463,7 +463,7 @@ jobs:
   moq-interop:
     # Both pinned moq.dev profiles: lite/browser coverage, then explicit
     # moqt-19 MSF/LOC egress and relay-forwarded ingest. MediaMTX remains
-    # diagnostic-only until its dialect mismatch is resolved (Q-091).
+    # diagnostic-only until its dialect mismatch is resolved.
     # Reuse integration-build's binaries and the same downloaded peers.
     name: MoQ interop
     runs-on: ubuntu-24.04

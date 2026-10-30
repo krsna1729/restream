@@ -1,4 +1,4 @@
-//! Consumer leases on shared stages (Q-041).
+//! Consumer leases on shared stages.
 //!
 //! Every consumer of a shared stage (an egress, an HLS preview, an SRT
 //! player) holds a [`StageLease`] on each stage it reads. The registry entry

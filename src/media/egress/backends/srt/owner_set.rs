@@ -45,10 +45,9 @@ mod dispose;
 use self::dispose::{Disposing, FamilyClosure};
 
 /// Default concurrent datagram sends per family Owner (its TX pool and lane
-/// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The retired
-/// native driver allowed 16 concurrent UDP send operations per family; that
-/// envelope was kept as the starting point. The runtime is sized for both
-/// families: `AddressFamily::COUNT * K`.
+/// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The default
+/// allows 16 concurrent UDP send operations per family. The runtime is sized
+/// for both families: `AddressFamily::COUNT * K`.
 /// Unsent protocol output waits in bounded protocol state, not in a Restream
 /// transport queue, so this is the whole TX envelope of one family.
 pub(crate) const SRT_OWNER_TX_CAPACITY: usize = 16;
@@ -120,7 +119,7 @@ pub(crate) fn substrate_diagnosis(substrate: ManagedRxSubstrate) -> &'static str
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SrtOwnerSettings {
     /// Per-Owner caller-pool `max_in_flight`: the transport's connect
-    /// admission bound (replaces the old application connect semaphore).
+    /// admission bound.
     pub(crate) caller_max_in_flight: std::num::NonZeroUsize,
     /// Upstream defaults, independent of pool capacity and fan-out: protocol
     /// TX (`max_actions`) and pool/lifecycle maintenance

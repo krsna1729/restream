@@ -110,7 +110,7 @@ mod tests {
         let mut errors = vec![];
         scan_text(
             "page.tsx",
-            "// style-ok: legacy\ncard-body\ncard-body",
+            "// style-ok: fixture exception\ncard-body\ncard-body",
             &rules,
             &mut errors,
         );

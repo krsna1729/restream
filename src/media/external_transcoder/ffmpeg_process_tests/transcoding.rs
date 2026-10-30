@@ -443,8 +443,8 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     // exact regression where every stage remained at `firstInput` while a
     // low-bitrate HEVC publisher kept its pipe open.
     // A complete HEVC + AAC live-start window fits in 640 KiB. This is
-    // above the headers required for both streams, but far below the old
-    // 2 MiB probe ceiling that caused the SRT harness stall.
+    // above the headers required for both streams, but far below a 2 MiB
+    // probe ceiling, which stalls the SRT harness.
     const LIVE_STARTUP_TS_BUDGET: usize = 640 * 1024;
     for packet in &packets {
         packet_buf.clear();
@@ -461,12 +461,12 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     );
     assert!(
         ts_bytes.len() <= LIVE_STARTUP_TS_BUDGET,
-        "the live-start regression fixture must stay below the old 2 MiB probe ceiling"
+        "the live-start regression fixture must stay below a 2 MiB probe ceiling"
     );
     const LIVE_STARTUP_BATCHES: usize = 3;
     assert!(
         ts_bytes.len() * LIVE_STARTUP_BATCHES < 2 * 1024 * 1024,
-        "the persistent-pipe proof must emit before the old 2 MiB probe ceiling"
+        "the persistent-pipe proof must emit before a 2 MiB probe ceiling"
     );
 
     let ffmpeg = crate::ffmpeg_binary::ffmpeg_bin_path();

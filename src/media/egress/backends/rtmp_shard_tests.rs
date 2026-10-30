@@ -524,9 +524,8 @@ fn only_an_enhanced_outputs_connect_advertises_fourcc_list() {
 #[test]
 fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     // `LeafCommon::pending_application_bytes` (wired up in
-    // `visit_one_ready_leaf`) used to mean nothing: nothing ever read it.
-    // `sweep_stalled_leaves` (mirroring `SrtShardBackend`'s identical
-    // mechanism) is what makes it actually enforce something: a leaf with
+    // `visit_one_ready_leaf`) is enforced by `sweep_stalled_leaves`
+    // (mirroring `SrtShardBackend`'s identical mechanism): a leaf with
     // pending bytes and no byte/protocol progress within
     // `LeafLimits::max_backpressure_duration` gets closed. This test
     // drives two real leaves to `Publishing` (real handshake/negotiation
@@ -944,8 +943,8 @@ fn an_unusable_url_terminates_the_leaf() {
 
 /// A readiness event or I/O completion still naming a removed leaf must not
 /// reach the output that reuses its slot. Both outputs are generation 1 and
-/// the shard has one slot, so before slot epochs the old event matched the
-/// new leaf exactly (same slot, same generation, often the same fd).
+/// the shard has one slot, so without slot epochs the stale event would match
+/// the new leaf exactly (same slot, same generation, often the same fd).
 #[test]
 fn a_removed_leafs_late_event_does_not_reach_the_slots_next_output() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

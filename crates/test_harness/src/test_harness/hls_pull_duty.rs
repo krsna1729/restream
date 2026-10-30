@@ -1,6 +1,6 @@
 //! `hls-pull-duty`: the harness mode that drives HLS **pull** ingest.
 //!
-//! The mode exists to prove Q-068 end to end against the product's own output
+//! The mode exists to prove HLS pull ingest end to end against the product's own output
 //! rather than a synthetic origin: a source pipeline is fed by a real RTMP
 //! publisher, and a second pipeline pulls that source's own HLS preview
 //! (`/hls/{pipeline_id}/master.m3u8`) through the API's `hlsPull` input with

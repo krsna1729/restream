@@ -26,9 +26,9 @@
 //! # Passthrough
 //!
 //! `source` encodings never enter a video-preset stage; on HEVC ingest, an
-//! H.264-only destination still goes through the codec edge. Legacy `custom`
-//! output rows also fall through as passthrough, but output create/update now
-//! rejects new custom output encodings until custom FFmpeg args are applied.
+//! H.264-only destination still goes through the codec edge. Persisted
+//! `custom` output rows also fall through as passthrough; output create/update
+//! rejects custom output encodings until custom FFmpeg args are applied.
 //!
 //! Every non-passthrough FFmpeg stage runs here; lightweight audio track
 //! selection runs in `audio_router` (`planner::select_backend`).
@@ -268,7 +268,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         encoding.clone(),
     );
 
-    // FFmpeg I/O runs on dedicated threads, not Tokio (WI11): one pulls the
+    // FFmpeg I/O runs on dedicated threads, not Tokio: one pulls the
     // source ring and writes stdin, one demuxes stdout into the output ring.
     let (input_done_tx, mut input_done_rx) = tokio::sync::oneshot::channel();
     let mut io_threads = Vec::with_capacity(2);

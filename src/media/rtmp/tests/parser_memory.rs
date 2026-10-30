@@ -1,4 +1,4 @@
-// WI5B.1 ingest parser memory: a publisher may not make the RTMP owner buffer
+// Bounded ingest parser memory: a publisher may not make the RTMP owner buffer
 // an oversized declared message, and all parsers together stay within the
 // aggregate parser budget. Included into the RTMP test module.
 

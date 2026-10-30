@@ -545,7 +545,7 @@ pub async fn v1_engine_telemetry_handler(
     Json(crate::api_runtime_views::engine_telemetry(&state.engine).await).into_response()
 }
 
-/// Fixed-shape counters for capacity sampling (Q-037): counts and byte sums
+/// Fixed-shape counters for capacity sampling: counts and byte sums
 /// only, so a sample does not pay for the per-entity operator payloads.
 pub async fn v1_measure_handler(
     State(state): State<Arc<AppState>>,

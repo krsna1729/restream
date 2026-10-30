@@ -1,4 +1,4 @@
-//! Runtime convergence for topology mutations (Q-039).
+//! Runtime convergence for topology mutations.
 //!
 //! API and agent handlers only persist a change and then call
 //! [`ReconcileRequests`]; the reconciler applies it with
@@ -20,7 +20,7 @@ use tracing::{info, warn};
 use crate::application::models::Output;
 use crate::media::engine::MediaEngine;
 
-/// Requests to the reconciler (Q-039, Q-040). The output pass runs only when
+/// Requests to the reconciler. The output pass runs only when
 /// something asked for it: a mutation or engine lifecycle event
 /// ([`Self::wake`]), or a deadline that came due ([`Self::wake_at`]: retry
 /// backoff, ingest-disconnect grace). A deadline only
@@ -98,7 +98,7 @@ impl ReconcileRequests {
 /// ingest arriving or leaving (outputs start or stop; a departure also once
 /// its grace ends), an ingest's probe landing (outputs held for it start) and
 /// an egress ending (retry it). Stages need no pass: their consumers' leases
-/// stop them (Q-041).
+/// stop them.
 /// `EgressFailed` is not one: it reports each error of a still-active egress
 /// (every upload retry), and the egress ending emits `EgressStopped`.
 pub fn request_pass_for_event(

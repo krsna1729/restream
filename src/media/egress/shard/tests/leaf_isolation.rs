@@ -119,7 +119,7 @@ fn blocked_leaf_on_one_shard_does_not_starve_ready_leaf_on_another_shard_thread(
     assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
 }
 
-/// Phase 3 exit-gate headline shape on one real shard thread: a healthy
+/// Leaf isolation on one real shard thread: a healthy
 /// population shares its shard with one permanently blocked and one severely
 /// throttled leaf.  Every healthy leaf must keep making progress with
 /// deterministic bounded completion; the blocked leaf leaves the runnable set

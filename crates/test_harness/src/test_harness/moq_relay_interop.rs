@@ -1,7 +1,7 @@
 //! `moq-relay-interop`: diagnostic reproduction against unmodified MediaMTX.
 //!
 //! MediaMTX v1.21.2 has SETUP, namespace discovery and LOC dialect mismatches
-//! documented with source/spec evidence in backlog Q-091. This is not a passing
+//! documented with source/spec evidence in the backlog. This is not a passing
 //! IETF gate; use `moq-dev-interop --ietf` for that. The pinned binary is installed by
 //! `cargo xtask fetch mediamtx` under `.local/bin/` (never the
 //! `/usr/local/bin/mediamtx` the other live modes use). Each run generates its

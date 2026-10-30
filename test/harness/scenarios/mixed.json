@@ -1075,7 +1075,7 @@
           "protocol": "rtmp",
           "encoding": "source"
         },
-        "rationale": "legacy ramp RTMP ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp RTMP ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1093,7 +1093,7 @@
           "protocol": "rtmp",
           "encoding": "720p"
         },
-        "rationale": "legacy ramp RTMP ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp RTMP ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1111,7 +1111,7 @@
           "protocol": "srt",
           "encoding": "source"
         },
-        "rationale": "legacy ramp RTMP ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp RTMP ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1129,7 +1129,7 @@
           "protocol": "srt",
           "encoding": "720p"
         },
-        "rationale": "legacy ramp RTMP ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp RTMP ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1147,7 +1147,7 @@
           "protocol": "rtmp",
           "encoding": "source"
         },
-        "rationale": "legacy ramp SRT ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp SRT ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1165,7 +1165,7 @@
           "protocol": "rtmp",
           "encoding": "720p"
         },
-        "rationale": "legacy ramp SRT ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp SRT ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1183,7 +1183,7 @@
           "protocol": "srt",
           "encoding": "source"
         },
-        "rationale": "legacy ramp SRT ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp SRT ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1201,7 +1201,7 @@
           "protocol": "srt",
           "encoding": "720p"
         },
-        "rationale": "legacy ramp SRT ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
+        "rationale": "ramp SRT ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
         "checkBundle": "resource.light",
         "checks": [
           "ffprobe",
@@ -1217,7 +1217,7 @@
         "id": "sweep.h264-rtmp",
         "foldedInto": "mixed.live.rtmp.h264.a1.bf2",
         "sourceScenario": "mixed.live.rtmp.h264.a1.bf2",
-        "rationale": "legacy H.264 RTMP sweep is covered by mixed RTMP/H.264/single-audio with B-frame reorder",
+        "rationale": "H.264 RTMP sweep is covered by mixed RTMP/H.264/single-audio with B-frame reorder",
         "checkBundle": "media.deep",
         "checks": [
           "ffprobe",
@@ -1232,7 +1232,7 @@
         "id": "sweep.h264-srt",
         "foldedInto": "mixed.live.srt.h264.a1.bf2",
         "sourceScenario": "mixed.live.srt.h264.a1.bf2",
-        "rationale": "legacy H.264 SRT sweep is covered by mixed SRT/H.264/single-audio with B-frame reorder",
+        "rationale": "H.264 SRT sweep is covered by mixed SRT/H.264/single-audio with B-frame reorder",
         "checkBundle": "media.deep",
         "checks": [
           "ffprobe",
@@ -1247,7 +1247,7 @@
         "id": "sweep.h265-srt",
         "foldedInto": "mixed.live.srt.h265.a1.bf2",
         "sourceScenario": "mixed.live.srt.h265.a1.bf2",
-        "rationale": "legacy HEVC SRT sweep is covered by mixed SRT/HEVC/single-audio with B-frame reorder",
+        "rationale": "HEVC SRT sweep is covered by mixed SRT/HEVC/single-audio with B-frame reorder",
         "checkBundle": "media.deep",
         "checks": [
           "ffprobe",
@@ -1262,7 +1262,7 @@
         "id": "sweep.mixed.live.srt.h264.a2.bf2",
         "foldedInto": "mixed.live.srt.h264.a2.bf2",
         "sourceScenario": "mixed.live.srt.h264.a2.bf2",
-        "rationale": "legacy multi-audio H.264 SRT sweep directly names the mixed scenario",
+        "rationale": "multi-audio H.264 SRT sweep directly names the mixed scenario",
         "checkBundle": "media.deep",
         "extraChecks": [
           "adaptive-source-ring"
@@ -1281,7 +1281,7 @@
         "id": "sweep.mixed.live.srt.h265.a2.bf2",
         "foldedInto": "mixed.live.srt.h265.a2.bf2",
         "sourceScenario": "mixed.live.srt.h265.a2.bf2",
-        "rationale": "legacy multi-audio HEVC SRT sweep directly names the mixed scenario",
+        "rationale": "multi-audio HEVC SRT sweep directly names the mixed scenario",
         "checkBundle": "media.deep",
         "extraChecks": [
           "adaptive-source-ring"
@@ -1503,7 +1503,7 @@
           "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
           "default": 1
         },
-        "legacyConfig": "h264-rtmp",
+        "sweepConfig": "h264-rtmp",
         "rationale": "measures bitrate-driven CPU/RSS/ring growth for RTMP H.264 ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
@@ -1528,7 +1528,7 @@
           "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
           "default": 1
         },
-        "legacyConfig": "h264-srt",
+        "sweepConfig": "h264-srt",
         "rationale": "measures bitrate-driven CPU/RSS/ring growth for SRT H.264 ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
@@ -1553,7 +1553,7 @@
           "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
           "default": 1
         },
-        "legacyConfig": "h265-srt",
+        "sweepConfig": "h265-srt",
         "rationale": "measures bitrate-driven bridge/transcode resource growth for SRT HEVC ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
@@ -1578,7 +1578,7 @@
           "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
           "default": 1
         },
-        "legacyConfig": "mixed.live.srt.h264.a2.bf2",
+        "sweepConfig": "mixed.live.srt.h264.a2.bf2",
         "rationale": "measures bitrate/resource behavior with multi-audio SRT H.264 ingest",
         "checkBundle": "resource.bitrate",
         "checks": [
@@ -1604,7 +1604,7 @@
           "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
           "default": 1
         },
-        "legacyConfig": "mixed.live.srt.h265.a2.bf2",
+        "sweepConfig": "mixed.live.srt.h265.a2.bf2",
         "rationale": "measures bitrate/resource behavior with multi-audio SRT HEVC ingest",
         "checkBundle": "resource.bitrate",
         "checks": [

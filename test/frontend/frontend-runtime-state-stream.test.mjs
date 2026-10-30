@@ -86,7 +86,7 @@ test("deltas apply in revision order; removed entities go", async () => {
   );
 });
 
-// Q-050: the views read inputs and graphs from the state instead of polling,
+// The views read inputs and graphs from the state instead of polling,
 // so a changed input must replace the held one and a deleted pipeline's input
 // and graph must go, or the deck shows a stale or orphaned source.
 test("input and graph deltas replace and remove what the client holds", async () => {

@@ -375,7 +375,7 @@ fn executor(classes: Value, services: Value) -> Value {
     json!({"classes": classes, "services": services})
 }
 
-/// The Q-074 gate is counted in the window and per HLS session: a mutation
+/// The HLS session poll-budget gate is counted in the window and per HLS session: a mutation
 /// that reports lifetime counts (no subtraction) or divides by the window
 /// in seconds rather than minutes, or forgets the session count, fails here.
 #[test]

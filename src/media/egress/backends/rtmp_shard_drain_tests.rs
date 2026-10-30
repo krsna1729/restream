@@ -49,10 +49,9 @@ fn connected_backend_for_drain_tests() -> (
 
 #[test]
 fn remove_defers_close_until_pending_bytes_are_flushed() {
-    // Before this change, `Remove` called `remove_leaf_by_output`
-    // immediately, tearing down the transport regardless of whatever the
-    // engine still had queued in `pending_application_bytes` — that data
-    // was silently lost. `begin_graceful_close` must instead keep a leaf
+    // `Remove` must not tear down the transport while the engine still has
+    // data queued in `pending_application_bytes` — that data would be
+    // silently lost. `begin_graceful_close` must instead keep a leaf
     // with nonzero pending bytes registered (not closed) until a later
     // sweep or visit finds it flushed.
     let (mut backend, output_id, server) = connected_backend_for_drain_tests();
@@ -155,7 +154,7 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
 
 #[test]
 fn shutdown_marks_every_connected_leaf_draining() {
-    // `Shutdown` (unlike the old immediate-stop behavior) must give every
+    // `Shutdown` (not an immediate stop) must give every
     // leaf a chance to flush, not just the one being explicitly removed.
     let (mut backend, output_id, server) = connected_backend_for_drain_tests();
     server.join().unwrap();

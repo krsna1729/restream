@@ -149,7 +149,7 @@
             "benchProfile": false
           },
           "purpose": "B-frame timestamp/DTS behavior",
-          "migrationBlockedBy": "needs transcodeProfileAxis for full matrix coverage"
+          "blockedBy": "needs transcodeProfileAxis for full matrix coverage"
         },
         "file.live-edge": {
           "suiteDefault": true,
@@ -198,7 +198,7 @@
             "portNamespace": true,
             "benchProfile": true
           },
-          "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded (WI2.5)"
+          "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded"
         },
         "srt.admission": {
           "suiteDefault": false,
@@ -206,7 +206,7 @@
             "portNamespace": true,
             "benchProfile": true
           },
-          "purpose": "one SRT shard pool (ADMISSION_SHARDS at most) driven past its admission ceiling (Q-034): refused outputs report capacityRefused and send nothing, admitted outputs keep progressing, and no egress shard thread reaches 62% busy"
+          "purpose": "one SRT shard pool (ADMISSION_SHARDS at most) driven past its admission ceiling: refused outputs report capacityRefused and send nothing, admitted outputs keep progressing, and no egress shard thread reaches 62% busy"
         },
         "fault.resilience": {
           "suiteDefault": true,
@@ -279,7 +279,7 @@
             "portNamespace": true,
             "benchProfile": false
           },
-          "purpose": "Diagnostic-only MoQ egress and ingest against pinned MediaMTX v1.21.2; not a passing IETF gate because of the Q-091 SETUP, namespace discovery and LOC dialect mismatches. Exercises RTMP-fed MoQ egress plus RTMP sibling isolation, RTSP readback, and RTSP source forwarded over MoQ into Restream with RTMP readback. Use moq-dev-interop --ietf for the supported moqt-19 MSF/LOC gate; do not fork the MediaMTX dialect into production"
+          "purpose": "Diagnostic-only MoQ egress and ingest against pinned MediaMTX v1.21.2; not a passing IETF gate because of MediaMTX's SETUP, namespace discovery and LOC dialect mismatches. Exercises RTMP-fed MoQ egress plus RTMP sibling isolation, RTSP readback, and RTSP source forwarded over MoQ into Restream with RTMP readback. Use moq-dev-interop --ietf for the supported moqt-19 MSF/LOC gate; do not fork the MediaMTX dialect into production"
         }
       }
     }

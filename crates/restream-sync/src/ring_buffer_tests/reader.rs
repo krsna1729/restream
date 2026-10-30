@@ -236,17 +236,17 @@ fn dts_enforcer_handles_out_of_bounds_stream() {
 
 #[test]
 fn dts_enforcer_stream_idx_collision_corrupts_video_dts() {
-    // Regression for issue #2: before the fix, audio packets with an
-    // unknown track_index were routed to stream_idx=0 via `.unwrap_or(0)`,
-    // aliasing into the video DTS slot. This test documents the corruption
-    // pattern. The fix is `None => continue` in all pipeline mux loops so
-    // unknown-track audio packets are dropped instead of aliased.
+    // Audio packets with an unknown track_index must not be routed to
+    // stream_idx=0 via `.unwrap_or(0)`: that aliases into the video DTS
+    // slot. This test documents the corruption pattern; pipeline mux loops
+    // use `None => continue` so unknown-track audio packets are dropped
+    // instead of aliased.
     let mut e = DtsEnforcer::new(2); // stream 0 = video, stream 1 = audio
 
     // Normal video frame.
     assert_eq!(e.enforce(0, 100, 100), (100, 100));
 
-    // Simulate the OLD bug: an audio packet with unknown track_index is
+    // Simulate the aliasing: an audio packet with unknown track_index is
     // incorrectly routed to stream_idx=0 (video's slot) and carries a
     // large DTS, advancing video's monotonic counter to 300.
     assert_eq!(e.enforce(0, 300, 300), (300, 300));
@@ -259,7 +259,7 @@ fn dts_enforcer_stream_idx_collision_corrupts_video_dts() {
     assert_eq!(
         corrupted, 301,
         "aliasing audio to stream_idx=0 bumps video DTS past the actual \
-             video timestamp, demonstrating the corruption fixed by None=>continue"
+             video timestamp, the corruption None=>continue prevents"
     );
 }
 

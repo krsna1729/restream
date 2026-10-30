@@ -1,4 +1,4 @@
-//! One answer to "why is this output degraded" (Q-043).
+//! One answer to "why is this output degraded".
 //!
 //! An output's media passes four layers: the ingest, the feed (the shared
 //! stages that shape it), the egress fabric shard that sends it, and the

@@ -221,7 +221,7 @@ pub struct ShardMetrics {
     // --- Loop statistics ---
     pub loop_iterations: u64,
     pub media_ticks: u64,
-    /// Sum of loop durations for latency percentile computation (Phase 3).
+    /// Sum of loop durations for latency percentile computation.
     pub loop_duration_sum_us: u64,
 
     // --- Retry ---

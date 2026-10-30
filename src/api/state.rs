@@ -145,9 +145,9 @@ pub struct AppState {
     pub alert_tracker: alerts::AlertTracker,
     /// Mutation handlers persist, then ask the reconciler to converge here.
     pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
-    /// The revisioned runtime state behind `/api/v1/state` (Q-042).
+    /// The revisioned runtime state behind `/api/v1/state`.
     pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
-    /// The fleet's sampled signals behind `/api/v1/fleet/history` (Q-064).
+    /// The fleet's sampled signals behind `/api/v1/fleet/history`.
     pub fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
     /// Each pipeline's recorded health behind
     /// `/api/v1/pipelines/:id/flight-recorder`.

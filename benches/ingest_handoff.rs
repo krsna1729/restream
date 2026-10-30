@@ -1,5 +1,5 @@
 //! Cross-thread handoff of received SRT payloads from the ingress Owner to a
-//! media worker (WI11). Two threads, one producer and one consumer, as in the
+//! media worker. Two threads, one producer and one consumer, as in the
 //! Owner -> worker hop: the producer hands over `(peer id, Bytes)` payloads in
 //! passes of 32 and wakes the consumer once per pass; the consumer drains and
 //! parks when empty. Compares today's Tokio mpsc (one event per payload) with

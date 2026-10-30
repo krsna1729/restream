@@ -1,4 +1,4 @@
-//! WI3.4 packet-rate benchmark contract sampling.
+//! Packet-rate benchmark contract sampling.
 //!
 //! One flat record per sample, sourced from the production packet-rate
 //! surfaces (`/metrics/system` `egressShards`, `capacity` and `ioUring`) plus
@@ -952,7 +952,7 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
         ));
     }
     let summary = json!({
-        "contract": "wi3.4-packet-rate",
+        "contract": "packet-rate",
         "run": run,
         "samplesJsonl": samples_jsonl(work_dir),
         "sampleCount": samples.len(),

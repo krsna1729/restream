@@ -1,4 +1,4 @@
-//! A bounded history of the fleet's signals (Q-064): headroom, the share of
+//! A bounded history of the fleet's signals: headroom, the share of
 //! wanted outputs delivering, and the diagnosed outputs by layer, sampled on
 //! a fixed clock whether or not anyone watches, so an incident that opened
 //! before a page did can still be read against them

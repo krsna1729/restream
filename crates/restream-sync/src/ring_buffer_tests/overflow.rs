@@ -26,10 +26,10 @@ fn overflow_triggers_fast_forward_to_keyframe() {
 
 #[test]
 fn fast_forward_with_no_keyframe_returns_live_edge() {
-    // Bug #8: when no keyframe has been pushed yet (sentinel = usize::MAX)
+    // When no keyframe has been pushed yet (sentinel = usize::MAX)
     // fast_forward must return current_write_idx, NOT 0 or write_idx.saturating_sub(100).
-    // Returning 0 when write_idx < 100 caused late-joining readers to re-scan
-    // from the beginning of the ring rather than starting at the live edge.
+    // Returning 0 when write_idx < 100 would make late-joining readers re-scan
+    // from the beginning of the ring rather than start at the live edge.
     let rb = Arc::new(RingBuffer::new(4096));
 
     // Push 5 non-keyframe audio packets (no video keyframe → sentinel stays)

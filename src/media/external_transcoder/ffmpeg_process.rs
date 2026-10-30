@@ -17,7 +17,7 @@ pub(crate) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs
 }
 
 /// Feed the external FFmpeg child's stdin from its source ring on a dedicated
-/// thread (WI11): the input pump pulls the ring and encodes TS on this
+/// thread: the input pump pulls the ring and encodes TS on this
 /// thread, and blocking pipe writes carry the back-pressure. Ends at end of
 /// input, on cancellation or on a write error, then closes stdin so FFmpeg
 /// sees EOF. The outcome is sent on `done`; the caller joins the returned
@@ -67,7 +67,7 @@ pub(crate) fn spawn_external_stdin_writer(
 }
 
 /// Demux the external FFmpeg child's stdout into the stage's output ring on
-/// a dedicated thread (WI11). Marks end of stream and cancels the stage when
+/// a dedicated thread. Marks end of stream and cancels the stage when
 /// FFmpeg closes stdout.
 pub(super) fn spawn_external_stdout_reader(
     stdout: tokio::process::ChildStdout,

@@ -1,10 +1,9 @@
 //! Pipeline recirculation `ProtocolEngine`: publishes feed units into
 //! another pipeline's ring buffer through the same
-//! [`crate::media::recirculation::RecirculationInputPublisher`] the
-//! pre-fabric implementation used — the timestamp mapping, standby-GOP
-//! replay, and input-gate handling logic is unchanged and untouched here,
-//! only *what drives it* changes (a shard-scheduled `advance()` call
-//! instead of a per-output `tokio::select!` loop).
+//! [`crate::media::recirculation::RecirculationInputPublisher`]
+//! `start_pipeline_recirculation` uses, so timestamp mapping, standby-GOP
+//! replay and input-gate handling are shared; here a shard-scheduled
+//! `advance()` call drives it instead of a per-output `tokio::select!` loop.
 
 use std::marker::PhantomData;
 use std::sync::Arc;

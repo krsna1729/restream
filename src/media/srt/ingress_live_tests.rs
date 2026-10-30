@@ -484,7 +484,7 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn q098_stale_control_probe_cannot_modify_a_replacement_publisher() {
+async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
     use super::ingress_media::IngressMedia;
     use crate::media::snapshots::SrtIngressOwnerStats;
 
@@ -558,7 +558,7 @@ async fn q098_stale_control_probe_cannot_modify_a_replacement_publisher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn q098_review_superseded_resize_ack_keeps_current_ring_through_deselection() {
+async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
     use super::ingress_media::IngressMedia;
     use crate::media::engine::MediaEngine;
     use crate::media::snapshots::SrtIngressOwnerStats;
