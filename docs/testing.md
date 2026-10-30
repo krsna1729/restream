@@ -626,23 +626,23 @@ troubleshooting control, never a deployment setting.
 
 ## SRT egress qualification
 
-`scripts/harness/srt_final_qual.py` runs the SRT Owner qualification
-(fanout points, connect bursts, `srt.slow-peer`, frozen destination) and
-derives gates; `scripts/harness/test_srt_final_qual.py` tests it.
-
-For a frozen-destination attribution campaign, build with
-`cargo xtask build-release`, then run (under the host measurement lock):
+`cargo xtask srt-frozen` runs one frozen-destination campaign
+(`fault.srt-output-stall`) with a 1 s process sampler and derives its gates.
+Build with `cargo xtask build-release`, then run (under the host measurement
+lock):
 
 ```sh
-flock -x /tmp/restream-host.lock python3 scripts/harness/srt_final_qual.py frozen \
+flock -x /tmp/restream-host.lock cargo xtask srt-frozen \
   --variant candidate --tag frozen-attribution --out .local/artifacts/srt-attribution \
   --attribution
 ```
 
-The frozen driver defaults to `target/qual-release/{restream,test_harness}`;
+It defaults to `target/qual-release/{restream,test_harness}`;
 `--restream-bin` and `--harness-bin` permit explicit binaries (including an
 exec-style allocation-profiler launcher that preserves the child PID).
-`--variant` is a report label only, and each tag must be new. The campaign
+`--variant` is a report label only, and each tag must be new. The sampler logs
+in with `RESTREAM_INITIAL_ADMIN_PASSWORD`, else a random password it also
+hands the harness. The campaign
 records smaps, thread, socket and Owner telemetry with phase markers from
 live progress through SIGSTOP, retry, output stop and pipeline deletion. It
 fails closed: missing or zero RSS endpoints, missing reports, incomplete

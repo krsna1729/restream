@@ -388,7 +388,6 @@ fn is_fixture_or_harness(file: &str) -> bool {
             "crates/xtask/src/harness.rs",
             "crates/xtask/src/harness/*",
             "crates/xtask/src/fixtures.rs",
-            "scripts/harness/*",
             "crates/xtask/src/bins.rs",
             "crates/test_harness/src/main.rs",
             "crates/test_harness/src/test_harness/*",

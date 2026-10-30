@@ -1,4 +1,5 @@
-//! Native entrypoints for bench freshness, bounded validation, and CPU launchers.
+//! Native entrypoints for bench freshness, bounded validation, CPU launchers
+//! and the frozen-SRT-destination campaign.
 
 use std::env;
 use std::fs;
@@ -11,10 +12,12 @@ use crate::workflow::{self, Error, WorkflowResult};
 mod affinity;
 mod media;
 mod parallel;
+mod srt_frozen;
 
 pub(crate) use affinity::{pinned, segregated};
 pub(crate) use media::media_validation;
 pub(crate) use parallel::parallel_fast_breadth;
+pub(crate) use srt_frozen::srt_frozen;
 
 const USAGE: &str = "usage:
   cargo xtask harness [--prepare] <mode> [-- <harness args...>]
@@ -63,18 +66,27 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     let Some(mode) = parsed.mode.filter(|_| !parsed.prepare_only) else {
         return Ok(());
     };
+    workflow::checked(&mut harness_command(&root, &binary, mode, parsed.args)?)
+}
+
+/// The `test_harness` invocation for one mode, run from the repository root.
+/// Callers that own a process group (`workflow::checked`, `srt-frozen`)
+/// launch it directly so every media child stays in that group.
+pub(super) fn harness_command(
+    root: &Path,
+    binary: &Path,
+    mode: &str,
+    args: &[&str],
+) -> Result<Command, Error> {
     if env::var("HARNESS_USE_CGROUP_WRAPPER")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
     {
         // The harness execs this path (core/setup.rs CGROUP_WRAP_BIN).
         crate::container::install_executable(&root.join(".local/bin"), "restream-cgroup-wrap")?;
     }
-    workflow::checked(
-        Command::new(binary)
-            .current_dir(root)
-            .arg(mode)
-            .args(parsed.args),
-    )
+    let mut command = Command::new(binary);
+    command.current_dir(root).arg(mode).args(args);
+    Ok(command)
 }
 
 pub(super) fn env_default(name: &str, default: &str) -> std::ffi::OsString {

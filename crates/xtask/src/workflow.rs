@@ -160,11 +160,16 @@ fn group_exists(child: &Child) -> bool {
 /// Best-effort bounded cleanup, including descendants after the leader exits.
 /// Call only for a child created by spawn, and only while its owner is live.
 pub(crate) fn terminate(child: &mut Child) {
+    terminate_within(child, Duration::from_secs(5));
+}
+
+/// `terminate` with `grace` between SIGTERM and SIGKILL of the group.
+fn terminate_within(child: &mut Child, grace: Duration) {
     #[cfg(unix)]
     signal_group(child, libc::SIGTERM);
     #[cfg(not(unix))]
     let _ = child.kill();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + grace;
     loop {
         let reaped = matches!(child.try_wait(), Ok(Some(_)));
         #[cfg(unix)]
@@ -193,6 +198,38 @@ pub(crate) fn wait(child: &mut Child) -> Result<ExitStatus, Error> {
         }
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                terminate(child);
+                return Err(error.into());
+            }
+        }
+    }
+}
+
+/// `wait` with a deadline: on expiry the whole group is terminated (`grace`
+/// before SIGKILL) and reaped. Returns the status and whether it timed out;
+/// the child is reaped on every outcome.
+pub(crate) fn wait_timeout(
+    child: &mut Child,
+    limit: Duration,
+    grace: Duration,
+) -> Result<(ExitStatus, bool), Error> {
+    let until = Instant::now() + limit;
+    loop {
+        if let Some(signal) = interrupted() {
+            terminate(child);
+            return Err(interruption(signal));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok((status, false)),
+            Ok(None) if Instant::now() >= until => {
+                terminate_within(child, grace);
+                // std caches the status reaped by terminate.
+                let status = child.try_wait()?.ok_or("timed-out child was not reaped")?;
+                return Ok((status, true));
+            }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => {

@@ -45,7 +45,7 @@ the [assurance roadmap](assurance-roadmap.md).
   live-vs-free data and feed/transport ownership snapshots that explain or
   reproduce that shape. Keep the gate unchanged until then.
 - Gates: `cargo xtask harness fault.srt-output-stall -- --no-netns`;
-  `scripts/harness/srt_final_qual.py frozen` for the RSS time series.
+  `cargo xtask srt-frozen` for the RSS time series.
 
 ### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
 - Goal: SRT capacity rungs measure Restream, not the receiver.

@@ -94,6 +94,7 @@ fn main() -> ExitCode {
         ["parallel-fast-breadth", ref rest @ ..] => harness::parallel_fast_breadth(rest),
         ["harness-pinned", ref rest @ ..] => harness::pinned(rest),
         ["harness-segregated", ref rest @ ..] => harness::segregated(rest),
+        ["srt-frozen", ref rest @ ..] => harness::srt_frozen(rest),
         ["frontend", ref rest @ ..] => frontend::run(rest),
         ["release", ref rest @ ..] => release::run(rest),
         ["qualify", ref rest @ ..] => qualify::run(rest),
@@ -152,6 +153,8 @@ workflows (each prints its own usage):
   parallel-fast-breadth three port-isolated harness groups, merged report
   harness-pinned|harness-segregated <restream args>
                         CPU-affinity RESTREAM_BIN launchers
+  srt-frozen --out <dir> --tag <tag> --variant baseline|candidate [args]
+                        frozen-SRT-destination RSS campaign (Q-026)
   frontend compile-for-node <out> | node-tests [--coverage] | e2e [args]
   release prepare-build-tree|package-binaries|package-runtime-image|publish-image|
           tag-and-publish|app-native|emit-sbom|checksums|shards [args]
