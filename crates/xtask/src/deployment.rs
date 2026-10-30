@@ -1,12 +1,6 @@
 //! Host service installation and the standalone, repository-independent launcher.
-use crate::workflow::{Error, WorkflowResult, checked, output};
-use std::{
-    env,
-    ffi::OsString,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use crate::workflow::{Error, WorkflowResult, checked};
+use std::{env, ffi::OsString, fs, path::Path, process::Command};
 
 const INSTALL_USAGE: &str = "usage: cargo xtask deploy install-systemd-service [--now]\n\nInstalls /etc/systemd/system/restream.service (root required).\nEnvironment overrides: RESTREAM_SERVICE_NAME (restream), RESTREAM_BIN (/usr/local/bin/restream),\nRESTREAM_USER (restream), RESTREAM_GROUP (restream), RESTREAM_WORKDIR (/var/lib/restream),\nRESTREAM_ENV_FILE (/etc/restream/restream.env), RESTREAM_CPU_AFFINITY, RESTREAM_NUMA_POLICY,\nRESTREAM_NUMA_MASK. Use --now to enable and restart the installed unit.";
 
@@ -171,13 +165,8 @@ fn install_service(now: bool) -> WorkflowResult {
         let service = Service::from_env()?;
         let unit_name = format!("{}.service", service.name);
         let unit_path = Path::new("/etc/systemd/system").join(&unit_name);
-        let temp = output(&mut Command::new("mktemp"))?;
-        let temp_path = PathBuf::from(
-            String::from_utf8(temp.stdout)
-                .map_err(|e| e.to_string())?
-                .trim_end_matches('\n'),
-        );
-        let _cleanup = TempUnit(temp_path.clone());
+        let temp = crate::workflow::TempDir::new("restream-unit")?;
+        let temp_path = temp.path().join(&unit_name);
         fs::create_dir_all(
             Path::new(&service.env_file)
                 .parent()
@@ -245,13 +234,6 @@ fn install_service(now: bool) -> WorkflowResult {
             println!("run 'systemctl enable --now {unit_name}' when ready");
         }
         Ok(())
-    }
-}
-
-struct TempUnit(PathBuf);
-impl Drop for TempUnit {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
     }
 }
 

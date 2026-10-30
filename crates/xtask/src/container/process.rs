@@ -1,21 +1,20 @@
-//! Process ownership for CLI workflows (off the media hot path).
-//! A spawned process group has exactly one reaper. Cancellation first reaches
-//! the group as TERM/INT; a bounded grace period ends in KILL and wait. Container
-//! ownership is separate: named/label cleanup survives a killed engine client.
-use crate::workflow::{Error, WorkflowResult};
+//! Container process ownership (off the media hot path), built on the
+//! process-group primitives in `workflow`. Unlike `workflow::spawn`, these
+//! guards still start children after an interruption, so cleanup runs, and
+//! they kill descendants that outlive the reaped leader. Cancellation
+//! forwards the received TERM/INT; a bounded grace period ends in KILL and
+//! wait. Container ownership is separate: named/label cleanup survives a
+//! killed engine client.
+use crate::workflow::{self, Error, TempDir, WorkflowResult};
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-
-static SERIAL: AtomicU64 = AtomicU64::new(0);
 
 pub(super) struct Signals;
 impl Signals {
     pub(super) fn received(&self) -> i32 {
-        crate::workflow::interrupted().unwrap_or(0)
+        workflow::interrupted().unwrap_or(0)
     }
     pub(super) fn check(&self) -> WorkflowResult {
         let signal = self.received();
@@ -46,9 +45,8 @@ pub(super) struct OwnedChild {
 }
 impl OwnedChild {
     pub(super) fn spawn(command: &mut Command) -> Result<Self, Error> {
-        command.process_group(0);
         Ok(Self {
-            child: command.spawn()?,
+            child: workflow::spawn_group(command)?,
             reaped: false,
         })
     }
@@ -64,20 +62,16 @@ impl OwnedChild {
         input.write_all(bytes)?;
         Ok(())
     }
-    pub(super) fn wait(&mut self, signals: &Signals) -> WorkflowResult {
-        loop {
-            signals.check().or_else(|error| {
-                self.terminate(libc::SIGTERM, Duration::from_secs(5))?;
-                Err(error)
-            })?;
-            if let Some(status) = self.poll()? {
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(Error::status(status, "container subprocess failed"))
-                };
-            }
-            std::thread::sleep(Duration::from_millis(25));
+    /// Waits for the leader; an interruption stops the group first.
+    pub(super) fn wait(&mut self) -> WorkflowResult {
+        // `workflow::wait` reaps the leader on every outcome.
+        let status = workflow::wait(&mut self.child);
+        self.reaped = true;
+        let status = status?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(Error::status(status, "container subprocess failed"))
         }
     }
     pub(super) fn poll(&mut self) -> Result<Option<ExitStatus>, Error> {
@@ -86,27 +80,11 @@ impl OwnedChild {
         Ok(status)
     }
     pub(super) fn signal(&mut self, signal: i32) {
-        // SAFETY: the child was spawned as its own process-group leader; the
-        // negative PID addresses only that owned group.
-        unsafe {
-            libc::kill(-(self.child.id() as i32), signal);
-        }
+        workflow::signal_group(&self.child, signal);
     }
-    pub(super) fn terminate(&mut self, signal: i32, grace: Duration) -> Result<(), Error> {
-        self.signal(signal);
-        let until = Instant::now() + grace;
-        while self.poll()?.is_none() {
-            if Instant::now() >= until {
-                self.signal(libc::SIGKILL);
-                self.child.wait()?;
-                self.reaped = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        // A descendant may outlive its direct parent after TERM.
-        self.signal(libc::SIGKILL);
-        Ok(())
+    pub(super) fn terminate(&mut self, signal: i32, grace: Duration) {
+        workflow::stop_group(&mut self.child, signal, grace);
+        self.reaped = true;
     }
 }
 impl Drop for OwnedChild {
@@ -139,63 +117,44 @@ pub(super) fn execute(
         }
         let signal = signals.received();
         if signal != 0 {
-            child.terminate(signal, Duration::from_secs(5))?;
+            child.terminate(signal, Duration::from_secs(5));
             return Err(Error::exit(
                 (128 + signal) as u8,
                 "container subprocess interrupted",
             ));
         }
         if limit.is_some_and(|limit| start.elapsed() >= limit) {
-            child.terminate(libc::SIGTERM, Duration::from_secs(5))?;
+            child.terminate(libc::SIGTERM, Duration::from_secs(5));
             return Err(Error::exit(124, "container subprocess timed out"));
         }
         std::thread::sleep(Duration::from_millis(25));
     }
 }
 
-pub(super) fn quiet(command: &mut Command) {
-    // Cleanup must be bounded even when the engine daemon is unavailable.
-    command.stdout(Stdio::null()).stderr(Stdio::null());
-    if let Ok(mut child) = OwnedChild::spawn(command) {
-        let until = Instant::now() + Duration::from_secs(12);
-        while matches!(child.poll(), Ok(None)) && Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(25));
-        }
+/// Runs engine cleanup or a probe for at most 12 s, even when the engine
+/// daemon is unavailable; dropping the guard then kills the group.
+fn bounded(command: &mut Command) -> WorkflowResult {
+    let mut child = OwnedChild::spawn(command)?;
+    let until = Instant::now() + Duration::from_secs(12);
+    while child.poll()?.is_none() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(25));
     }
+    Ok(())
+}
+pub(super) fn quiet(command: &mut Command) {
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    let _ = bounded(command);
 }
 pub(super) fn quiet_capture(command: &mut Command) -> String {
-    let Ok(directory) = unique_dir(&std::env::temp_dir(), "restream-engine-output") else {
-        return String::new();
-    };
-    let log = directory.join("output");
     let result = (|| -> Result<String, Error> {
+        let directory = TempDir::new("restream-engine-output")?;
+        let log = directory.path().join("output");
         let output = fs::File::create(&log)?;
         command.stdout(output.try_clone()?).stderr(output);
-        let mut child = OwnedChild::spawn(command)?;
-        let until = Instant::now() + Duration::from_secs(12);
-        while child.poll()?.is_none() && Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        drop(child);
+        bounded(command)?;
         Ok(fs::read_to_string(&log)?)
     })();
-    let _ = fs::remove_dir_all(directory);
     result.unwrap_or_default()
-}
-pub(super) fn unique_dir(parent: &Path, prefix: &str) -> Result<PathBuf, Error> {
-    fs::create_dir_all(parent)?;
-    loop {
-        let path = parent.join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            SERIAL.fetch_add(1, Ordering::Relaxed)
-        ));
-        match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.into()),
-        }
-    }
 }
 pub(crate) fn install_executable(directory: &Path, name: &str) -> Result<PathBuf, Error> {
     fs::create_dir_all(directory)?;
@@ -204,7 +163,7 @@ pub(crate) fn install_executable(directory: &Path, name: &str) -> Result<PathBuf
     if fs::canonicalize(&destination).ok().as_ref() == Some(&source) {
         return Ok(destination);
     }
-    let stage = unique_dir(directory, ".xtask-install")?;
+    let stage = workflow::unique_dir(directory, ".xtask-install")?;
     let staged = stage.join(name);
     let result = (|| {
         if fs::hard_link(&source, &staged).is_err() {

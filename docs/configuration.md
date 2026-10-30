@@ -586,15 +586,16 @@ Production kernel settings come from `restream host-tune`
 private user and network namespaces:
 
 ```sh
-cargo xtask setup harness-host-prereqs              # check
-scripts/dev/bootstrap.sh --configure-harness-host   # persist
-scripts/dev/bootstrap-runtime.sh --configure-harness-host
+scripts/ci/install-system-deps.sh --harness-host               # check
+scripts/ci/install-system-deps.sh --harness-host --configure   # persist
 ```
 
-The bootstrappers write `kernel.unprivileged_userns_clone=1`,
+`scripts/dev/bootstrap.sh` and `scripts/dev/bootstrap-runtime.sh` run the same
+check, or persist the settings with `--configure-harness-host`. Persisting
+writes `kernel.unprivileged_userns_clone=1`,
 `user.max_user_namespaces=28633`, `net.core.rmem_max=26214400` and
-`net.core.wmem_max=8388608` to `/etc/sysctl.d/99-restream-harness.conf`. They
-do not change AppArmor. Use `--no-netns` only as a temporary fallback.
+`net.core.wmem_max=8388608` to `/etc/sysctl.d/99-restream-harness.conf`. It
+does not change AppArmor. Use `--no-netns` only as a temporary fallback.
 
 | Setting | Harness baseline | Why |
 |---|---:|---|

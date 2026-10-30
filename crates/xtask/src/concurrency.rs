@@ -1,6 +1,7 @@
-//! Concurrency proof gates (`docs/concurrency-proofing.md`): loom models,
-//! focused lifecycle regressions, and, for `contract`, live fault and
-//! recovery harness runs with a guard that no media process outlives them.
+//! Concurrency proof gates (`docs/concurrency-proofing.md`): `fast` runs the
+//! loom models; `contract` runs live fault and recovery harness modes with a
+//! guard that no media process outlives them. Ordinary unit, integration and
+//! property tests run in CI's workspace test job, not here.
 
 use std::collections::HashSet;
 use std::fs;
@@ -22,87 +23,6 @@ const LOOM_TARGETS: &[&str] = &[
     "ts_chunk_ring_loom",
     "ts_muxer_stage_loom",
     "transcoder_stage_loom",
-];
-
-/// `(label, cargo args)` shared by `fast` and `contract`; one test per row.
-#[rustfmt::skip]
-const COMMON_TESTS: &[(&str, &[&str])] = &[
-    ("api-health", &["test", "health_endpoint_exposes_probe_and_egress_fault_fields", "--test", "api", "--", "--nocapture"]),
-    ("api-output-recent-failure", &["test", "output_status_and_health_preserve_recent_egress_failure_after_unregister", "--test", "api", "--", "--nocapture"]),
-    ("api-output-restart-retry", &["test", "active_output_status_ignores_stale_retry_state_after_restart", "--test", "api", "--", "--nocapture"]),
-    ("output-status-active", &["test", "active_output_status_matches_health_runtime_fields", "--test", "output_status_contract", "--", "--nocapture"]),
-    ("output-status-stalled", &["test", "stalled_output_status_matches_health_runtime_fields", "--test", "output_status_contract", "--", "--nocapture"]),
-    ("api-disconnect-clears", &["test", "health_endpoint_clears_recent_disconnect_details_after_reconnect", "--test", "api", "--", "--nocapture"]),
-    ("api-disconnect-flapping", &["test", "health_endpoint_surfaces_repeated_transient_disconnects_as_flapping", "--test", "api", "--", "--nocapture"]),
-    ("api-egress-flapping", &["test", "recovered_output_surfaces_flapping_after_repeated_sink_failures", "--test", "api", "--", "--nocapture"]),
-    ("db-stale-job-update", &["test", "stale_job_update_cannot_clobber_replacement_attempt", "--test", "db", "--", "--nocapture"]),
-    ("db-multiple-stale-job-updates", &["test", "multiple_stale_job_updates_cannot_clobber_newest_attempt", "--test", "db", "--", "--nocapture"]),
-    ("lib-stale-ingest-unregister", &["test", "stale_ingest_unregister_cannot_clobber_replacement_attempt", "--lib", "--", "--nocapture"]),
-    ("lib-stale-ingest-disconnect", &["test", "stale_ingest_disconnect_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
-    ("lib-stale-egress-unregister", &["test", "stale_egress_unregister_cannot_clobber_replacement_attempt", "--lib", "--", "--nocapture"]),
-    ("lib-stale-egress-error", &["test", "stale_egress_error_cannot_poison_replacement_attempt", "--lib", "--", "--nocapture"]),
-    ("lib-stage-leases", &["test", "engine_stage_tests::runtime", "--lib", "--", "--nocapture"]),
-    ("lib-runtime-state", &["test", "application::runtime_state", "--lib", "--", "--nocapture"]),
-    ("lib-reconcile-triggers", &["test", "application::topology::tests", "--lib", "--", "--nocapture"]),
-    ("api-mutation-requests-pass", &["test", "a_successful_mutation_requests_a_reconcile_pass", "--test", "api", "--", "--nocapture"]),
-    ("ring-proptest", &["test", "prop_no_loss_no_gap_no_duplication", "--test", "ring_migration", "--", "--nocapture"]),
-    ("ring-multi-reader-proptest", &["test", "prop_multi_reader_migration_preserves_each_reader_order", "--test", "ring_migration", "--", "--nocapture"]),
-    ("input-selection-proptest", &["test", "gate_matches_sequential_selection_model", "--test", "input_selection", "--", "--nocapture"]),
-    ("standby-gop-proptest", &["test", "cache_never_exceeds_its_declared_limits", "--test", "standby_gop", "--", "--nocapture"]),
-    ("lib-byte-queue-batch", &["test", "-p", "restream-sync", "write_batch_round_trips_random_chunks", "--lib", "--", "--nocapture"]),
-    ("lib-byte-queue-unit", &["test", "-p", "restream-sync", "byte_queue::tests", "--lib", "--", "--nocapture"]),
-    ("lib-srt-stream-id-normalization", &["test", "media::srt_stream_id::tests", "--lib", "--", "--nocapture"]),
-    ("lib-srt-ingress-owner", &["test", "media::srt::ingress_live_tests", "--lib", "--", "--nocapture"]),
-    ("lib-srt-ingress-bridges", &["test", "media::srt::ingress_bridge_tests", "--lib", "--", "--nocapture"]),
-    ("lib-srt-ingress-admission", &["test", "media::srt::ingress_admission", "--lib", "--", "--nocapture"]),
-    ("external-transcoder-routing", &["test", "external_output_stream_idx_routes_known_tracks_without_aliasing", "--lib", "--", "--nocapture"]),
-    ("external-transcoder-routing-proptest", &["test", "proptest_external_output_dts_routing_preserves_per_stream_monotonicity", "--lib", "--", "--nocapture"]),
-    ("external-transcoder-h264-live", &["test", "external_720p_stage_emits_live_packets_for_h264_marker_fixture", "--lib", "--", "--nocapture"]),
-    ("external-transcoder-h264-dts-remux", &["test", "external_1080p_stage_remuxes_marker_fixture_with_monotone_dts", "--lib", "--", "--nocapture"]),
-    ("transcoder-replacement-metadata", &["test", "replacement_video_stage_preserves_codec_hint_and_audio_tracks", "--test", "transcoder", "--", "--nocapture"]),
-    ("hls-segment-dts-boundaries", &["test", "hls_segment_boundaries_preserve_non_decreasing_dts_per_stream", "--lib", "--", "--nocapture"]),
-    ("recording-remux-continuity-retention-disabled", &["test", "remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled", "--lib", "--", "--nocapture"]),
-    ("recording-remux-continuity-retention-enabled", &["test", "remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled", "--lib", "--", "--nocapture"]),
-    ("test-harness-process-lifecycle", &["test", "-p", "test_harness", "--bin", "test_harness", "tests::media_validation::kill_and_wait_child_terminates_spawned_process", "--", "--exact", "--nocapture"]),
-    ("rtmp-ingress-owner-shutdown", &["test", "--lib", "--", "shutdown_cancels_pending_publish_auth_before_owner_join", "idle_playback_is_cancelled_with_listener_shutdown", "shutdown_cancels_blocked_play_write_and_joins_owner", "--nocapture"]),
-    ("rtmp-sharded-ingress-lifecycle", &["test", "media::rtmp::listener::tests", "--lib"]),
-    ("lib-compio-rtmp-readiness-fairness", &["test", "media::egress::backends::compio_tcp::poller::tests", "--lib", "--", "--nocapture"]),
-    ("test-harness-slow-sink-sibling-count", &["test", "-p", "test_harness", "--bin", "test_harness", "tests::harness_contracts::fault_output_stall_sibling_count_honors_n_per_group_cap", "--", "--exact", "--nocapture"]),
-    ("lib-recent-egress", &["test", "recent_egress", "--lib", "--", "--nocapture"]),
-    ("lib-ingest-grace", &["test", "recent_ingest_disconnect_respects_grace_window", "--lib", "--", "--nocapture"]),
-    ("lib-ingest-flap-window", &["test", "build_recent_ingest_outcome_resets_flap_streak_outside_window", "--lib", "--", "--nocapture"]),
-    ("lib-ingest-proptest", &["test", "prop_ingest_lifecycle_preserves_health_invariants", "--lib", "--", "--nocapture"]),
-    ("lib-egress-flap-window", &["test", "build_recent_egress_outcome_resets_flap_streak_outside_window", "--lib", "--", "--nocapture"]),
-    ("lib-health-reconnect-flapping", &["test", "health_snapshot_surfaces_flapping_after_repeated_reconnects", "--lib", "--", "--nocapture"]),
-    ("lib-health-egress-flapping", &["test", "health_snapshot_surfaces_flapping_after_repeated_egress_recoveries", "--lib", "--", "--nocapture"]),
-    ("lib-late-retry-state", &["test", "late_retry_state_update_is_ignored_after_output_restarts", "--lib", "--", "--nocapture"]),
-    ("lib-multi-late-retry-state", &["test", "repeated_late_retry_updates_cannot_poison_newest_output_attempt", "--lib", "--", "--nocapture"]),
-    ("lib-output-retry-backoff", &["test", "output_status_surfaces_retry_backoff_after_failure", "--lib", "--", "--nocapture"]),
-    ("lib-egress-proptest", &["test", "prop_egress_lifecycle_preserves_runtime_and_health_invariants", "--lib", "--", "--nocapture"]),
-    ("lib-egress-leaf-cursor-priming", &["test", "first_visit_primes", "--lib", "--", "--nocapture"]),
-    ("lib-egress-leaf-live-start", &["test", "live_start", "--lib", "--", "--nocapture"]),
-    ("recording-drain-bounded-on-cancel", &["test", "media::recording::tests::drain_ready_bursts", "--lib", "--", "--nocapture"]),
-    ("lib-media-executor", &["test", "media::executor::tests", "--lib"]),
-    ("lib-egress-sizing", &["test", "media::egress::sizing", "--lib"]),
-    ("lib-egress-resize", &["test", "media::egress::runtime", "--lib"]),
-    ("lib-egress-panic-recovery", &["test", "--lib", "--", "every_fabric_recovers_panics_without_adaptive_observation", "a_retried_output_delivers_again_after_its_shard_panics", "reconciler_recovery_replaces_a_panicked_sink_shard"]),
-    ("lib-agent-verify-apply-race", &["test", "applying_snapshot_cannot_be_verified_when_apply_completes_during_checks", "--lib"]),
-    ("lib-egress-feed-wake-races", &["test", "shard::tests::feed_wake", "--lib"]),
-    ("lib-media-control-isolation", &["test", "while_control_thread_is_blocked", "--lib"]),
-    ("lib-media-file-ingest", &["test", "media::external_file_ingest::tests", "--lib"]),
-    ("recording-media-owner-abort", &["test", "aborting_control_owner_closes_media_feeder_and_writer", "--lib"]),
-    ("hls-media-owner-abort", &["test", "control_owner_abort_flushes_final_segment", "--lib"]),
-    ("recording-media-writer-failure", &["test", "recording_media_writer_failure_reports_failed_without_finalization", "--lib"]),
-    ("hls-media-replacement", &["test", "detached_teardown_preserves_replacement", "--lib"]),
-];
-
-/// Run by `fast` only, after the shared set.
-#[rustfmt::skip]
-const FAST_ONLY_TESTS: &[(&str, &[&str])] = &[
-    ("lib-rtmp-feed-wake-after-media", &["test", "feed_wake_delivers_media_after_idle_when_factory_start_is_delayed", "--lib", "--", "--nocapture"]),
-    ("lib-srt-ingress-two-owners", &["test", "two_owners_share_the_port_and_each_session_command_reaches_its_owner", "--lib", "--", "--nocapture"]),
-    ("health-view", &["test", "api_runtime_views::status::tests::health", "--lib"]),
-    ("test-harness-unit", &["test", "-p", "test_harness", "--bin", "test_harness", "--", "--nocapture"]),
 ];
 
 /// Live harness modes run by `contract`, each with its own work directory.
@@ -132,9 +52,6 @@ pub(crate) fn fast() -> StepResult {
     for target in LOOM_TARGETS {
         loom(target)?;
     }
-    for (_, args) in COMMON_TESTS.iter().chain(FAST_ONLY_TESTS) {
-        cargo_test(args)?;
-    }
     Ok(())
 }
 
@@ -151,12 +68,6 @@ fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
     logged("process-lifecycle-guards", || {
         process_lifecycle_guards(Path::new("crates/test_harness/src/main.rs"))
     })?;
-    for target in LOOM_TARGETS {
-        logged(&format!("loom-{target}"), || loom(target))?;
-    }
-    for (label, args) in COMMON_TESTS {
-        logged(label, || cargo_test(args))?;
-    }
     logged("build-harness-bins", || {
         cargo(&[
             "build",
@@ -195,41 +106,6 @@ fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
         outcome?;
     }
     Ok(())
-}
-
-/// Runs one test row, first failing it when its filters select no test: a
-/// renamed or deleted test must not turn the row into a silent pass.
-fn cargo_test(args: &[&str]) -> StepResult {
-    let mut list = args.to_vec();
-    if !list.contains(&"--") {
-        list.push("--");
-    }
-    list.push("--list");
-    let (_, stderr) = child_output()?;
-    let output = Command::new("cargo")
-        .args(&list)
-        .stderr(stderr)
-        .output()
-        .map_err(|error| format!("cannot start cargo: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`cargo {}` failed ({})",
-            list.join(" "),
-            output.status
-        ));
-    }
-    require_listed_test(&String::from_utf8_lossy(&output.stdout))
-        .map_err(|error| format!("`cargo {}` {error}", args.join(" ")))?;
-    cargo(args)
-}
-
-/// Fails a libtest `--list` output (`<name>: test` lines) with no test.
-fn require_listed_test(listing: &str) -> StepResult {
-    if listing.lines().any(|line| line.ends_with(": test")) {
-        Ok(())
-    } else {
-        Err("selects no test".to_string())
-    }
 }
 
 /// Runs `step` with every child's stdout and stderr in
@@ -431,17 +307,6 @@ b.spawn()?;
 c.kill_on_drop(true).spawn()?;
 ";
         assert_eq!(unarmed_spawns(text), vec![3]);
-    }
-
-    #[test]
-    fn a_listing_without_a_test_fails_the_row() {
-        let listing = "\
-media::egress::visit_tests::live_start_cursor_never_rewinds: test
-
-1 test, 0 benchmarks
-";
-        assert_eq!(require_listed_test(listing), Ok(()));
-        assert!(require_listed_test("bench_feed: benchmark\n\n0 tests, 1 benchmark\n").is_err());
     }
 
     #[test]

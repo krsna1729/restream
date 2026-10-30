@@ -82,13 +82,13 @@ On Debian or Ubuntu:
 
 ```sh
 scripts/dev/bootstrap.sh
-cargo xtask setup prepare
+npm run build:frontend
 cargo xtask release app-native
 RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
 ```
 
 The [developer guide](docs/development.md) explains each step, the daily loop
-and parallel worktrees.
+and shared-host rules.
 
 ## Where to read next
 
@@ -96,7 +96,7 @@ and parallel worktrees.
 |---|---|
 | [Documentation index](docs/README.md) | Every page, grouped by task |
 | [Architecture](docs/architecture.md) | What runs where: data plane, control plane, threads, layers |
-| [Developer guide](docs/development.md) | Setup, daily loop, worktrees |
+| [Developer guide](docs/development.md) | Setup, daily loop, shared-host rules |
 | [Media pipeline](docs/media-pipeline.md) | Protocols, codecs and stages |
 | [Configuration](docs/configuration.md) | Environment variables, ports, paths |
 | [API reference](docs/api-reference.md) | HTTP routes |

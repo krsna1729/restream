@@ -35,7 +35,6 @@ These paths are gitignored outputs:
 
 | Script | Purpose |
 |---|---|
-| `cargo xtask setup prepare` ([source](../crates/xtask/src/setup.rs)) | Clean-checkout preparation for development |
 | `cargo xtask release prepare-build-tree` ([source](../crates/xtask/src/release/prepare.rs)) | Release-tree preparation for packaging and CI: `public/`, then output checks |
 | `npm run build:frontend` | Embedded browser output |
 

@@ -279,7 +279,7 @@ fn raw_line_count(text: &str) -> usize {
 }
 
 /// Shell `case` matching for patterns whose only wildcard is `*`.
-pub(crate) fn glob(pattern: &str, text: &str) -> bool {
+fn glob(pattern: &str, text: &str) -> bool {
     let mut parts = pattern.split('*');
     let first = parts.next().unwrap_or_default();
     let Some(mut rest) = text.strip_prefix(first) else {

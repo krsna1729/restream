@@ -10,7 +10,7 @@ skills; load the skill for the area you touch.
 - [Repository Map](#repository-map)
 - [Commands](#commands)
 - [Inner Loop](#inner-loop)
-- [Build and Worktree Safety](#build-and-worktree-safety)
+- [Branches and Build Safety](#branches-and-build-safety)
 - [Testing](#testing)
 - [Rigor and Evidence](#rigor-and-evidence)
 - [Merge Strategy](#merge-strategy)
@@ -47,8 +47,7 @@ because a skill is relevant.
 | live pipeline operations | [restream-ops-agent](docs/agent-guidance/skills/restream-ops-agent/SKILL.md) |
 
 Claude Code shims are generated locally by `cargo xtask setup-skills`
-(`.claude/` is gitignored; `cargo xtask worktree` runs it in new
-worktrees). After adding or editing a canonical skill, rerun it.
+(`.claude/` is gitignored). After adding or editing a canonical skill, rerun it.
 
 ## Repository Map
 
@@ -80,10 +79,6 @@ cargo test
 cargo clippy
 cargo fmt --all
 
-cargo xtask worktree <id>
-source .local/worktrees/<id>/.agent-state/setup.env
-cargo xtask worktree --cleanup <id>
-
 cargo xtask setup-skills
 
 npm run test:frontend
@@ -112,7 +107,7 @@ in on demand, and verify with the narrowest gate first.
 | Files touched | CI job that gates it | Local, when adding/changing it |
 |---|---|---|
 | backend module, timestamp/DTS/PTS logic | Rust unit hygiene and fixtures | `cargo test <new test name>` |
-| lifecycle, concurrency primitives, thread hops | Concurrency fast; Concurrency live on master pushes | the new test or loom case only |
+| lifecycle, concurrency primitives, thread hops | Rust unit hygiene and fixtures; Concurrency fast (loom); Concurrency live on master pushes | the new test or loom case only |
 | frontend/backend contract surface | API contract | — |
 | test media, fixtures, bench/harness setup | Rust unit hygiene and fixtures | — |
 | Markdown documentation | Source architecture audit (`cargo xtask docs-audit`) | — |
@@ -120,13 +115,17 @@ in on demand, and verify with the narrowest gate first.
 | RTMP/SRT/HLS protocol behavior | Transport live-harness; master push transport matrix | one harness mode for a new scenario (`test_harness catalog list-modes`) |
 | hot-path code | — | relevant `benches/` suite before and after |
 
-## Build and Worktree Safety
+## Branches and Build Safety
+
+Work on a branch in the primary checkout. Do not create Git worktrees.
+Several agents may share the checkout, so check `git status` before builds
+and edits, and keep to your own hunks.
 
 **Never run Cargo builds, tests, checks, clippy, or benchmarks while a live pipeline is running.**
 Builds are memory heavy and can push a small host into OOM territory.
 
-Before heavy builds, check for live media; nothing else serializes builds
-against live runs or other worktrees:
+Before heavy builds, check for live media and other builds; nothing else
+serializes them:
 
 ```sh
 pgrep -a -x restream
@@ -138,9 +137,6 @@ pgrep -a -x cargo
 - Stop only processes owned by this task or covered by the user's restart
   request, after checking their PIDs and command lines. A matching process
   name does not establish ownership. Defer heavy work while other media runs.
-- Prefer `cargo xtask worktree <id>` over manual setup; use one worktree per agent or task.
-- Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
-- Use `.agent-state/setup.env` as the source of truth for `WORK_ROOT`.
 
 ## Testing
 

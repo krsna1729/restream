@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -117,17 +117,21 @@ fn interruption(signal: i32) -> Error {
     )
 }
 
+/// Starts `command` and refuses once interrupted. Cleanup that must still run
+/// after an interruption uses `spawn_group` directly.
 pub(crate) fn spawn(command: &mut Command) -> Result<Child, Error> {
     if let Some(signal) = interrupted() {
         return Err(interruption(signal));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // The child and its ordinary descendants form an owned group. Never
-        // signal the calling terminal's group or find processes by name.
-        command.process_group(0);
-    }
+    spawn_group(command)
+}
+
+/// Starts `command` as the leader of its own process group. The child and its
+/// ordinary descendants form an owned group: never signal the calling
+/// terminal's group or find processes by name.
+pub(crate) fn spawn_group(command: &mut Command) -> Result<Child, Error> {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
     command.spawn().map_err(|error| {
         format!(
             "cannot start {}: {error}",
@@ -137,18 +141,17 @@ pub(crate) fn spawn(command: &mut Command) -> Result<Child, Error> {
     })
 }
 
-#[cfg(unix)]
-fn signal_group(child: &Child, signal: i32) {
+/// Signals the group led by `child`, which must come from `spawn_group`.
+pub(crate) fn signal_group(child: &Child, signal: i32) {
     if let Ok(pid) = i32::try_from(child.id()) {
-        // SAFETY: this group was created by spawn for this recorded child;
-        // negative PID addresses that group, not unrelated named processes.
+        // SAFETY: this group was created by spawn_group for this recorded
+        // child; negative PID addresses that group, not unrelated processes.
         unsafe {
             libc::kill(-pid, signal);
         }
     }
 }
 
-#[cfg(unix)]
 fn group_exists(child: &Child) -> bool {
     let Ok(pid) = i32::try_from(child.id()) else {
         return false;
@@ -157,21 +160,16 @@ fn group_exists(child: &Child) -> bool {
     unsafe { libc::kill(-pid, 0) == 0 }
 }
 
-/// Best-effort bounded cleanup, including descendants after the leader exits.
-/// Call only for a child created by spawn, and only while its owner is live.
-pub(crate) fn terminate(child: &mut Child) {
-    #[cfg(unix)]
-    signal_group(child, libc::SIGTERM);
-    #[cfg(not(unix))]
-    let _ = child.kill();
-    let until = Instant::now() + Duration::from_secs(5);
+/// Sends `signal` to the child's group and waits up to `grace` for the leader
+/// and every descendant to exit, then kills whatever remains, including
+/// descendants that outlived the leader, and reaps the leader. Call only for
+/// a child created by `spawn_group`, and only while its owner is live.
+pub(crate) fn stop_group(child: &mut Child, signal: i32, grace: Duration) {
+    signal_group(child, signal);
+    let until = Instant::now() + grace;
     loop {
         let reaped = matches!(child.try_wait(), Ok(Some(_)));
-        #[cfg(unix)]
-        let descendants = group_exists(child);
-        #[cfg(not(unix))]
-        let descendants = false;
-        if reaped && !descendants {
+        if reaped && !group_exists(child) {
             return;
         }
         if Instant::now() >= until {
@@ -179,10 +177,14 @@ pub(crate) fn terminate(child: &mut Child) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    #[cfg(unix)]
     signal_group(child, libc::SIGKILL);
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Best-effort bounded cleanup: TERM, then KILL after five seconds.
+pub(crate) fn terminate(child: &mut Child) {
+    stop_group(child, libc::SIGTERM, Duration::from_secs(5));
 }
 
 pub(crate) fn wait(child: &mut Child) -> Result<ExitStatus, Error> {
@@ -222,11 +224,6 @@ impl OwnedChild {
     pub(crate) fn wait(&mut self) -> Result<ExitStatus, Error> {
         let mut child = self.0.take().expect("owned child has not been reaped");
         wait(&mut child)
-    }
-
-    /// Records that the caller reaped the child itself (`try_wait`).
-    pub(crate) fn reaped(&mut self) {
-        self.0.take();
     }
 
     pub(crate) fn terminate(&mut self) {
@@ -418,24 +415,33 @@ pub(crate) fn on_path(name: &str) -> bool {
         .is_some_and(|paths| env::split_paths(&paths).any(|dir| executable(&dir.join(name))))
 }
 
-/// A private (0700) directory below the system temporary directory, removed
-/// with its contents on drop (the shell's `mktemp -d` plus an EXIT trap).
+/// A new private (0700) directory `<prefix>-<pid>-<serial>` below `parent`,
+/// which is created if missing. The caller owns its removal.
+pub(crate) fn unique_dir(parent: &Path, prefix: &str) -> Result<PathBuf, Error> {
+    use std::os::unix::fs::DirBuilderExt;
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    fs::create_dir_all(parent)?;
+    loop {
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!("{prefix}-{}-{serial}", std::process::id()));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+/// A `unique_dir` below the system temporary directory, removed with its
+/// contents on drop (the shell's `mktemp -d` plus an EXIT trap).
 pub(crate) struct TempDir(PathBuf);
 
 impl TempDir {
     pub(crate) fn new(prefix: &str) -> Result<Self, Error> {
-        use std::os::unix::fs::DirBuilderExt;
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let parent = fs::canonicalize(env::temp_dir())?;
-        loop {
-            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = parent.join(format!("{prefix}-{}-{serial}", std::process::id()));
-            match fs::DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
+        Ok(Self(unique_dir(
+            &fs::canonicalize(env::temp_dir())?,
+            prefix,
+        )?))
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -479,6 +485,27 @@ mod tests {
         assert_eq!(
             Error::status(status, "terminated").code,
             128 + libc::SIGTERM as u8
+        );
+    }
+
+    #[test]
+    fn stopping_a_group_kills_descendants_that_outlive_the_leader() {
+        // The leader exits at once, leaving a TERM-immune sleep in its group.
+        let mut command = Command::new("sh");
+        command.args(["-c", "trap '' TERM; sleep 60 & exit 0"]);
+        let mut child = spawn_group(&mut command).unwrap();
+        while child.try_wait().unwrap().is_none() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(group_exists(&child));
+        stop_group(&mut child, libc::SIGTERM, Duration::from_millis(100));
+        let until = Instant::now() + Duration::from_secs(5);
+        while group_exists(&child) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !group_exists(&child),
+            "a descendant outlived its stopped group"
         );
     }
 }

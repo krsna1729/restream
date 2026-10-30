@@ -72,16 +72,14 @@ fn walk(root: &Path, path: &Path, policy: &Policy, errors: &mut Vec<String>) -> 
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        // Node's readFile(…, "utf8") decodes lossily; .ts MPEG-TS fixtures
-        // under test/ are scanned too, exactly as the original guard did.
-        policy.scan(&name, &String::from_utf8_lossy(&fs::read(path)?), errors);
+        policy.scan(&name, &fs::read_to_string(path)?, errors);
     } else {
         let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let p = entry.path();
             let kind = entry.file_type()?;
-            if kind.is_dir()
+            if (kind.is_dir() && !p.ends_with("test/fixtures"))
                 || matches!(
                     p.extension().and_then(|e| e.to_str()),
                     Some("ts" | "tsx" | "js" | "rs" | "html" | "sh" | "mjs")

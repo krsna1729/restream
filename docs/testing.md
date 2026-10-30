@@ -51,7 +51,7 @@ flowchart LR
 
 | CI job (name) | Runs | When |
 |---|---|---|
-| `format` (Source formatting and TS types) | `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit`, `cargo test -p xtask worktree::tests` | every run |
+| `format` (Source formatting and TS types) | `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit` | every run |
 | `lint` (Rust lint) | `cargo clippy` for the lib, all targets, and the MCP features; the MCP feature `cargo check` matrix; agent tests with and without the agent plane | every run |
 | `architecture-guardrails` (Source architecture audit) | `cargo xtask source-audit`, `cargo xtask docs-audit` | every run |
 | `test` (Rust unit hygiene and fixtures) | `cargo xtask test-hygiene` (runs `cargo test --workspace`, then scans for noise), `cargo xtask fixture-discipline` | every run |
@@ -59,7 +59,7 @@ flowchart LR
 | `api-contract` (API contract smoke) | `cargo xtask api-contract` | every run |
 | `frontend` (Frontend unit) | `npm run test:frontend:coverage` | every run |
 | `frontend-e2e` (Frontend app E2E) | `npm run test:e2e` in Chromium | after `frontend` |
-| `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast`, `cargo test --test egress_scheduler_shape` | every run, in parallel |
+| `concurrency-fast` (Concurrency fast proof) | `cargo xtask concurrency fast` (every loom model) | every run, in parallel |
 | `concurrency-contract` (Concurrency live lifecycle proof) | `cargo xtask concurrency contract` with `--no-netns` | `master` only |
 | `fuzz-smoke` (Parser fuzz smoke) | every target in `fuzz/` for 30 s | after `test`; pull requests touching `src/media/`, production `crates/restream-*/`, `crates/test_harness/`, `src/lib.rs`, `fuzz/`, `vendor/`, Cargo manifests, toolchain or `ci.yml` |
 | `miri` (Miri) | selected root pure modules and the canonical `restream-core` bit-reader tests | after `test` |
@@ -113,16 +113,17 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream --lib media::srt::` for retained consumers |
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream --lib media::moq::` for retained integration/consumer tests |
 
-For extracted-library source and manifest changes, `cargo xtask gates`
-recommends the owning unit suite plus its retained root consumer suite.
+For extracted-library source and manifest changes, run the owning unit suite
+plus its retained root consumer suite.
 MPEG-TS implementation tests run in `restream-mpegts`; its allocation guard
 stays in the application test binary so the leaf library can continue to
 forbid unsafe code without a custom test allocator. Owner suites run unfiltered
 rather than deriving a possibly empty filter from the implementation file name.
 
-Every recommended focused test command first runs
-`cargo xtask require-test-filters` and chains the actual test run with `&&`.
-An empty selection fails instead of reporting a successful zero-test run.
+Run a focused test command through
+`cargo xtask require-test-filters <cargo test ...> -- <filter>...` to prove
+each filter selects tests: an empty selection fails instead of reporting a
+successful zero-test run.
 `cargo test --workspace` remains the CI-wide coverage gate.
 The package graph and runtime seams are in
 [Workspace layout](architecture.md#workspace-layout).
@@ -265,7 +266,7 @@ fails with a shrunk counterexample, then revert.
 
 ## Parallelism policy
 
-- Rust tests: one `cargo test` at a time per worktree. Cargo owns compile
+- Rust tests: one `cargo test` at a time per checkout. Cargo owns compile
   parallelism (`.cargo/config.toml`, `jobs = -1`). On a small host, set
   `RUST_TEST_THREADS=N` and `CARGO_BUILD_JOBS=N`.
 - Live correctness modes may run in parallel when each has its own network
@@ -626,32 +627,45 @@ troubleshooting control, never a deployment setting.
 
 ## SRT egress qualification
 
-`scripts/harness/srt_final_qual.py` runs the SRT Owner qualification
-(fanout points, connect bursts, `srt.slow-peer`, frozen destination) and
-derives gates; `scripts/harness/test_srt_final_qual.py` tests it.
+`fault.srt-output-stall` holds the frozen-destination gate. While the output
+retries against the SIGSTOPped receiver, the test samples Restream every
+second from live progress to capture completion: RSS, PSS, threads and file
+descriptors from `/proc`, SRT shard rows from `/metrics/system`, output rows
+from `/api/v1/engine/health` and `memoryAccounting` from
+`/api/v1/engine/telemetry`. Samples go to `samples.jsonl` in the mode's
+artifact directory. The test stops and awaits the sampler before it stops
+Restream.
 
-For a frozen-destination attribution campaign, build with
-`cargo xtask build-release`, then run (under the host measurement lock):
+The capture fails closed. Any sample error (a sample slower than 1.5 s is
+one), a sample without positive RSS, a gap over 2 s, a phase (sampling start,
+SIGSTOP, retry, output stop, pipeline deletion, capture completion) with no
+sample within 2 s, samples that do not span SIGSTOP through pipeline
+deletion, or a retry window under 120 s fails the test. The pass gate is RSS
+growth between the reading before SIGSTOP and the one after the retry
+window. The test JSON also reports sampled peak growth, `rssMbMax` and
+`threadsMax`.
+
+For an attribution run, build release binaries and hold the host
+measurement lock:
 
 ```sh
-flock -x /tmp/restream-host.lock python3 scripts/harness/srt_final_qual.py frozen \
-  --variant candidate --tag frozen-attribution --out .local/artifacts/srt-attribution \
-  --attribution
+flock -x /tmp/restream-host.lock cargo xtask build-release
+
+HARNESS_BIN="$PWD/target/qual-release/test_harness" \
+RESTREAM_BIN="$PWD/target/qual-release/restream" \
+BENCH_BUILD=never \
+  flock -x /tmp/restream-host.lock \
+  cargo xtask harness fault.srt-output-stall -- --no-netns
 ```
 
-The frozen driver defaults to `target/qual-release/{restream,test_harness}`;
-`--restream-bin` and `--harness-bin` permit explicit binaries (including an
-exec-style allocation-profiler launcher that preserves the child PID).
-`--variant` is a report label only, and each tag must be new. The campaign
-records smaps, thread, socket and Owner telemetry with phase markers from
-live progress through SIGSTOP, retry, output stop and pipeline deletion. It
-fails closed: missing or zero RSS endpoints, missing reports, incomplete
-sample coverage or gaps over two sampling intervals fail the driver, and
-exit zero alone is not a pass. RSS and ring payload alone cannot separate
-live heap from allocator retention; pair them with an allocation profiler.
-The 64 MiB growth limit stays unchanged until
+`RESTREAM_BIN` may name an exec-style allocation-profiler launcher that keeps
+the child PID. RSS and ring payload alone cannot separate live heap from
+allocator retention; pair them with an allocation profiler. The 64 MiB growth
+limit stays unchanged until
 [Q-026](backlog.md#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
 attributes the historical growth.
+
+Two more modes qualify SRT egress:
 
 - `srt.slow-peer` pauses application delivery on one `RawSrtSink` receiver
   while protocol timers keep running. Healthy siblings must keep progressing.
@@ -734,7 +748,7 @@ brings an equal or stronger proof in the same change.
 
 | Failure class | Replay | Guardrail |
 |---|---|---|
-| External H.265 capacity or zero-output stall | `test/fixtures/transport/correctness-h265.ts`, `bench-h265-1_5m.ts`, `bench-h265-1_5m-2a.ts`; `mixed.live.srt.h265.a1.bf2`, `mixed.live.srt.h265.a2.bf2` | `waitingForCapacity` health/alert tests; `cargo xtask concurrency fast` |
+| External H.265 capacity or zero-output stall | `test/fixtures/transport/correctness-h265.ts`, `bench-h265-1_5m.ts`, `bench-h265-1_5m-2a.ts`; `mixed.live.srt.h265.a1.bf2`, `mixed.live.srt.h265.a2.bf2` | `waitingForCapacity` health/alert tests; external transcoder tests (`cargo test external_`) |
 | Low-CPU external-capacity collapse | `cargo xtask harness resource-sweep` (output in `.local/artifacts/resource-sweep/`) | [resource sweep](resource-sweep.md) |
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 

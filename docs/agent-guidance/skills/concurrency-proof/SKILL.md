@@ -14,14 +14,16 @@ does not prove the production path.
   bound the model.
 - For recovery or teardown changes, update the live harness fault assertion
   and operator-visible status contract together.
-- Extend the proof gate for a new primitive or thread hop (the step tables
-  in `crates/xtask/src/concurrency.rs`), or explain how existing coverage
-  enforces it.
+- Add a loom model for a new primitive or thread hop to `LOOM_TARGETS` and a
+  new live fault mode to `CONTRACT_MODES` (`crates/xtask/src/concurrency.rs`),
+  or explain how existing coverage enforces it. Ordinary tests need no gate
+  entry: CI's workspace test job runs them.
 - Benchmark hot-path changes; otherwise state that the change is off the hot path.
 
 Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. Locally, run
-only the new step or loom case you added (`cargo test <new test name>`). CI
-runs the fast gate on every PR and the live contract gate on master pushes:
+only the new test or loom model you added (`cargo test <new test name>`,
+`cargo xtask loom <target>`). CI runs the loom gate on every PR and the live
+contract gate on master pushes:
 
 ```sh
 cargo xtask concurrency fast

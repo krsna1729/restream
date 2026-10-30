@@ -135,7 +135,7 @@ fn package_name(role: &PackageRole, version: &str, arch: &str) -> String {
     format!("{}-{version}-{arch}", role.prefix)
 }
 
-pub(crate) fn runtime_image_info(version: &str) -> Result<(String, String), Error> {
+fn runtime_image_info(version: &str) -> Result<(String, String), Error> {
     require_version("package-runtime-image", version)?;
     Ok((
         format!(
@@ -146,7 +146,7 @@ pub(crate) fn runtime_image_info(version: &str) -> Result<(String, String), Erro
     ))
 }
 
-pub(super) fn package_runtime_image(version: &str) -> WorkflowResult {
+fn package_runtime_image(version: &str) -> WorkflowResult {
     require_version("package-runtime-image", version)?;
     require_commands(&["docker", "gzip"])?;
     let out_dir = PathBuf::from(crate::workflow::env_or("RESTREAM_RELEASE_DIR", "dist"));
@@ -250,49 +250,6 @@ fn save_image(image: &str, archive: &Path) -> WorkflowResult {
     Ok(())
 }
 
-pub(super) fn checksums(args: &[&str]) -> WorkflowResult {
-    if args.len() > 1 || matches!(args.first(), Some(&"-h" | &"--help")) {
-        return Err(Error::usage(
-            "usage: cargo xtask release checksums [dist-dir]",
-        ));
-    }
-    let directory = args.first().copied().unwrap_or("dist");
-    let mut groups = [Vec::new(), Vec::new(), Vec::new()];
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let filename = entry.file_name();
-        let name = filename.to_string_lossy();
-        if let Some(group) = checksum_group(&name) {
-            groups[group].push(filename);
-        }
-    }
-    for group in &mut groups {
-        group.sort();
-        if group.is_empty() {
-            return Err("release checksums: required archive/JSON artifact group is empty".into());
-        }
-    }
-    let output_file = File::create(Path::new(directory).join("SHA256SUMS"))?;
-    checked(
-        Command::new("sha256sum")
-            .current_dir(directory)
-            .args(groups.into_iter().flatten())
-            .stdout(output_file),
-    )
-}
-
-fn checksum_group(name: &str) -> Option<usize> {
-    if name.starts_with("restream-") && name.ends_with(".tar.gz") {
-        Some(0)
-    } else if name.starts_with("restream-") && name.ends_with(".json") {
-        Some(1)
-    } else if name.starts_with("test-harness-") && name.ends_with(".tar.gz") {
-        Some(2)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,26 +277,5 @@ mod tests {
             ["restream"]
         );
         assert_eq!(ROLES[2].binary, "test_harness");
-    }
-
-    #[test]
-    fn checksum_selection_covers_all_distributed_roles_and_metadata() {
-        for name in [
-            "restream-v1-oci.tar.gz",
-            "restream-mcp-v1-linux-x86_64.tar.gz",
-        ] {
-            assert_eq!(checksum_group(name), Some(0));
-        }
-        assert_eq!(
-            checksum_group("restream-v1-linux-aarch64.sbom.cdx.json"),
-            Some(1)
-        );
-        assert_eq!(checksum_group("restream-v1-seccomp.json"), Some(1));
-        assert_eq!(
-            checksum_group("test-harness-v1-linux-aarch64.tar.gz"),
-            Some(2)
-        );
-        assert_eq!(checksum_group("SHA256SUMS"), None);
-        assert_eq!(checksum_group("unrelated.tar.gz"), None);
     }
 }

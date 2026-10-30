@@ -1,5 +1,7 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 cd "$(git rev-parse --show-toplevel)"
-exec cargo xtask gates --staged
+cargo fmt --all --check
+cargo xtask docs-audit
+exec cargo xtask source-audit

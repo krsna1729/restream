@@ -43,12 +43,6 @@ jobs:
         # The catalog in crates/xtask/src/qualify/shards.rs is the one list.
         run: echo "json=$(cargo xtask release shards --json)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
-      - name: Prepare release build tree
-        # Clean runners do not have generated public/ assets. The harness
-        # compile embeds public/ before packaging runs, so prepare the tree via
-        # the same canonical release workflow used by packaging instead of
-        # relying on developer-local generated files.
-        run: cargo xtask release prepare-build-tree
       - name: Package release Linux binaries
         env:
           RESTREAM_DOCKER_GHA_CACHE: "1"
@@ -87,8 +81,6 @@ jobs:
           node_version: '22'
           system_deps_profile: build
           rust_cache: 'true'
-      - name: Prepare release build tree
-        run: cargo xtask release prepare-build-tree
       - name: Package release Linux binaries
         env:
           RESTREAM_RELEASE_IMAGE: '0'
@@ -202,7 +194,6 @@ jobs:
         with:
           name: release-dist-aarch64-${{ env.RELEASE_VERSION }}-${{ github.sha }}
           path: dist-aarch64
-      - uses: ./.github/actions/ci-bootstrap
       - name: Normalize release dist layout
         run: |
           if [[ -d dist/dist ]]; then
@@ -221,13 +212,17 @@ jobs:
         id: image
         env:
           GH_TOKEN: ${{ github.token }}
-          RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-          RESTREAM_CONTAINER_IMAGE: restream:release
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+        # The certified archive carries the restream:release tag that
+        # package-evidence smoked; push those exact bytes.
         run: |
           docker load -i "dist/restream-${RELEASE_VERSION}-oci.tar.gz"
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          cargo xtask release publish-image "$GITHUB_REF_NAME"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$RESTREAM_REGISTRY_IMAGE:$GITHUB_REF_NAME")"
+          for tag in "$GITHUB_REF_NAME" latest; do
+            docker tag restream:release "$REGISTRY_IMAGE:$tag"
+            docker push "$REGISTRY_IMAGE:$tag"
+          done
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$REGISTRY_IMAGE:$GITHUB_REF_NAME")"
           echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
       - name: Attest build provenance for the release assets
         uses: actions/attest-build-provenance@v4

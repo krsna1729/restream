@@ -18,8 +18,12 @@ cargo xtask harness <mode>
 
 Choose scenarios whose plans cover the changed protocol, codec, timestamp,
 encryption, audio-track, or recovery contract. Use the live catalog rather than
-a copied list of mode names. Run `cargo xtask media-validation` for
-cross-codec/mux changes or when the bounded validation suite is requested.
+a copied list of mode names. For cross-codec/mux changes, or when the bounded
+validation suite is requested, run:
+
+```sh
+cargo xtask harness suite -- --only-modes mixed.live.rtmp.h264.a1.bf0,mixed.live.srt.h265.a1.bf0,mixed.live.rtmp.h264.a1.bf2
+```
 
 Private loopback namespaces are the default; use `--no-netns` only when
 required and report why. Correctness scenarios may overlap when isolated;

@@ -1,6 +1,6 @@
 use std::process::{Command, Stdio};
 
-use super::common::{git, require_clean_checkout, require_commands, require_tag, require_version};
+use super::common::{git, require_clean_checkout, require_commands, require_tag};
 use crate::workflow::{Error, WorkflowResult, checked, output, spawn, wait};
 use serde_json::Value;
 
@@ -108,31 +108,6 @@ fn validate_run(run: &Value, run_id: &str, head_sha: &str) -> WorkflowResult {
         )
         .into());
     }
-    Ok(())
-}
-
-pub(super) fn publish_image(version: &str) -> WorkflowResult {
-    require_version("publish-image", version)?;
-    let source = crate::workflow::env_or("RESTREAM_CONTAINER_IMAGE", "restream:release");
-    let registry = std::env::var("RESTREAM_REGISTRY_IMAGE")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or("RESTREAM_REGISTRY_IMAGE is required")?;
-    require_commands(&["docker"])?;
-    let mut inspect = spawn(
-        Command::new("docker")
-            .args(["image", "inspect", &source])
-            .stdout(Stdio::null()),
-    )?;
-    if !wait(&mut inspect)?.success() {
-        return Err(format!("publish-image: certified image is missing: {source}").into());
-    }
-    for tag in [version, "latest"] {
-        let destination = format!("{registry}:{tag}");
-        checked(Command::new("docker").args(["tag", &source, &destination]))?;
-        checked(Command::new("docker").args(["push", &destination]))?;
-    }
-    println!("publish-image: PASS image={registry} version={version}");
     Ok(())
 }
 

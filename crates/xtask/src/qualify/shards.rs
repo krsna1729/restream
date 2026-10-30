@@ -120,45 +120,16 @@ pub(crate) fn plan(shard: &str) -> Result<Vec<Step>, Error> {
     })
 }
 
-const USAGE: &str = "usage: cargo xtask qualify harness-shard <shard> | run <shard> | list | timeout <shard> | explain <shard>";
+const USAGE: &str = "usage: cargo xtask qualify harness-shard <shard>";
 
-/// Shared catalog CLI, also exposed as `release shards`.
+/// `release shards --json`: the shard matrix CI expands into jobs.
 pub(crate) fn run(args: &[&str]) -> WorkflowResult {
-    match args {
-        ["--json", ..] | ["list", "--json", ..] => {
-            let json = serde_json::to_string(list())
-                .map_err(|error| format!("release shards: {error}"))?;
-            println!("{json}");
-            Ok(())
-        }
-        [] | ["list", ..] => {
-            for shard in list() {
-                println!("{shard}");
-            }
-            Ok(())
-        }
-        ["-h" | "--help", ..] => {
-            println!("{USAGE}");
-            Ok(())
-        }
-        [verb @ ("timeout" | "explain" | "plan"), shard, ..] if exists(shard) => {
-            if *verb == "timeout" {
-                println!("{}", timeout(shard));
-            } else {
-                if *verb == "explain" {
-                    println!("shard={shard}\ntimeout={}", timeout(shard));
-                }
-                for step in plan(shard)? {
-                    println!("{}\t{}", step.kind, step.value);
-                }
-            }
-            Ok(())
-        }
-        ["timeout" | "explain" | "plan", shard, ..] => {
-            Err(Error::usage(format!("unknown release shard: {shard}")))
-        }
-        _ => Err(Error::usage(USAGE)),
+    if args != ["--json"] {
+        return Err(Error::usage("usage: cargo xtask release shards --json"));
     }
+    let json = serde_json::to_string(list()).map_err(|error| format!("release shards: {error}"))?;
+    println!("{json}");
+    Ok(())
 }
 
 pub(super) fn harness(args: &[&str]) -> WorkflowResult {
@@ -168,9 +139,6 @@ pub(super) fn harness(args: &[&str]) -> WorkflowResult {
             eprintln!("{USAGE}");
             return Ok(());
         }
-        ["list" | "timeout" | "explain", ..] => return run(args),
-        ["run", shard, ..] if !shard.is_empty() => *shard,
-        ["run", ..] => return Err(Error::usage(USAGE)),
         [shard, ..] => *shard,
     };
     if !exists(shard) {
@@ -187,7 +155,7 @@ pub(super) fn harness(args: &[&str]) -> WorkflowResult {
             Command::new("timeout")
                 .args(["--kill-after=30s", &limit])
                 .arg(std::env::current_exe()?)
-                .args(["qualify", "harness-shard", "run", shard])
+                .args(["qualify", "harness-shard", shard])
                 .env("RELEASE_HARNESS_SHARD_TIMEOUT_ACTIVE", "1"),
         )?;
         let status = workflow::wait(&mut child)?;

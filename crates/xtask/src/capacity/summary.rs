@@ -43,7 +43,7 @@ fn csv_fields(line: &str) -> Vec<String> {
     fields
 }
 
-/// Python's `float(value)` with NaN for missing or malformed input.
+/// Parses a float, with NaN for missing or malformed input.
 pub(super) fn number(value: Option<&String>) -> f64 {
     value
         .and_then(|text| text.trim().parse().ok())
@@ -114,17 +114,6 @@ fn rung_summary(protocol: &str, outputs: u64, runs: &[Row]) -> Rung {
     }
 }
 
-/// Python `repr` of a float: `12.0`, `0.95`, `nan`.
-fn py_float(value: f64) -> String {
-    if value.is_nan() {
-        "nan".into()
-    } else if value.is_finite() && value.fract() == 0.0 {
-        format!("{value:.1}")
-    } else {
-        value.to_string()
-    }
-}
-
 /// Writes `<root>/summary.csv` and `<root>/summary.md` and prints the latter.
 pub(super) fn summarize(root: &Path) -> StepResult {
     let mut rungs: BTreeMap<(String, u64), Vec<Row>> = BTreeMap::new();
@@ -173,16 +162,16 @@ pub(super) fn summarize(root: &Path) -> StepResult {
             r.repeats,
             r.passed,
             r.rx_delivered_min,
-            py_float(r.rx_ratio_min),
-            py_float(r.rx_ratio_median_med),
-            py_float(r.rx_interval_min),
-            py_float(r.rx_jain_min),
+            r.rx_ratio_min,
+            r.rx_ratio_median_med,
+            r.rx_interval_min,
+            r.rx_jain_min,
             r.restream_delivered_min,
-            py_float(r.restream_ratio_min),
-            py_float(r.cpu_avg_median),
-            py_float(r.cpu_peak_max),
-            py_float(r.rss_peak_mb_max),
-            py_float(r.threads_peak_max),
+            r.restream_ratio_min,
+            r.cpu_avg_median,
+            r.cpu_peak_max,
+            r.rss_peak_mb_max,
+            r.threads_peak_max,
         ));
     }
     fs::write(root.join("summary.csv"), csv)
@@ -386,12 +375,5 @@ mod tests {
         assert!(markdown.contains("| 150 | 1/2 |"), "{markdown}");
         let failing = [row(50, 3, 2)];
         assert!(summary_markdown(&Value::Null, &failing).contains("capacity 0 outputs"));
-    }
-
-    #[test]
-    fn python_float_repr() {
-        assert_eq!(py_float(12.0), "12.0");
-        assert_eq!(py_float(0.95), "0.95");
-        assert_eq!(py_float(f64::NAN), "nan");
     }
 }

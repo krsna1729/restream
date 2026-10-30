@@ -1,8 +1,8 @@
 # Release runbook
 
-A release is three scripts run in order: local due diligence, a GitHub
-dry-run, then tag-and-publish. The scripts own the gates, artifact list,
-shards, timeouts and packaging; this page gives the sequence.
+A release is three steps run in order: local due diligence, a GitHub
+dry-run, then tag-and-publish. The scripts and workflow own the gates,
+artifact list, shards, timeouts and packaging; this page gives the sequence.
 
 ## Contents
 
@@ -22,7 +22,7 @@ from a clean branch to published artifacts.
 ```mermaid
 flowchart TD
   ldd["cargo xtask qualify local-due-diligence vX.Y.Z"] --> push["git push release branch"]
-  push --> dry["cargo xtask qualify dispatch-dry-run"]
+  push --> dry["gh workflow run release.yml --ref branch"]
   dry --> wf["release.yml (workflow_dispatch): package-build, full-live-harness, package-evidence, certify"]
   wf --> arm["package-build-aarch64: arm64 archives + artifact smoke"]
   arm --> ok
@@ -32,7 +32,7 @@ flowchart TD
   ok -- yes --> tag["cargo xtask release tag-and-publish vX.Y.Z run-id"]
   tag --> tagwf["release.yml (tag v*): same jobs plus publish"]
   tagwf --> gh["GitHub Release assets, SHA256SUMS, provenance and SBOM attestations"]
-  tagwf --> img["cargo xtask release publish-image: GHCR vX.Y.Z and latest"]
+  tagwf --> img["publish job: GHCR vX.Y.Z and latest from the certified image archive"]
 ```
 
 ## Preflight
@@ -65,16 +65,17 @@ for the failing owner instead of rerunning a copied subsequence.
 
 ## Dispatch the GitHub dry-run
 
-`cargo xtask qualify dispatch-dry-run` ([source](../crates/xtask/src/qualify.rs))
-starts the non-publishing Release workflow for the current branch or a given
-ref. It certifies the exact pushed SHA without creating a GitHub Release or
-pushing images.
+`.github/workflows/release.yml` on a branch is the non-publishing dry-run. It
+certifies the exact pushed SHA without creating a GitHub Release or pushing
+images. Start it, then find its run ID:
 
 ```sh
-cargo xtask qualify dispatch-dry-run [ref]
+gh workflow run release.yml --ref <branch>
+gh run list --workflow release.yml --branch <branch> --limit 1 \
+  --json databaseId,status,conclusion,headSha,url --jq '.[0]'
 ```
 
-Keep the run ID it reports. If the branch moves, dispatch again: a run for
+Keep the run ID (`databaseId`). If the branch moves, dispatch again: a run for
 an older SHA cannot authorize publication. The workflow and
 `crates/xtask/src/qualify/shards.rs` own matrix, runtime image, retries and
 timeouts.

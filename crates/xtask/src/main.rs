@@ -14,6 +14,8 @@ use std::sync::{LazyLock, OnceLock};
 mod api_drift;
 mod bins;
 mod capacity;
+#[cfg(test)]
+mod ci_scope;
 mod concurrency;
 mod container;
 mod deployment;
@@ -23,7 +25,6 @@ mod fixtures;
 mod frontend;
 mod frontend_style;
 mod fuzz;
-mod gates;
 mod harness;
 mod qualify;
 mod release;
@@ -33,7 +34,6 @@ mod skills;
 mod source_audit;
 mod test_filters;
 mod workflow;
-mod worktree;
 
 /// Outcome of one step; the error is the message printed before exiting.
 type StepResult = Result<(), String>;
@@ -52,8 +52,6 @@ fn main() -> ExitCode {
     let aliased = match alias {
         Some("restream-container-shim") => Some(container::shim(&args)),
         Some("restream-cgroup-wrap") => Some(deployment::cgroup_wrap(&args)),
-        Some("restream-harness-pinned") => Some(harness::pinned(&args)),
-        Some("restream-harness-segregated") => Some(harness::segregated(&args)),
         _ => None,
     };
     if let Some(result) = aliased {
@@ -67,10 +65,6 @@ fn main() -> ExitCode {
         eprintln!("xtask: cannot enter {}: {error}", root.display());
         return ExitCode::FAILURE;
     }
-    if alias == Some("pre-commit") {
-        // Same as `.githooks/pre-commit`: gate the staged diff at the root.
-        return exit(gates::run_gates(&["--staged"]).map_err(Into::into));
-    }
     let result = match args[..] {
         ["help" | "-h" | "--help"] => {
             println!("{USAGE}");
@@ -83,16 +77,13 @@ fn main() -> ExitCode {
         ["concurrency", "fast"] => concurrency::fast().map_err(Into::into),
         ["concurrency", "contract"] => concurrency::contract().map_err(Into::into),
         ["loom", target] => concurrency::loom(target).map_err(Into::into),
-        ["gates", ref rest @ ..] => gates::run_gates(rest).map_err(Into::into),
         ["build-bench"] => bins::build_bench().map_err(Into::into),
         ["build-release"] => bins::build_release().map_err(Into::into),
         ["capacity-ramp", ref rest @ ..] => capacity::capacity_ramp(rest).map_err(Into::into),
         ["host-jitter", ref rest @ ..] => capacity::host_jitter(rest).map_err(Into::into),
         ["setup-skills", ref rest @ ..] => skills::setup_skills(rest).map_err(Into::into),
         ["harness", ref rest @ ..] => harness::run(rest),
-        ["media-validation", ref rest @ ..] => harness::media_validation(rest),
         ["parallel-fast-breadth", ref rest @ ..] => harness::parallel_fast_breadth(rest),
-        ["harness-pinned", ref rest @ ..] => harness::pinned(rest),
         ["harness-segregated", ref rest @ ..] => harness::segregated(rest),
         ["frontend", ref rest @ ..] => frontend::run(rest),
         ["release", ref rest @ ..] => release::run(rest),
@@ -100,10 +91,8 @@ fn main() -> ExitCode {
         ["container", ref rest @ ..] => container::run(rest),
         ["setup", ref rest @ ..] => setup::run(rest),
         ["fetch", ref rest @ ..] => fetch::run(rest),
-        ["worktree", ref rest @ ..] => worktree::run(rest),
         ["fixtures", ref rest @ ..] => fixtures::run(rest),
         ["deploy", ref rest @ ..] => deployment::run(rest),
-        ["native", "cgroup-wrap", ref rest @ ..] => deployment::cgroup_wrap(rest),
         ["fuzz", ref rest @ ..] => fuzz::run(rest),
         ["docs-audit", ref rest @ ..] => docs_audit::run(rest),
         ["frontend-style", ref rest @ ..] => frontend_style::run(rest),
@@ -130,14 +119,12 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   source-audit          layering, file-size, env-var and guardrail audit
-  fixture-discipline    fixture contract test + no inline media generators
-  test-hygiene          fmt check + full test run whose passing log stays quiet
-  api-contract          frontend/backend API contract + api-smoke harness run
-  concurrency fast      loom models and focused concurrency regressions
-  concurrency contract  fast set + live fault/recovery harness modes
+  fixture-discipline    no inline media generators in test-facing code
+  test-hygiene          full test run whose passing log stays quiet
+  api-contract          API drift guard + api-smoke harness run
+  concurrency fast      every loom model under --cfg loom
+  concurrency contract  live fault/recovery harness modes + process cleanup guard
   loom <test-target>    build one tests/<target>.rs with --cfg loom and run it
-  gates [--staged|--unstaged|--base <ref>] [--dry-run]
-                        route changed files to checks; run the pre-commit ones
   build-bench           bench-profile restream + test_harness into target/bench/
   build-release         release binaries into target/qual-release/ (committed evidence)
   capacity-ramp         egress capacity ramp (--help lists its environment)
@@ -148,37 +135,33 @@ commands:
 
 workflows (each prints its own usage):
   harness [--prepare] <mode> [-- <args>]   fresh bench binaries + test_harness
-  media-validation      bounded media validation harness modes
   parallel-fast-breadth three port-isolated harness groups, merged report
-  harness-pinned|harness-segregated <restream args>
-                        CPU-affinity RESTREAM_BIN launchers
-  frontend compile-for-node <out> | node-tests [--coverage] | e2e [args]
-  release prepare-build-tree|package-binaries|package-runtime-image|publish-image|
-          tag-and-publish|app-native|emit-sbom|checksums|shards [args]
+  harness-segregated <restream args>
+                        exec REAL_RESTREAM under segregated CPU masks
+  frontend node-tests [--coverage] | e2e [args]
+  release prepare-build-tree|package-binaries|tag-and-publish|app-native|
+          shards --json [args]
   qualify local-due-diligence|release-artifact-smoke|release-evidence|
-          harness-shard|dispatch-dry-run [args]
-  container smoke|restream-shim|run-in-harness-runtime|run-harness-shard-in-runtime
-  setup prepare|install-git-hooks|refresh-docker-seccomp|harness-host-prereqs
+          harness-shard [args]
+  container smoke|run-harness-shard-in-runtime
+  setup refresh-docker-seccomp <moby-tag>
   fetch mediamtx|moq-dev|moxygen
-  worktree [args]       optional developer worktree setup (--help)
   fixtures generate-bench|generate-msr-1080p [args]
   deploy install-systemd-service [--now]
-  native cgroup-wrap <args>
   fuzz seed-corpus
   docs-audit | frontend-style | api-drift
   require-test-filters <cargo test ...> -- <filter>...
 
-argv0 aliases: restream-container-shim, restream-cgroup-wrap,
-restream-harness-pinned, restream-harness-segregated, pre-commit";
+argv0 aliases: restream-container-shim, restream-cgroup-wrap";
 
 /// Repository root: a nonempty `RESTREAM_REPO_ROOT`, else the
 /// `CARGO_MANIFEST_DIR` that `cargo run` sets at runtime, else the Git
 /// top level of the working directory (an installed binary outside Cargo),
 /// else the compile-time manifest directory. Read the runtime variable first:
-/// the compile-time value names the worktree the binary was built in, and a
-/// `target/` moved to another worktree keeps the binary fresh (Cargo
+/// the compile-time value names the checkout the binary was built in, and a
+/// `target/` moved to another checkout keeps the binary fresh (Cargo
 /// fingerprints workspace members by relative path), so `env!` alone would
-/// act on the old worktree.
+/// act on the old checkout.
 fn repo_root() -> PathBuf {
     static ROOT: LazyLock<PathBuf> = LazyLock::new(resolve_root);
     ROOT.clone()
@@ -288,18 +271,12 @@ fn cargo(args: &[&str]) -> StepResult {
     run("cargo", args, &[])
 }
 
+/// API drift guard, then the `api-smoke` harness against a debug build with
+/// the dashboard assets embedded. Frontend contract tests and the Rust API
+/// integration suite run in their own CI jobs.
 fn api_contract() -> StepResult {
-    let out = env::temp_dir().join("restream-api-contract-js");
-    run("npx", &["tsc", "-p", "tsconfig.json", "--noEmit"], &[])?;
     api_drift::run(&[]).map_err(|error| error.to_string())?;
-    compile_frontend_for_node(&out)?;
-    run(
-        "node",
-        &["--test", "test/frontend/frontend-api-contract.test.mjs"],
-        &[("API_CONTRACT_JS_DIR", path_str(&out)?)],
-    )?;
     run("npm", &["run", "build:frontend"], &[])?;
-    cargo(&["test", "--test", "api", "--", "--nocapture"])?;
     cargo(&[
         "build",
         "-p",
@@ -320,12 +297,6 @@ fn api_contract() -> StepResult {
             ("WORK_DIR", ".local/artifacts/api-contract-smoke"),
         ],
     )
-}
-
-/// Emits the frontend as plain JavaScript into `out` for `node --test`
-/// (the same compile `npm run test:frontend` uses).
-fn compile_frontend_for_node(out: &Path) -> StepResult {
-    frontend::run(&["compile-for-node", path_str(out)?]).map_err(|error| error.to_string())
 }
 
 fn path_str(path: &Path) -> Result<&str, String> {

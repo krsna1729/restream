@@ -1,18 +1,10 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::workflow::{self, Error, WorkflowResult};
-
-pub(super) fn compile(root: &Path, args: &[&str]) -> WorkflowResult {
-    let out = args
-        .first()
-        .ok_or_else(|| Error::exit(1, "compile-for-node: missing output directory"))?;
-    compile_to(root, Path::new(out))
-}
 
 fn compile_to(root: &Path, out: &Path) -> WorkflowResult {
     // Keep rm's original operand handling and root/dot-directory protections.
@@ -25,27 +17,22 @@ fn compile_to(root: &Path, out: &Path) -> WorkflowResult {
     )
 }
 
-// Match rm -rf: unlink a symlink itself, not the directory it points to.
-fn remove_output(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
 pub(super) fn tests(root: &Path, args: &[&str]) -> WorkflowResult {
     let tmp_base = super::env_path("TMPDIR", "/tmp");
-    let build = TempBuild::create(&tmp_base)?;
-    compile_to(root, &build.path)?;
-    let mut command = node_command(args.first() == Some(&"--coverage"));
-    command
-        .current_dir(root)
-        .env("FRONTEND_MODULES_DIR", &build.path)
-        .env("TMPDIR", &tmp_base)
-        .args(test_files(root)?);
-    workflow::checked(&mut command)
+    let build = workflow::TempDir::new("restream-frontend-node-test-js")?;
+    let result = compile_to(root, build.path()).and_then(|()| {
+        let mut command = node_command(args.first() == Some(&"--coverage"));
+        command
+            .current_dir(root)
+            .env("FRONTEND_MODULES_DIR", build.path())
+            .env("TMPDIR", &tmp_base)
+            .args(test_files(root)?);
+        workflow::checked(&mut command)
+    });
+    if env::var_os("FRONTEND_NODE_TEST_KEEP_BUILD_DIR") == Some(OsString::from("1")) {
+        std::mem::forget(build);
+    }
+    result
 }
 
 fn node_command(coverage: bool) -> Command {
@@ -79,44 +66,6 @@ fn test_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(files)
 }
 
-struct TempBuild {
-    path: PathBuf,
-    keep: bool,
-}
-
-impl TempBuild {
-    fn create(base: &Path) -> Result<Self, Error> {
-        let output = workflow::output(
-            Command::new("mktemp")
-                .arg("-d")
-                .arg(base.join("restream-frontend-node-test-js.XXXXXX")),
-        )?;
-        let mut bytes = output.stdout;
-        while bytes.last() == Some(&b'\n') {
-            bytes.pop();
-        }
-        #[cfg(unix)]
-        let path = {
-            use std::os::unix::ffi::OsStringExt;
-            PathBuf::from(OsString::from_vec(bytes))
-        };
-        #[cfg(not(unix))]
-        let path = PathBuf::from(String::from_utf8(bytes).map_err(|error| error.to_string())?);
-        Ok(Self {
-            path,
-            keep: env::var_os("FRONTEND_NODE_TEST_KEEP_BUILD_DIR") == Some(OsString::from("1")),
-        })
-    }
-}
-
-impl Drop for TempBuild {
-    fn drop(&mut self) {
-        if !self.keep {
-            let _ = remove_output(&self.path);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,51 +80,6 @@ mod tests {
         ));
         fs::create_dir(&path).unwrap();
         path
-    }
-
-    #[test]
-    fn temp_build_removes_partial_compiler_output_on_error() {
-        let path = scratch();
-        let result: io::Result<()> = (|| {
-            let _build = TempBuild {
-                path: path.clone(),
-                keep: false,
-            };
-            fs::write(path.join("partial.js"), "partial")?;
-            Err(io::Error::other(
-                "compiler failed after writing partial output",
-            ))
-        })();
-        assert!(result.is_err());
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn requested_build_preservation_keeps_output() {
-        let path = scratch();
-        {
-            let _build = TempBuild {
-                path: path.clone(),
-                keep: true,
-            };
-        }
-        assert!(path.is_dir());
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn removing_compiler_output_unlinks_symlink_without_removing_target() {
-        let parent = scratch();
-        let target = parent.join("target");
-        fs::create_dir(&target).unwrap();
-        fs::write(target.join("keep.js"), "keep").unwrap();
-        let link = parent.join("output");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        remove_output(&link).unwrap();
-        assert!(target.join("keep.js").is_file());
-        assert!(fs::symlink_metadata(link).is_err());
-        fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]

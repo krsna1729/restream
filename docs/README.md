@@ -19,7 +19,7 @@ page is one `git log -- <path>` away.
 1. [Project README](../README.md): what Restream is, quick start, container
    launch.
 2. [Developer guide](development.md): prerequisites, first build, daily
-   loop, worktrees, shared-host rules.
+   loop, shared-host rules.
 3. [Architecture](architecture.md): the system at a glance, the
    [workspace layout and direct package dependencies](architecture.md#workspace-layout),
    thread placement, input selection, stages, recovery and layering rules.
@@ -111,5 +111,4 @@ page is one `git log -- <path>` away.
   instead of copying it.
 - Link every page from this index.
 - When a source or command rename lands, update the owning page in the same
-  change and run `cargo xtask docs-audit` (`cargo xtask gates` selects it
-  for Markdown changes).
+  change and run `cargo xtask docs-audit` (the pre-commit hook runs it).

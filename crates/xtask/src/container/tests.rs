@@ -1,18 +1,18 @@
 use super::{process, shim, smoke};
+use crate::workflow::TempDir;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct Engine {
-    directory: PathBuf,
+    directory: TempDir,
     executable: PathBuf,
 }
 impl Engine {
     fn new() -> Self {
-        let directory =
-            process::unique_dir(&std::env::temp_dir(), "container-engine-test").unwrap();
-        let executable = directory.join("engine");
+        let directory = TempDir::new("container-engine-test").unwrap();
+        let executable = directory.path().join("engine");
         // A Docker argv adapter, not a second implementation of the shim.
         // Production run_with owns all launching, waiting, forwarding and cleanup.
         // Each invocation appends one line: its arguments, each ended by
@@ -54,15 +54,18 @@ fi
             environment: vec![("RESTREAM_TEST_MODE".into(), mode.into())],
         }
     }
+    fn dir(&self) -> &Path {
+        self.directory.path()
+    }
     fn events(&self) -> Vec<Vec<String>> {
-        fs::read_to_string(self.directory.join("events"))
+        fs::read_to_string(self.dir().join("events"))
             .unwrap()
             .lines()
             .map(|line| line.split_terminator('\u{1f}').map(String::from).collect())
             .collect()
     }
     fn assert_reaped(&self) {
-        let pid: i32 = fs::read_to_string(self.directory.join("pid"))
+        let pid: i32 = fs::read_to_string(self.dir().join("pid"))
             .unwrap()
             .parse()
             .unwrap();
@@ -73,11 +76,6 @@ fi
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH)
         );
-    }
-}
-impl Drop for Engine {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -141,7 +139,7 @@ fn container_shim_term_and_int_stop_container_then_reap_client() {
     for signal in [libc::SIGTERM, libc::SIGINT] {
         let engine = Engine::new();
         let result = shim::run_with(&engine.settings("wait"), &[], || {
-            if engine.directory.join("ready").exists() {
+            if engine.dir().join("ready").exists() {
                 signal
             } else {
                 0
@@ -149,7 +147,7 @@ fn container_shim_term_and_int_stop_container_then_reap_client() {
         });
         assert!(result.is_err());
         assert_eq!(
-            fs::read_to_string(engine.directory.join("signal")).unwrap(),
+            fs::read_to_string(engine.dir().join("signal")).unwrap(),
             signal.to_string()
         );
         let events = engine.events();
