@@ -256,8 +256,13 @@ fn admin_password() -> Result<String, Error> {
     if let Ok(password) = env::var("RESTREAM_INITIAL_ADMIN_PASSWORD") {
         return Ok(password);
     }
-    let mut bytes = [0u8; 32];
-    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let mut bytes = Vec::with_capacity(32);
+    File::open("/dev/urandom")?
+        .take(32)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() != 32 {
+        return Err("short read from /dev/urandom".into());
+    }
     let mut password = String::with_capacity(64);
     for byte in bytes {
         let _ = write!(password, "{byte:02x}");
