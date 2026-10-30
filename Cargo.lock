@@ -3197,6 +3197,7 @@ dependencies = [
  "rand 0.10.2",
  "rcgen",
  "reqwest",
+ "restream",
  "restream-core",
  "restream-domain",
  "restream-moq",

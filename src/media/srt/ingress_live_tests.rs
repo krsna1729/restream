@@ -692,7 +692,7 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_srt_call_input_dials_a_remote_listener_and_publishes() {
     let server = TestServer::start(&[], Vec::new()).await;
-    let fixture = crate::test_fixtures::canonical_h264_ts_fixture().expect("fixture");
+    let fixture = crate::media::test_fixtures::canonical_h264_ts_fixture().expect("fixture");
     let port = free_port();
     let mut listener = tokio::process::Command::new(crate::media::ffmpeg_binary::ffmpeg_bin_path())
         .args([

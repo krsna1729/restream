@@ -111,7 +111,7 @@ pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
 
     let stream_key = "slow-peer-input";
     let pid = create_pipeline_with_stream_key(&api, "slow-peer", stream_key).await?;
-    let fixture = restream::test_fixtures::bench_transport_fixture("h264", "1.5M", false)?;
+    let fixture = restream::media::test_fixtures::bench_transport_fixture("h264", "1.5M", false)?;
     let mut publisher = spawn_publisher(
         &fixture,
         &harness_srt_ffmpeg_url(ports.srt, stream_key, HarnessSrtMode::Publish, None),

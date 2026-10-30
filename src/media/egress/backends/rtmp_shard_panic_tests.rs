@@ -11,7 +11,9 @@ struct PanickingStartupSource(SharedRtmpPublishStartupSource);
 impl RtmpPublishStartupSource for PanickingStartupSource {
     fn take_startup(&mut self, output_id: &OutputId) -> Option<RtmpPublishStartup> {
         if output_id.as_str().starts_with("boom") {
-            crate::test_support::with_expected_panic_suppressed(|| panic!("scripted shard panic"));
+            crate::media::test_support::with_expected_panic_suppressed(|| {
+                panic!("scripted shard panic")
+            });
         }
         self.0.take_startup(output_id)
     }

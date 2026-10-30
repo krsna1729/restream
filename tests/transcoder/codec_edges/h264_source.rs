@@ -30,13 +30,13 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
             .unwrap();
 
         let (video, audio_tracks, mut packets) = load_primary_transport_packets("h264");
-        let (video_sh, audio_sh) = restream::test_fixtures::wrap_packets_for_rtmp_ingest(
+        let (video_sh, audio_sh) = restream::media::test_fixtures::wrap_packets_for_rtmp_ingest(
             &video,
             &audio_tracks,
             &mut packets,
         );
         packets.truncate(100);
-        let expected_packets = restream::test_fixtures::count_ts_feedable_packets(
+        let expected_packets = restream::media::test_fixtures::count_ts_feedable_packets(
             &video,
             &audio_tracks,
             &packets,

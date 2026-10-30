@@ -231,7 +231,7 @@ pub(super) const AUDIO_MASTER: &str = "#EXTM3U\n\
 /// ~64 KiB of the canonical H.264 MPEG-TS fixture: a whole number of
 /// transport packets from an origin that starts with a keyframe.
 pub(super) fn ts_segment() -> Vec<u8> {
-    let path = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
+    let path = crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap();
     let bytes = std::fs::read(path).unwrap();
     let wanted = (64 * 1024).min(bytes.len());
     bytes[..wanted - wanted % 188].to_vec()
@@ -240,7 +240,7 @@ pub(super) fn ts_segment() -> Vec<u8> {
 /// As much of the canonical fixture as one segment may carry (256 KiB): unlike
 /// [`ts_segment`], enough to hold audio as well as video.
 fn av_segment() -> Vec<u8> {
-    let path = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
+    let path = crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap();
     let bytes = std::fs::read(path).unwrap();
     let wanted = limits().max_segment_bytes.min(bytes.len());
     bytes[..wanted - wanted % 188].to_vec()

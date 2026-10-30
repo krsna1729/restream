@@ -460,7 +460,7 @@ mod tests {
 
         let poison_lc = lc.clone();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            crate::test_support::with_expected_panic_suppressed(|| {
+            crate::media::test_support::with_expected_panic_suppressed(|| {
                 let _guard = poison_lc.inner.lock().unwrap();
                 panic!("poison stage lifecycle lock");
             });

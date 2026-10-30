@@ -76,7 +76,7 @@ pub(crate) fn grep_files(files: &[PathBuf], matches: impl Fn(&str) -> bool) -> V
 }
 
 /// Test-facing code must take media from `test/fixtures/` through
-/// `src/test_fixtures.rs`, not synthesize it with FFmpeg filter sources.
+/// `src/media/test_fixtures.rs`, not synthesize it with FFmpeg filter sources.
 const INLINE_GENERATORS: &[&str] = &[
     "lavfi",
     "testsrc",
@@ -97,7 +97,7 @@ pub(crate) fn fixture_discipline() -> StepResult {
         }
         return Err(
             "[fixture-discipline] inline generator patterns found in test-facing code.
-Use checked-in assets from test/fixtures/ via src/test_fixtures.rs.
+Use checked-in assets from test/fixtures/ via src/media/test_fixtures.rs.
 If a case truly cannot be covered by an existing asset, add a dedicated fixture
 generation workflow and document why the committed fixture set is insufficient."
                 .into(),

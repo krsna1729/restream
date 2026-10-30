@@ -34,7 +34,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
 
         let (video, audio_tracks, mut packets) = load_primary_transport_packets("h265");
         let (_video_sequence_header, audio_sequence_header) =
-            restream::test_fixtures::wrap_packets_for_rtmp_ingest(
+            restream::media::test_fixtures::wrap_packets_for_rtmp_ingest(
                 &video,
                 &audio_tracks,
                 &mut packets,

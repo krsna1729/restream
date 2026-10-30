@@ -449,7 +449,7 @@ mod tests {
     }
 
     fn timestamped_audio_ts() -> Vec<u8> {
-        let fixture = crate::test_fixtures::canonical_h264_ts_fixture().expect("TS fixture");
+        let fixture = crate::media::test_fixtures::canonical_h264_ts_fixture().expect("TS fixture");
         let data = std::fs::read(fixture).expect("read TS fixture");
         let mut demuxer = TsDemuxer::new();
         demuxer.feed(&data);

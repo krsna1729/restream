@@ -41,7 +41,8 @@ pub(super) const CHUNK: usize = 1316;
 
 /// The first `chunks` SRT-message-sized slices of the canonical H.264 TS.
 pub(super) fn ts_chunks(chunks: usize) -> Vec<Bytes> {
-    let path = crate::test_fixtures::canonical_h264_ts_fixture().expect("checked-in fixture");
+    let path =
+        crate::media::test_fixtures::canonical_h264_ts_fixture().expect("checked-in fixture");
     let bytes = std::fs::read(path).expect("read fixture");
     bytes
         .chunks_exact(CHUNK)

@@ -23,7 +23,7 @@ async fn active_egress_diag_snapshots_recovers_from_poisoned_locks() {
 
     let p = phase.clone();
     let _ = std::thread::spawn(move || {
-        crate::test_support::with_expected_panic_suppressed(|| {
+        crate::media::test_support::with_expected_panic_suppressed(|| {
             let _guard = p.lock().unwrap();
             panic!("deliberate poison: phase");
         });
@@ -33,7 +33,7 @@ async fn active_egress_diag_snapshots_recovers_from_poisoned_locks() {
 
     let t = target_addr.clone();
     let _ = std::thread::spawn(move || {
-        crate::test_support::with_expected_panic_suppressed(|| {
+        crate::media::test_support::with_expected_panic_suppressed(|| {
             let mut guard = t.lock().unwrap();
             *guard = Some("poisoned-addr".to_string());
             panic!("deliberate poison: target_addr");
@@ -47,7 +47,7 @@ async fn active_egress_diag_snapshots_recovers_from_poisoned_locks() {
 
     let e = last_error.clone();
     let _ = std::thread::spawn(move || {
-        crate::test_support::with_expected_panic_suppressed(|| {
+        crate::media::test_support::with_expected_panic_suppressed(|| {
             let _guard = e.lock().unwrap();
             panic!("deliberate poison: last_error");
         });

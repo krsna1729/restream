@@ -79,6 +79,11 @@ pub mod stream_qa;
 pub mod ffmpeg;
 pub mod ingest_publisher;
 pub mod tcp_stats;
+#[cfg(test)]
+pub(crate) mod test_alloc;
+pub mod test_fixtures;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod timing;
 pub mod ts_chunk_ring;
 pub mod uring_capabilities;

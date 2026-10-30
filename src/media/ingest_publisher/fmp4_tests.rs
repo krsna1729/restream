@@ -32,7 +32,7 @@ const MAX_INIT: usize = 4 * 1024 * 1024;
 /// The first keyframe of a checked-in TS fixture, as Annex B (it carries
 /// the parameter sets a sample entry is built from).
 fn fixture_keyframe(codec: &str) -> Vec<u8> {
-    let (_, _, packets) = crate::test_fixtures::primary_av_packets_for_codec(codec).unwrap();
+    let (_, _, packets) = crate::media::test_fixtures::primary_av_packets_for_codec(codec).unwrap();
     packets
         .into_iter()
         .find(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)

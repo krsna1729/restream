@@ -30,10 +30,10 @@ fn audio_for_ts_passes_through_existing_adts() {
 
 #[test]
 fn hevc_enhanced_rtmp_sequence_header_builds_from_bf0_fixture() {
-    let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+    let fixture = crate::media::test_fixtures::av_marker_transport_fixture_for_bframes(
         "h265",
         false,
-        crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        crate::media::test_fixtures::AvMarkerBframeMode::Bf0,
     )
     .expect("checked-in HEVC BF0 fixture");
     let bytes = std::fs::read(fixture).expect("read HEVC BF0 fixture");

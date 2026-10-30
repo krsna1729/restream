@@ -95,7 +95,7 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
 
     let stream_key = "admission-input";
     let pid = create_pipeline_with_stream_key(&api, "admission", stream_key).await?;
-    let fixture = restream::test_fixtures::bench_transport_fixture("h264", "8M", false)?;
+    let fixture = restream::media::test_fixtures::bench_transport_fixture("h264", "8M", false)?;
     let mut publisher = spawn_publisher(
         &fixture,
         &harness_srt_ffmpeg_url(ports.srt, stream_key, HarnessSrtMode::Publish, None),

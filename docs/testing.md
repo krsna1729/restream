@@ -136,9 +136,15 @@ The package graph and runtime seams are in
 [Workspace layout](architecture.md#workspace-layout).
 
 Fixture paths and the required checked-in registry are single-sourced in
-`src/test_fixtures/paths.rs`, shared by leaf tests and the root
-`test_fixtures` API. Packet/feeder fixture helpers remain application-owned;
-leaf crates do not depend on the application to find fixtures.
+`src/media/test_fixtures/paths.rs`, shared by leaf tests and the
+`media::test_fixtures` API. Packet/feeder fixture helpers remain
+media-owned; leaf crates do not depend on the application to find fixtures.
+
+Media test helpers that root tests also call (`media::test_support`,
+`media::hls_ingest::test_support`, `media::moq::transport::test_support`)
+build under `cfg(test)` or the `test-support` Cargo feature. The root
+enables that feature only through its own dev-dependency, so `cargo test`
+and benches get the helpers and shipped builds do not.
 
 
 ### Parser fuzz targets
@@ -594,7 +600,7 @@ RTMPS leg is RTMP ingest → Restream → RTMPS egress.
 
 ### Fixtures and artifacts
 
-Resolve committed media through `src/test_fixtures.rs`; add new assets to that
+Resolve committed media through `src/media/test_fixtures.rs`; add new assets to that
 contract. Runs write under `.local/artifacts/<run>/` (manifest, results,
 logs, probes). These are evidence, not source: never commit them.
 
@@ -761,5 +767,5 @@ brings an equal or stronger proof in the same change.
 | Recording `.tmp.mp4` or wrong-case media selection | `cargo test media_recording_identity --bin test_harness` | API media-library tests key recordings by `pipelineId`/`recordingId` |
 
 New failure evidence takes a durable form: a fixture registered in
-`src/test_fixtures/paths.rs`, a focused test, a harness mode writing
+`src/media/test_fixtures/paths.rs`, a focused test, a harness mode writing
 `manifest.json` and `results.jsonl`, or a baseline with its replay command.

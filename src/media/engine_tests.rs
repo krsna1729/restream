@@ -2,6 +2,7 @@ use super::*;
 use crate::media::engine::MediaEngine;
 use crate::media::engine_hls::HlsConsumers;
 use crate::media::pipe_metrics::PipeMetrics;
+use crate::media::test_support::{test_audio_packet, test_video_packet};
 use bytes::Bytes;
 use proptest::prelude::*;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
@@ -31,27 +32,3 @@ mod graph_tests;
 mod ingest_registry_tests;
 #[path = "engine_tests/snapshots.rs"]
 mod snapshot_tests;
-
-pub(crate) fn test_video_packet(pts: i64, dts: i64, keyframe: bool) -> MediaPacket {
-    MediaPacket {
-        media_type: MediaType::Video,
-        format: PayloadFormat::Raw,
-        is_keyframe: keyframe,
-        track_index: 0,
-        pts,
-        dts,
-        payload: Bytes::from_static(b"video"),
-    }
-}
-
-pub(crate) fn test_audio_packet(pts: i64, dts: i64) -> MediaPacket {
-    MediaPacket {
-        media_type: MediaType::Audio,
-        format: PayloadFormat::Raw,
-        is_keyframe: false,
-        track_index: 0,
-        pts,
-        dts,
-        payload: Bytes::from_static(b"audio"),
-    }
-}

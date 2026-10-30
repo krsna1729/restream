@@ -69,7 +69,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fixture_file_yields_a_poster_the_right_width() {
-        let path = crate::test_fixtures::checked_in_fixture(
+        let path = crate::media::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
         )
         .unwrap();
@@ -83,7 +83,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_shorter_than_five_seconds_still_gets_its_first_frame() {
-        let path = crate::test_fixtures::checked_in_fixture(
+        let path = crate::media::test_fixtures::checked_in_fixture(
             "test/fixtures/media-library/sparse-gop-5s.mp4",
         )
         .unwrap();

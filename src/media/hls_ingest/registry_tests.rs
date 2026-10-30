@@ -145,7 +145,7 @@ async fn send_keyed(
 }
 
 pub(super) fn fixture() -> Vec<u8> {
-    std::fs::read(crate::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
+    std::fs::read(crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap()).unwrap()
 }
 
 /// Wait until the pipeline's current ring satisfies `predicate`, or fail
@@ -833,7 +833,7 @@ async fn a_released_segment_reaches_the_ring_at_media_pace() {
     let (engine, ingest) = test_ingest(HlsIngestLimits::default());
     let ring = engine.get_or_create_pipeline(PIPELINE_ID).await;
     let start = ring.get_write_idx();
-    let fixture = crate::test_fixtures::canonical_h264_ts_fixture().unwrap();
+    let fixture = crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap();
     let segment = std::fs::read(fixture).unwrap();
     let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8.0,\nindex0.ts\n#EXT-X-ENDLIST\n";
 

@@ -380,7 +380,8 @@ mod tests {
             ..HlsConfig::default()
         }));
         let (video, audio, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         ring.set_audio_tracks(audio);
         let service = start_hls_segmenter(
             pipeline_id.to_string(),
@@ -432,7 +433,8 @@ mod tests {
             ..HlsConfig::default()
         }));
         let (video, audio, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         ring.set_audio_tracks(audio);
         let service = start_hls_fmp4_segmenter(
             pipeline_id.to_string(),
@@ -558,7 +560,8 @@ mod tests {
             ..HlsConfig::default()
         }));
         let (video, audio, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         let packets = packets
             .into_iter()
             .skip_while(|packet| packet.media_type != MediaType::Video || !packet.is_keyframe)
@@ -610,7 +613,8 @@ mod tests {
             ..HlsConfig::default()
         }));
         let (video, audio, packets) =
-            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("fixture packets");
+            crate::media::test_fixtures::primary_av_packets_for_codec("h264")
+                .expect("fixture packets");
         let packets = packets
             .into_iter()
             .skip_while(|packet| packet.media_type != MediaType::Video || !packet.is_keyframe)

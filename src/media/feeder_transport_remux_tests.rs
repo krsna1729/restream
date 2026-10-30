@@ -160,7 +160,7 @@ fn feeder_matches_manual_codec_mux_and_dts_path() {
 
 #[test]
 fn feeder_remuxed_h265_multi_audio_fixture_decodes_cleanly() {
-    let fixture = crate::test_fixtures::bench_transport_fixture("h265", "1.5M", true)
+    let fixture = crate::media::test_fixtures::bench_transport_fixture("h265", "1.5M", true)
         .expect("fixture must exist");
     let input = std::fs::read(&fixture).expect("fixture must be readable");
     let mut demuxer = restream_mpegts::TsDemuxer::new();

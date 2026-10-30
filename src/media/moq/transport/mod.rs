@@ -13,7 +13,7 @@
 
 mod driver;
 mod session;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_support;
 mod webtransport;
 

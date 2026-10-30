@@ -1,8 +1,8 @@
 //! Runtime-view assertions (health, output status, processing graph) over a
 //! live `MediaEngine`.
-use crate::media::engine::tests::{test_audio_packet, test_video_packet};
 use crate::media::engine::*;
 use crate::media::snapshots::PublisherQuality;
+use crate::media::test_support::{test_audio_packet, test_video_packet};
 use proptest::prelude::*;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::stage::{StageKey, StageKind};

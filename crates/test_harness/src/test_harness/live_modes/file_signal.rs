@@ -355,7 +355,7 @@ pub(crate) async fn file_live_edge() -> Result<Value, String> {
         &mut api,
         &ports,
         &media_dir,
-        &restream::test_fixtures::sparse_gop_mp4_fixture()?,
+        &restream::media::test_fixtures::sparse_gop_mp4_fixture()?,
         "file-live-edge-optimized",
         true,
         2,
@@ -395,7 +395,8 @@ pub(crate) async fn signal_control() -> Result<Value, String> {
     ];
     let mut results = Vec::new();
     for (name, codec, multi_audio, transcode_720p) in cases {
-        let fixture = restream::test_fixtures::av_marker_transport_fixture(codec, multi_audio)?;
+        let fixture =
+            restream::media::test_fixtures::av_marker_transport_fixture(codec, multi_audio)?;
         let capture_path = work_dir.join(format!("{name}.signal.mkv"));
         ffmpeg_control_capture(&fixture, &capture_path, duration, transcode_720p).await?;
         let started = Instant::now();

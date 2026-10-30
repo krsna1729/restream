@@ -4,7 +4,7 @@ use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::manager::EgressManagerConfig;
 use crate::media::egress::runtime::EgressFabricRuntime;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardGroup};
-use crate::media::engine::tests::egress_fabric_tests::{output_spec, shard_config};
+use crate::media::test_support::{output_spec, shard_config};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -21,7 +21,9 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
     struct PanicBackend;
     impl EgressShardBackend for PanicBackend {
         fn on_command(&mut self, _: EgressCommand) -> EgressShardCommandEffect {
-            crate::test_support::with_expected_panic_suppressed(|| panic!("scripted shard panic"))
+            crate::media::test_support::with_expected_panic_suppressed(|| {
+                panic!("scripted shard panic")
+            })
         }
     }
 

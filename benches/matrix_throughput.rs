@@ -140,7 +140,7 @@ async fn setup_matrix_path(
 
     let fixture_codec = if trans { "h265" } else { "h264" };
     let (video_meta, audio_tracks, mut packets) =
-        restream::test_fixtures::primary_av_packets_for_codec(fixture_codec)
+        restream::media::test_fixtures::primary_av_packets_for_codec(fixture_codec)
             .unwrap_or_else(|e| panic!("{e}"));
 
     assert!(
@@ -152,7 +152,7 @@ async fn setup_matrix_path(
     packets.truncate(NUM_PACKETS);
 
     let (video_sequence_header, audio_sequence_header) = if ingest == "rtmp" {
-        restream::test_fixtures::wrap_packets_for_rtmp_ingest(
+        restream::media::test_fixtures::wrap_packets_for_rtmp_ingest(
             &video_meta,
             &audio_tracks,
             &mut packets,
@@ -183,7 +183,7 @@ async fn setup_matrix_path(
             .await;
     }
     let expected_packets = if ingest == "rtmp" {
-        restream::test_fixtures::count_ts_feedable_packets(
+        restream::media::test_fixtures::count_ts_feedable_packets(
             &video_meta,
             &audio_tracks,
             &packets,

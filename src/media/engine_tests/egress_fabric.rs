@@ -3,16 +3,12 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::media::egress::command::{
-    EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId,
-};
+use crate::media::egress::command::{EgressCommand, FeedId, OutputId, ProtocolSpec, ShardId};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::manager::{EgressManagerConfig, ManagerCommandOutcome};
-use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::runtime::EgressFabricRuntime;
-use crate::media::egress::shard::{
-    EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardGroup,
-};
+use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardGroup};
+use crate::media::test_support::{output_spec, shard_config};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use tokio_util::sync::CancellationToken;
 
@@ -79,10 +75,6 @@ impl EgressShardBackend for ProbeBackend {
     }
 }
 
-pub(crate) fn shard_config() -> EgressShardConfig {
-    EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(1)).unwrap()
-}
-
 fn runtime(probe: Probe) -> EgressFabricRuntime {
     let group = EgressShardGroup::spawn(
         NonZeroU32::new(1).unwrap(),
@@ -93,17 +85,6 @@ fn runtime(probe: Probe) -> EgressFabricRuntime {
     )
     .unwrap();
     EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group).unwrap()
-}
-
-pub(crate) fn output_spec(id: &str, feed: &FeedId) -> OutputSpec {
-    OutputSpec {
-        id: OutputId::new(id),
-        generation: 1,
-        feed: feed.clone(),
-        protocol: ProtocolSpec::Sink,
-        policy: LeafPolicy::default(),
-        progress: Default::default(),
-    }
 }
 
 #[tokio::test]

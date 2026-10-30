@@ -1,6 +1,6 @@
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
-    let path = crate::test_fixtures::av_marker_transport_fixture("h264", false)
+    let path = crate::media::test_fixtures::av_marker_transport_fixture("h264", false)
         .expect("H.264 marker fixture");
     let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
     let mut demuxer = TsDemuxer::new();
@@ -117,10 +117,10 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
 
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_eos() {
-    let path = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+    let path = crate::media::test_fixtures::av_marker_transport_fixture_for_bframes(
         "h264",
         false,
-        crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        crate::media::test_fixtures::AvMarkerBframeMode::Bf0,
     )
     .expect("H.264 marker fixture");
     let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
@@ -236,7 +236,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
 
 #[tokio::test]
 async fn external_1080p_stage_remuxes_marker_fixture_with_monotone_dts() {
-    let path = crate::test_fixtures::av_marker_transport_fixture("h264", false)
+    let path = crate::media::test_fixtures::av_marker_transport_fixture("h264", false)
         .expect("H.264 marker fixture");
     let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
     let mut demuxer = TsDemuxer::new();

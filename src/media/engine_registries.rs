@@ -765,8 +765,9 @@ mod tests {
     #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_shards_invariant() {
         let mut pool = SrtMuxerShardPool::default();
-        let _ =
-            crate::test_support::with_expected_panic_suppressed(|| pool.assign("out-1", 1, 4, 0));
+        let _ = crate::media::test_support::with_expected_panic_suppressed(|| {
+            pool.assign("out-1", 1, 4, 0)
+        });
     }
 
     #[test]
@@ -774,7 +775,8 @@ mod tests {
     #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_outputs_per_shard_invariant() {
         let mut pool = SrtMuxerShardPool::default();
-        let _ =
-            crate::test_support::with_expected_panic_suppressed(|| pool.assign("out-1", 1, 0, 4));
+        let _ = crate::media::test_support::with_expected_panic_suppressed(|| {
+            pool.assign("out-1", 1, 0, 4)
+        });
     }
 }

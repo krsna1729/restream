@@ -2,7 +2,7 @@
 #[test]
 fn an_enhanced_rtmp_hevc_publish_is_probed_classified_and_timed() {
     use restream_core::codec;
-    let (probe, _, packets) = crate::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
+    let (probe, _, packets) = crate::media::test_fixtures::primary_av_packets_for_codec("h265").unwrap();
     let keyframe = packets
         .iter()
         .find(|p| p.media_type == MediaType::Video && p.is_keyframe)

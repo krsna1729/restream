@@ -200,12 +200,12 @@ fn fixture_configs_carry_records_sizes_and_codec_strings() {
     let cases = [
         (
             VideoCodec::H264,
-            crate::test_fixtures::canonical_h264_ts_fixture().unwrap(),
+            crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap(),
             "avc1.640032",
         ),
         (
             VideoCodec::H265,
-            crate::test_fixtures::canonical_h265_ts_fixture().unwrap(),
+            crate::media::test_fixtures::canonical_h265_ts_fixture().unwrap(),
             "hvc1.1.6.L120.90",
         ),
     ];
@@ -228,7 +228,8 @@ fn fixture_configs_carry_records_sizes_and_codec_strings() {
 
 #[test]
 fn a_published_catalog_reads_back() {
-    let sets = fixture_parameter_sets(crate::test_fixtures::canonical_h264_ts_fixture().unwrap());
+    let sets =
+        fixture_parameter_sets(crate::media::test_fixtures::canonical_h264_ts_fixture().unwrap());
     let mut video = VideoConfig::from_parameter_sets(VideoCodec::H264, &sets).unwrap();
     video.jitter = Some(Duration::from_millis(66));
     let audio = AudioConfig {
