@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::agent_core::{ApprovalRequest, OperationCreateRequest, PlanRequest};
 use crate::agent_plane::PlanResponse;
+use restream_agent_contract::{ApprovalRequest, OperationCreateRequest, PlanRequest};
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
 const AUTHENTICATED_DASHBOARD_ACTOR: &str = "dashboard-admin";
@@ -539,8 +539,8 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_core::types::ProposedChange;
     use crate::agent_plane::{GraphPreview, ImpactPreview, ValidationResult};
+    use restream_agent_contract::ProposedChange;
 
     fn test_request(idempotency_key: Option<String>) -> OperationCreateRequest {
         OperationCreateRequest {

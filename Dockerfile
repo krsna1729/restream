@@ -88,7 +88,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into target/
 # so ordinary src/ edits only need to rebuild our crate in the next layer.
-COPY Cargo.toml Cargo.lock build.rs ./
+COPY Cargo.toml Cargo.lock build.rs build_identity.rs ./
 COPY .cargo/ .cargo/
 # `[patch.crates-io]` path dependencies must exist before Cargo can resolve the
 # graph (tests/docker_build_recipe.rs enforces this).
@@ -96,25 +96,30 @@ COPY vendor/ vendor/
 # Path workspace members: stage each manifest with a dummy lib so the warm
 # layer's workspace loads (tests/docker_build_recipe.rs enforces this).
 COPY crates/xtask/Cargo.toml crates/xtask/Cargo.toml
+COPY crates/restream-agent-contract/Cargo.toml crates/restream-agent-contract/Cargo.toml
 COPY crates/restream-core/Cargo.toml crates/restream-core/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-engine/Cargo.toml crates/restream-engine/Cargo.toml
+COPY crates/restream-mcp/Cargo.toml crates/restream-mcp/Cargo.toml
 COPY crates/restream-sync/Cargo.toml crates/restream-sync/Cargo.toml
 COPY crates/restream-mpegts/Cargo.toml crates/restream-mpegts/Cargo.toml
 COPY crates/restream-rtmp/Cargo.toml crates/restream-rtmp/Cargo.toml
 COPY crates/restream-moq/Cargo.toml crates/restream-moq/Cargo.toml
 COPY crates/restream-srt/Cargo.toml crates/restream-srt/Cargo.toml
 COPY crates/test_harness/Cargo.toml crates/test_harness/Cargo.toml
-RUN mkdir -p benches src crates/xtask/src crates/restream-core/src crates/restream-domain/src crates/restream-engine/src crates/restream-engine/benches crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
+RUN mkdir -p benches src crates/xtask/src crates/restream-agent-contract/src crates/restream-core/src crates/restream-domain/src crates/restream-engine/src crates/restream-engine/benches crates/restream-mcp/src crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("crates/restream-engine/benches/" name ".rs"); in_bench = 0 }' crates/restream-engine/Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs \
     && : > crates/xtask/src/lib.rs \
+    && : > crates/restream-agent-contract/src/lib.rs \
     && : > crates/restream-core/src/lib.rs \
     && : > crates/restream-domain/src/lib.rs \
     && : > crates/restream-domain/src/lib.rs \
     && : > crates/restream-engine/src/lib.rs \
+    && : > crates/restream-mcp/src/lib.rs \
+    && printf 'fn main() {}\n' > crates/restream-mcp/src/main.rs \
     && : > crates/restream-sync/src/lib.rs \
     && : > crates/restream-mpegts/src/lib.rs \
     && : > crates/restream-rtmp/src/lib.rs \
@@ -133,10 +138,12 @@ FROM rust-build AS runtime-tree
 # target directory above.
 COPY src/ src/
 COPY crates/xtask/ crates/xtask/
+COPY crates/restream-agent-contract/ crates/restream-agent-contract/
 COPY crates/restream-core/ crates/restream-core/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-engine/ crates/restream-engine/
+COPY crates/restream-mcp/ crates/restream-mcp/
 COPY crates/restream-sync/ crates/restream-sync/
 COPY crates/restream-mpegts/ crates/restream-mpegts/
 COPY crates/restream-rtmp/ crates/restream-rtmp/

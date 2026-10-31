@@ -67,7 +67,7 @@ pub async fn agent_context_handler(
 pub async fn agent_investigation_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::InvestigationRequest>,
+    Json(request): Json<restream_agent_contract::InvestigationRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -182,7 +182,7 @@ pub async fn agent_investigation_handler(
 pub async fn agent_plan_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::PlanRequest>,
+    Json(request): Json<restream_agent_contract::PlanRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -225,7 +225,7 @@ fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) ->
 pub async fn agent_plan_validate_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::PlanRequest>,
+    Json(request): Json<restream_agent_contract::PlanRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -250,7 +250,7 @@ pub async fn agent_plan_validate_handler(
 pub async fn agent_graph_diff_preview_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::PlanRequest>,
+    Json(request): Json<restream_agent_contract::PlanRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -274,7 +274,7 @@ pub async fn agent_graph_diff_preview_handler(
 #[cfg(feature = "agent-plane")]
 pub(super) async fn build_agent_plan(
     state: &AppState,
-    request: crate::agent_core::PlanRequest,
+    request: restream_agent_contract::PlanRequest,
 ) -> crate::agent_plane::PlanResponse {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;

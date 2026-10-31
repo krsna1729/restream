@@ -121,6 +121,8 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-rtmp/src/` | `cargo test -p restream-rtmp --lib`; also `cargo test -p restream-engine --lib rtmp::tests` for retained engine/network consumers |
 | `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream-engine --lib srt::` for retained consumers |
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream-engine --lib moq::` for retained integration/consumer tests |
+| `crates/restream-agent-contract/src/` | `cargo test -p restream-agent-contract` and `cargo test -p restream --test api agent::` for discovery |
+| `crates/restream-mcp/src/` | `cargo test -p restream-mcp --features mcp-http-backend` |
 
 For extracted-library source and manifest changes, run the owning unit suite
 plus its retained consumer suite.

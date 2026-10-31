@@ -210,7 +210,7 @@ the [assurance roadmap](assurance-roadmap.md).
   enable the MediaMTX CI gate.
 
 ### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
-- Goal: the MCP server (`src/agent_mcp/`) asks for input or approval during a
+- Goal: the MCP server (`crates/restream-mcp/`) asks for input or approval during a
   plan (elicitation), reports progress on long operations, and returns small
   live panels (pipeline health, a plan diff with an Approve button).
 - Gates: agent-plane tests drive an elicited approval end to end; a refused

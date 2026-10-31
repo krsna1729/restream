@@ -3182,9 +3182,11 @@ dependencies = [
  "proptest",
  "rand 0.10.2",
  "reqwest",
+ "restream-agent-contract",
  "restream-core",
  "restream-domain",
  "restream-engine",
+ "restream-mcp",
  "restream-moq",
  "restream-mpegts",
  "restream-rtmp",
@@ -3211,6 +3213,15 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "url",
+]
+
+[[package]]
+name = "restream-agent-contract"
+version = "0.1.0"
+dependencies = [
+ "restream-domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3292,6 +3303,20 @@ dependencies = [
  "web-transport-proto",
  "web-transport-trait",
  "webpki-roots",
+]
+
+[[package]]
+name = "restream-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "reqwest",
+ "restream",
+ "restream-agent-contract",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

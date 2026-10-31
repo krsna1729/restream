@@ -1,5 +1,5 @@
 //! The agent tools: the one list that capability discovery (`agent_plane`)
-//! and the MCP catalog and dispatch (`agent_mcp`) both follow, so neither
+//! and the MCP catalog and dispatch (`restream-mcp`) both follow, so neither
 //! advertises a tool the other cannot serve.
 
 /// What a tool does, as capability discovery groups it.

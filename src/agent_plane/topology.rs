@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::agent_core::{PlanRequest, ProposedChange};
 use crate::application::models::Output;
+use restream_agent_contract::{PlanRequest, ProposedChange};
 use restream_domain::domain::output_spec::{EgressProtocol, OutputConfig, OutputUrlScheme};
 use restream_domain::domain::stage::StageKind;
 use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};

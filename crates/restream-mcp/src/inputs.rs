@@ -1,4 +1,4 @@
-use crate::agent_core::ApprovalRequest;
+use restream_agent_contract::ApprovalRequest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

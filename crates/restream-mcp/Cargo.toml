@@ -1,0 +1,38 @@
+[package]
+name = "restream-mcp"
+version.workspace = true
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Builds the `restream-mcp` binary (with `mcp-http-backend`).
+mcp-server = []
+# HTTP adapter to the product's `/api/v1/agent/*` routes.
+mcp-http-backend = []
+# Lists the execution tools as compiled in. The product's `agent-execution`
+# feature enables it whenever the product build also enables MCP.
+agent-execution = ["restream-agent-contract/agent-execution"]
+
+[dependencies]
+restream-agent-contract = { path = "../restream-agent-contract" }
+tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "time"] }
+axum = "0.8"
+bytes = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
+
+[dev-dependencies]
+# The build-identity test compares this crate's stamp with the product's
+# `/api/v1/engine` identity.
+restream = { path = "../..", default-features = false }
+
+[[bin]]
+name = "restream-mcp"
+path = "src/main.rs"
+required-features = ["mcp-server", "mcp-http-backend"]

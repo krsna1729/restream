@@ -2,7 +2,16 @@ use crate::workflow::{Error, WorkflowResult};
 use regex::Regex;
 use std::{fs, path::Path};
 
-const ROOTS: &[&str] = &["web/ts", "web/pages", "web/assets", "src", "tests", "test"];
+const ROOTS: &[&str] = &[
+    "web/ts",
+    "web/pages",
+    "web/assets",
+    "src",
+    "crates/restream-agent-contract",
+    "crates/restream-mcp",
+    "tests",
+    "test",
+];
 const BANNED: &[&str] = &[
     r#"(["'`])/api/logs(?:/stream)?\b"#,
     r#"(["'`])/api/media(?:/|["'`])"#,

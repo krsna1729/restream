@@ -5,14 +5,8 @@
 // tests may poison and inspect locks directly.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
-#[cfg(feature = "mcp-http-backend")]
-pub mod agent_backends;
-#[cfg(any(feature = "agent-plane", feature = "mcp-core"))]
-pub mod agent_core;
 #[cfg(feature = "agent-execution")]
 pub mod agent_execution;
-#[cfg(feature = "mcp-core")]
-pub mod agent_mcp;
 #[cfg(feature = "agent-plane")]
 pub mod agent_plane;
 pub mod alerts;

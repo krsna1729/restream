@@ -217,46 +217,56 @@ fn planner_stays_independent_of_edge_runtime_and_environment_layers() {
     }
 }
 
+/// Names of a manifest's `[dependencies]` (not dev or build dependencies).
+fn manifest_dependencies(manifest: &str) -> Vec<&str> {
+    manifest
+        .split("\n[")
+        .find(|section| section.starts_with("dependencies]"))
+        .into_iter()
+        .flat_map(|section| section.lines().skip(1))
+        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
+        .filter(|name| !name.is_empty() && !name.starts_with('#') && !name.contains(' '))
+        .collect()
+}
+
 #[test]
-fn agent_core_stays_independent_of_edge_and_runtime_layers() {
-    let agent_core_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent_core");
-    let forbidden_dependencies = [
-        "crate::agent_plane::",
-        "crate::application::",
-        "restream_engine::",
-        "reqwest::",
-        "axum::",
-        "sqlx::",
-    ];
-    let mut offenders = Vec::new();
-    collect_rust_sources(&agent_core_dir, &mut |path, source| {
-        for dependency in forbidden_dependencies {
-            if source.contains(dependency) {
-                offenders.push(format!("{} imports {dependency}", path.display()));
-            }
-        }
-    });
-    assert!(
-        offenders.is_empty(),
-        "agent_core must stay transport-, persistence-, and runtime-independent: {offenders:?}"
-    );
+fn agent_contract_and_mcp_crates_stay_independent_of_the_product() {
+    let contract = manifest_dependencies(include_str!(
+        "../../crates/restream-agent-contract/Cargo.toml"
+    ));
+    for forbidden in [
+        "restream",
+        "restream-engine",
+        "restream-mcp",
+        "reqwest",
+        "axum",
+        "sqlx",
+        "tokio",
+    ] {
+        assert!(
+            !contract.contains(&forbidden),
+            "the agent contract must stay transport-, persistence-, and runtime-independent: depends on {forbidden}"
+        );
+    }
+    let mcp = manifest_dependencies(include_str!("../../crates/restream-mcp/Cargo.toml"));
+    for forbidden in ["restream", "restream-engine", "sqlx"] {
+        assert!(
+            !mcp.contains(&forbidden),
+            "the MCP sidecar must reach the product only over HTTP: depends on {forbidden}"
+        );
+    }
 
     let cargo_toml = include_str!("../../Cargo.toml");
     assert!(
         cargo_toml
             .lines()
-            .any(|line| line.trim() == "mcp-core = []"),
+            .any(|line| line.trim() == "mcp-core = [\"dep:restream-mcp\"]"),
         "mcp-core must not enable the in-process agent plane"
     );
-    let lib_rs = include_str!("../../src/lib.rs");
+    let mcp_lib = include_str!("../../crates/restream-mcp/src/lib.rs");
+    assert!(mcp_lib.contains("#[cfg(feature = \"mcp-http-backend\")]\npub mod http;"));
     assert!(
-        lib_rs.contains("#[cfg(any(feature = \"agent-plane\", feature = \"mcp-core\"))]"),
-        "agent_core must compile for either the HTTP agent plane or MCP core"
-    );
-    let backends_mod = include_str!("../../src/agent_backends/mod.rs");
-    assert!(backends_mod.contains("#[cfg(feature = \"mcp-http-backend\")]"));
-    assert!(
-        !backends_mod.contains("in_process"),
+        !mcp_lib.contains("in_process"),
         "mcp-embedded must not compile an in-process MCP backend scaffold"
     );
 }
