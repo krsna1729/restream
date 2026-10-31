@@ -109,7 +109,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let media = media_inventory(state).await;
     let storage = storage_summary(state, &media).await;
 
-    crate::agent_plane::redacted_context(
+    restream_agent::plane::redacted_context(
         &pipelines,
         &outputs,
         &jobs_json,
@@ -194,7 +194,7 @@ fn desired_vs_actual(
                 .filter(|job| job.pipeline_id == pipeline.id && job.output_id == output.id)
                 .take(5)
                 .map(|job| {
-                    crate::agent_plane::redact_secrets_from_serializable(
+                    restream_agent::plane::redact_secrets_from_serializable(
                         &api_view_models::job_response_json(job),
                     )
                 })

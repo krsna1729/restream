@@ -1,8 +1,8 @@
 //! Agent read/planning plane.
 //!
-//! Compiled with the `agent-plane` Cargo feature, which the default build
-//! enables; `--no-default-features` removes it. It exposes typed, testable
-//! planning primitives to the HTTP edge and the MCP sidecar.
+//! The product's `agent-plane` Cargo feature, which the default build
+//! enables, links this crate; `--no-default-features` removes it. It exposes
+//! typed, testable planning primitives to the HTTP edge and the MCP sidecar.
 
 mod catalog;
 #[cfg(test)]

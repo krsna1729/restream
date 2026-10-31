@@ -164,7 +164,7 @@ pub struct AppState {
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
-    pub agent_execution: Arc<crate::agent_execution::AgentExecutionStore>,
+    pub agent_execution: Arc<restream_agent::execution::AgentExecutionStore>,
 }
 
 impl AppState {
@@ -243,7 +243,7 @@ impl AppState {
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
             #[cfg(feature = "agent-execution")]
-            agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
+            agent_execution: Arc::new(restream_agent::execution::AgentExecutionStore::default()),
         }
     }
 

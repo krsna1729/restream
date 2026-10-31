@@ -3,7 +3,7 @@
 Read this when constructing agent-plane requests. Discover current tool names,
 schemas, and compiled features from `get_agent_capabilities`
 (`GET /api/v1/agent/capabilities`).
-The [catalog source](../../../../../src/agent_plane/catalog.rs) and
+The [catalog source](../../../../../crates/restream-agent/src/plane/catalog.rs) and
 [API reference](../../../../api-reference.md#agent-plane) own the full contract.
 
 ## Contents

@@ -3182,6 +3182,7 @@ dependencies = [
  "proptest",
  "rand 0.10.2",
  "reqwest",
+ "restream-agent",
  "restream-agent-contract",
  "restream-core",
  "restream-domain",
@@ -3214,6 +3215,22 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "url",
+]
+
+[[package]]
+name = "restream-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rand 0.10.2",
+ "restream-agent-contract",
+ "restream-domain",
+ "restream-engine",
+ "restream-health",
+ "restream-sync",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]

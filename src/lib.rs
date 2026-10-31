@@ -5,10 +5,6 @@
 // tests may poison and inspect locks directly.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
-#[cfg(feature = "agent-execution")]
-pub mod agent_execution;
-#[cfg(feature = "agent-plane")]
-pub mod agent_plane;
 pub mod api;
 pub(crate) mod api_runtime_views;
 pub mod api_view_models;

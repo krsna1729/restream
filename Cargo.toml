@@ -11,6 +11,7 @@ repository = "https://github.com/krsna1729/restream"
 resolver = "3"
 members = [
     "crates/xtask",
+    "crates/restream-agent",
     "crates/restream-agent-contract",
     "crates/restream-core",
     "crates/restream-domain",
@@ -45,13 +46,15 @@ workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-# The agent plane and its approval-gated execution back the control room's
-# Change Studio. `-p restream --no-default-features` removes them without
-# workspace consumers re-enabling defaults through feature unification.
+# The agent plane (`crates/restream-agent`) and its approval-gated execution
+# back the control room's Change Studio. `-p restream --no-default-features`
+# removes them without workspace consumers re-enabling defaults through
+# feature unification.
 default = ["agent-execution"]
-agent-plane = ["dep:restream-agent-contract"]
+agent-plane = ["dep:restream-agent", "dep:restream-agent-contract"]
 agent-execution = [
     "agent-plane",
+    "restream-agent/agent-execution",
     "restream-agent-contract/agent-execution",
     "restream-mcp?/agent-execution",
 ]
@@ -63,6 +66,7 @@ mcp-http-backend = ["mcp-core", "restream-mcp/mcp-http-backend"]
 mcp-embedded = ["mcp-core", "agent-plane"]
 
 [dependencies]
+restream-agent = { path = "crates/restream-agent", optional = true }
 restream-agent-contract = { path = "crates/restream-agent-contract", optional = true }
 restream-mcp = { path = "crates/restream-mcp", optional = true }
 restream-core = { path = "crates/restream-core" }
