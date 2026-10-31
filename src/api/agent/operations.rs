@@ -76,8 +76,8 @@ pub async fn agent_operation_get_handler(
         return response;
     }
     match state.agent_execution.get(&operation_id) {
-        Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-        None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
+        Some(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
+        None => operation_store_error(restream_agent::execution::OperationStoreError::NotFound),
     }
 }
 
@@ -104,7 +104,7 @@ pub async fn agent_operation_approve_handler(
         return response;
     }
     match state.agent_execution.approve(&operation_id, request) {
-        Ok(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
+        Ok(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
         Err(err) => operation_store_error(err),
     }
 }
@@ -148,13 +148,13 @@ pub async fn agent_operation_apply_handler(
             result.progress_snapshots,
             result.execution_result,
         ) {
-            Some(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
-            None => operation_store_error(crate::agent_execution::OperationStoreError::NotFound),
+            Some(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
+            None => operation_store_error(restream_agent::execution::OperationStoreError::NotFound),
         },
         Err(err) => match state.agent_execution.fail_apply(&operation_id, err.clone()) {
             Some(record) => (
                 StatusCode::BAD_REQUEST,
-                Json(crate::agent_execution::public_record(&record)),
+                Json(restream_agent::execution::public_record(&record)),
             )
                 .into_response(),
             None => (
@@ -236,7 +236,7 @@ struct OperationApplyOutcome {
 #[cfg(feature = "agent-execution")]
 async fn execute_operation(
     state: &AppState,
-    record: &crate::agent_execution::OperationRecord,
+    record: &restream_agent::execution::OperationRecord,
 ) -> Result<OperationApplyOutcome, String> {
     let request = record.request.plan_request();
     let catalog = state
@@ -244,7 +244,7 @@ async fn execute_operation(
         .try_load_pipeline_output_catalog()
         .await?;
     let validation =
-        crate::agent_plane::validate_plan(&request, &catalog.pipelines, &catalog.outputs);
+        restream_agent::plane::validate_plan(&request, &catalog.pipelines, &catalog.outputs);
     if !validation.valid {
         return Err(format!(
             "operation plan is no longer valid: {}",
@@ -285,7 +285,7 @@ async fn execute_operation(
     Ok(OperationApplyOutcome {
         state_transitions,
         progress_snapshots,
-        execution_result: crate::agent_plane::redact_secrets(serde_json::json!({
+        execution_result: restream_agent::plane::redact_secrets(serde_json::json!({
             "success": true,
             "appliedAt": chrono::Utc::now().to_rfc3339(),
             "changeCount": total,
@@ -503,7 +503,7 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
     let record = match state.agent_execution.get(operation_id) {
         Some(record) => record,
         None => {
-            return operation_store_error(crate::agent_execution::OperationStoreError::NotFound);
+            return operation_store_error(restream_agent::execution::OperationStoreError::NotFound);
         }
     };
     // The checks must use an already-applied snapshot, not an in-flight
@@ -516,7 +516,7 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
         .agent_execution
         .complete_verify(operation_id, verification)
     {
-        Ok(record) => Json(crate::agent_execution::public_record(&record)).into_response(),
+        Ok(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
         Err(err) => operation_store_error(err),
     }
 }
@@ -524,7 +524,7 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
 #[cfg(feature = "agent-execution")]
 async fn verify_operation(
     state: &AppState,
-    record: &crate::agent_execution::OperationRecord,
+    record: &restream_agent::execution::OperationRecord,
 ) -> serde_json::Value {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
@@ -639,7 +639,7 @@ async fn verify_operation(
         .count();
     let changed = changed_pipelines(&record.request);
     let before = record.baseline.clone().unwrap_or_default();
-    let after_critical = crate::agent_plane::critical_ids_on(&alerts, &changed);
+    let after_critical = restream_agent::plane::critical_ids_on(&alerts, &changed);
     let alert_delta = alerts.len() as isize - before.alerts_total as isize;
 
     // Delivery of the outputs this operation set running; outputs it did
@@ -672,10 +672,10 @@ async fn verify_operation(
         .filter(|check| check["passed"].as_bool() == Some(true))
         .count();
     let gates = [
-        crate::agent_plane::desired_state(passed_checks, checks.len()),
-        crate::agent_plane::outputs_running(wanted.len(), delivering),
-        crate::agent_plane::new_critical_alerts(&before.critical_ids, &after_critical),
-        crate::agent_plane::capacity_state(
+        restream_agent::plane::desired_state(passed_checks, checks.len()),
+        restream_agent::plane::outputs_running(wanted.len(), delivering),
+        restream_agent::plane::new_critical_alerts(&before.critical_ids, &after_critical),
+        restream_agent::plane::capacity_state(
             before.projected_utilization,
             crate::capacity::capacity_priors(&state.engine, &state.config)
                 .await
@@ -685,7 +685,7 @@ async fn verify_operation(
     ];
     let success = gates.iter().all(|gate| gate.passed);
 
-    crate::agent_plane::redact_secrets(serde_json::json!({
+    restream_agent::plane::redact_secrets(serde_json::json!({
         "success": success,
         "verifiedAt": chrono::Utc::now().to_rfc3339(),
         "postChangeHealth": health,
@@ -715,7 +715,7 @@ async fn verify_operation(
 
 #[cfg(feature = "agent-execution")]
 fn change_output_id(
-    record: &crate::agent_execution::OperationRecord,
+    record: &restream_agent::execution::OperationRecord,
     change: &restream_agent_contract::ProposedChange,
 ) -> Option<String> {
     if let Some(output_id) = &change.output_id {
@@ -763,7 +763,7 @@ fn changed_pipelines(
 async fn apply_baseline(
     state: &AppState,
     changed: &std::collections::HashSet<String>,
-) -> crate::agent_execution::ApplyBaseline {
+) -> restream_agent::execution::ApplyBaseline {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipeline_ids = catalog
         .pipelines
@@ -772,9 +772,9 @@ async fn apply_baseline(
         .collect::<Vec<_>>();
     let (_, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
-    crate::agent_execution::ApplyBaseline {
+    restream_agent::execution::ApplyBaseline {
         alerts_total: alerts.len(),
-        critical_ids: crate::agent_plane::critical_ids_on(&alerts, changed),
+        critical_ids: restream_agent::plane::critical_ids_on(&alerts, changed),
         projected_utilization: crate::capacity::capacity_priors(&state.engine, &state.config)
             .await
             .projected_utilization,
@@ -783,9 +783,9 @@ async fn apply_baseline(
 
 #[cfg(feature = "agent-execution")]
 fn operation_store_error(
-    err: crate::agent_execution::OperationStoreError,
+    err: restream_agent::execution::OperationStoreError,
 ) -> axum::response::Response {
-    use crate::agent_execution::OperationStoreError;
+    use restream_agent::execution::OperationStoreError;
 
     let (status, code, message) = match err {
         OperationStoreError::NotFound => (
@@ -881,7 +881,7 @@ mod tests {
     #[tokio::test]
     async fn applying_snapshot_cannot_be_verified_when_apply_completes_during_checks() {
         use super::*;
-        use crate::agent_execution::{ApplyBaseline, OperationStatus};
+        use restream_agent::execution::{ApplyBaseline, OperationStatus};
         use std::task::Poll;
 
         let pool = sqlx::sqlite::SqlitePoolOptions::new()

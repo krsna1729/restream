@@ -221,7 +221,7 @@ the [assurance roadmap](assurance-roadmap.md).
   and proposes a fix as an agent-plane plan; approval shows what the change
   touches, approves one action at a time by role, and can come from Slack or
   a push notification.
-- Files: `web/ts/control-room/incidents*.tsx`, `src/agent_plane/`.
+- Files: `web/ts/control-room/incidents*.tsx`, `crates/restream-agent/src/plane/`.
 - Gates: a recorded incident yields a plan that names the right layer; an
   approval from a role below the action's minimum is refused and audited.
 

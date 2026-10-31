@@ -89,6 +89,7 @@ const API_STAGE_STARTS: &[&str] = &[
 
 const PRODUCTION_ROOTS: &[&str] = &[
     "src",
+    "crates/restream-agent",
     "crates/restream-agent-contract",
     "crates/restream-core",
     "crates/restream-domain",

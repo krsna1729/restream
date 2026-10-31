@@ -85,7 +85,7 @@ This diagram shows how a change travels from a user to the media engine.
 flowchart LR
     Ui["Web UI<br/>web/ts/control-room"] -->|"HTTP, SSE"| Api["axum router<br/>api::router"]
     Mcp["restream-mcp sidecar"] -->|HTTP| Api
-    Api --> Agent["Agent plane<br/>agent_plane, agent_execution"]
+    Api --> Agent["Agent plane<br/>restream-agent"]
     Api --> App["application services"]
     Agent --> App
     App --> Db[("SQLite<br/>db")]
@@ -103,8 +103,8 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines fourteen packages: the `restream` application,
-eleven library crates under `crates/restream-*`, and the `test_harness` and
+The root `Cargo.toml` defines fifteen packages: the `restream` application,
+twelve library crates under `crates/restream-*`, and the `test_harness` and
 `xtask` command packages. They share one `Cargo.lock`; all are default
 workspace members. These are source and compilation boundaries, not separate
 services or additional thread families.
@@ -123,7 +123,13 @@ flowchart TD
     App --> Health["restream-health"]
     Health --> Engine
     Health --> Sync
+    App -.->|"agent-plane"| Agent["restream-agent"]
     App -.->|"agent-plane"| Contract["restream-agent-contract"]
+    Agent --> Contract
+    Agent --> Health
+    Agent --> Engine
+    Agent --> Domain
+    Agent --> Sync
     App -.->|"mcp-core"| Mcp["restream-mcp"]
     Mcp --> Contract
     Contract --> Domain
@@ -207,6 +213,15 @@ validate its downstream integration.
   `restream-mcp` binary; it reaches the product over HTTP and does not depend
   on `restream` (its build-identity test uses it as a dev-dependency). The
   root `mcp-*` features enable it so one build produces both binaries.
+- **Agent plane:** `restream-agent` owns redacted context, investigation,
+  planning, validation, graph/topology previews and verification gates
+  (`plane`) and, with its `agent-execution` feature, the approval-gated
+  operation store (`execution`). It depends on the contract, domain, health,
+  engine (event type) and sync crates, never on `restream`; the authenticated
+  handlers, apply/verify against persistence and the runtime stay in
+  `src/api/agent/`. The product's `agent-plane` feature links it and
+  `agent-execution` enables its execution feature, so `--no-default-features`
+  still compiles it out.
 - **Application integration:** `src/api/` owns HTTP/authentication and SSE.
   `src/application/` owns orchestration and `reconcile.rs`; `src/db/` owns SQL.
   `src/infrastructure/` owns bootstrap, service wiring and adapters.
@@ -644,7 +659,7 @@ describes where their callers execute.
 | `crates/restream-engine/src/hls/`, `crates/restream-engine/src/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
 | `crates/restream-engine/src/external_transcoder/`, `crates/restream-engine/src/ffmpeg/`, `crates/restream-engine/src/audio_router.rs` | FFmpeg child stages, native audio track selection |
 | `crates/restream-engine/src/executor.rs` | MEDIA executor |
-| `src/agent_plane/`, `src/agent_execution.rs`, `crates/restream-agent-contract/`, `crates/restream-mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
+| `crates/restream-agent/`, `crates/restream-agent-contract/`, `crates/restream-mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
 | `web/ts/` | Dashboard and control room source; `public/` is generated |
 | `crates/test_harness/src/` | Integration scenarios, peers and live qualification |
 | `crates/xtask/src/` | Build helpers, local gates, source/fixture audits and qualification commands |

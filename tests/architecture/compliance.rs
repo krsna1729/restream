@@ -230,7 +230,7 @@ fn manifest_dependencies(manifest: &str) -> Vec<&str> {
 }
 
 #[test]
-fn agent_contract_and_mcp_crates_stay_independent_of_the_product() {
+fn agent_crates_stay_independent_of_the_product() {
     let contract = manifest_dependencies(include_str!(
         "../../crates/restream-agent-contract/Cargo.toml"
     ));
@@ -249,10 +249,24 @@ fn agent_contract_and_mcp_crates_stay_independent_of_the_product() {
         );
     }
     let mcp = manifest_dependencies(include_str!("../../crates/restream-mcp/Cargo.toml"));
-    for forbidden in ["restream", "restream-engine", "sqlx"] {
+    for forbidden in ["restream", "restream-agent", "restream-engine", "sqlx"] {
         assert!(
             !mcp.contains(&forbidden),
             "the MCP sidecar must reach the product only over HTTP: depends on {forbidden}"
+        );
+    }
+    let agent = manifest_dependencies(include_str!("../../crates/restream-agent/Cargo.toml"));
+    for forbidden in [
+        "restream",
+        "restream-mcp",
+        "axum",
+        "sqlx",
+        "reqwest",
+        "tokio",
+    ] {
+        assert!(
+            !agent.contains(&forbidden),
+            "the agent plane must leave HTTP, persistence and runtime mutation to the product: depends on {forbidden}"
         );
     }
 

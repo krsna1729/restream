@@ -1,9 +1,10 @@
 //! Agent execution plane.
 //!
-//! Compiled with `agent-execution` (in the default build), which depends on the
-//! read/planning `agent-plane` feature. It owns operation state, approval
-//! transitions, audit events, idempotency lookups, and redacted public views;
-//! API handlers still perform the actual runtime mutations through core APIs.
+//! Compiled with this crate's `agent-execution` feature, which the product's
+//! default `agent-execution` feature enables on top of `agent-plane`. It owns
+//! operation state, approval transitions, audit events, idempotency lookups,
+//! and redacted public views; API handlers still perform the actual runtime
+//! mutations through core APIs.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -11,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::agent_plane::PlanResponse;
+use crate::plane::PlanResponse;
 use restream_agent_contract::{ApprovalRequest, OperationCreateRequest, PlanRequest};
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
@@ -103,7 +104,7 @@ pub enum OperationStoreError {
 }
 
 impl OperationStatus {
-    pub(crate) fn require_applied(self) -> Result<(), OperationStoreError> {
+    pub fn require_applied(self) -> Result<(), OperationStoreError> {
         match self {
             Self::Invalid => Err(OperationStoreError::Invalid),
             Self::AwaitingApproval | Self::Approved | Self::Failed => {
@@ -437,7 +438,7 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 pub fn public_record(record: &OperationRecord) -> Value {
-    crate::agent_plane::redact_secrets(serde_json::json!({
+    crate::plane::redact_secrets(serde_json::json!({
         "operationId": record.operation_id,
         "idempotencyKey": record.idempotency_key,
         "status": record.status,
@@ -539,7 +540,7 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_plane::{GraphPreview, ImpactPreview, ValidationResult};
+    use crate::plane::{GraphPreview, ImpactPreview, ValidationResult};
     use restream_agent_contract::ProposedChange;
 
     fn test_request(idempotency_key: Option<String>) -> OperationCreateRequest {

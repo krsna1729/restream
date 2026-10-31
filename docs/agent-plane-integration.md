@@ -96,7 +96,7 @@ verification.
 
 ## Operation lifecycle
 
-`AgentExecutionStore` in `src/agent_execution.rs` holds operation state. The
+`AgentExecutionStore` in `crates/restream-agent/src/execution.rs` holds operation state. The
 handlers in `src/api/agent/operations.rs` drive it and perform the runtime
 mutation through `AgentService::apply_output_mutation`.
 
@@ -230,7 +230,7 @@ runtime health. Check reasons include `running`, `stopped`, `persisted`,
 `outputMissing`, `desiredStateMismatch`, `retriesExhausted`, and
 `unsupportedChangeKind`.
 
-Then four gates (`src/agent_plane/verify_gates.rs`) decide `success`. Each
+Then four gates (`crates/restream-agent/src/plane/verify_gates.rs`) decide `success`. Each
 gate is `{ gate, passed, detail }` in the result's `gates` array. All four
 must pass for `verified`.
 
@@ -242,7 +242,7 @@ must pass for `verified`.
 | `capacityState` | the hottest service center's projected utilization is below the safe limit, or was already at or above it before apply |
 
 The baseline is taken when apply starts (`ApplyBaseline` in
-`src/agent_execution.rs`). The operation view shows it as
+`crates/restream-agent/src/execution.rs`). The operation view shows it as
 `preApplyAlertCount`, `preApplyCriticalAlertIds`, and
 `preApplyProjectedUtilization` (`null` before apply). Capacity uses the
 host-wide calibration priors, so a change on another pipeline between apply
@@ -254,7 +254,7 @@ These are reported, not judged.
 
 ### Topology preview
 
-`topology_diff` (`src/agent_plane/topology.rs`) fills
+`topology_diff` (`crates/restream-agent/src/plane/topology.rs`) fills
 `graphPreview.topology` in plan responses. It covers only the request's
 `pipelineId`; without one it is `null`, and changes on other pipelines are
 left out. Fields:
@@ -381,7 +381,7 @@ binary. Use the `restream-mcp` sidecar.
 | `crates/restream-mcp/src/http.rs` | `HttpAgentBackend` |
 | `crates/restream-mcp/src/` | Tool catalog, handlers, auth context, transports |
 | `crates/restream-mcp/src/main.rs` | CLI, environment, compatibility check |
-| `src/agent_plane.rs`, `src/agent_plane/` | Redaction, investigation, planning, validation, graph and topology preview, verification gates |
-| `src/agent_execution.rs` | Operation store, states, idempotency, audit log |
+| `crates/restream-agent/src/plane.rs`, `crates/restream-agent/src/plane/` | Redaction, investigation, planning, validation, graph and topology preview, verification gates |
+| `crates/restream-agent/src/execution.rs` | Operation store, states, idempotency, audit log |
 | `src/api/agent.rs`, `src/api/agent/` | Authenticated HTTP handlers, apply and verify |
 | `Cargo.toml` | Feature graph and binary requirements |

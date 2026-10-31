@@ -27,7 +27,7 @@ pub async fn agent_capabilities_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::agent_plane::capabilities()).into_response()
+    Json(restream_agent::plane::capabilities()).into_response()
 }
 
 #[cfg(not(feature = "agent-plane"))]
@@ -84,7 +84,7 @@ pub async fn agent_investigation_handler(
         .pipeline_id
         .as_deref()
         .and_then(|pid| pipelines.iter().find(|pipeline| pipeline.id == pid))
-        .map(crate::agent_plane::redact_secrets_from_serializable);
+        .map(restream_agent::plane::redact_secrets_from_serializable);
     let output_exists = request.output_id.as_deref().is_none_or(|oid| {
         outputs.iter().any(|output| {
             output.id == oid
@@ -106,7 +106,7 @@ pub async fn agent_investigation_handler(
                         .is_none_or(|pid| output.pipeline_id == pid)
             })
         })
-        .map(crate::agent_plane::redact_secrets_from_serializable);
+        .map(restream_agent::plane::redact_secrets_from_serializable);
     let pipeline_ids = request
         .pipeline_id
         .clone()
@@ -150,7 +150,7 @@ pub async fn agent_investigation_handler(
         request.pipeline_id.as_deref(),
     );
 
-    Json(crate::agent_plane::investigation_response(
+    Json(restream_agent::plane::investigation_response(
         request,
         pipeline_exists,
         output_exists,
@@ -203,7 +203,7 @@ pub async fn agent_plan_handler(
 }
 
 #[cfg(feature = "agent-plane")]
-fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+fn agent_plan_validation_json(response: &restream_agent::plane::PlanResponse) -> serde_json::Value {
     serde_json::json!({
         "generatedAt": response.generated_at,
         "planId": response.plan_id,
@@ -212,7 +212,9 @@ fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> se
 }
 
 #[cfg(feature = "agent-plane")]
-fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+fn agent_plan_graph_preview_json(
+    response: &restream_agent::plane::PlanResponse,
+) -> serde_json::Value {
     serde_json::json!({
         "generatedAt": response.generated_at,
         "planId": response.plan_id,
@@ -275,7 +277,7 @@ pub async fn agent_graph_diff_preview_handler(
 pub(super) async fn build_agent_plan(
     state: &AppState,
     request: restream_agent_contract::PlanRequest,
-) -> crate::agent_plane::PlanResponse {
+) -> restream_agent::plane::PlanResponse {
     let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
@@ -289,7 +291,7 @@ pub(super) async fn build_agent_plan(
     } else {
         (None, None)
     };
-    crate::agent_plane::plan_response(
+    restream_agent::plane::plan_response(
         request,
         &pipelines,
         &outputs,
@@ -304,8 +306,8 @@ mod tests {
     use super::{agent_plan_graph_preview_json, agent_plan_validation_json};
 
     #[cfg(feature = "agent-plane")]
-    fn sample_plan_response() -> crate::agent_plane::PlanResponse {
-        crate::agent_plane::PlanResponse {
+    fn sample_plan_response() -> restream_agent::plane::PlanResponse {
+        restream_agent::plane::PlanResponse {
             generated_at: "2026-07-14T00:00:00Z".to_string(),
             plan_id: "plan_123".to_string(),
             status: "draft",
@@ -313,12 +315,12 @@ mod tests {
             execution_enabled: true,
             execution_note: "compiled in",
             steps: Vec::new(),
-            validation: crate::agent_plane::ValidationResult {
+            validation: restream_agent::plane::ValidationResult {
                 valid: true,
                 errors: Vec::new(),
                 warnings: Vec::new(),
             },
-            graph_preview: crate::agent_plane::GraphPreview {
+            graph_preview: restream_agent::plane::GraphPreview {
                 mode: "preview",
                 added_nodes: Vec::new(),
                 removed_nodes: Vec::new(),
@@ -326,7 +328,7 @@ mod tests {
                 notes: vec!["note".to_string()],
                 topology: None,
             },
-            impact: crate::agent_plane::ImpactPreview {
+            impact: restream_agent::plane::ImpactPreview {
                 affected_pipelines: vec!["pipe-1".to_string()],
                 affected_outputs: Vec::new(),
                 shared_stage_candidates: Vec::new(),

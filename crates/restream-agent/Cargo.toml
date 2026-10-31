@@ -1,0 +1,30 @@
+[package]
+name = "restream-agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Approval-gated operation store (`execution`); the planning responses then
+# report execution as available. The product's `agent-execution` enables it.
+agent-execution = ["restream-agent-contract/agent-execution"]
+
+[dependencies]
+restream-agent-contract = { path = "../restream-agent-contract" }
+restream-domain = { path = "../restream-domain" }
+restream-engine = { path = "../restream-engine" }
+restream-health = { path = "../restream-health" }
+restream-sync = { path = "../restream-sync" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+rand = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+restream-engine = { path = "../restream-engine", features = ["test-support"] }
