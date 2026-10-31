@@ -407,5 +407,4 @@ fn audio_frame(pts_us: u64, payload: &[u8]) -> MediaFrame {
 }
 
 #[cfg(test)]
-#[path = "media_tests.rs"]
 mod tests;

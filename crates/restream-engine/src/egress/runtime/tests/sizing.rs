@@ -1,5 +1,5 @@
-use super::tests::{Probe, group, output_spec};
-use super::*;
+use super::super::tests::{Probe, group, output_spec};
+use super::super::*;
 use crate::egress::metrics::ShardService;
 
 fn runtime(shards: u32) -> EgressFabricRuntime {
@@ -131,7 +131,7 @@ fn replacement_ring_resets_forecast_counter_even_if_new_counter_is_larger() {
 fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
     let profile = crate::config::EgressShardProfile::SrtOutputCount;
     let probes = [Probe::default()];
-    let mut runtime = super::tests::roomy_runtime(&probes).0;
+    let mut runtime = super::super::tests::roomy_runtime(&probes).0;
     let ring = RingBuffer::new(8);
     // 2 MB over 500 ms of media time: 32 Mbit/s, well over the 4.8 Mbit/s
     // reference rate, all published before the runtime first looks.

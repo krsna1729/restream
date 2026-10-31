@@ -158,5 +158,4 @@ impl NonBlockingRtmpHandshake {
 }
 
 #[cfg(test)]
-#[path = "rtmp_handshake_tests.rs"]
 mod tests;

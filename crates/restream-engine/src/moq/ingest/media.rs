@@ -575,5 +575,4 @@ pub(crate) struct MoqProbe {
 }
 
 #[cfg(test)]
-#[path = "media_tests.rs"]
 mod tests;

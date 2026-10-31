@@ -488,5 +488,4 @@ pub(crate) fn live_start(feed: &RingFeed) -> FeedCursor {
 }
 
 #[cfg(test)]
-#[path = "publish_tests.rs"]
 mod tests;

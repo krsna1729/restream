@@ -4,15 +4,15 @@ use futures_util::future::join;
 use moq_net::transport::poll::Session as _;
 use web_transport_trait::poll::Session as _;
 
-use super::session_tests::{
+use super::super::test_support::{LOOPBACK_SERVER_NAME, Loopback, loopback_client_tls, run};
+use super::super::webtransport::{
+    H3_MESSAGE_ERROR, H3_REQUEST_REJECTED, H3_STREAM_CREATION_ERROR, WT_BUFFERED_STREAM_REJECTED,
+};
+use super::super::*;
+use super::session::{
     dropped_stream_is_reset, exchange_streams, last_drop_closes, moq_round_trip,
     peer_close_is_observed,
 };
-use super::test_support::{LOOPBACK_SERVER_NAME, Loopback, loopback_client_tls, run};
-use super::webtransport::{
-    H3_MESSAGE_ERROR, H3_REQUEST_REJECTED, H3_STREAM_CREATION_ERROR, WT_BUFFERED_STREAM_REJECTED,
-};
-use super::*;
 
 const URL: &str = "https://localhost/live/key?token=abc";
 

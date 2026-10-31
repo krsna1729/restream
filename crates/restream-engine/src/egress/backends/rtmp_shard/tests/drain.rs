@@ -1,5 +1,5 @@
 //! Graceful-drain regression tests for `RtmpShardBackend`, split out of
-//! `rtmp_shard_tests.rs` to stay under the source-audit line cap.
+//! `rtmp_shard/tests.rs` to stay under the source-audit line cap.
 
 use super::*;
 

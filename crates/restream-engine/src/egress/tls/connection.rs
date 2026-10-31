@@ -636,5 +636,4 @@ impl Write for TlsTcpConnection {
 }
 
 #[cfg(test)]
-#[path = "connection_tests.rs"]
 mod tests;

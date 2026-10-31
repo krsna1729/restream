@@ -30,8 +30,6 @@
 //! revalidate generations without a later viewer attach.
 
 use restream_moq::token;
-#[cfg(test)]
-mod token_tests;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -896,5 +894,4 @@ pub fn mint_token(pipeline_id: &str) -> (String, u64) {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

@@ -198,7 +198,6 @@ impl<T> LeafArena<T> {
 }
 
 #[cfg(test)]
-#[path = "leaf_arena_tests.rs"]
 mod tests;
 
 /// Rung 4 (docs/assurance-roadmap.md): for every bounded sequence of

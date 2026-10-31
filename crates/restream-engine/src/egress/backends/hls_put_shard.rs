@@ -951,5 +951,4 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
 }
 
 #[cfg(test)]
-#[path = "hls_put_shard_tests.rs"]
 mod tests;

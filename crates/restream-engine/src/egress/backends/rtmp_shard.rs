@@ -828,5 +828,4 @@ mod rtmp_shard_connect;
 mod rtmp_shard_drain;
 
 #[cfg(test)]
-#[path = "rtmp_shard_tests.rs"]
 mod tests;

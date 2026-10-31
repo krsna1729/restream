@@ -355,5 +355,4 @@ async fn deliver_admission(
 }
 
 #[cfg(test)]
-#[path = "lifecycle_tests.rs"]
-mod lifecycle_tests;
+mod tests;

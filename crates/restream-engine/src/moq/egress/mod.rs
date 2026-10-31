@@ -19,7 +19,7 @@ pub(crate) mod media;
 pub(crate) mod publish;
 pub mod startup;
 #[cfg(test)]
-mod url_tests;
+mod tests;
 
 pub(crate) use backend::moq_shard_backend;
 pub use startup::{MoqPublishStartup, SharedMoqStartupSource, publish_startup};

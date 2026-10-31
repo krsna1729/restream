@@ -568,5 +568,4 @@ async fn idle_watch(last_frame: &Cell<Instant>, idle: Duration) -> SessionEnd {
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
 mod tests;

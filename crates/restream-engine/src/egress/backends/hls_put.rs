@@ -199,5 +199,4 @@ fn http_error(error: HttpError) -> String {
 }
 
 #[cfg(test)]
-#[path = "hls_put_tests.rs"]
 mod tests;

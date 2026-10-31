@@ -758,5 +758,4 @@ impl ProtocolEngine for RtmpFabricEngine {
 }
 
 #[cfg(test)]
-#[path = "rtmp_tests.rs"]
 mod tests;

@@ -1,5 +1,5 @@
 //! Regression tests for `on_media_tick`'s connect-completion scheduling,
-//! split out of `rtmp_shard_tests.rs` to stay under the source-audit line
+//! split out of `rtmp_shard/tests.rs` to stay under the source-audit line
 //! cap. See the doc comment on `EgressShardBackend::on_media_tick`
 //! (`crates/restream-engine/src/egress/shard.rs`) for the full story: a freshly-connected
 //! leaf has no independent way to discover its own I/O readiness — the

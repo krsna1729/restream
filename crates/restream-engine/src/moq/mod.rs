@@ -21,6 +21,4 @@ pub mod subscribe_entry;
 pub mod transport;
 
 #[cfg(test)]
-mod media_tests;
-#[cfg(test)]
-mod tls_tests;
+mod tests;
