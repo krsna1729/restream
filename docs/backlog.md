@@ -255,10 +255,15 @@ the [assurance roadmap](assurance-roadmap.md).
   `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
   (`crates/restream-engine/src/external_transcoder/tests/hevc_pipeline.rs`, output deadline)
   each failed once in a full local `--lib` run; each passes when rerun.
-  `container_timeout_reaps_engine_client` (`crates/xtask/src/container/tests.rs`)
-  failed once in CI: its fake engine had not written its `pid` file when the
-  1 s shim timeout fired; it passed 40 local runs and 20 runs pinned to one
-  saturated CPU. Remove the timing dependence.
+  The xtask container tests (`crates/xtask/src/container/tests.rs`)
+  `container_timeout_reaps_engine_client`,
+  `container_shim_term_and_int_stop_container_then_reap_client` and
+  `container_shim_cleans_named_container_after_engine_error` fail about 3%
+  of full `xtask` test-binary runs (4 of 120 locally; twice in CI). A
+  traced failure shows the fake engine shell not reaching its first
+  statement before the 1 s deadline while the binary's other tests run in
+  parallel; it is not ETXTBSY, and a fork-free fake engine still failed 5 of
+  300. Remove the timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.
 

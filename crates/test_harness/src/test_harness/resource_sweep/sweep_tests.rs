@@ -121,3 +121,20 @@ fn outputs_spread_across_peer_instances() {
         "one peer keeps every output"
     );
 }
+
+#[test]
+fn a_scenario_filter_that_selects_nothing_is_reported() {
+    let filter = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+    assert!(
+        config::unknown_scenarios(&filter(&["baseline-empty", "egress-growth-hevc-bridge"]))
+            .is_empty()
+    );
+    assert_eq!(
+        config::unknown_scenarios(&filter(&[
+            "resource.egress-growth-source-same",
+            "egress-growth-source-same",
+            "ingest",
+        ])),
+        ["ingest", "resource.egress-growth-source-same"]
+    );
+}

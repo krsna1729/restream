@@ -104,13 +104,13 @@ pub(crate) fn plan(shard: &str) -> Result<Vec<Step>, Error> {
         "bitrate-sweep.mixed-h265-a2" => vec![row("bitrate", "mixed.live.srt.h265.a2.bf2")],
         "resource-sweep.source" => vec![row(
             "resource",
-            "resource.egress-growth-source-same,resource.egress-growth-source-mixed",
+            "egress-growth-source-same,egress-growth-source-mixed",
         )],
         "resource-sweep.transcode" => vec![row(
             "resource",
-            "resource.egress-growth-transcode-same,resource.egress-growth-transcode-mixed,resource.egress-growth-source-plus-transcode-mixed,resource.egress-growth-transcode-dual-mixed,resource.egress-growth-source-plus-transcode-dual-mixed",
+            "egress-growth-transcode-same,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed",
         )],
-        "resource-sweep.hevc" => vec![row("resource", "resource.egress-growth-hevc-bridge")],
+        "resource-sweep.hevc" => vec![row("resource", "egress-growth-hevc-bridge")],
         "msr-smoke" => vec![row("msr-smoke", "msr")],
         name if name.starts_with("mixed.file.") => vec![row(
             "mode",
