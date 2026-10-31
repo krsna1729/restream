@@ -60,9 +60,6 @@ mcp-core = ["dep:restream-mcp"]
 mcp-server = ["mcp-core", "restream-mcp/mcp-server"]
 mcp-http-backend = ["mcp-core", "restream-mcp/mcp-http-backend"]
 mcp-embedded = ["mcp-core", "agent-plane"]
-# Forwards the engine's benchmark-only SRT shard-count seam to bench-profile
-# `restream` builds (`RESTREAM_BENCH_FEATURES=srt-shard-bench cargo xtask build-bench`).
-srt-shard-bench = ["restream-engine/srt-shard-bench"]
 
 [dependencies]
 restream-agent-contract = { path = "crates/restream-agent-contract", optional = true }

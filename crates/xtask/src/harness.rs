@@ -19,7 +19,8 @@ const USAGE: &str = "usage:
 
 BENCH_BUILD=never skips bench preparation. Any other accepted value (always,
 if-needed, the default) runs build-bench, and Cargo decides what is stale.
-RESTREAM_BENCH_FEATURES passes optional Cargo features to build-bench.";
+RESTREAM_BENCH_FEATURES passes optional Cargo features to build-bench, for
+example restream-engine/srt-shard-bench.";
 
 struct Invocation<'a> {
     prepare_only: bool,
