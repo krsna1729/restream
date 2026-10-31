@@ -18,7 +18,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
-- [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
+
 - [Q-109 SRT group receive skips a lost sequence](#q-109-protocol-opus-an-srt-group-receiver-skips-a-sequence-every-member-lost)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Not planned](#not-planned)
@@ -140,17 +140,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
 - Gates: misspelt and reordered requests reach the same command the buttons
   would; nothing applies without the approval step.
-
-### Q-108 [performance] [opus] Explain the ring producer bench shift after the engine move
-- Goal: `ring_buffer/producer/push_one_at_a_time/4` measured +17.5% and
-  +21.5% after moving the benches into `crates/restream-engine` (A/B against
-  `2fb586c1`), while a same-code A/A rerun drifted +2.4%. The bench source,
-  `restream-sync` and `restream-core` code and their resolved features are
-  unchanged, so binary layout is the suspected cause, but that is unproven.
-  Compare `perf stat` counters and the disassembly of the push loop in both
-  bench binaries and either confirm layout or find the cause.
-- Gates: a written cause backed by counter or disassembly evidence; if the
-  product path is affected, a fix with a before/after Criterion A/B.
 
 ### Q-109 [protocol] [opus] An SRT group receiver skips a sequence every member lost
 - Goal: when no group member delivers the next sequence before its TSBPD
