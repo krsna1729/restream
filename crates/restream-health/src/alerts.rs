@@ -31,6 +31,13 @@ impl Severity {
 }
 
 const REPEATED_RESYNC_WARN_THRESHOLD: u64 = 5;
+/// A black picture this long is an alert.
+const BLACK_ALERT_MS: u64 = 10_000;
+/// A picture unchanged this long is an alert (a slate or a still is meant
+/// to be still; the alert says so).
+const STILL_ALERT_MS: u64 = 30_000;
+/// Silence this long is an alert.
+const SILENT_ALERT_MS: u64 = 10_000;
 
 // ─── Scope ───────────────────────────────────────────────────────────────────
 
@@ -390,7 +397,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             if let Some(qa) = input.get("qa") {
                 let held = |key: &str| qa.get(key).and_then(|v| v.as_u64());
                 if let Some(ms) = held("blackForMs")
-                    && ms >= restream_engine::stream_qa::BLACK_ALERT_MS
+                    && ms >= BLACK_ALERT_MS
                 {
                     alerts.push(Alert {
                         pipeline_id: Some(pipeline_id.clone()),
@@ -406,7 +413,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         )
                     });
                 } else if let Some(ms) = held("stillForMs")
-                    && ms >= restream_engine::stream_qa::STILL_ALERT_MS
+                    && ms >= STILL_ALERT_MS
                 {
                     let slate = qa.get("stillIsSlate").and_then(|v| v.as_bool()) == Some(true);
                     let (id, title, summary, fix) = if slate {
@@ -439,7 +446,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     });
                 }
                 if let Some(ms) = held("silentForMs")
-                    && ms >= restream_engine::stream_qa::SILENT_ALERT_MS
+                    && ms >= SILENT_ALERT_MS
                 {
                     alerts.push(Alert {
                         pipeline_id: Some(pipeline_id.clone()),
@@ -467,7 +474,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     ) else {
                         continue;
                     };
-                    if ms < restream_engine::stream_qa::SILENT_ALERT_MS {
+                    if ms < SILENT_ALERT_MS {
                         continue;
                     }
                     alerts.push(Alert {

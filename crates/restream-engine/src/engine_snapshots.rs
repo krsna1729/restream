@@ -5,11 +5,9 @@ use crate::snapshots::{
     EgressDiagSnapshot, FileIngestDependencySnapshot, HlsDependencySnapshot, IngestDiagSnapshot,
     RingBufferDiagSnapshot, SrtListenerDiagSnapshot,
 };
-use restream_domain::domain::state::EgressStatus;
+use restream_domain::domain::state::{EGRESS_PROGRESS_STALE_MS, EgressStatus};
 
-use super::engine::{
-    ActiveEgress, EGRESS_PROGRESS_STALE_MS, MediaEngine, hls_preview_registry_key,
-};
+use super::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
 
 /// Locks without blocking, still recovering the guarded value from a
 /// poisoned mutex instead of discarding it — diagnostics reads must not

@@ -3,7 +3,9 @@
 use proptest::prelude::*;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::stage::{StageKey, StageKind};
-use restream_domain::domain::state::{DesiredOutputState, EgressPhase, EgressPhase as EP};
+use restream_domain::domain::state::{
+    DesiredOutputState, EGRESS_PROGRESS_STALE_MS, EgressPhase, EgressPhase as EP,
+};
 use restream_engine::engine::*;
 use restream_engine::snapshots::PublisherQuality;
 use restream_engine::test_support::{test_audio_packet, test_video_packet};

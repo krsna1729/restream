@@ -18,7 +18,6 @@ use restream_domain::domain::stage::StageKey;
 use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 use restream_sync::RingBuffer;
 
-pub const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
 pub(crate) const EGRESS_FLAP_WINDOW_MS: u64 = 30_000;
 

@@ -121,13 +121,12 @@ flowchart TD
     Harness --> Sync
     App --> Engine["restream-engine"]
     App --> Health["restream-health"]
-    Health --> Engine
+    Health --> Domain
     Health --> Sync
     App -.->|"agent-plane"| Agent["restream-agent"]
     App -.->|"agent-plane"| Contract["restream-agent-contract"]
     Agent --> Contract
     Agent --> Health
-    Agent --> Engine
     Agent --> Domain
     Agent --> Sync
     App -.->|"mcp-core"| Mcp["restream-mcp"]
@@ -203,8 +202,9 @@ validate its downstream integration.
 - **Health assessment:** `restream-health` owns the typed alerts derived from
   the health snapshot (`alerts`, `AlertTracker`), the per-output `diagnosis`
   shared by alerts and the runtime state, and per-destination
-  `destination_baselines`. It is pure derivation; it depends on the engine
-  only for its alert thresholds and on `restream-sync` for lock helpers. Its
+  `destination_baselines`. It is pure derivation and owns its alert
+  thresholds; it depends on `restream-domain` for the egress staleness rule
+  (`EGRESS_PROGRESS_STALE_MS`) and on `restream-sync` for lock helpers. Its
   `ts` feature adds the TypeScript export derives for `Diagnosis`.
 - **Agent contract and MCP sidecar:** `restream-agent-contract` owns the agent
   request types, `AgentBackend`, errors and the agent tool list; it depends on
@@ -216,8 +216,8 @@ validate its downstream integration.
 - **Agent plane:** `restream-agent` owns redacted context, investigation,
   planning, validation, graph/topology previews and verification gates
   (`plane`) and, with its `agent-execution` feature, the approval-gated
-  operation store (`execution`). It depends on the contract, domain, health,
-  engine (event type) and sync crates, never on `restream`; the authenticated
+  operation store (`execution`). It depends on the contract, domain, health
+  and sync crates, never on `restream` or `restream-engine`; the authenticated
   handlers, apply/verify against persistence and the runtime stay in
   `src/api/agent/`. The product's `agent-plane` feature links it and
   `agent-execution` enables its execution feature, so `--no-default-features`

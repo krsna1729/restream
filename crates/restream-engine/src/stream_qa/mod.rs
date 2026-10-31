@@ -16,13 +16,6 @@ pub mod runner;
 
 use serde::{Deserialize, Serialize};
 
-/// A black picture this long is an alert.
-pub const BLACK_ALERT_MS: u64 = 10_000;
-/// A picture unchanged this long is an alert (a slate or a still is meant
-/// to be still; the alert says so).
-pub const STILL_ALERT_MS: u64 = 30_000;
-/// Silence this long is an alert.
-pub const SILENT_ALERT_MS: u64 = 10_000;
 /// Short-term loudness at or below this is silence.
 pub const SILENT_BELOW_LUFS: f64 = -60.0;
 /// A check older than this says nothing about now.

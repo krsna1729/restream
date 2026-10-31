@@ -4,7 +4,6 @@
     "bitrate-sweep": {
       "version": 1,
       "id": "bitrate-sweep",
-      "runtimeProfile": "bitrateSweep",
       "coverage": "scenarios/mixed.json#coverageSlices.bitrateSweep",
       "workflow": "workflows/mixed-slice.json",
       "execution": {
@@ -20,7 +19,6 @@
     "branch-matrix": {
       "version": 1,
       "id": "branch-matrix",
-      "runtimeProfile": "branchMatrix",
       "coverage": "scenarios/mixed.json#coverageSlices.branchMatrix",
       "workflow": "workflows/mixed-slice.json",
       "execution": {
@@ -56,7 +54,6 @@
     "mixed.fast-breadth": {
       "version": 1,
       "id": "mixed.fast-breadth",
-      "runtimeProfile": "mixedFastBreadth",
       "batches": "scenarios/mixed.json#fastBreadthBatches",
       "selection": {
         "env": "MIXED_FAST_BREADTH_GROUPS",
@@ -80,7 +77,6 @@
     "mixed.signal": {
       "version": 1,
       "id": "mixed.signal",
-      "runtimeProfile": "mixedSignal",
       "batches": "scenarios/mixed.json#signalBatches",
       "selection": {
         "env": "MIXED_SIGNAL_GROUPS",
@@ -104,7 +100,6 @@
     "mixed.matrix": {
       "version": 1,
       "id": "mixed.matrix",
-      "runtimeProfile": "mixed",
       "scenarios": {
         "from": "scenarios/mixed.json#inputs",
         "order": "manifest"
@@ -120,7 +115,6 @@
     "ramp-family": {
       "version": 1,
       "id": "ramp-family",
-      "runtimeProfile": "mixed",
       "coverage": "scenarios/mixed.json#coverageSlices.rampFamily",
       "workflow": "workflows/mixed-slice.json",
       "execution": {
@@ -136,7 +130,6 @@
     "resource-sweep": {
       "version": 1,
       "id": "resource-sweep",
-      "runtimeProfile": "mixed",
       "coverage": "scenarios/mixed.json#coverageSlices.resourceEgress",
       "workflow": "workflows/mixed-slice.json",
       "execution": {
@@ -152,7 +145,6 @@
     "srt-crypto-matrix": {
       "version": 1,
       "id": "srt-crypto-matrix",
-      "runtimeProfile": "srtCryptoMatrix",
       "coverage": "scenarios/mixed.json#coverageSlices.srtCryptoMatrix",
       "workflow": "workflows/mixed-slice.json",
       "execution": {
