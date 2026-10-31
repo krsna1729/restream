@@ -14,7 +14,8 @@ matrix runs, and special workflow inventory.
 
 Rust keeps:
 
-- process/service lifecycle
+- process/service lifecycle, runtime defaults, environment overrides and
+  protocol URLs
 - API calls and polling
 - FFmpeg/FFprobe invocation
 - in-process sinks where still required
@@ -25,9 +26,6 @@ Manifests own:
 
 - command-to-workflow dispatch
 - suites and selected scenarios
-- runtime defaults and environment override mapping
-- service topology and readiness probes
-- protocol URL templates
 - scenario rows and expected media properties
 - check parameters, retry windows, thresholds, and bad-log patterns
 

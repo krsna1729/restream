@@ -88,7 +88,7 @@ pub struct PlanResponse {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn redacted_context(
+pub fn redacted_context<E: Serialize>(
     pipelines: &[Pipeline],
     outputs: &[Output],
     jobs: &[Value],
@@ -100,7 +100,7 @@ pub fn redacted_context(
     resource_map: Value,
     graphs: Vec<Value>,
     alerts: Vec<restream_health::alerts::Alert>,
-    events: Vec<restream_engine::events::Event>,
+    events: Vec<E>,
     configuration: Value,
     media: Value,
     desired_vs_actual: Value,
@@ -291,7 +291,7 @@ fn fingerprint(raw: &str) -> Value {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn investigation_response(
+pub fn investigation_response<E: Serialize>(
     request: InvestigationRequest,
     pipeline_exists: bool,
     output_exists: bool,
@@ -302,7 +302,7 @@ pub fn investigation_response(
     telemetry: Value,
     resource_map: Value,
     alerts: Vec<restream_health::alerts::Alert>,
-    events: Vec<restream_engine::events::Event>,
+    events: Vec<E>,
 ) -> Value {
     let workflow = request
         .workflow

@@ -53,8 +53,6 @@ impl HarnessCatalog {
 pub(crate) fn workflow_summary(workflow: &Value) -> Value {
     json!({
         "id": workflow.get("id").cloned().unwrap_or(Value::Null),
-        "runtimeProfile": workflow.get("runtimeProfile").cloned().unwrap_or(Value::Null),
-        "stack": workflow.get("stack").cloned().unwrap_or(Value::Null),
         "stepCount": workflow.get("steps").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
     })
 }

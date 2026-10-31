@@ -2,11 +2,6 @@
   "version": 1,
   "schema": "restream.test-harness.catalog.v1",
   "modes": "modes.json",
-  "runtime": {
-    "profiles": "runtime/profiles.json",
-    "protocols": "runtime/protocols.json",
-    "services": "runtime/services.json"
-  },
   "checks": {
     "registry": "checks/checks.json",
     "ffmpegPatterns": "checks/ffmpeg-patterns.json",
@@ -16,8 +11,7 @@
     "index": "suites.json"
   },
   "scenarios": {
-    "mixed": "scenarios/mixed.json",
-    "fault": "scenarios/fault.json"
+    "mixed": "scenarios/mixed.json"
   },
   "workflows": {
     "mixedScenario": "workflows/mixed-scenario.json",

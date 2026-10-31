@@ -258,6 +258,7 @@ fn agent_crates_stay_independent_of_the_product() {
     let agent = manifest_dependencies(include_str!("../../crates/restream-agent/Cargo.toml"));
     for forbidden in [
         "restream",
+        "restream-engine",
         "restream-mcp",
         "axum",
         "sqlx",
@@ -267,6 +268,24 @@ fn agent_crates_stay_independent_of_the_product() {
         assert!(
             !agent.contains(&forbidden),
             "the agent plane must leave HTTP, persistence and runtime mutation to the product: depends on {forbidden}"
+        );
+    }
+    // Health derives alerts from JSON snapshots and the agent serializes
+    // events generically; neither links the media engine, as a regular or a
+    // dev-dependency.
+    for (krate, manifest) in [
+        (
+            "restream-agent",
+            include_str!("../../crates/restream-agent/Cargo.toml"),
+        ),
+        (
+            "restream-health",
+            include_str!("../../crates/restream-health/Cargo.toml"),
+        ),
+    ] {
+        assert!(
+            !manifest.contains("restream-engine"),
+            "{krate} must not depend on restream-engine"
         );
     }
 

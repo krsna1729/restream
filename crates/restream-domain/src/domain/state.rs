@@ -146,6 +146,10 @@ impl From<String> for EgressStatus {
     }
 }
 
+/// An egress with no progress for this long is
+/// [`EgressRuntimeStatus::Stalled`], and health alerts on it.
+pub const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
+
 /// Operator-facing computed status for an egress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

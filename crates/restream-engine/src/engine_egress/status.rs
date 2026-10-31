@@ -1,9 +1,9 @@
 use std::sync::atomic::Ordering;
 
-use crate::engine::{
-    ActiveEgress, EGRESS_FLAP_WINDOW_MS, EGRESS_PROGRESS_STALE_MS, MediaEngine, RecentEgressOutcome,
+use crate::engine::{ActiveEgress, EGRESS_FLAP_WINDOW_MS, MediaEngine, RecentEgressOutcome};
+use restream_domain::domain::state::{
+    EGRESS_PROGRESS_STALE_MS, EgressPhase, EgressRuntimeStatus, EgressStatus,
 };
-use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 
 impl MediaEngine {
     pub fn egress_effective_status(egress: &ActiveEgress, has_ingest: bool) -> String {

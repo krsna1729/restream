@@ -35,7 +35,7 @@ fn qa_alert_ids(qa: serde_json::Value) -> Vec<String> {
 
 #[test]
 fn picture_and_sound_checks_alert_once_a_condition_has_held_long_enough() {
-    use restream_engine::stream_qa::{BLACK_ALERT_MS, SILENT_ALERT_MS, STILL_ALERT_MS};
+    use crate::alerts::{BLACK_ALERT_MS, SILENT_ALERT_MS, STILL_ALERT_MS};
     // Short of each threshold: nothing.
     assert!(
         qa_alert_ids(json!({
@@ -73,7 +73,7 @@ fn picture_and_sound_checks_alert_once_a_condition_has_held_long_enough() {
 
 #[test]
 fn a_still_slate_and_a_silent_later_track_are_named_for_what_they_are() {
-    use restream_engine::stream_qa::{SILENT_ALERT_MS, STILL_ALERT_MS};
+    use crate::alerts::{SILENT_ALERT_MS, STILL_ALERT_MS};
     assert_eq!(
         qa_alert_ids(json!({ "stillForMs": STILL_ALERT_MS, "stillIsSlate": true })),
         ["pipeline:pipe1:input:picture_slate"]

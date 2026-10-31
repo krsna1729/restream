@@ -3225,7 +3225,6 @@ dependencies = [
  "rand 0.10.2",
  "restream-agent-contract",
  "restream-domain",
- "restream-engine",
  "restream-health",
  "restream-sync",
  "serde",
@@ -3329,6 +3328,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "proptest",
+ "restream-domain",
  "restream-engine",
  "restream-sync",
  "serde",

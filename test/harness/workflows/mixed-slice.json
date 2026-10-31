@@ -1,8 +1,6 @@
 {
   "version": 1,
   "id": "mixed-slice",
-  "runtimeProfile": "mixed",
-  "stack": "mixedLive",
   "description": "Generic executor for mixed-derived coverage slices: output subsets, load axes, branch/resource axes, and SRT crypto axes.",
   "steps": [
     {

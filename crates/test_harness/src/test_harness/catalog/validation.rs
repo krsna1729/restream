@@ -38,15 +38,11 @@ impl HarnessCatalog {
     fn check_catalog_refs(&self) -> AppResult<()> {
         for path in [
             self.catalog.pointer("/modes"),
-            self.catalog.pointer("/runtime/profiles"),
-            self.catalog.pointer("/runtime/protocols"),
-            self.catalog.pointer("/runtime/services"),
             self.catalog.pointer("/checks/registry"),
             self.catalog.pointer("/checks/ffmpegPatterns"),
             self.catalog.pointer("/checks/bundles"),
             self.catalog.pointer("/suites/index"),
             self.catalog.pointer("/scenarios/mixed"),
-            self.catalog.pointer("/scenarios/fault"),
         ]
         .into_iter()
         .flatten()

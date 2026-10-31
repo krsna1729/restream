@@ -196,8 +196,8 @@ export function bitrateWords(
   return { severity: "ok", words: `about right for ${picture}` };
 }
 
-/** The engine's alert lines for the picture and sound checks
- * (`media/stream_qa/mod.rs`): a verdict turns red or amber with them. */
+/** The alert lines for the picture and sound checks
+ * (`crates/restream-health/src/alerts.rs`): a verdict turns red or amber with them. */
 export const BLACK_ALERT_SEC = 10;
 export const STILL_ALERT_SEC = 30;
 export const SILENT_ALERT_SEC = 10;
