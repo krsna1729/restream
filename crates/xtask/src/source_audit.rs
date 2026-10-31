@@ -64,7 +64,7 @@ const CLASSIFICATION: &[(&str, &[&str])] = &[
 /// Files allowed to read `std::env::var` directly. Matched against the whole
 /// `path:line:text` hit, as the original `grep -v` chain did.
 const ENV_VAR_OWNERS: &[&str] = &[
-    "src/config.rs",
+    "src/config/mod.rs",
     "crates/restream-engine/src/config/env.rs",
     "src/main.rs",
     "src/lib.rs",
@@ -130,7 +130,7 @@ pub(crate) fn run() -> StepResult {
         })
         .collect();
     failed |= report(
-        "inline std::env::var usage outside src/config.rs",
+        "inline std::env::var usage outside src/config/mod.rs",
         "Found raw std::env::var usage outside approved config/test harness owners",
         "No raw std::env::var usage found outside configuration module.",
         env_hits,

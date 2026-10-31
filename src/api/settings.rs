@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::warn;
 
-use crate::api_view_models;
+use crate::api::view_models;
 
 use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
@@ -84,7 +84,7 @@ fn config_response_json(
         "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
         "transcodeProfiles": settings.transcode_profiles,
         "pipelines": pipelines,
-        "outputs": api_view_models::output_response_json_list(outputs),
+        "outputs": view_models::output_response_json_list(outputs),
         "jobs": jobs_json
     });
 
@@ -119,9 +119,9 @@ async fn jobs_response_json(
 
     let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
     if wants_latest_jobs(query) {
-        api_view_models::latest_job_response_json_list(&jobs)
+        view_models::latest_job_response_json_list(&jobs)
     } else {
-        api_view_models::job_response_json_list(&jobs)
+        view_models::job_response_json_list(&jobs)
     }
 }
 
@@ -219,7 +219,7 @@ pub async fn config_get_handler(
             Ok(file_ingest) => file_ingest,
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
-        pipelines.push(api_view_models::pipeline_response_json_with_file_ingest(
+        pipelines.push(view_models::pipeline_response_json_with_file_ingest(
             pipeline,
             effective_ingest_host,
             state.ports.rtmp,

@@ -10,7 +10,7 @@ use super::agent_plane_unavailable;
 #[cfg(feature = "agent-plane")]
 use super::{agent_health_snapshot, context::build_agent_context};
 #[cfg(feature = "agent-plane")]
-use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
+use crate::api::runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use restream_engine::events;
 #[cfg(feature = "agent-plane")]
@@ -127,17 +127,17 @@ pub async fn agent_investigation_handler(
             .count()
             <= AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT
     {
-        Some(crate::api_runtime_views::processing_graph(&state.engine, pid, &outputs).await)
+        Some(crate::api::runtime_views::processing_graph(&state.engine, pid, &outputs).await)
     } else {
         None
     };
     let telemetry = if let Some(pid) = request.pipeline_id.as_deref() {
-        crate::api_runtime_views::pipeline_telemetry(&state.engine, pid).await
+        crate::api::runtime_views::pipeline_telemetry(&state.engine, pid).await
     } else {
-        crate::api_runtime_views::engine_telemetry(&state.engine).await
+        crate::api::runtime_views::engine_telemetry(&state.engine).await
     };
-    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
-    let resource_map = crate::api_runtime_views::resource_map(
+    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let resource_map = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,
         process,
@@ -285,7 +285,7 @@ pub(super) async fn build_agent_plan(
         && pipelines.iter().any(|pipeline| pipeline.id == pid)
     {
         (
-            Some(crate::api_runtime_views::processing_graph(&state.engine, pid, &outputs).await),
+            Some(crate::api::runtime_views::processing_graph(&state.engine, pid, &outputs).await),
             state.engine.ingest_video_codec(pid).await,
         )
     } else {

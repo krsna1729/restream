@@ -2,7 +2,7 @@
 //! they are called and how media flows between them. Counters (packet
 //! rates, ring fill, feed lag) are not state: `/api/v1/engine/telemetry`
 //! samples them, and `GET /api/v1/pipelines/{id}/graph` attaches them to
-//! this same structure ([`crate::api_runtime_views::processing_graph`]).
+//! this same structure ([`crate::api::runtime_views::processing_graph`]).
 
 use std::collections::{HashMap, HashSet};
 

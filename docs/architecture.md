@@ -592,7 +592,7 @@ flowchart TD
 `application::ports` with SQLite adapters in `infrastructure::sqlite_ports`
 is the target shape. Some application modules (for example
 `application::outputs` and `application::topology`), bootstrap reconcile and
-egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
+egress tasks, and `src/logging/mod.rs` still call `crate::db` with a pool.
 
 ### Layering rules
 
@@ -612,7 +612,7 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
 - API handlers stay thin. Agent orchestration lives in
   `application::services::agent_service`. API modules do not start FFmpeg or
   transcoder stages.
-- Only approved owners read environment variables (mainly `src/config.rs` and
+- Only approved owners read environment variables (mainly `src/config/mod.rs` and
   `crates/restream-engine/src/config/env.rs`).
 - Split files by ownership, not by size. A file near the 999-line limit is a
   sign to find the owner, not to cut it in half.
@@ -644,7 +644,7 @@ describes where their callers execute.
 | `crates/restream-domain/src/domain/` | IDs, `state.rs`, pipeline inputs, output specs, stage identity and validation |
 | `src/db/` | SQLite schema and repositories |
 | `crates/restream-domain/src/planner/` | Pure stage-graph planning |
-| `crates/restream-domain/src/runtime/`, `src/api_runtime_views/` | Runtime contracts and operator snapshots |
+| `crates/restream-domain/src/runtime/`, `src/api/runtime_views/` | Runtime contracts and operator snapshots |
 | `crates/restream-engine/src/engine*.rs` | `MediaEngine`: media lifecycle, registries, fabric retention, snapshots |
 | `crates/restream-core/src/` | Shared packet/metadata descriptors and canonical codec parsing/conversion |
 | `crates/restream-sync/src/`, `crates/restream-engine/src/ts_chunk_ring.rs` | Bounded packet and byte transport |

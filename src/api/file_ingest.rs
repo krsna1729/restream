@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::path::{Component, Path as FsPath};
 use std::sync::Arc;
 
-use crate::api_view_models;
+use crate::api::view_models;
 use crate::application::services::file_ingest_service::FileIngestConfigInput;
 
 use super::error::ApiError;
@@ -120,7 +120,7 @@ pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
 fn file_ingest_state_response(
     state: crate::application::ingest::PipelineFileIngestState,
 ) -> Response {
-    Json(api_view_models::file_ingest_response(
+    Json(view_models::file_ingest_response(
         state.ingest,
         state.running,
         state.now_playing,

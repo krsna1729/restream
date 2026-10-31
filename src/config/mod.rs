@@ -1,7 +1,7 @@
 //! Centralized application configuration.
 //! Reads environment variables once at startup and stores them in a typed struct.
 
-use crate::capacity::{CapacityLimits, LimitSource, LimitSources};
+use crate::application::capacity::{CapacityLimits, LimitSource, LimitSources};
 use restream_engine::config::EngineConfig;
 use restream_engine::config::env::{env_bool, env_present, env_u32, env_u64, env_usize, env_var};
 use restream_engine::host_capacity::HostCapacity;
@@ -168,7 +168,7 @@ fn capacity_limits_from_env(parallelism: usize) -> (CapacityLimits, LimitSources
 
 /// The malloc arena environment, read once at startup before any thread
 /// exists: `(MALLOC_ARENA_MAX, RESTREAM_MALLOC_ARENA_MAX)`. Interpreted by
-/// `crate::malloc_tuning`.
+/// `crate::host::malloc_tuning`.
 pub fn malloc_arena_env() -> (Option<String>, Option<String>) {
     (
         env_var("MALLOC_ARENA_MAX"),
@@ -451,5 +451,5 @@ impl AppConfig {
 }
 
 #[cfg(test)]
-#[path = "config/tests/configuration_behavior.rs"]
+#[path = "tests/configuration_behavior.rs"]
 mod configuration_behavior_tests;

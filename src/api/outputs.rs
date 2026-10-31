@@ -13,7 +13,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
-use crate::api_view_models;
+use crate::api::view_models;
 
 use restream_domain::domain::output_spec::{
     OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities, RecirculationTarget,
@@ -333,7 +333,7 @@ fn output_response_body(
 ) -> serde_json::Value {
     serde_json::json!({
         "message": message,
-        "output": api_view_models::output_response_json(output)
+        "output": view_models::output_response_json(output)
     })
 }
 
@@ -345,7 +345,7 @@ fn output_state_response(
     Json(serde_json::json!({
         "message": message,
         "desiredState": desired_state,
-        "output": api_view_models::output_response_json(output)
+        "output": view_models::output_response_json(output)
     }))
     .into_response()
 }
@@ -671,7 +671,7 @@ pub async fn output_status_handler(
         return response;
     }
 
-    match crate::api_runtime_views::output_status(&state.engine, &output_id).await {
+    match crate::api::runtime_views::output_status(&state.engine, &output_id).await {
         Some(status) => Json(status).into_response(),
         None => (
             StatusCode::NOT_FOUND,

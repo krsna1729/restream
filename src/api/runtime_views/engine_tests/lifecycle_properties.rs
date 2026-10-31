@@ -196,7 +196,7 @@ proptest! {
                     }
                 }
 
-                let status = crate::api_runtime_views::output_status(&engine, "out-1").await;
+                let status = crate::api::runtime_views::output_status(&engine, "out-1").await;
                 let snapshot =
                     test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new())
                         .await;

@@ -105,7 +105,7 @@ flowchart LR
 ## Engine health
 
 `GET /api/v1/engine/health` is built on demand by
-`api_runtime_views::health_snapshot_view` (`src/api_runtime_views/status.rs`)
+`api::runtime_views::health_snapshot_view` (`src/api/runtime_views/status.rs`)
 from `MediaEngine` state and per-pipeline recording settings in SQLite. The
 view is serialized straight from its typed form.
 
@@ -337,7 +337,7 @@ fields appear per SRT egress Owner under `egressFabricShards`.
 
 `GET /metrics/system` (`src/api/telemetry/system.rs`) is JSON, not
 Prometheus. Host CPU and memory come from one shared `HOST_SAMPLER`
-(`src/system_sampling.rs`) refreshed per request: host CPU usage is the delta
+(`src/host/system_sampling.rs`) refreshed per request: host CPU usage is the delta
 since the previous call, and only Restream and its child processes are
 refreshed. Network rates come from two interface reads 250 ms apart.
 
@@ -657,7 +657,7 @@ broadcast to SSE clients.
 
 ### Data flow
 
-The three subscriber layers in `src/logging.rs` and the SSE handoff:
+The three subscriber layers in `src/logging/mod.rs` and the SSE handoff:
 
 ```mermaid
 flowchart TD
@@ -773,13 +773,13 @@ history by those fields, not by message text.
 
 | Concern | Source |
 |---|---|
-| Subscriber layers, span inheritance, batching, broadcast | `src/logging.rs` |
+| Subscriber layers, span inheritance, batching, broadcast | `src/logging/mod.rs` |
 | Log DTOs and filters | `src/logging/types.rs` |
 | SQLite schema | `src/db/schema.rs` |
 | Storage and filter queries | `src/db/log_repo.rs` |
 | HTTP query and SSE | `src/api/logs.rs` |
 | Routes | `src/api/router.rs` |
-| Defaults | `src/config.rs`, [configuration](configuration.md) |
+| Defaults | `src/config/mod.rs`, [configuration](configuration.md) |
 
 ### Invariants
 

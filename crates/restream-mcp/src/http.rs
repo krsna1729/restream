@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn this_builds_engine_status_matches_the_local_identity() {
-        let (status, _) = restream::runtime_info::status_and_sbom(false);
+        let (status, _) = restream::host::runtime_info::status_and_sbom(false);
         assert_eq!(
             parse_build_identity(&status).expect("engine status carries an identity"),
             local_build_identity()

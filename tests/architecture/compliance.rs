@@ -142,7 +142,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(license.contains("MIT License"));
     assert!(license.contains("Permission is hereby granted"));
 
-    let runtime_info = include_str!("../../src/runtime_info.rs");
+    let runtime_info = include_str!("../../src/host/runtime_info.rs");
     for required in [
         "env!(\"RESTREAM_BUILD_TIMESTAMP\")",
         "restream:enabledFeatures",

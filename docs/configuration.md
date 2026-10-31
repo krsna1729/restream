@@ -25,7 +25,7 @@ The diagram shows where each kind of setting comes from and when it is read.
 
 ```mermaid
 flowchart LR
-    env[Process environment] --> from_env["AppConfig::from_env (src/config.rs)"]
+    env[Process environment] --> from_env["AppConfig::from_env (src/config/mod.rs)"]
     env --> engine["EngineConfig::from_env (crates/restream-engine/src/config.rs)"]
     env --> moq["MoqIngestSetting::from_env (crates/restream-engine/src/config/moq.rs)"]
     env --> knobs["restream_engine::srt::knobs (OnceLock)"]
@@ -51,7 +51,7 @@ flowchart LR
 ## Fixed runtime values and environment variables
 
 Tables are grouped by area. "Clamp" is the range a parsed value is forced
-into. Source is `src/config.rs` for process settings and `crates/restream-engine/src/config.rs`
+into. Source is `src/config/mod.rs` for process settings and `crates/restream-engine/src/config.rs`
 (`EngineConfig`, embedded in `AppConfig`) for media engine settings, unless
 noted.
 
@@ -283,7 +283,7 @@ pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 | `RESTREAM_TOKIO_WORKER_THREADS` | all CPUs up to 2, else `ceil(CPUs/3)` in `2..=8` | `>= 1` | Tokio scheduler workers (`restream-tokio`) |
 | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | `512` | `>= 1` | Tokio `spawn_blocking` capacity |
 | `RESTREAM_MEDIA_WORKERS` | `clamp(CPUs, 1, 4)` | `1..=64` | `restream-media` executor workers (`crates/restream-engine/src/executor.rs`) |
-| `RESTREAM_MALLOC_ARENA_MAX` | `2` (provisional) | `default` or positive integer | glibc malloc arenas via `mallopt` (`src/malloc_tuning.rs`). `default` keeps glibc's policy |
+| `RESTREAM_MALLOC_ARENA_MAX` | `2` (provisional) | `default` or positive integer | glibc malloc arenas via `mallopt` (`src/host/malloc_tuning.rs`). `default` keeps glibc's policy |
 | `MALLOC_ARENA_MAX` | unset | glibc | Applied by glibc itself; wins over `RESTREAM_MALLOC_ARENA_MAX` |
 
 "CPUs" means the effective count from the CPU mask and cgroup quota
@@ -295,7 +295,7 @@ pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 
 | Variable | Default | Range / values | Effect |
 |---|---|---|---|
-| `RUST_LOG` | `info` | `tracing` `EnvFilter` syntax | Log filter (`src/logging.rs`) |
+| `RUST_LOG` | `info` | `tracing` `EnvFilter` syntax | Log filter (`src/logging/mod.rs`) |
 | `NO_COLOR` | unset | presence | Any value turns off ANSI colour in console logs |
 | `RESTREAM_LOG_RETENTION_DAYS` | `7` | days | SQLite log-history retention |
 | `RESTREAM_MEDIA_POLL_USAGE` | off | bool | Diagnostic: per-poll `getrusage` in media executor metrics (two extra syscalls per poll) |
@@ -397,7 +397,7 @@ cannot offload fails clearly, and HTTPS HLS outputs fall back to Reqwest (see
 [HLS](#hls)).
 
 The server never needs root. Use the one-shot helpers in the same binary
-(`src/host_tuning.rs`):
+(`src/host/host_tuning.rs`):
 
 ```sh
 restream host-check        # report; exit status 1 if anything is unmet

@@ -28,7 +28,7 @@ async fn dashboard_alert_snapshot(state: &AppState) -> serde_json::Value {
 
     // Alerts should reflect the current dashboard view immediately, so they do
     // not preserve the disconnect grace window used by some operator snapshots.
-    crate::api_runtime_views::health_snapshot(
+    crate::api::runtime_views::health_snapshot(
         &state.engine,
         &state.config,
         &pipeline_ids,

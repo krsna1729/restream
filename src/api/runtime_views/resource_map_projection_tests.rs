@@ -7,7 +7,7 @@ use super::{
     execution_for_stage, group_key, group_label, grouped_nodes, merge_thread_counts, node_score,
     number_field, placed_shard_nodes, source_ring_node, stage_backend_pid, stage_node, top_nodes,
 };
-use crate::system_sampling::ChildProcessResourceSnapshot;
+use crate::host::system_sampling::ChildProcessResourceSnapshot;
 
 #[test]
 fn a_pipeline_view_keeps_only_the_shards_its_outputs_are_placed_on() {

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
-use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
+use crate::host::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
 use restream_engine::egress::backends::hls_put_shard::HLS_PUT_TLS_COUNTERS;
 use restream_engine::egress::backends::rtmp::RTMPS_TLS_COUNTERS;
 use restream_engine::egress::tls::TlsTelemetrySnapshot;
@@ -17,7 +17,7 @@ use super::configured_media_root;
 /// only the fields needed by compact operator surfaces.
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
     let (cpu_pct, total_mem, used_mem, core_count, engine) =
-        crate::system_sampling::sampled_system(|sys| {
+        crate::host::system_sampling::sampled_system(|sys| {
             let core_count = sys.cpus().len();
             (
                 sys.global_cpu_usage() as f64,
@@ -34,7 +34,8 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         0.0
     };
     let load_avg = System::load_average();
-    let capacity = crate::capacity::capacity_snapshot(&state.engine, &state.config).await;
+    let capacity =
+        crate::application::capacity::capacity_snapshot(&state.engine, &state.config).await;
     let egress_shards = state
         .engine
         .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
@@ -459,15 +460,15 @@ pub fn read_trimmed_file(path: impl AsRef<Path>) -> Option<String> {
 }
 
 pub fn proc_total_ticks() -> Option<u64> {
-    crate::system_sampling::proc_total_ticks()
+    crate::host::system_sampling::proc_total_ticks()
 }
 
 pub fn proc_process_ticks(pid: u32) -> Option<u64> {
-    crate::system_sampling::proc_process_ticks(pid)
+    crate::host::system_sampling::proc_process_ticks(pid)
 }
 
 pub fn engine_process_pids(sys: &System) -> Vec<u32> {
-    crate::system_sampling::engine_process_pids(sys)
+    crate::host::system_sampling::engine_process_pids(sys)
 }
 
 pub fn engine_metrics(sys: &System, core_count: usize) -> serde_json::Value {

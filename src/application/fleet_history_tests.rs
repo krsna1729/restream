@@ -163,8 +163,11 @@ async fn the_sample_counts_wanted_outputs_as_the_control_room_does() {
         // Not wanted: neither delivering nor degraded, whatever it says.
         output(Stopped, Converged, Flowing, Some(Layer::Feed)),
     ];
-    let mut capacity =
-        crate::capacity::capacity_snapshot(&MediaEngine::new(), &crate::AppConfig::default()).await;
+    let mut capacity = crate::application::capacity::capacity_snapshot(
+        &MediaEngine::new(),
+        &crate::AppConfig::default(),
+    )
+    .await;
     capacity.projected_utilization = 0.25;
     let sample = take_fleet_sample(7, &outputs, &capacity);
     assert_eq!(sample.at_ms, 7);

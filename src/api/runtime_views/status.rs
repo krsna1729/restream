@@ -5,7 +5,7 @@
 
 use super::status_projection as api_view_models;
 use crate::config::AppConfig;
-use crate::system_sampling::{
+use crate::host::system_sampling::{
     CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
 };
 use restream_engine::engine::MediaEngine;
@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-use crate::host_tuning::{REQUIRED_RMEM_MAX, REQUIRED_WMEM_MAX};
+use crate::host::host_tuning::{REQUIRED_RMEM_MAX, REQUIRED_WMEM_MAX};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -185,7 +185,7 @@ fn host_settings_json(
             "runtime.malloc.arena_max",
             "glibc malloc arenas",
             serde_json::json!(
-                crate::malloc_tuning::applied()
+                crate::host::malloc_tuning::applied()
                     .map_or_else(|| "not set at startup".to_string(), ToString::to_string)
             ),
             "arenas",

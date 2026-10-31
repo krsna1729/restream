@@ -7,8 +7,8 @@ use super::super::{
     telemetry::{process_resource_snapshot, system_status},
 };
 use super::agent_health_snapshot;
-use crate::api_runtime_views::ResourceMapOptions;
-use crate::api_view_models;
+use crate::api::runtime_views::ResourceMapOptions;
+use crate::api::view_models;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::models::{Ingest, Job, Output, Pipeline};
 use restream_engine::events;
@@ -23,14 +23,14 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
         .collect::<Vec<_>>();
     let outputs = catalog.outputs;
     let jobs = catalog.jobs;
-    let jobs_json = api_view_models::job_response_json_list(&jobs);
+    let jobs_json = view_models::job_response_json_list(&jobs);
     let ingests = catalog.ingests;
     let (recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let events = state.engine.recent_events(events::MAX_EVENTS, None);
-    let engine_telemetry = crate::api_runtime_views::engine_telemetry(&state.engine).await;
-    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
-    let resource_map = crate::api_runtime_views::resource_map(
+    let engine_telemetry = crate::api::runtime_views::engine_telemetry(&state.engine).await;
+    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let resource_map = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,
         process,
@@ -42,9 +42,9 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
         pipeline_telemetry
-            .push(crate::api_runtime_views::pipeline_telemetry(&state.engine, pipeline_id).await);
+            .push(crate::api::runtime_views::pipeline_telemetry(&state.engine, pipeline_id).await);
         graphs.push(
-            crate::api_runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
+            crate::api::runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
         );
     }
     // Output convergence and diagnosis come from the runtime state, the
@@ -75,8 +75,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     .await;
 
     let bonding_available = state.engine.bonding_available();
-    let (mut status, _) = crate::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = crate::system_sampling::sampled_system(system_status);
+    let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
+    status["os"] = crate::host::system_sampling::sampled_system(system_status);
 
     let settings = catalog.settings;
     let custom_encoding_len = catalog.custom_encoding_len;
@@ -195,7 +195,7 @@ fn desired_vs_actual(
                 .take(5)
                 .map(|job| {
                     restream_agent::plane::redact_secrets_from_serializable(
-                        &api_view_models::job_response_json(job),
+                        &view_models::job_response_json(job),
                     )
                 })
                 .collect::<Vec<_>>();

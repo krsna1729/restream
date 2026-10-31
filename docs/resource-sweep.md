@@ -189,7 +189,7 @@ topology. It is not automatically production capacity certification.
 | Resource | Owner |
 |---|---|
 | Cargo parallelism | `.cargo/config.toml`; host lock is an operator convention |
-| Server executors and storage bounds | `src/config.rs`, `crates/restream-engine/src/config.rs` and `crates/restream-engine/src/` implementations |
+| Server executors and storage bounds | `src/config/mod.rs`, `crates/restream-engine/src/config.rs` and `crates/restream-engine/src/` implementations |
 | RTMP/SRT admission and owner threads | Protocol listeners and runtime configuration |
 | FFmpeg child admission and thread hints | `crates/restream-engine/src/config.rs`, `crates/restream-engine/src/external_transcoder.rs` |
 | Fixtures, peer processes, artifacts and cleanup | `crates/test_harness/`, `test/harness/` |

@@ -52,7 +52,7 @@ fn hls_preview_consumes_typed_runtime_state() {
     let hls_preview = include_str!("../../src/application/hls_preview.rs");
 
     assert!(
-        !hls_preview.contains("api_runtime_views") && !hls_preview.contains("serde_json"),
+        !hls_preview.contains("runtime_views") && !hls_preview.contains("serde_json"),
         "HLS preview application policy must consume typed runtime state, not API projection JSON"
     );
 }

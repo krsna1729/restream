@@ -1,7 +1,7 @@
 use crate::application::srt_ingest::parse_persisted_srt_ingest_policy;
 use restream_domain::models::{Ingest, Job, Output, Pipeline};
 
-pub(crate) use crate::api_runtime_views::probe_snapshot;
+pub(crate) use crate::api::runtime_views::probe_snapshot;
 
 pub(crate) fn pipeline_response_json(
     pipeline: &Pipeline,
