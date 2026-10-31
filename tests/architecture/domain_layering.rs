@@ -81,9 +81,7 @@ fn is_test_only_source(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    matches!(name, "test.rs" | "tests.rs")
-        || name.ends_with("_test.rs")
-        || name.ends_with("_tests.rs")
+    name == "tests.rs"
 }
 
 fn declared_dependency_roots(cargo_toml: &str) -> BTreeSet<String> {

@@ -208,5 +208,4 @@ fn a53_captions(message: &[u8]) -> FrameCaptions {
 }
 
 #[cfg(test)]
-#[path = "captions_tests.rs"]
 mod tests;

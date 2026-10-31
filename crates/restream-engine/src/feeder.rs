@@ -240,11 +240,4 @@ fn prepare_video_startup_packet(
 }
 
 #[cfg(test)]
-#[path = "feeder_parameter_set_behavior_tests.rs"]
-mod parameter_set_behavior_tests;
-#[cfg(test)]
-#[path = "feeder_startup_gating_tests.rs"]
-mod startup_gating_tests;
-#[cfg(test)]
-#[path = "feeder_transport_remux_tests.rs"]
-mod transport_remux_tests;
+mod tests;

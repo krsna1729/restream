@@ -48,7 +48,6 @@ pub use egress_metadata::{
 };
 
 #[cfg(test)]
-#[path = "rtmp/tests.rs"]
 mod tests;
 
 #[cfg(test)]

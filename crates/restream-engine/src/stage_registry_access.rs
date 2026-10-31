@@ -519,5 +519,4 @@ impl MediaEngine {
 }
 
 #[cfg(test)]
-#[path = "stage_registry_access/registry_tests.rs"]
-mod registry_tests;
+mod tests;

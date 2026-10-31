@@ -707,5 +707,4 @@ fn run_ts_writer(
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

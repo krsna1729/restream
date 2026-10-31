@@ -18,10 +18,6 @@
 mod continuity;
 pub mod fmp4;
 #[cfg(test)]
-#[path = "ingest_publisher/rendition_tests.rs"]
-mod rendition_tests;
-#[cfg(test)]
-#[path = "ingest_publisher/tests.rs"]
 mod tests;
 
 use std::collections::VecDeque;

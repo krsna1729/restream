@@ -383,7 +383,7 @@ const ASAN_ENGINE: Cmd = cargo(&[
     "rtmp::listener",
     "rtmp::tests",
     "tcp_stats",
-    "mpegts_allocation_tests",
+    "tests::mpegts_allocation",
 ])
 .env(ASAN_ENV);
 const ASAN_SYNC: Cmd = cargo(&[

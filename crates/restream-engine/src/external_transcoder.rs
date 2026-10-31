@@ -352,5 +352,4 @@ fn external_stage_arg_preset(plan: &FfmpegStagePlan, fallback: &str) -> String {
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[path = "external_transcoder_tests.rs"]
 mod tests;

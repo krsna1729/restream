@@ -721,7 +721,7 @@ proptest! {
 
 /// A feed that ends mid-packet keeps exactly that tail, and the next feed
 /// joins and consumes it. The root allocation guard
-/// (`media::mpegts_allocation_tests`) measures this same path; these state
+/// (`restream_engine::tests::mpegts_allocation`) measures this same path; these state
 /// transitions prove each measured iteration really enters and clears it.
 #[test]
 fn continuing_a_partial_packet_stages_then_clears_the_tail() {

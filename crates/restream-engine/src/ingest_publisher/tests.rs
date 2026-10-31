@@ -3,6 +3,8 @@
 //! stretch of that pipe must never fail the publisher: before the fMP4 work
 //! `publish` returned `()`, and the TS demux still has no rejection to give.
 
+mod rendition;
+
 use std::sync::Arc;
 
 use super::*;
