@@ -500,6 +500,16 @@ impl SrtOwners {
         }
     }
 
+    /// Connection state of a logical caller; `None` when it (or its family
+    /// Owner) no longer exists.
+    pub(crate) fn caller_state(&self, caller: &SrtCaller) -> Option<LogicalCallerState> {
+        self.owners[caller.family.index()]
+            .as_ref()?
+            .owner
+            .logical_caller(&caller.id)?
+            .state()
+    }
+
     /// Public logical-caller statistics (sender backlog, RTT, loss, ...).
     pub(crate) fn stats(&self, caller: &SrtCaller) -> Option<LogicalCallerStats> {
         self.owners[caller.family.index()]

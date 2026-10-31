@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::egress::backend::{CloseReason, Readiness};
+use crate::egress::backend::{CloseReason, EngineProgress, Interest, Readiness, WaitCondition};
 use crate::egress::journal::TsFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::policy::{LeafStallClass, WorkBudget, classify_stall};
@@ -9,7 +9,7 @@ use crate::snapshots::PublisherQuality;
 use crate::srt::SrtEgressEngine;
 use crate::srt::egress_stats::SenderQualitySampler;
 use restream_srt::egress_stats::SrtSendBacklog;
-use srt_transport::advanced::caller::LogicalCallerStats;
+use srt_transport::advanced::caller::{LogicalCallerState, LogicalCallerStats};
 
 use super::{SrtCaller, SrtLeafPressure, SrtOwners, apply_send_backlog};
 
@@ -45,6 +45,10 @@ pub(crate) struct SrtFabricLeaf {
     pub(super) blocked_queued: bool,
     /// Attributed peer-local/transient TX failures observed for this caller.
     pub(super) tx_failures: u32,
+    /// The caller has reached `Connected` and the cursor was anchored at the
+    /// live start. Until then the leaf reads nothing from the feed and its
+    /// feed lag is not measured.
+    pub(super) connected: bool,
 }
 
 impl SrtFabricLeaf {
@@ -62,6 +66,7 @@ impl SrtFabricLeaf {
             draining_reason: None,
             blocked_queued: false,
             tx_failures: 0,
+            connected: false,
         }
     }
 
@@ -161,6 +166,35 @@ impl SrtFabricLeaf {
         now: srt_proto::Timestamp,
     ) -> EngineVisitResult {
         let caller = self.caller;
+        if !self.connected {
+            // The leaf exists from pool admission, before the handshake. A
+            // unit pulled now would sit pending for the whole handshake,
+            // reported as backpressure and aging behind live. A caller that
+            // is gone takes the send path below, which reports the closure.
+            let handshake = match owners.caller_state(&caller) {
+                Some(LogicalCallerState::Connecting) => {
+                    Some(EngineProgress::Needs(WaitCondition::Io(Interest::WRITE)))
+                }
+                Some(LogicalCallerState::Connected) => Some(EngineProgress::HandshakeComplete),
+                None | Some(LogicalCallerState::Disconnected) => None,
+            };
+            if let Some(progress) = handshake {
+                let result = visit_leaf(
+                    generation,
+                    &mut self.common,
+                    feed,
+                    readiness,
+                    budget,
+                    |_, _, _| progress,
+                );
+                self.connected = matches!(
+                    &result,
+                    EngineVisitResult::Visited(outcome)
+                        if matches!(outcome.progress, EngineProgress::HandshakeComplete)
+                );
+                return result;
+            }
+        }
         let engine = &mut self.engine;
         visit_leaf(
             generation,

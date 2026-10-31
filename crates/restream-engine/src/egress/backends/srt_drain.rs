@@ -75,7 +75,7 @@ impl SrtShardBackend {
             let owners = &self.owners;
             let Some((output_id, close, pressured, delivery)) =
                 self.leaves.get_mut(key).map(|leaf| {
-                    let lag_units = if leaf.common().cursor_primed {
+                    let lag_units = if leaf.common().cursor_primed && leaf.connected {
                         head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
                     } else {
                         0

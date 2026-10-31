@@ -462,6 +462,13 @@ socket buffers.
 - A peer or transient TX failure affects one caller. A structural Owner fault
   retires that family's leaves and keeps admission closed for the shard's
   life; the other family keeps running.
+- The leaf is installed at pool admission, before the handshake. While its
+  caller is `Connecting`, a visit reads no feed data and parks on write
+  (`Needs(Io)`), so a handshaking leaf holds no pending bytes: the stall
+  sweep reports it idle with lag 0, and it never counts toward
+  `shard_saturated`. The connect deadline, not the stall bound, ends a
+  handshake that does not finish. The first visit after `Connected` returns
+  `HandshakeComplete`, which anchors the cursor at the live start.
 
 The SRT shard needs a working io_uring runtime. Receive mode is chosen per
 Owner under `RxModePolicy::ManagedPreferred`:

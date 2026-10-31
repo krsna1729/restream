@@ -228,8 +228,8 @@ ended, so a failure and its error stay visible after cleanup.
 | `blockedBy` | Snapshot of the upstream stage the output waits on |
 | `fabric`, `fabricFeed`, `shardId` | Egress fabric feed and owning shard |
 | `resyncCount` | Times this leaf fell behind the retained feed window and resynced to the latest sync point |
-| `feedLagUnits` | Feed units behind the head, updated by the shard's 1 s stall sweep |
-| `backpressureReason` | `null`, `backpressured` (bytes queued within the no-progress deadline), `stalled` (deadline passed), or `shard_saturated` (SRT: deadline passed while at least four, and at least a quarter, of the shard's outputs are backpressured; the output stays connected) |
+| `feedLagUnits` | Feed units behind the head, updated by the shard's 1 s stall sweep. An SRT output whose caller is still handshaking reports 0 |
+| `backpressureReason` | `null`, `backpressured` (bytes queued within the no-progress deadline), `stalled` (deadline passed), or `shard_saturated` (SRT: deadline passed while at least four, and at least a quarter, of the shard's outputs are backpressured; the output stays connected). An SRT output whose caller is still handshaking holds no bytes and reports `null` |
 | `quality` | Sender transport quality (below) |
 | `metrics` | The output's `StageMetrics` counters |
 

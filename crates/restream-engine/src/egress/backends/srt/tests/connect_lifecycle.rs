@@ -20,8 +20,9 @@ fn direct_connect_admits_immediately_and_delivers_payload() {
     assert_eq!(leaf.caller().family, AddressFamily::V4);
     assert_eq!(harness.backend.owners.owner_count(), 1);
 
-    // The leaf anchors at the feed's live edge on its first visit, so media
-    // published after the handshake is what it delivers.
+    // The leaf touches no feed data until its caller is connected, then
+    // anchors at the feed's live start, so media published after the
+    // handshake is what it delivers.
     harness.feed_until(&unit, Duration::from_secs(10), |_| sink.payloads() >= 5);
     assert!(
         sink.payloads() >= 5,
@@ -367,4 +368,81 @@ fn churn_reclaims_slots_and_callers_without_identity_reuse() {
             .len(),
         0
     );
+}
+
+/// Q-049: a caller still handshaking holds no feed data, so the stall sweep
+/// reports it idle (no reason, no lag) instead of `backpressured` with a
+/// growing lag, and it never counts as pressure toward shard saturation.
+#[test]
+fn connecting_leaf_holds_no_feed_data_and_is_not_backpressured() {
+    let (_hold, silent) = silent_peer();
+    let mut harness = Harness::new();
+    let unit = Bytes::from(vec![0x47u8; 1316]);
+    let feed_lag_units = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let backpressure_reason = Arc::new(std::sync::Mutex::new(Some("unset")));
+    let mut spec = srt_spec("connecting", 1, &url_for(silent));
+    spec.progress = crate::egress::leaf::EgressProgressSink {
+        feed_lag_units: Some(Arc::clone(&feed_lag_units)),
+        backpressure_reason: Some(Arc::clone(&backpressure_reason)),
+        ..Default::default()
+    };
+    harness.add_resolved(spec, vec![silent]);
+    let key = harness.backend.output_sockets[&OutputId::new("connecting")];
+    assert!(
+        harness.feed_until(&unit, Duration::from_secs(5), |backend| backend
+            .blocked
+            .contains(&key)),
+        "a connecting caller parks"
+    );
+    for _ in 0..8 {
+        harness.publish(unit.clone());
+        harness.turn(Duration::from_millis(1));
+    }
+
+    harness.backend.last_stall_sweep = None;
+    harness
+        .backend
+        .sweep_stalled_leaves(std::time::Instant::now());
+
+    let leaf = harness.backend.leaves.get(key).expect("leaf");
+    assert_eq!(
+        leaf.engine.pending_message_bytes(),
+        0,
+        "no unit pulled before connect"
+    );
+    assert_eq!(*backpressure_reason.lock().unwrap(), None);
+    assert_eq!(feed_lag_units.load(Ordering::Relaxed), 0);
+}
+
+/// Q-049: a slow handshake does not hand the publisher a stale unit taken
+/// before it connected; the first delivered unit is one published after the
+/// leaf's first (connecting) visit.
+#[test]
+fn leaf_starts_at_live_start_after_a_slow_handshake() {
+    let sink = SinkPeer::v4();
+    sink.set_stalled(true);
+    let mut harness = Harness::new();
+    let tagged = |tag: u8| Bytes::from(vec![tag; 1316]);
+
+    harness.add_resolved(srt_spec("slow", 1, &url_for(sink.addr)), vec![sink.addr]);
+    for tag in 0..10 {
+        harness.publish(tagged(tag));
+    }
+    assert!(
+        harness.pump(Duration::from_secs(5), |backend| backend.leaf_visits() >= 1),
+        "the connecting leaf is visited"
+    );
+    for tag in 10..20 {
+        harness.publish(tagged(tag));
+    }
+    harness.turn(Duration::from_millis(1));
+    sink.set_stalled(false);
+
+    assert!(
+        harness.feed_until(&tagged(99), Duration::from_secs(10), |_| sink.payloads()
+            >= 1),
+        "the leaf delivers once connected"
+    );
+    let first = *sink.stats.first_payload_tag.get().expect("first payload");
+    assert!(first >= 10, "first delivered unit {first} predates connect");
 }

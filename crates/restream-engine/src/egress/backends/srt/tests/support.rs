@@ -195,6 +195,8 @@ pub(super) struct SinkStats {
     /// Distinct remote (Restream-side) socket addresses the sink has seen:
     /// one per Restream caller socket.
     pub(super) sources: Mutex<HashSet<SocketAddr>>,
+    /// Leading byte of the first payload received (tests tag units by it).
+    pub(super) first_payload_tag: std::sync::OnceLock<u8>,
 }
 
 /// A real SRT listener: a Compio `Owner` on its own thread accepting direct
@@ -256,6 +258,11 @@ impl SinkPeer {
                                     thread_stats
                                         .payload_bytes
                                         .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                    if let Some(&tag) =
+                                        payload.chunks().find_map(|chunk| chunk.first())
+                                    {
+                                        let _ = thread_stats.first_payload_tag.set(tag);
+                                    }
                                 }
                                 thread_stats
                                     .sources
