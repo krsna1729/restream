@@ -29,9 +29,9 @@ fn render_contract() -> String {
         Flow::decl(&cfg),
         RetryState::decl(&cfg),
         FailureEvidence::decl(&cfg),
-        crate::application::diagnosis::Diagnosis::decl(&cfg),
-        crate::application::diagnosis::Layer::decl(&cfg),
-        crate::application::diagnosis::Cause::decl(&cfg),
+        restream_health::diagnosis::Diagnosis::decl(&cfg),
+        restream_health::diagnosis::Layer::decl(&cfg),
+        restream_health::diagnosis::Cause::decl(&cfg),
         DesiredOutputState::decl(&cfg),
         restream_domain::domain::output_spec::EgressProtocol::decl(&cfg),
         EgressPhase::decl(&cfg),
@@ -306,7 +306,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
     assert_eq!(diagnosis(&projection, "stopped"), None);
     assert_eq!(
         diagnosis(&projection, "waiting").map(|d| d.cause),
-        Some(crate::application::diagnosis::Cause::NoPublisher)
+        Some(restream_health::diagnosis::Cause::NoPublisher)
     );
 
     engine
@@ -326,22 +326,22 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
         .expect("a retrying output is degraded");
     assert_eq!(
         rejected.layer,
-        crate::application::diagnosis::Layer::Destination
+        restream_health::diagnosis::Layer::Destination
     );
     assert!(matches!(
         rejected.cause,
-        crate::application::diagnosis::Cause::Rejected { .. }
+        restream_health::diagnosis::Cause::Rejected { .. }
     ));
     assert_eq!(
         rejected.ruled_out,
         [
-            crate::application::diagnosis::Layer::Ingest,
-            crate::application::diagnosis::Layer::Feed
+            restream_health::diagnosis::Layer::Ingest,
+            restream_health::diagnosis::Layer::Feed
         ]
     );
     assert_eq!(
         diagnosis(&projection, "exhausted").map(|d| d.cause),
-        Some(crate::application::diagnosis::Cause::RetriesExhausted)
+        Some(restream_health::diagnosis::Cause::RetriesExhausted)
     );
 
     engine

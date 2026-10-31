@@ -4,7 +4,7 @@
 //! the operator's intent (desired), what the engine is doing (actual), how
 //! the two relate (convergence), whether media moves (flow), queue pressure
 //! the latest failure evidence, and the diagnosis of a degraded output
-//! ([`crate::application::diagnosis`]). Each pipeline input carries its
+//! ([`restream_health::diagnosis`]). Each pipeline input carries its
 //! stored settings and its session's state ([`inputs`]), and each pipeline
 //! its processing graph ([`graph`]). Only state is projected: counters that
 //! advance on every read (rates, bytes, fill, lag, transport quality) are
@@ -33,11 +33,11 @@ use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 
-use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 use restream_domain::domain::output_spec::EgressProtocol;
 use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
 use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
+use restream_health::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
 
 pub use graph::{GraphEdge, GraphNode, PipelineGraph};
 pub use inputs::{IngestEndpoints, IngestUrls, InputState};

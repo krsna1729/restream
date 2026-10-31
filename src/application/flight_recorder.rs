@@ -279,7 +279,7 @@ pub struct FlightRecorder {
     traces: Mutex<HashMap<String, Trace>>,
     /// Each running destination's usual, fed on the same clock
     /// (`destination_baselines`); the alert rules read its anomalies.
-    pub baselines: crate::application::destination_baselines::DestinationBaselines,
+    pub baselines: restream_health::destination_baselines::DestinationBaselines,
     cap: usize,
     started_ms: u64,
 }
@@ -745,7 +745,7 @@ async fn destination_readings(
 ) -> Vec<(
     String,
     String,
-    crate::application::destination_baselines::Readings,
+    restream_health::destination_baselines::Readings,
 )> {
     engine
         .egresses
@@ -758,7 +758,7 @@ async fn destination_readings(
             (
                 egress.pipeline_id.clone(),
                 egress.output_id.clone(),
-                crate::application::destination_baselines::Readings {
+                restream_health::destination_baselines::Readings {
                     delivery_ratio: quality.delivery_ratio,
                     rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
                     retrans_per_sec: quality.packets_sent_retrans_per_sec,

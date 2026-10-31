@@ -1,5 +1,5 @@
 use super::*;
-use crate::application::diagnosis::{Cause, Diagnosis};
+use restream_health::diagnosis::{Cause, Diagnosis};
 
 fn sample(at_ms: u64) -> FleetSample {
     FleetSample {

@@ -1126,7 +1126,7 @@ Outputs:
   flow problem, not a desired/actual mismatch.
 - `evidence`: the latest failure (`error`, `phase`, `atMs`) of the running
   attempt, else of the last one.
-- `diagnosis` (`application::diagnosis`): why a desired-running output is
+- `diagnosis` (`restream_health::diagnosis`): why a desired-running output is
   degraded, or `null`. The media path has four layers, upstream first:
   `ingest`, `feed` (shared stages), `shard` (fabric shard) and `destination`.
   `layer` is the first unhealthy one; `ruledOut` lists the healthy layers

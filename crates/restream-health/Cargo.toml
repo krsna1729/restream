@@ -1,0 +1,27 @@
+[package]
+name = "restream-health"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# TypeScript declarations for the dashboard drift test (`ts_rs::TS` derives).
+ts = ["dep:ts-rs"]
+
+[dependencies]
+# Alert thresholds the engine owns (egress progress staleness, stream-QA
+# black/still/silent durations).
+restream-engine = { path = "../restream-engine" }
+restream-sync = { path = "../restream-sync" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+ts-rs = { version = "12", optional = true }
+
+[dev-dependencies]
+proptest = "1"

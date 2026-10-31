@@ -1,5 +1,5 @@
 //! Output alerts, from the one output diagnosis
-//! ([`crate::application::diagnosis`]).
+//! ([`crate::diagnosis`]).
 //!
 //! Each output in the health view is reduced to [`OutputSignals`] and
 //! diagnosed. The cause picks the alert. An output whose cause is upstream
@@ -10,9 +10,7 @@
 use std::collections::HashMap;
 
 use super::{Alert, Evidence, Scope, Severity, blocked_output_action, stage_phase_name};
-use crate::application::diagnosis::{
-    Cause, Diagnosis, Layer, OutputSignals, ShardHealth, diagnose,
-};
+use crate::diagnosis::{Cause, Diagnosis, Layer, OutputSignals, ShardHealth, diagnose};
 use restream_engine::engine::EGRESS_PROGRESS_STALE_MS;
 
 /// `(feed id, shard index)` → health, from `egressFabricShards`.
@@ -315,7 +313,7 @@ pub(super) fn push_output_alerts<'a>(
 #[cfg(test)]
 mod tests {
     use super::super::{Evidence, derive_alerts};
-    use crate::application::diagnosis::{Cause, Layer};
+    use crate::diagnosis::{Cause, Layer};
     use serde_json::json;
 
     fn snapshot(shard_state: &str) -> serde_json::Value {

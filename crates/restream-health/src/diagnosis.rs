@@ -16,7 +16,7 @@ use serde::Serialize;
 
 /// Where an output's media path is broken, upstream first.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum Layer {
     Ingest,
@@ -26,7 +26,7 @@ pub enum Layer {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(
     tag = "code",
     rename_all = "camelCase",
@@ -51,7 +51,7 @@ pub enum Cause {
     /// Failing and close to spending the restart budget.
     RetryBudgetNearlySpent {
         attempts: u32,
-        #[cfg_attr(test, ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
         max: u64,
     },
     /// The destination or the network rejected the output.
@@ -66,7 +66,7 @@ pub enum Cause {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnosis {
     pub layer: Layer,

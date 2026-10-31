@@ -123,6 +123,7 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream-engine --lib moq::` for retained integration/consumer tests |
 | `crates/restream-agent-contract/src/` | `cargo test -p restream-agent-contract` and `cargo test -p restream --test api agent::` for discovery |
 | `crates/restream-mcp/src/` | `cargo test -p restream-mcp --features mcp-http-backend` |
+| `crates/restream-health/src/` | `cargo test -p restream-health` and `cargo test -p restream --lib api_runtime_views::stage_phase_tests` for the status/graph/alert phase table |
 
 For extracted-library source and manifest changes, run the owning unit suite
 plus its retained consumer suite.

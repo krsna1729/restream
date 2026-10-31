@@ -14,7 +14,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
-use crate::alerts;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
@@ -26,6 +25,7 @@ use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::engine::MediaEngine;
 use restream_engine::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
 use restream_engine::srt::SrtIngestPolicyStore;
+use restream_health::alerts;
 use sqlx::SqlitePool;
 
 use super::AppServices;

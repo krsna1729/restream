@@ -110,9 +110,9 @@ pub struct Alert {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<String>,
     /// For an output alert: the degraded layer, its cause and the layers
-    /// ruled out (`crate::application::diagnosis`).
+    /// ruled out (`crate::diagnosis`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnosis: Option<crate::application::diagnosis::Diagnosis>,
+    pub diagnosis: Option<crate::diagnosis::Diagnosis>,
 }
 
 impl Alert {
@@ -194,10 +194,10 @@ pub fn name_subjects(
 /// (`application::destination_baselines`): a warning that names the signal,
 /// the value now and the usual one.
 pub fn anomaly_alerts(
-    anomalies: &[crate::application::destination_baselines::Anomaly],
+    anomalies: &[crate::destination_baselines::Anomaly],
     generated_at: &str,
 ) -> Vec<Alert> {
-    use crate::application::destination_baselines::Signal;
+    use crate::destination_baselines::Signal;
     anomalies
         .iter()
         .map(|anomaly| {

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::alerts::{Alert, Severity};
+use restream_health::alerts::{Alert, Severity};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,7 +124,7 @@ mod tests {
         Alert {
             id: id.to_string(),
             severity,
-            scope: crate::alerts::Scope::Pipeline,
+            scope: restream_health::alerts::Scope::Pipeline,
             pipeline_id: pipeline.map(str::to_string),
             stage_id: None,
             output_id: None,

@@ -24,12 +24,13 @@ use super::agent_execution_unavailable;
 #[cfg(feature = "agent-execution")]
 use super::{agent_health_snapshot, pipeline_input_is_on, queries::build_agent_plan};
 #[cfg(feature = "agent-execution")]
-use crate::{
-    alerts,
-    application::services::agent_service::{AgentOutputMutation, AgentOutputMutationOutcome},
+use crate::application::services::agent_service::{
+    AgentOutputMutation, AgentOutputMutationOutcome,
 };
 #[cfg(feature = "agent-execution")]
 use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputState};
+#[cfg(feature = "agent-execution")]
+use restream_health::alerts;
 
 #[cfg(feature = "agent-execution")]
 pub async fn agent_operation_create_handler(

@@ -13,7 +13,6 @@ use futures_util::FutureExt as _;
 use sqlx::SqlitePool;
 use tracing::{error, warn};
 
-use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
 use restream_domain::domain::output_spec::OutputUrlScheme;
@@ -23,6 +22,7 @@ use restream_engine::egress::journal::{RingFeed, TsFeed};
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
 use restream_engine::engine::MediaEngine;
 use restream_engine::secret_display::redact_url;
+use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
 use super::FailureTracker;
 

@@ -15,6 +15,7 @@ members = [
     "crates/restream-core",
     "crates/restream-domain",
     "crates/restream-engine",
+    "crates/restream-health",
     "crates/restream-mcp",
     "crates/restream-sync",
     "crates/restream-mpegts",
@@ -67,6 +68,7 @@ restream-mcp = { path = "crates/restream-mcp", optional = true }
 restream-core = { path = "crates/restream-core" }
 restream-domain = { path = "crates/restream-domain" }
 restream-engine = { path = "crates/restream-engine" }
+restream-health = { path = "crates/restream-health" }
 restream-sync = { path = "crates/restream-sync" }
 restream-mpegts = { path = "crates/restream-mpegts" }
 restream-rtmp = { path = "crates/restream-rtmp" }
@@ -129,6 +131,7 @@ loom = { version = "0.7", features = ["checkpoint"] }
 ts-rs = "12"
 restream-domain = { path = "crates/restream-domain", features = ["ts"] }
 restream-engine = { path = "crates/restream-engine", features = ["test-support", "ts"] }
+restream-health = { path = "crates/restream-health", features = ["ts"] }
 
 [[bench]]
 name = "api_health"

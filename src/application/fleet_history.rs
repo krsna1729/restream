@@ -12,13 +12,13 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
-use crate::application::diagnosis::Layer;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
 use crate::capacity::CapacitySnapshot;
 use crate::config::AppConfig;
 use restream_domain::domain::state::DesiredOutputState;
 use restream_engine::engine::MediaEngine;
+use restream_health::diagnosis::Layer;
 
 /// How often the sampler takes a sample.
 pub const FLEET_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);

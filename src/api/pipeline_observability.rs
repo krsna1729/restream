@@ -8,10 +8,10 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::alerts;
 use crate::logging::types::AppLogFilters;
 use restream_domain::domain::state::StageBackendKind;
 use restream_domain::runtime::graph::{GraphRole, StageGraphPlan};
+use restream_health::alerts;
 
 use super::error::ApiError;
 use super::state::{AppState, recording_enabled_map, require_authenticated};

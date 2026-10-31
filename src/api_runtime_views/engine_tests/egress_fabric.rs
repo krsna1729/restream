@@ -102,7 +102,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
             old.shutdown();
             let before = test_health_snapshot(&engine, &[], &HashMap::new()).await;
             assert!(
-                crate::alerts::derive_alerts(&before)
+                restream_health::alerts::derive_alerts(&before)
                     .iter()
                     .any(|alert| alert.id.ends_with(":panicked")),
                 "{} panic must alert",
@@ -125,7 +125,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
             drop(registry);
             let after = test_health_snapshot(&engine, &[], &HashMap::new()).await;
             assert!(
-                !crate::alerts::derive_alerts(&after)
+                !restream_health::alerts::derive_alerts(&after)
                     .iter()
                     .any(|alert| alert.id.ends_with(":panicked")),
                 "{} recovery must clear its alert",

@@ -99,7 +99,7 @@ pub fn redacted_context(
     pipeline_telemetry: Vec<Value>,
     resource_map: Value,
     graphs: Vec<Value>,
-    alerts: Vec<crate::alerts::Alert>,
+    alerts: Vec<restream_health::alerts::Alert>,
     events: Vec<restream_engine::events::Event>,
     configuration: Value,
     media: Value,
@@ -301,7 +301,7 @@ pub fn investigation_response(
     graph: Option<Value>,
     telemetry: Value,
     resource_map: Value,
-    alerts: Vec<crate::alerts::Alert>,
+    alerts: Vec<restream_health::alerts::Alert>,
     events: Vec<restream_engine::events::Event>,
 ) -> Value {
     let workflow = request
