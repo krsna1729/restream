@@ -355,5 +355,4 @@ mod capacity_tests {
 }
 
 #[cfg(test)]
-#[path = "shared_muxer_tests.rs"]
 mod tests;

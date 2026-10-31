@@ -514,5 +514,4 @@ fn retry_window(duration: f64) -> Duration {
 }
 
 #[cfg(test)]
-#[path = "upload_policy_tests.rs"]
 mod tests;

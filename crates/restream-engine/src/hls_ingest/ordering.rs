@@ -991,9 +991,4 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "ordering_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "ordering_rendition_tests.rs"]
-mod rendition_tests;

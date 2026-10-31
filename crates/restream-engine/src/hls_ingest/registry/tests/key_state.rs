@@ -1,7 +1,7 @@
 //! The key state's lifetime: an input whose row is gone releases what its key
 //! applied.
 
-use super::*;
+use super::super::*;
 use crate::hls_ingest::test_support::{INPUT_ID, test_ingest};
 
 /// `forget_input` clears the applied init. The key itself stays while a caller

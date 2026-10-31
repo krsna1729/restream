@@ -2,6 +2,11 @@
 //! budget, session start and restart, and the fMP4 objects a session
 //! routes to its ordering state.
 
+mod key_state;
+mod pull;
+mod session_end;
+mod session_start;
+
 use super::*;
 use crate::hls_ingest::test_support::{
     INPUT_ID, IndexedKeys, PIPELINE_ID, RevocableKey, STREAM_KEY, authenticated, emptied_mdat,

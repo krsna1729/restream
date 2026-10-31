@@ -533,5 +533,4 @@ impl From<MediaRejection> for ObjectOutcome {
 }
 
 #[cfg(test)]
-#[path = "session_turn_tests.rs"]
-mod turn_tests;
+mod tests;

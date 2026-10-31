@@ -1,10 +1,10 @@
 //! HLS pull ingest: how the pull reaches an origin — the resolver guard that
 //! refuses names resolving into private ranges, and HTTP Digest answers to an
-//! origin's challenge. Split from `tests_guards.rs` for the 999-line cap.
+//! origin's challenge. Split from `guards.rs` for the 999-line cap.
 
-use super::fetch::{AuthScope, RequestAuth, build_client};
-use super::tests_origin::{Origin, media_playlist};
-use super::*;
+use super::super::fetch::{AuthScope, RequestAuth, build_client};
+use super::super::*;
+use super::origin::{Origin, media_playlist};
 use restream_domain::domain::pipeline_input::PullAuth;
 
 // ---- the resolver guard ----------------------------------------------------
@@ -23,9 +23,10 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
     let url = Url::parse(&format!("http://localhost:{port}/live/index.m3u8")).unwrap();
     let scope = AuthScope::new(&url, RequestAuth::new(&PullAuth::None).unwrap());
 
-    let refused = super::fetch::fetch_small(&build_client(false, false), &url, &scope, 4096).await;
+    let refused =
+        super::super::fetch::fetch_small(&build_client(false, false), &url, &scope, 4096).await;
     match refused {
-        Err(super::fetch::FetchError::PrivateTarget(reason)) => {
+        Err(super::super::fetch::FetchError::PrivateTarget(reason)) => {
             assert!(reason.contains("localhost"), "{reason}")
         }
         other => panic!("a private name is refused by the resolver, got {other:?}"),
@@ -37,14 +38,15 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
     );
     assert!(
         matches!(
-            PullError::from(super::fetch::FetchError::PrivateTarget(String::new())),
+            PullError::from(super::super::fetch::FetchError::PrivateTarget(String::new())),
             PullError::Fatal(_)
         ),
         "a refused target is final, not retried every backoff"
     );
 
     // A pull whose own source is private may reach it.
-    let allowed = super::fetch::fetch_small(&build_client(false, true), &url, &scope, 4096).await;
+    let allowed =
+        super::super::fetch::fetch_small(&build_client(false, true), &url, &scope, 4096).await;
     assert!(
         allowed.is_ok(),
         "a private pull reaches its origin: {allowed:?}"
@@ -56,10 +58,10 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
 #[tokio::test]
 async fn a_source_named_into_a_private_range_is_a_private_pull() {
     let url = Url::parse("http://localhost:9/live/index.m3u8").unwrap();
-    assert!(super::fetch::source_resolves_private(&url).await);
+    assert!(super::super::fetch::source_resolves_private(&url).await);
     let public = Url::parse("http://192.0.2.1/live/index.m3u8").unwrap();
     assert!(
-        !super::fetch::source_resolves_private(&public).await,
+        !super::super::fetch::source_resolves_private(&public).await,
         "a literal is judged by the literal guard, not resolved"
     );
 }
@@ -132,7 +134,10 @@ async fn digest_origin(
 
 async fn fetch_with_digest(
     origin: DigestOrigin,
-) -> (Result<Vec<u8>, super::fetch::FetchError>, Vec<String>) {
+) -> (
+    Result<Vec<u8>, super::super::fetch::FetchError>,
+    Vec<String>,
+) {
     let app = axum::Router::new()
         .fallback(axum::routing::get(digest_origin))
         .with_state(origin.clone());
@@ -146,7 +151,8 @@ async fn fetch_with_digest(
     })
     .unwrap();
     let scope = AuthScope::new(&url, auth);
-    let result = super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
+    let result =
+        super::super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
     let seen = restream_sync::lock::lock(&origin.seen).clone();
     (result, seen)
 }
@@ -233,7 +239,7 @@ async fn a_refused_digest_answer_is_not_repeated() {
     })
     .await;
     assert!(
-        matches!(result, Err(super::fetch::FetchError::Status(401))),
+        matches!(result, Err(super::super::fetch::FetchError::Status(401))),
         "{result:?}"
     );
     assert_eq!(
@@ -253,14 +259,14 @@ async fn an_unsupported_digest_challenge_is_refused_with_its_reason() {
     })
     .await;
     match result {
-        Err(super::fetch::FetchError::Auth(reason)) => {
+        Err(super::super::fetch::FetchError::Auth(reason)) => {
             assert!(reason.contains("SHA-512-256"), "{reason}")
         }
         other => panic!("an unanswerable challenge is refused, got {other:?}"),
     }
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert!(matches!(
-        PullError::from(super::fetch::FetchError::Auth(String::new())),
+        PullError::from(super::super::fetch::FetchError::Auth(String::new())),
         PullError::Fatal(_)
     ));
 }
@@ -306,12 +312,15 @@ async fn a_nonce_rotated_without_stale_is_answered_on_the_next_request() {
     .unwrap();
     let scope = AuthScope::new(&url, auth);
     let client = build_client(true, true);
-    let fetch = || super::fetch::fetch_small(&client, &url, &scope, 4096);
+    let fetch = || super::super::fetch::fetch_small(&client, &url, &scope, 4096);
 
     assert!(fetch().await.is_ok(), "the first challenge is answered");
     *restream_sync::lock::lock(&nonce) = "n2";
     assert!(
-        matches!(fetch().await, Err(super::fetch::FetchError::Status(401))),
+        matches!(
+            fetch().await,
+            Err(super::super::fetch::FetchError::Status(401))
+        ),
         "a non-stale refusal is not re-sent within the request"
     );
     assert!(
@@ -342,9 +351,10 @@ async fn a_digest_username_outside_ascii_is_refused_with_its_reason() {
     })
     .unwrap();
     let scope = AuthScope::new(&url, auth);
-    let result = super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
+    let result =
+        super::super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
     match result {
-        Err(super::fetch::FetchError::Auth(reason)) => {
+        Err(super::super::fetch::FetchError::Auth(reason)) => {
             assert!(reason.contains("username*"), "{reason}")
         }
         other => panic!("a non-ASCII Digest username is refused, got {other:?}"),

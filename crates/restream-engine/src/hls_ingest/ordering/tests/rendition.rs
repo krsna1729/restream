@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use bytes::Bytes;
 
-use super::tests::{media, with_map};
-use super::*;
+use super::super::tests::{media, with_map};
+use super::super::*;
 use crate::hls_ingest::playlist::{AudioRendition, MasterPlaylist, Playlist, Variant};
 
 fn limits() -> SessionLimits {

@@ -944,17 +944,4 @@ async fn sleep_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {
 }
 
 #[cfg(test)]
-#[path = "hls_pull/tests.rs"]
 mod tests;
-// The integration halves: `tests_origin` owns the origin stub and the helpers
-// both integration modules use, `tests_guards` the guards a real origin can
-// prove. Split because one file of them would break the 999-line cap.
-#[cfg(test)]
-#[path = "hls_pull/tests_auth.rs"]
-mod tests_auth;
-#[cfg(test)]
-#[path = "hls_pull/tests_guards.rs"]
-mod tests_guards;
-#[cfg(test)]
-#[path = "hls_pull/tests_origin.rs"]
-mod tests_origin;

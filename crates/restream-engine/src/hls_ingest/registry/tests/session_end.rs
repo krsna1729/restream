@@ -1,7 +1,7 @@
 //! How a session ends: whatever ends one — here a panic — ends only that
 //! session and releases its input.
 
-use super::*;
+use super::super::*;
 use crate::hls_ingest::test_support::test_ingest;
 
 /// A panic inside one session is contained by the MEDIA executor: the

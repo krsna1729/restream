@@ -606,5 +606,4 @@ async fn close_deleted_sessions(
 }
 
 #[cfg(test)]
-#[path = "tokio_ingress_tests.rs"]
 mod tests;
