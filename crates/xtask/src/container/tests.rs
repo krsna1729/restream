@@ -165,14 +165,12 @@ fn container_shim_term_and_int_stop_container_then_reap_client() {
 fn container_timeout_reaps_engine_client() {
     let engine = Engine::new();
     let settings = engine.settings("wait");
-    assert!(
-        process::execute(
-            &mut settings.command(&[]),
-            &process::Signals,
-            Some(std::time::Duration::from_secs(1))
-        )
-        .is_err()
-    );
+    // The timeout fires once the client is up, however slow its start.
+    let ready = engine.dir().join("ready");
+    let result = process::execute_until(&mut settings.command(&[]), &process::Signals, || {
+        ready.exists()
+    });
+    assert!(result.is_err());
     engine.assert_reaped();
 }
 

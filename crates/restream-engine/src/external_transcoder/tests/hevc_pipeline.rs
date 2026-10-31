@@ -462,7 +462,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     );
     let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, _lease42, is_new) = manager
-        .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+        .ensure_stage(stage_key, source_ring.clone(), None)
         .await;
     assert!(is_new);
     let output_ring = handle.ring.clone();
@@ -474,44 +474,32 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     let mut reader = Reader::new_live("test_hevc_preview_output".to_string(), output_ring);
     let cancel = handle.cancel.clone();
 
+    // Fill the source ring and end it before the stage starts: the stage
+    // reader then starts at the last keyframe minus its preroll, as on a
+    // live ring, and the fixture's last GOP carries both audio and video.
+    // At end of input FFmpeg flushes, and the stage ends its output ring
+    // once FFmpeg closes stdout.
+    source_ring.push_batch(packets.drain(..));
+    source_ring.mark_end_of_stream();
     manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
-    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if source_ring
-            .reader_snapshots()
-            .iter()
-            .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < ready_deadline,
-            "HEVC preview stage reader did not attach in time"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-
-    source_ring.push_batch(packets.drain(..));
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    cancel.cancel();
-
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
+    // The stdout reader ends the output ring before it cancels the stage, so
+    // a drain that starts after the cancel was seen collects every packet; a
+    // cancel without an ended output is a stage failure, which the asserts
+    // report.
     let mut output_packets = Vec::new();
     loop {
+        let stage_ended = cancel.is_cancelled();
         while let Ok(Some(packet)) = reader.pull() {
             output_packets.push(packet);
         }
-        if output_packets
-            .iter()
-            .any(|packet| packet.media_type == MediaType::Video)
-        {
+        if stage_ended || reader.is_caught_up_to_end_of_stream() {
             break;
         }
-        if tokio::time::Instant::now() >= output_deadline {
-            break;
+        tokio::select! {
+            _ = reader.wait_for_data() => {}
+            _ = cancel.cancelled() => {}
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     assert!(

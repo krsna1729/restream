@@ -22,7 +22,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
-- [Q-106 intermittent timing tests](#q-106-testing-sonnet-timing-tests-fail-intermittently-on-a-loaded-host)
+- [Q-106 separate-rendition HLS push order](#q-106-testing-opus-separate-rendition-hls-push-depends-on-server-arrival-order)
 - [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
@@ -189,27 +189,22 @@ the [assurance roadmap](assurance-roadmap.md).
   fixtures pass; an encode-speed A/B (libx264 and libx265, same host and
   profile) shows no regression.
 
-### Q-106 [testing] [sonnet] Timing tests fail intermittently on a loaded host
-- Goal: find why `the_projector_rebuilds_only_while_a_client_listens`
-  (`src/application/runtime_state/tests.rs`) and
-  `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
-  (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job, and
-  `a_playlist_parse_does_not_block_the_pull_task_worker`
-  (`crates/restream-engine/src/hls_pull/tests/guards.rs`, 200 ms worker-delay bound) and
-  `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
-  (`crates/restream-engine/src/external_transcoder/tests/hevc_pipeline.rs`, output deadline)
-  each failed once in a full local `--lib` run; each passes when rerun.
-  The xtask container tests (`crates/xtask/src/container/tests.rs`)
-  `container_timeout_reaps_engine_client`,
-  `container_shim_term_and_int_stop_container_then_reap_client` and
-  `container_shim_cleans_named_container_after_engine_error` fail about 3%
-  of full `xtask` test-binary runs (4 of 120 locally; twice in CI). A
-  traced failure shows the fake engine shell not reaching its first
-  statement before the 1 s deadline while the binary's other tests run in
-  parallel; it is not ETXTBSY, and a fork-free fake engine still failed 5 of
-  300. Remove the timing dependence.
-- Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
-  loaded host, with no added sleeps or widened timeouts.
+### Q-106 [testing] [opus] Separate-rendition HLS push depends on server arrival order
+- Goal: `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
+  (`tests/hls_push_ingest.rs`) failed once in the CI coverage job. FFmpeg
+  with `-http_persistent 0` reads no replies, and a playlist goes through
+  the blocking-pool parse while a segment does not, so the session's arrival
+  order is the server's, not FFmpeg's.
+- Finding: a deterministic replay of FFmpeg's own write order (from its
+  `Opening '…' for writing` log) over one persistent connection fails every
+  run: audio up to 8 s reaches the ring before video at 2 s, which suggests
+  the session follows the audio rendition until FFmpeg's final master write.
+  The replay test is parked at `.local/parked/q106-hls_push_ingest.rs`
+  (local only). Decide whether that order is a product defect (a live
+  separate-rendition encoder would see it) or a replay artefact, then fix
+  the product or the replay.
+- Gates: the test is deterministic (no wall-clock budget) and passes 200
+  consecutive runs under `cargo llvm-cov` on a loaded host.
 
 ### Q-108 [performance] [opus] Explain the ring producer bench shift after the engine move
 - Goal: `ring_buffer/producer/push_one_at_a_time/4` measured +17.5% and

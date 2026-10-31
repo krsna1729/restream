@@ -288,6 +288,40 @@ impl StateHub {
     fn has_clients(&self) -> bool {
         self.deltas.receiver_count() > 0
     }
+
+    /// The projector's schedule (see [`run_projector`]); `rebuild` is one
+    /// projection rebuild.
+    pub(super) async fn schedule_rebuilds<F: Future<Output = ()>>(
+        &self,
+        interval: Duration,
+        shutdown: &CancellationToken,
+        mut rebuild: impl FnMut() -> F,
+    ) {
+        let mut next_allowed = Instant::now();
+        loop {
+            let periodic = async {
+                if self.has_clients() {
+                    tokio::time::sleep(interval).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = self.changed.notified() => {}
+                () = periodic => {}
+            }
+            if !self.has_clients() {
+                continue;
+            }
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep_until(next_allowed) => {}
+            }
+            rebuild().await;
+            next_allowed = Instant::now() + interval;
+        }
+    }
 }
 
 /// While a stream client is connected, rebuilds every `interval` and soon
@@ -304,28 +338,6 @@ pub async fn run_projector(
     interval: Duration,
     shutdown: CancellationToken,
 ) {
-    let mut next_allowed = tokio::time::Instant::now();
-    loop {
-        let periodic = async {
-            if hub.has_clients() {
-                tokio::time::sleep(interval).await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        };
-        tokio::select! {
-            () = shutdown.cancelled() => return,
-            () = hub.changed.notified() => {}
-            () = periodic => {}
-        }
-        if !hub.has_clients() {
-            continue;
-        }
-        tokio::select! {
-            () = shutdown.cancelled() => return,
-            () = tokio::time::sleep_until(next_allowed) => {}
-        }
-        hub.refresh(&pool, &engine).await;
-        next_allowed = tokio::time::Instant::now() + interval;
-    }
+    hub.schedule_rebuilds(interval, &shutdown, || hub.refresh(&pool, &engine))
+        .await;
 }

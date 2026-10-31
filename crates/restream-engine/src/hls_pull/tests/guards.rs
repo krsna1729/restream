@@ -692,60 +692,35 @@ async fn a_cancel_in_flight_dispatches_nothing_after_it() {
 /// Parsing a fetched playlist must not run on the worker the pull task runs
 /// on: a playlist is capped at `max_playlist_bytes`, and parsing one that size
 /// costs tens of milliseconds of CPU, which the API and every other protocol
-/// share. The runtime here has a single worker, so a parse on it would delay
-/// the timer below by the parse's own duration.
+/// share.
 ///
-/// The playlist is far larger than production's 1 MiB cap to make the signal
-/// unambiguous; the property under test is where the parse runs, not the cap.
-#[tokio::test(flavor = "current_thread")]
-async fn a_playlist_parse_does_not_block_the_pull_task_worker() {
-    let origin = Origin::new();
-    let mut text = String::from("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n");
-    while text.len() < 4 * 1024 * 1024 {
-        text.push_str("#EXTINF:0.5,\nseg.ts\n");
-    }
-    origin.serve("/live/index.m3u8", text.clone());
-    let base = origin.spawn().await;
-    let (engine, ingest) = test_ingest(HlsIngestLimits {
-        max_playlist_bytes: 8 * 1024 * 1024,
-        ..limits()
-    });
-    let task = spawn(
-        engine.clone(),
-        ingest,
-        identity(),
-        source(
-            format!("{base}/live/index.m3u8"),
-            VariantRule::HighestBandwidth,
-        ),
-        HlsIngestLimits {
-            max_playlist_bytes: 8 * 1024 * 1024,
-            ..limits()
-        },
-    );
-
-    // Sample a 10 ms timer on the same runtime until the playlist has reached
-    // the ingest, so the parse and the passes that follow it are inside the
-    // measured span, and take the worst delay over it.
-    let mut worst = Duration::ZERO;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut arrived = false;
-    while tokio::time::Instant::now() < deadline {
-        let started = std::time::Instant::now();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        worst = worst.max(started.elapsed());
-        if engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
-            arrived = true;
-            break;
+/// The runtime's only blocking thread is held by a gate, so a parse sent to
+/// the blocking pool queues behind it and the first poll is `Pending`; a parse
+/// run inline would finish inside that poll. No clock is involved.
+#[test]
+fn a_playlist_parse_does_not_block_the_pull_task_worker() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let gate = tokio::task::spawn_blocking(move || gate_rx.recv());
+        let url = Url::parse("http://origin.test/live/index.m3u8").unwrap();
+        let bytes = media_playlist(&["a.ts", "b.ts", "c.ts"]).into_bytes();
+        let mut parse = std::pin::pin!(prepare_off_worker(url, bytes, true));
+        let first =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(parse.as_mut().poll(cx))).await;
+        assert!(
+            first.is_pending(),
+            "the playlist was parsed on the pull task's worker"
+        );
+        gate_tx.send(()).unwrap();
+        match parse.await {
+            Ok(Prepared::Media(media, _)) => assert_eq!(media.segments.len(), 3),
+            Ok(Prepared::Master(_)) => panic!("parsed a media playlist as a master"),
+            Err(_) => panic!("the off-worker parse failed"),
         }
-    }
-    assert!(arrived, "the pulled playlist never reached the ingest");
-    // Wide enough for a loaded host to deschedule the process, far below the
-    // ~1 s an inline parse blocks the only worker for.
-    assert!(
-        worst < Duration::from_millis(200),
-        "the pull blocked its worker for {worst:?}: a parse is running on it"
-    );
-    task.cancel();
-    task.join().await;
+        gate.await.unwrap().unwrap();
+    });
 }
