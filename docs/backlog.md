@@ -27,7 +27,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
 - [Q-106 intermittent timing tests](#q-106-testing-sonnet-timing-tests-fail-intermittently-on-a-loaded-host)
-- [Q-107 matrix_throughput transcode benches](#q-107-testing-sonnet-matrix_throughput-transcode-benches-deliver-nothing)
 - [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
@@ -266,16 +265,6 @@ the [assurance roadmap](assurance-roadmap.md).
   300. Remove the timing dependence.
 - Gates: each test passes 200 consecutive runs under `cargo llvm-cov` on a
   loaded host, with no added sleeps or widened timeouts.
-
-### Q-107 [testing] [sonnet] matrix_throughput transcode benches deliver nothing
-- Goal: the `*_trans` cases of `crates/restream-engine/benches/matrix_throughput.rs` fail with
-  `pulled=0` on master. The pinned FFmpeg child
-  (`.restream/runtime/ffmpeg/ffmpeg`, libx265 720p) exits with `AVERROR_EOF`
-  (-541478725) because its stdin closes before it opens the MPEG-TS input;
-  the bench waits only 50 ms after starting the transcoder (around lines
-  202-215). Make every transcode case deliver.
-- Gates: every `_trans` case runs and reports a time; no change to engine
-  behaviour without a failing test.
 
 ### Q-108 [performance] [opus] Explain the ring producer bench shift after the engine move
 - Goal: `ring_buffer/producer/push_one_at_a_time/4` measured +17.5% and
