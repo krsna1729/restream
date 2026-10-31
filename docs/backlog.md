@@ -12,7 +12,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
-- [Q-066 SRT ingress test port race](#q-066-testing-sonnet-srt-multi-owner-test-port-can-join-a-foreign-reuseport-group)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
@@ -87,15 +86,6 @@ the [assurance roadmap](assurance-roadmap.md).
   Next probes: the Owner's view of that caller, and which path fired.
 - Gates: a reproduction or a proof that a connected leaf cannot stall
   silently; the fix keeps sibling leaves unaffected.
-
-### Q-066 [testing] [sonnet] SRT multi-Owner test port can join a foreign reuseport group
-- Goal: `two_owners_share_the_port_and_each_session_command_reaches_its_owner`
-  cannot share its port with another process.
-- Why: the test probes a free port and releases it before binding; a foreign
-  same-uid `SO_REUSEPORT` socket (another `cargo test`) can take it in the gap
-  and join the group. The byte counts then fail loudly. Fix with a per-test
-  network namespace, or srt-rs binding Owner 0 first and the rest to its port.
-- Gates: none until it flakes.
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
 - Goal: an IETF MOQT `moqt-19` publisher (MSF catalog, LOC objects) feeds a

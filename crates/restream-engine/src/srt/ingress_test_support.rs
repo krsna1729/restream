@@ -130,6 +130,14 @@ pub(super) fn free_port() -> u16 {
         .port()
 }
 
+/// A loopback address no other live process binds: 127.128.0.0/9 plus this
+/// pid (Linux pids stay below 2^22). A same-user `SO_REUSEPORT` socket joins a
+/// group only on its exact address, so no other process can join a reuseport
+/// listener bound here.
+pub(super) fn process_loopback() -> std::net::Ipv4Addr {
+    std::net::Ipv4Addr::from(0x7f80_0000 | (std::process::id() & 0x007f_ffff))
+}
+
 pub(super) struct TestServer {
     pub(super) server: Arc<SrtServer>,
     pub(super) engine: Arc<MediaEngine>,
