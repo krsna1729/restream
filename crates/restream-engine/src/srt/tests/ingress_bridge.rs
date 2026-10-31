@@ -1,6 +1,6 @@
 //! Bridge, sampling and thread-ownership tests for the SRT ingress owner.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -125,16 +125,22 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     ));
     let stats = Arc::new(crate::snapshots::ListenerSocketStats::default());
     // A multi-Owner listener needs an explicit port (production ingest
-    // listens on a configured, well-known one), so this test probes a free
-    // port and binds it. The probe is released first, so a parallel test can
-    // take the port in between: the bind then fails, and the test retries on
-    // a fresh port. A foreign `SO_REUSEPORT` socket that joins instead would
-    // take a share of the datagrams; the byte counts below fail on that.
+    // listens on a configured, well-known one). Any same-user process can
+    // join a `SO_REUSEPORT` group on `127.0.0.1:P` and take a hash share of
+    // its datagrams, so the Owners bind `P` on this process's own loopback
+    // address instead. `foreign` stands in for such a process: a same-user
+    // reuseport socket holding `127.0.0.1:P`. Its port comes from a plain
+    // autobind, so it never joins another process's group itself. A bind that
+    // still collides (a wildcard socket on `P`) fails, and the test retries.
     let mut attempts = 0;
-    let mut handle = loop {
+    let (foreign, mut handle) = loop {
         attempts += 1;
+        let foreign = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("foreign bind");
+        foreign.set_nonblocking(true).expect("foreign non-blocking");
+        rustix::net::sockopt::set_socket_reuseport(&foreign, true).expect("foreign reuseport");
+        let port = foreign.local_addr().expect("foreign addr").port();
         let started = SrtIngressHandle::start(IngressConfig {
-            bind: SocketAddr::from(([127, 0, 0, 1], free_port())),
+            bind: SocketAddr::new(process_loopback().into(), port),
             policy_store: store.clone(),
             receiver_group: ReceiverGroupId::generate(),
             stats: stats.clone(),
@@ -147,7 +153,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         })
         .await;
         match started {
-            Ok(handle) => break handle,
+            Ok(handle) => break (foreign, handle),
             Err(error) if attempts < 5 => eprintln!("ingress start retried: {error:?}"),
             Err(error) => panic!("two ingress Owners start: {error:?}"),
         }
@@ -245,6 +251,12 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         ),
         (0, 0, 0, 0),
         "stopped Owners withdraw their gauges"
+    );
+    let mut buf = [0u8; 2048];
+    assert_eq!(
+        foreign.recv(&mut buf).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::WouldBlock),
+        "the foreign reuseport socket received none of the listener's datagrams"
     );
 }
 
