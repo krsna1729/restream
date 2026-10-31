@@ -34,6 +34,15 @@ fn mediamtx_child_env_removes_harness_port_overrides() {
 }
 
 #[test]
+fn the_harness_refuses_any_mediamtx_but_the_pinned_one() {
+    let pinned = pinned_mediamtx_version();
+    assert!(check_mediamtx_version(&format!("{pinned}\n")).is_ok());
+    for stale in ["v1.19.1\n", "v1.20.0\n", "", "mediamtx\n"] {
+        assert!(check_mediamtx_version(stale).is_err(), "{stale:?}");
+    }
+}
+
+#[test]
 fn strip_netns_opt_removes_only_the_opt_out_flag() {
     let raw = vec![
         "bitrate-sweep".to_string(),

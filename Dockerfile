@@ -35,7 +35,7 @@ COPY package.json package-lock.json ./
 COPY rust-toolchain.toml rust-toolchain.toml
 # Copy only the bootstrap owners: copying all of scripts/ would make unrelated
 # helper edits rebuild the toolchain.
-COPY scripts/data/debian-packages.tsv scripts/data/
+COPY scripts/data/debian-packages.tsv scripts/data/mediamtx.tsv scripts/data/
 COPY scripts/ci/install-system-deps.sh scripts/ci/
 COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap-runtime.sh scripts/dev/
 
@@ -291,7 +291,7 @@ FROM ubuntu:24.04 AS ci-harness-runtime
 
 WORKDIR /workspace
 ENV RESTREAM_REPO_ROOT=/workspace
-COPY scripts/data/debian-packages.tsv scripts/data/
+COPY scripts/data/debian-packages.tsv scripts/data/mediamtx.tsv scripts/data/
 COPY scripts/ci/install-system-deps.sh scripts/ci/
 COPY scripts/dev/bootstrap-runtime.sh scripts/dev/
 RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check

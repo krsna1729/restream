@@ -10,6 +10,7 @@ on:
       - scripts/dev/bootstrap-runtime.sh
       - scripts/ci/install-system-deps.sh
       - scripts/data/debian-packages.tsv
+      - scripts/data/mediamtx.tsv
       - .github/workflows/ci-harness-runtime-image.yml
 
 permissions:

@@ -6,54 +6,12 @@ use super::*;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-/// The release the MoQ wire profile is pinned to.
-pub(crate) const PINNED_MEDIAMTX_VERSION: &str = "v1.21.2";
-/// Where `cargo xtask fetch mediamtx` installs it, relative to the
-/// repository root the harness runs from.
-const PINNED_MEDIAMTX_PATH: &str = ".local/bin/mediamtx-1.21.2";
-/// Overrides the pinned binary's path (the version check still applies).
-const MEDIAMTX_BIN_ENV: &str = "MOQ_INTEROP_MEDIAMTX_BIN";
-
 /// Path the egress output publishes to.
 pub(crate) const EGRESS_PATH: &str = "live";
 /// Path FFmpeg publishes into and MediaMTX forwards to Restream over MoQ.
 pub(crate) const INGEST_SOURCE_PATH: &str = "ingest-src";
 /// Path the ingest pipeline's RTMP output publishes back into MediaMTX.
 pub(crate) const INGEST_RETURN_PATH: &str = "ingest-back";
-
-/// Resolve and version-check the pinned MediaMTX.
-pub(crate) async fn pinned_mediamtx_bin() -> Result<PathBuf, String> {
-    let bin = std::env::var_os(MEDIAMTX_BIN_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(PINNED_MEDIAMTX_PATH));
-    let bin = absolute_path(&bin)?;
-    let fetch_hint = "run cargo xtask fetch mediamtx";
-    if !bin.is_file() {
-        return Err(format!(
-            "pinned MediaMTX {PINNED_MEDIAMTX_VERSION} not found at {}; {fetch_hint}",
-            bin.display()
-        ));
-    }
-    let output = tokio::time::timeout(
-        Duration::from_secs(10),
-        Command::new(&bin)
-            .arg("--version")
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| format!("{} --version timed out", bin.display()))?
-    .map_err(|error| format!("{} --version: {error}", bin.display()))?;
-    let reported = String::from_utf8_lossy(&output.stdout);
-    if reported.split_whitespace().next() != Some(PINNED_MEDIAMTX_VERSION) {
-        return Err(format!(
-            "{} reports {:?}, the MoQ profile is pinned to {PINNED_MEDIAMTX_VERSION}; {fetch_hint}",
-            bin.display(),
-            reported.trim()
-        ));
-    }
-    Ok(bin)
-}
 
 /// Per-run TLS material: a CA and an ECDSA P-256 leaf it signs, valid for 13
 /// days with SANs `localhost` and `127.0.0.1`. MediaMTX's native QUIC

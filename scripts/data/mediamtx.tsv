@@ -1,0 +1,7 @@
+# The one MediaMTX release the live harness runs, per architecture (uname -m).
+# Read by scripts/dev/bootstrap-runtime.sh, cargo xtask fetch mediamtx and the
+# harness's version check. Digests are the release's checksums.sha256.
+# version	arch	archive	sha256
+v1.21.3	x86_64	mediamtx_v1.21.3_linux_amd64.tar.gz	0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635
+v1.21.3	aarch64	mediamtx_v1.21.3_linux_arm64.tar.gz	27f038237cb5f77a724f6afc58eca2798f2bc4edf9989895631a80eeb41a4fe2
+v1.21.3	armv7l	mediamtx_v1.21.3_linux_armv7.tar.gz	134b53bfdb26583d02e1c27fc256d587cf3482e80c9e3b49083595e19a096284
