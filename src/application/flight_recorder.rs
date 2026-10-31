@@ -814,5 +814,4 @@ pub async fn run_flight_recorder(
 }
 
 #[cfg(test)]
-#[path = "flight_recorder_tests.rs"]
 mod tests;

@@ -451,5 +451,4 @@ impl AppConfig {
 }
 
 #[cfg(test)]
-#[path = "tests/configuration_behavior.rs"]
-mod configuration_behavior_tests;
+mod tests;

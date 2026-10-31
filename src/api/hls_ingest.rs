@@ -280,5 +280,4 @@ fn retry_later(reason: &'static str) -> Response {
 }
 
 #[cfg(test)]
-#[path = "hls_ingest_tests.rs"]
 mod tests;

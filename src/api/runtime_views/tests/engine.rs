@@ -55,21 +55,12 @@ async fn test_health_summary_snapshot(engine: &MediaEngine) -> serde_json::Value
     .await
 }
 
-#[path = "engine_tests/egress.rs"]
 mod egress;
-#[path = "engine_tests/egress_fabric.rs"]
 mod egress_fabric;
-#[path = "engine_tests/graph.rs"]
 mod graph;
-#[path = "engine_tests/ingest_registry.rs"]
 mod ingest_registry;
-#[path = "engine_tests/lifecycle_egress.rs"]
 mod lifecycle_egress;
-#[path = "engine_tests/lifecycle_ingest.rs"]
 mod lifecycle_ingest;
-#[path = "engine_tests/lifecycle_properties.rs"]
 mod lifecycle_properties;
-#[path = "engine_tests/lifecycle_ring.rs"]
 mod lifecycle_ring;
-#[path = "engine_tests/snapshots.rs"]
 mod snapshots;

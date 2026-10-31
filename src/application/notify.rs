@@ -454,5 +454,4 @@ pub fn valid_push_endpoint(endpoint: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "notify_tests.rs"]
 mod tests;

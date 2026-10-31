@@ -140,5 +140,4 @@ async fn columns(
 }
 
 #[cfg(test)]
-#[path = "migrations_tests.rs"]
 mod tests;

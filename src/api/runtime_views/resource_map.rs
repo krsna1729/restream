@@ -672,5 +672,4 @@ pub(crate) async fn resource_map(
 }
 
 #[cfg(test)]
-#[path = "resource_map_projection_tests.rs"]
-mod resource_map_projection_tests;
+mod tests;

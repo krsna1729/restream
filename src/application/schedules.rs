@@ -328,5 +328,4 @@ pub async fn record_run(
 }
 
 #[cfg(test)]
-#[path = "schedules_tests.rs"]
 mod tests;

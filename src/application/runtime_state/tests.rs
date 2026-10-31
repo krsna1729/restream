@@ -1,3 +1,5 @@
+mod entity;
+
 use super::hub::{DELTA_HISTORY, Since, StateHub};
 use super::*;
 use restream_domain::domain::output_spec::OutputConfig;

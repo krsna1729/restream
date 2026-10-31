@@ -183,5 +183,4 @@ fn targets_hls_upload(seen: &[u8]) -> Option<bool> {
 }
 
 #[cfg(test)]
-#[path = "http_server_tests.rs"]
 mod tests;

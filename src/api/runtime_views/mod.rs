@@ -18,10 +18,7 @@ mod telemetry;
 mod telemetry_projection;
 
 #[cfg(test)]
-#[path = "engine_tests.rs"]
-mod engine_tests;
-#[cfg(test)]
-mod stage_phase_tests;
+mod tests;
 
 pub(crate) use common::probe_snapshot;
 pub(crate) use graph::processing_graph;

@@ -19,9 +19,6 @@
 //! The TypeScript contract for these types is generated from them
 //! (`web/ts/core/generated/runtime-state.ts`, see `tests.rs`).
 
-#[cfg(test)]
-#[path = "entity_tests.rs"]
-mod entity_tests;
 pub mod graph;
 pub mod hub;
 pub mod inputs;
