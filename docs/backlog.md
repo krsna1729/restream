@@ -11,7 +11,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
-- [Q-049 silent SRT leaves](#q-049-resilience-opus-find-why-connected-srt-leaves-sent-nothing-under-host-overload)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
@@ -69,23 +68,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Open: the MediaMTX subset (blocked on Q-097) and Cloudflare's draft-16 relay,
   which needs an account relay and a publish-capable token.
 - Gates: a harness interop mode per peer.
-
-### Q-049 [resilience] [opus] Find why connected SRT leaves sent nothing under host overload
-- Evidence: under host CPU overload in `mixed.signal`, every SRT 1080p leaf of
-  one pipeline completed the handshake and then sent no payload for 30 s,
-  reporting `backpressured`, growing feed lag and no caller quality stats,
-  while sibling SRT 720p and RTMP leaves delivered. It did not reproduce with
-  CPU spinners.
-- Question: can a connected leaf be starved by its shard or Owner while
-  siblings progress? That would break output isolation.
-- Leads: such a leaf should have been closed as `stalled` after 15 s
-  (`classify_stall`, `egress/policy.rs`). It escapes that bound if it records
-  progress without payload (`record_send` with units and no bytes, the
-  backlog-shrink rule in `SrtLeaf::observe_stall`), has zero pending bytes or
-  no caller stats (counts as idle), or sits on a `shard_saturated` shard.
-  Next probes: the Owner's view of that caller, and which path fired.
-- Gates: a reproduction or a proof that a connected leaf cannot stall
-  silently; the fix keeps sibling leaves unaffected.
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
 - Goal: an IETF MOQT `moqt-19` publisher (MSF catalog, LOC objects) feeds a
