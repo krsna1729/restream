@@ -4340,6 +4340,7 @@ dependencies = [
  "restream",
  "restream-domain",
  "restream-engine",
+ "restream-srt",
  "restream-sync",
  "rml_rtmp",
  "rtrb",

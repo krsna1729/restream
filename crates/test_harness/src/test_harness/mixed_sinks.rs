@@ -371,7 +371,7 @@ where
             )
             .await?;
             *next_sink_offset += 1;
-            direct_urls.push(harness_srt_ffmpeg_publish_url(sink.port));
+            direct_urls.push(harness_srt_direct_output_url(sink.port));
             sinks.push(sink);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -420,7 +420,7 @@ pub(crate) async fn spawn_ffmpeg_signal_sink(
                 case.id()
             ));
         }
-        MixedOutputProtocol::Srt => harness_srt_ffmpeg_publish_url(port),
+        MixedOutputProtocol::Srt => harness_srt_direct_output_url(port),
     };
     let listen_url = match case.protocol() {
         MixedOutputProtocol::Rtmp => publish_url.clone(),

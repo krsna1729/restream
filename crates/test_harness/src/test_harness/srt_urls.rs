@@ -1,7 +1,9 @@
 //! Canonical SRT URLs used by harness scenarios.
 
 pub(crate) const HARNESS_SRT_PACKET_SIZE: u32 = 1316;
-pub(crate) const HARNESS_SRT_LATENCY_US: u32 = 200_000;
+pub(crate) const HARNESS_SRT_LATENCY_MS: u32 = 200;
+/// FFmpeg's libsrt `latency` is in microseconds.
+pub(crate) const HARNESS_SRT_LATENCY_US: u32 = HARNESS_SRT_LATENCY_MS * 1000;
 pub(crate) const HARNESS_SRT_TIMEOUT_US: u32 = 30_000_000;
 
 #[derive(Clone, Copy)]
@@ -53,10 +55,10 @@ pub(crate) fn harness_srt_ffmpeg_url(
     url
 }
 
-pub(crate) fn harness_srt_ffmpeg_publish_url(port: u16) -> String {
-    format!(
-        "srt://127.0.0.1:{port}?pkt_size={HARNESS_SRT_PACKET_SIZE}&latency={HARNESS_SRT_LATENCY_US}"
-    )
+/// The output URL Restream sends to for a harness FFmpeg SRT listener.
+/// Restream's `latency` is libsrt's URI option, in milliseconds.
+pub(crate) fn harness_srt_direct_output_url(port: u16) -> String {
+    format!("srt://127.0.0.1:{port}?latency={HARNESS_SRT_LATENCY_MS}")
 }
 
 pub(crate) fn harness_srt_ffmpeg_listener_url(port: u16) -> String {
@@ -91,5 +93,11 @@ mod tests {
             harness_srt_ffmpeg_listener_url(9000),
             "srt://127.0.0.1:9000?mode=listener&transtype=live&timeout=30000000&latency=200000"
         );
+    }
+
+    #[test]
+    fn restream_accepts_the_direct_sink_output_url() {
+        let url = harness_srt_direct_output_url(9000);
+        assert_eq!(restream_srt::validate_srt_egress_url(&url), Ok(()), "{url}");
     }
 }
