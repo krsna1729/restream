@@ -1,17 +1,17 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType};
-use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::domain::stage::StageKind;
 use restream_engine::codec::{audio_for_ts, video_for_ts};
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls::HlsSegmenterStart;
+use restream_engine::stage_lease::StageLease;
 use restream_mpegts::TsMuxer;
 use restream_sync::{DtsEnforcer, Reader, RingBuffer};
 use std::hint::black_box;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio_util::sync::CancellationToken;
 
 const NUM_PACKETS: usize = 100;
 
@@ -55,13 +55,23 @@ fn benchmark_matrix(c: &mut Criterion) {
                 engine,
                 source_ring,
                 target_ring,
-                transcoder_cancel,
-                transcoder_handle,
+                transcoder_lease,
                 video_meta,
                 audio_tracks,
                 packets,
                 expected_packets,
             ) = rt.block_on(async { setup_matrix_path(ingest, trans).await });
+            if trans {
+                rt.block_on(async {
+                    let stages = engine.active_transcoder_stages("pipe").await;
+                    assert!(
+                        stages
+                            .iter()
+                            .any(|(kind, alive)| *kind == StageKind::video_preset("720p") && *alive),
+                        "the transcoder stage stopped before measurement: {stages:?}"
+                    );
+                });
+            }
             let mut stream_reader = if egress == "hls" {
                 None
             } else {
@@ -106,10 +116,8 @@ fn benchmark_matrix(c: &mut Criterion) {
                 iter_count += 1;
             });
 
-            // Teardown once per benchmark case
-            rt.block_on(async {
-                teardown_matrix_path(transcoder_cancel, transcoder_handle).await;
-            });
+            // The stage stops when its last lease drops.
+            drop(transcoder_lease);
         });
     }
     group.finish();
@@ -122,8 +130,7 @@ async fn setup_matrix_path(
     Arc<MediaEngine>,
     Arc<RingBuffer>,
     Arc<RingBuffer>,
-    Option<CancellationToken>,
-    Option<tokio::task::JoinHandle<()>>,
+    Option<StageLease>,
     VideoMeta,
     Vec<AudioMeta>,
     Vec<MediaPacket>,
@@ -199,47 +206,30 @@ async fn setup_matrix_path(
         source_ring.push(pkt.clone());
     }
 
-    let (target_ring, transcoder_cancel, transcoder_handle) = if trans {
-        let stage_kind = StageKind::video_preset("720p");
-        let (trans_ring, _lease207) = engine
-            .get_or_create_transcoder("pipe", stage_kind, source_ring.clone(), None)
+    let (target_ring, transcoder_lease) = if trans {
+        let (trans_ring, lease) = engine
+            .get_or_create_transcoder(
+                "pipe",
+                StageKind::video_preset("720p"),
+                source_ring.clone(),
+                None,
+            )
             .await;
-        let cancel = {
-            let runtimes = engine.stages.runtimes.read().await;
-            runtimes
-                .get(&StageKey::new("pipe", StageKind::video_preset("720p")))
-                .map(|runtime| runtime.cancel.clone())
-                .unwrap()
-        };
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        (trans_ring, Some(cancel), None)
+        (trans_ring, Some(lease))
     } else {
-        (source_ring.clone(), None, None)
+        (source_ring.clone(), None)
     };
 
     (
         engine,
         source_ring,
         target_ring,
-        transcoder_cancel,
-        transcoder_handle,
+        transcoder_lease,
         video_meta,
         audio_tracks,
         packets,
         expected_packets,
     )
-}
-
-async fn teardown_matrix_path(
-    transcoder_cancel: Option<CancellationToken>,
-    transcoder_handle: Option<tokio::task::JoinHandle<()>>,
-) {
-    if let Some(cancel) = transcoder_cancel {
-        cancel.cancel();
-    }
-    if let Some(handle) = transcoder_handle {
-        let _ = handle.await;
-    }
 }
 
 async fn prewarm_transcoded_path(
@@ -297,7 +287,7 @@ async fn run_matrix_iteration(
     let hls_segmenter = if egress == "hls" {
         let (store, _) = engine.ensure_hls_segmenter("pipe").await;
         store.clear(); // Reset HlsStore for this iteration
-        let cancel = CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
         let segmenter = tokio::spawn(restream_engine::hls::start_hls_segmenter(
             "pipe".to_string(),
             store.clone(),
