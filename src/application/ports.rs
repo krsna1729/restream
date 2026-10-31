@@ -1,9 +1,9 @@
 //! Application-layer port traits defining the storage and catalog capabilities
 //! that orchestration code depends on.
 
-use crate::application::models::{Ingest, Job, Pipeline};
 use crate::application::notify::{Delivery, NotifyChannel, PushSubscription};
 use crate::application::team::{AuditEntry, Role, UserRecord};
+use restream_domain::models::{Ingest, Job, Pipeline};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;

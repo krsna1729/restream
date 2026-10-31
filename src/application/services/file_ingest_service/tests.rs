@@ -49,7 +49,7 @@ async fn setup_ingest(pool: &SqlitePool, ingest_id: &str) {
         false,
         "",
         false,
-        crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
     )
     .await
     .unwrap();
@@ -453,7 +453,7 @@ async fn start_ingest_requires_pipeline_for_stream_key() {
         false,
         "",
         false,
-        crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
     )
     .await
     .unwrap();

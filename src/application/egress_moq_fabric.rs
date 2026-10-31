@@ -7,7 +7,7 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use crate::application::egress::PreparedOutput;
-use crate::application::models::Output;
+use restream_domain::models::Output;
 use restream_engine::egress::journal::{FeedEpoch, RingFeed};
 use restream_engine::egress::policy::LeafPolicy;
 use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};

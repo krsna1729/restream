@@ -151,7 +151,7 @@ fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestCon
 /// returns the rebuilt pipeline file-ingest state.
 pub async fn apply_pipeline_file_ingest_payload(
     state: &Arc<AppState>,
-    pipeline: &crate::application::models::Pipeline,
+    pipeline: &restream_domain::models::Pipeline,
     previous_stream_key: Option<&str>,
     payload: Option<Option<PipelineFileIngestPayload>>,
 ) -> Result<crate::application::ingest::PipelineFileIngestState, Response> {

@@ -1,11 +1,11 @@
-//! Application-owned records for pipelines, outputs, jobs, and file ingests.
+//! Persisted catalog records for pipelines, outputs, jobs, and file ingests.
 //!
 //! Database repositories map private row structs into these records. API
 //! handlers may serialize them directly while their JSON contract still matches
 //! the application shape.
 
-use restream_domain::domain::output_spec::OutputConfig;
-use restream_domain::domain::state::DesiredOutputState;
+use crate::domain::output_spec::OutputConfig;
+use crate::domain::state::DesiredOutputState;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 

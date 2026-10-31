@@ -1,7 +1,7 @@
 //! Application-owned desired graph planning for API and diagnostics read models.
 
-use crate::application::models::Output;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::models::Output;
 use restream_domain::planner::PlannedOutput;
 use restream_domain::runtime::graph::StageGraphPlan;
 

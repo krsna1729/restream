@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::application::models::Pipeline;
 use crate::application::ports::PipelineStore;
+use restream_domain::models::Pipeline;
 
 use super::error::{ServiceError, ServiceResult};
 

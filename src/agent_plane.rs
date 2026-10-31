@@ -15,9 +15,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
-use crate::application::models::{Ingest, Output, Pipeline};
 use restream_agent_contract::{InvestigationRequest, PlanRequest, ProposedChange};
 use restream_domain::domain::output_spec::{OutputConfig, OutputUrlScheme, ProtocolCapabilities};
+use restream_domain::models::{Ingest, Output, Pipeline};
 use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 
 const OUTPUT_URL_SCHEME_ERROR: &str = "Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, https://, and moqt://";

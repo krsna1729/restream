@@ -6,10 +6,10 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::application::models::Output;
 use restream_agent_contract::{PlanRequest, ProposedChange};
 use restream_domain::domain::output_spec::{EgressProtocol, OutputConfig, OutputUrlScheme};
 use restream_domain::domain::stage::StageKind;
+use restream_domain::models::Output;
 use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
 
 /// Wanted-running outputs that read one stage over one protocol.

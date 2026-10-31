@@ -162,9 +162,10 @@ integration.
   units, `VideoCodecKind` and canonical codec parsers/converters. Its external
   dependencies are `bytes`, `serde` and `memchr`; it has no network runtime.
 - **Domain and planning:** `restream-domain` owns the `domain` vocabulary
-  (IDs, desired state, output specs, stage identity), the `runtime` state
-  contracts and the pure `planner`. It depends on core, `serde` and `url`;
-  its `ts` feature adds the dashboard TypeScript export derives.
+  (IDs, desired state, output specs, stage identity), the persisted catalog
+  records in `models` (`Pipeline`, `Output`, `Job`, `Ingest`), the `runtime`
+  state contracts and the pure `planner`. It depends on core, `serde` and
+  `url`; its `ts` feature adds the dashboard TypeScript export derives.
 - **Shared transport:** `restream-sync` owns the packet `RingBuffer`, readers,
   subscriber wakes and recording `MemoryQueue`. It depends on core types,
   ArcSwap and Tokio synchronization utilities; its package boundary is not a

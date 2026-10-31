@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::application::models::Pipeline;
 use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
+use restream_domain::models::Pipeline;
 use restream_engine::engine::MediaEngine;
 use restream_engine::recording::RecordingMetadataReporter;
 

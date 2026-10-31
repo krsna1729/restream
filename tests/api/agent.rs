@@ -170,7 +170,7 @@ async fn agent_context_returns_redacted_state_bundle() {
         "job-agent-context",
         &pid,
         &output_id,
-        restream::application::models::JobStatus::Running,
+        restream_domain::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
     .await

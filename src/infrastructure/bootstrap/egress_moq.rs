@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
 use crate::application::egress::PreparedOutput;
-use crate::application::models::Output;
 use restream_domain::domain::state::EgressPhase;
+use restream_domain::models::Output;
 use restream_engine::egress::journal::RingFeed;
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
 use restream_engine::engine::{EgressRegistration, MediaEngine};

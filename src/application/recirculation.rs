@@ -1,8 +1,8 @@
-use crate::application::models::Output;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::{ServiceError, ServiceResult};
 use restream_domain::domain::output_spec::RecirculationTarget;
 use restream_domain::domain::pipeline_input::PipelineInput;
+use restream_domain::models::Output;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 
@@ -152,7 +152,6 @@ fn recirculation_edges(outputs: &[Output]) -> HashMap<&str, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::Pipeline;
     use crate::application::ports::{
         PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
         PipelineLookupFuture, PipelineStore, PipelineStoreError, PipelineUpdateFuture,
@@ -161,6 +160,7 @@ mod tests {
     use restream_domain::domain::output_spec::OutputConfig;
     use restream_domain::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use restream_domain::domain::state::DesiredOutputState;
+    use restream_domain::models::Pipeline;
     use std::sync::Arc;
 
     struct ReadOnlyInputStore {

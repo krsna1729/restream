@@ -34,9 +34,9 @@ use std::sync::atomic::Ordering;
 use serde::Serialize;
 
 use crate::application::diagnosis::{Diagnosis, OutputSignals, ShardHealth, diagnose};
-use crate::application::models::Output;
 use restream_domain::domain::output_spec::EgressProtocol;
 use restream_domain::domain::state::{DesiredOutputState, EgressPhase};
+use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 
 pub use graph::{GraphEdge, GraphNode, PipelineGraph};

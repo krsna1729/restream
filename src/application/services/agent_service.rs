@@ -7,11 +7,11 @@
 
 use std::sync::Arc;
 
-use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
+use restream_domain::models::{Ingest, Job, Output, Pipeline};
 use restream_engine::security::IngestSecurityService;
 use sqlx::SqlitePool;
 
@@ -310,10 +310,10 @@ impl AgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::JobStatus;
     use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use restream_domain::domain::output_spec::OutputConfig;
     use restream_domain::domain::state::DesiredOutputState;
+    use restream_domain::models::JobStatus;
 
     #[tokio::test]
     async fn agent_service_loads_context_catalog_from_storage() {
@@ -352,7 +352,7 @@ mod tests {
             false,
             "",
             false,
-            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();

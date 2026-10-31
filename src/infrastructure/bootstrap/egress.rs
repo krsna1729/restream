@@ -6,7 +6,6 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::application::models::{JobStatus, Output};
 use crate::application::reconcile::{
     OutputFailureWindow, OutputStartAction, OutputStopAction, decide_output_start_action,
     decide_output_stop_action, load_output_runtime_snapshot,
@@ -14,6 +13,7 @@ use crate::application::reconcile::{
 use crate::application::runtime_state::hub::StateHub;
 use crate::config::RuntimeTuning;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::models::{JobStatus, Output};
 use restream_engine::engine::MediaEngine;
 
 #[path = "egress_task.rs"]

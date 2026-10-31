@@ -14,11 +14,11 @@ use sqlx::SqlitePool;
 use tracing::{error, warn};
 
 use crate::application::diagnosis::CAPACITY_REFUSED_PHASE;
-use crate::application::models::JobStatus;
 use crate::application::reconcile::next_output_retry_count;
 use crate::config::RuntimeTuning;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::domain::state::EgressPhase;
+use restream_domain::models::JobStatus;
 use restream_engine::egress::journal::{RingFeed, TsFeed};
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
 use restream_engine::engine::MediaEngine;

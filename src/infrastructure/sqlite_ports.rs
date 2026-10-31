@@ -8,8 +8,8 @@ pub use notify::SqliteNotifyStore;
 pub use team::SqliteTeamStore;
 
 use self::records::{ingest_model, job_model, pipeline_model};
-use crate::application::models::Pipeline;
 use crate::application::ports::*;
+use restream_domain::models::Pipeline;
 use sqlx::SqlitePool;
 
 #[derive(Clone)]

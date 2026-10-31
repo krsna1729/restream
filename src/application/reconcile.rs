@@ -1,9 +1,9 @@
 //! Application-layer reconciliation logic that compares desired output and
 //! recording state with engine reality and computes convergence actions.
 
-use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use restream_domain::domain::state::DesiredOutputState;
+use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,10 +255,10 @@ pub async fn build_recording_reconcile_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
     use restream_core::metadata::VideoMeta;
     use restream_domain::domain::output_spec::OutputConfig;
+    use restream_domain::models::Pipeline;
     // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
     use proptest::strategy::Strategy;
     use std::collections::HashMap;
@@ -645,7 +645,7 @@ mod tests {
                 None,
             )
             .await;
-        let output = crate::application::models::Output {
+        let output = restream_domain::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),
@@ -670,7 +670,7 @@ mod tests {
     #[tokio::test]
     async fn output_runtime_snapshot_gates_the_start_on_the_source_probe() {
         let engine = MediaEngine::new();
-        let unprobed = crate::application::models::Output {
+        let unprobed = restream_domain::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),
@@ -723,7 +723,7 @@ mod tests {
             .await
             .unwrap();
         engine.unregister_ingest("pipe").await;
-        let output = crate::application::models::Output {
+        let output = restream_domain::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),

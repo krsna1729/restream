@@ -46,14 +46,11 @@ struct NormalizedIngestPayload {
 /// before the value reaches the service layer.
 pub fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
     value
-        .unwrap_or(crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
+        .unwrap_or(restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
         .max(1)
 }
 
-fn ingest_response(
-    ingest: &crate::application::models::Ingest,
-    running: bool,
-) -> serde_json::Value {
+fn ingest_response(ingest: &restream_domain::models::Ingest, running: bool) -> serde_json::Value {
     serde_json::json!({
         "id": ingest.id,
         "filename": ingest.filename,
@@ -66,7 +63,7 @@ fn ingest_response(
     })
 }
 
-fn ingest_json_response(ingest: &crate::application::models::Ingest, running: bool) -> Response {
+fn ingest_json_response(ingest: &restream_domain::models::Ingest, running: bool) -> Response {
     Json(ingest_response(ingest, running)).into_response()
 }
 

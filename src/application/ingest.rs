@@ -1,12 +1,12 @@
 //! Application-layer ingest coordination that resolves pipelines, loads
 //! file-ingest context, and validates stream access before media processing begins.
 
-use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{
     IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
     PipelineStoreError,
 };
 use restream_domain::domain::pipeline_input::PipelineInput;
+use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
 use restream_engine::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,

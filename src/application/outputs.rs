@@ -5,10 +5,10 @@
 
 use sqlx::SqlitePool;
 
-use crate::application::models::Output;
 use crate::application::services::error::{ServiceError, ServiceResult};
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::state::DesiredOutputState;
+use restream_domain::models::Output;
 
 fn output_from_record(record: crate::db::OutputRecord) -> Output {
     Output {
