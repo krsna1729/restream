@@ -86,5 +86,4 @@ pub fn remux_segment_view(
 mod test_fixtures;
 
 #[cfg(test)]
-#[path = "mpegts_tests.rs"]
 mod tests;
