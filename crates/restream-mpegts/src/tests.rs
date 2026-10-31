@@ -172,18 +172,15 @@ fn first_probe_ready_payloads() -> (Vec<u8>, Vec<u8>) {
     (video, audio)
 }
 
-include!("mpegts_tests/timestamps.rs");
-include!("mpegts_tests/demux.rs");
-include!("mpegts_tests/mux.rs");
-include!("mpegts_tests/round_trip.rs");
-include!("mpegts_tests/probe.rs");
-include!("mpegts_tests/tables.rs");
+include!("tests/timestamps.rs");
+include!("tests/demux.rs");
+include!("tests/mux.rs");
+include!("tests/round_trip.rs");
+include!("tests/probe.rs");
+include!("tests/tables.rs");
 
-#[path = "mpegts_tests/nal_scanning.rs"]
 mod nal_scanning;
 
-#[path = "mpegts_tests/tables_and_sync.rs"]
 mod tables_and_sync;
 
-#[path = "mpegts_tests/topology_changes.rs"]
 mod topology_changes;
