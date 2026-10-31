@@ -39,7 +39,8 @@ impl TestFeed {
     }
 
     pub(super) fn publish(&self, payload: Bytes) {
-        self.ring.push(payload, true);
+        self.ring
+            .push(payload, restream_core::MediaType::Video, true);
     }
 }
 

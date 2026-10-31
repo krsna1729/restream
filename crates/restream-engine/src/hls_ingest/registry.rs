@@ -626,20 +626,10 @@ impl HlsIngest {
     ) -> Result<ObjectOutcome, DispatchError> {
         let (reply, outcome) = oneshot::channel();
         let payload = body.into_payload();
-        // A playlist is parsed here, on the blocking pool, so the session turn
-        // that applies it on the shared MEDIA worker never parses: parsing is
-        // linear in the playlist, about 29 ms for a 1 MiB one.
         let content = match kind {
-            ObjectKind::Playlist => {
-                let bytes = payload.bytes.clone();
-                let playlist_path = path.clone();
-                let parsed = tokio::task::spawn_blocking(move || {
-                    super::playlist::parse(&bytes, &playlist_path)
-                })
-                .await
-                .map_err(|_| DispatchError::Unavailable)?;
-                session::ObjectContent::Playlist(parsed)
-            }
+            ObjectKind::Playlist => session::ObjectContent::Playlist(
+                parse_playlist_off_worker(payload.bytes.clone(), path.clone()).await?,
+            ),
             ObjectKind::TsSegment => session::ObjectContent::TsSegment,
             ObjectKind::Fmp4 => session::ObjectContent::Fmp4,
         };
@@ -902,6 +892,18 @@ impl HlsIngest {
             .await;
         self.forget(&registration.input_id, registration.attempt_id);
     }
+}
+
+/// Parse a pushed or pulled playlist on the blocking pool, so the session
+/// turn that applies it on the shared MEDIA worker never parses: parsing is
+/// linear in the playlist, about 29 ms for a 1 MiB one.
+async fn parse_playlist_off_worker(
+    bytes: bytes::Bytes,
+    path: String,
+) -> Result<Result<super::playlist::Playlist, super::playlist::PlaylistError>, DispatchError> {
+    tokio::task::spawn_blocking(move || super::playlist::parse(&bytes, &path))
+        .await
+        .map_err(|_| DispatchError::Unavailable)
 }
 
 /// Tests live in `registry/tests.rs` (this file is at the line cap); the

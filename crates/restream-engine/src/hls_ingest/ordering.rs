@@ -21,6 +21,9 @@ use tokio::sync::OwnedSemaphorePermit;
 use super::KeyCharge;
 use super::playlist::{MasterPlaylist, MediaPlaylist, Playlist};
 
+mod release;
+pub(super) use release::{Init, Reanchor, Release};
+
 /// Production idle floor: also the hold age and idle timeout before any
 /// playlist names a target duration.
 pub(super) const IDLE_FLOOR: Duration = Duration::from_secs(10);
@@ -82,50 +85,6 @@ pub(super) enum SegmentOutcome {
 pub(super) enum PlaylistOutcome {
     Accepted,
     OtherVariant,
-}
-
-/// An init object delivered with the release that needs it.
-pub(super) struct Init {
-    pub(super) uri: String,
-    pub(super) payload: Payload,
-}
-
-/// Why a release re-anchors; the publisher decides whose offset it may adopt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Reanchor {
-    None,
-    /// The same clock (a variant switch, a changed `EXT-X-MAP` init).
-    Clock,
-    /// A break every rendition crosses (`EXT-X-DISCONTINUITY`, new epoch).
-    Timeline(u64),
-}
-
-pub(super) struct Release {
-    /// The followed rendition this segment belongs to (see `MAX_RENDITIONS`):
-    /// each has its own demuxer.
-    pub(super) rendition: usize,
-    pub(super) sequence: u64,
-    pub(super) epoch: u64,
-    /// Whether the bytes re-anchor this rendition's timestamps, and why.
-    pub(super) reanchor: Reanchor,
-    /// The playlist's `EXTINF` for this segment.
-    pub(super) duration: Duration,
-    /// The `EXT-X-MAP` init to apply before this segment.
-    pub(super) init: Option<Init>,
-    pub(super) payload: Payload,
-}
-
-impl Release {
-    /// The media time this release adds: its `EXTINF`, or none for a
-    /// separate audio rendition's segment, which covers time the variant's
-    /// segments already count.
-    pub(super) fn media(&self) -> Duration {
-        if self.rendition == 0 {
-            self.duration
-        } else {
-            Duration::ZERO
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +205,8 @@ struct Track {
     /// A new epoch counted but not yet carried by a release.
     timeline_pending: Option<u64>,
     clock_pending: bool,
+    /// A segment was skipped since the last release.
+    gap_pending: bool,
     generation: u64,
     ended: bool,
     /// The maps the playlist names, newest last (bounded).
@@ -275,6 +236,7 @@ impl Track {
             epoch: 0,
             timeline_pending: None,
             clock_pending: false,
+            gap_pending: false,
             generation: 0,
             ended: false,
             maps: Vec::new(),
@@ -318,7 +280,9 @@ impl Track {
     }
 
     /// A skipped segment still crosses its break: carry the generation on.
+    /// The next release follows a gap.
     fn skip_discontinuity(&mut self, discontinuity: bool) {
+        self.gap_pending = true;
         if discontinuity && self.timeline_pending.is_none() {
             self.timeline_pending = Some(self.next_generation());
         }
@@ -554,6 +518,7 @@ impl Track {
             if sequence > next {
                 // The window slid past sequences that were never listed here.
                 pool.counters.skipped = pool.counters.skipped.saturating_add(sequence - next);
+                self.gap_pending = true;
                 self.next_seq = Some(sequence);
                 continue;
             }
@@ -589,6 +554,7 @@ impl Track {
                         sequence,
                         epoch: self.epoch,
                         reanchor,
+                        after_gap: std::mem::take(&mut self.gap_pending),
                         duration: listed.duration,
                         init,
                         payload,

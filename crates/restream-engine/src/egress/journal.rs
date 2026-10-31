@@ -65,6 +65,88 @@ fn oldest_retained_sequence(ring: &RingBuffer) -> u64 {
     ring.get_write_idx().saturating_sub(ring.capacity()) as u64
 }
 
+fn refresh_oldest(ring: &RingBuffer, cached: &AtomicU64) -> u64 {
+    let oldest = oldest_retained_sequence(ring);
+    cached.store(oldest, Ordering::Relaxed);
+    oldest
+}
+
+/// Both feeds' read: the epoch and retention checks, then one contiguous run
+/// of `ring`'s units from `cursor` into `units` (empty on entry), each made
+/// by `unit`, within `budget`.
+///
+/// A slot that no longer holds its sequence's packet is an overrun, even
+/// while the write index still calls it retained (a batch writes its slots
+/// before it moves the write index). A cursor awaiting a keyframe first
+/// skips the video interframes at its position, without charging them to
+/// the budget, and the run stops before the next one; the first video
+/// keyframe ends the wait.
+fn read_ring<U>(
+    ring: &RingBuffer,
+    epoch: u64,
+    cached_oldest: &AtomicU64,
+    cursor: FeedCursor,
+    budget: ReadBudget,
+    units: &mut Vec<U>,
+    unit: impl Fn(Arc<MediaPacket>) -> U,
+) -> FeedRead<()> {
+    if cursor.epoch != epoch {
+        return FeedRead::EpochMismatch {
+            current_epoch: epoch,
+        };
+    }
+    let head = ring.get_write_idx() as u64;
+    let oldest = refresh_oldest(ring, cached_oldest);
+    if cursor.next_sequence < oldest {
+        return FeedRead::Overrun {
+            oldest_sequence: oldest,
+        };
+    }
+
+    let mut next = cursor;
+    let mut total_bytes = 0usize;
+    while next.next_sequence < head
+        && units.len() < budget.max_units
+        && total_bytes < budget.max_bytes
+    {
+        let Some(packet) = ring.read_at(next.next_sequence as usize) else {
+            return FeedRead::Overrun {
+                oldest_sequence: refresh_oldest(ring, cached_oldest),
+            };
+        };
+        if next.awaiting_keyframe {
+            if packet.is_video_interframe() {
+                if !units.is_empty() {
+                    break;
+                }
+                next.next_sequence += 1;
+                continue;
+            }
+            next.awaiting_keyframe = !packet.is_video_keyframe();
+        }
+        total_bytes += packet.payload.len();
+        units.push(unit(packet));
+        next.next_sequence += 1;
+    }
+    if next.next_sequence == cursor.next_sequence {
+        return FeedRead::Empty;
+    }
+    FeedRead::Units {
+        units: Vec::new(),
+        next_cursor: next,
+    }
+}
+
+/// `read_from` through `read_from_into`: the same read into a new batch.
+fn into_owned<U>(read: FeedRead<()>, units: Vec<U>) -> FeedRead<U> {
+    match read {
+        FeedRead::Units { next_cursor, .. } => FeedRead::Units { units, next_cursor },
+        FeedRead::Empty => FeedRead::Empty,
+        FeedRead::Overrun { oldest_sequence } => FeedRead::Overrun { oldest_sequence },
+        FeedRead::EpochMismatch { current_epoch } => FeedRead::EpochMismatch { current_epoch },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FeedLimits
 // ---------------------------------------------------------------------------
@@ -306,9 +388,7 @@ impl RingFeed {
     }
 
     fn refresh_oldest_from(&self, ring: &RingBuffer) -> u64 {
-        let oldest = oldest_retained_sequence(ring);
-        self.cached_oldest.store(oldest, Ordering::Relaxed);
-        oldest
+        refresh_oldest(ring, &self.cached_oldest)
     }
 
     fn refresh_oldest(&self) -> u64 {
@@ -381,54 +461,9 @@ impl EgressFeed for RingFeed {
     }
 
     fn read_from(&self, cursor: FeedCursor, budget: ReadBudget) -> FeedRead<Self::Unit> {
-        // Epoch check first.
-        let current_epoch = self.epoch.current();
-        if cursor.epoch != current_epoch {
-            return FeedRead::EpochMismatch { current_epoch };
-        }
-
-        let ring = self.current_ring();
-        let head = ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest_from(&ring);
-
-        if cursor.next_sequence < oldest {
-            return FeedRead::Overrun {
-                oldest_sequence: oldest,
-            };
-        }
-        if cursor.next_sequence >= head {
-            return FeedRead::Empty;
-        }
-
-        let mut units: Vec<Arc<MediaPacket>> = Vec::new();
-        let mut seq = cursor.next_sequence;
-        let mut total_bytes = 0usize;
-
-        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
-            match ring.read_at(seq as usize) {
-                Some(pkt) => {
-                    total_bytes += pkt.payload.len();
-                    units.push(pkt);
-                    seq += 1;
-                }
-                None => {
-                    // Slot was overwritten while we were reading.
-                    let new_oldest = self.refresh_oldest_from(&ring);
-                    return FeedRead::Overrun {
-                        oldest_sequence: new_oldest,
-                    };
-                }
-            }
-        }
-
-        if units.is_empty() {
-            return FeedRead::Empty;
-        }
-
-        FeedRead::Units {
-            units,
-            next_cursor: FeedCursor::new(cursor.epoch, seq),
-        }
+        let mut units = Vec::new();
+        let read = self.read_from_into(cursor, budget, &mut units);
+        into_owned(read, units)
     }
 
     fn read_from_into(
@@ -437,47 +472,16 @@ impl EgressFeed for RingFeed {
         budget: ReadBudget,
         units: &mut Vec<Self::Unit>,
     ) -> FeedRead<()> {
-        let current_epoch = self.epoch.current();
-        if cursor.epoch != current_epoch {
-            return FeedRead::EpochMismatch { current_epoch };
-        }
-
-        let ring = self.current_ring();
-        let head = ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest_from(&ring);
-        if cursor.next_sequence < oldest {
-            return FeedRead::Overrun {
-                oldest_sequence: oldest,
-            };
-        }
-        if cursor.next_sequence >= head {
-            return FeedRead::Empty;
-        }
-
         units.clear();
-        let mut seq = cursor.next_sequence;
-        let mut total_bytes = 0usize;
-        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
-            match ring.read_at(seq as usize) {
-                Some(pkt) => {
-                    total_bytes += pkt.payload.len();
-                    units.push(pkt);
-                    seq += 1;
-                }
-                None => {
-                    return FeedRead::Overrun {
-                        oldest_sequence: self.refresh_oldest_from(&ring),
-                    };
-                }
-            }
-        }
-        if units.is_empty() {
-            return FeedRead::Empty;
-        }
-        FeedRead::Units {
-            units: Vec::new(),
-            next_cursor: FeedCursor::new(cursor.epoch, seq),
-        }
+        read_ring(
+            &self.current_ring(),
+            self.epoch.current(),
+            &self.cached_oldest,
+            cursor,
+            budget,
+            units,
+            std::convert::identity,
+        )
     }
 
     fn latest_sync_point(&self) -> Option<FeedCursor> {
@@ -557,9 +561,7 @@ impl TsFeed {
     }
 
     fn refresh_oldest(&self) -> u64 {
-        let oldest = oldest_retained_sequence(&self.ring);
-        self.cached_oldest.store(oldest, Ordering::Relaxed);
-        oldest
+        refresh_oldest(&self.ring, &self.cached_oldest)
     }
 
     pub fn retention_snapshot(&self) -> FeedRetentionSnapshot {
@@ -602,52 +604,9 @@ impl EgressFeed for TsFeed {
     }
 
     fn read_from(&self, cursor: FeedCursor, budget: ReadBudget) -> FeedRead<Self::Unit> {
-        let current_epoch = self.epoch.current();
-        if cursor.epoch != current_epoch {
-            return FeedRead::EpochMismatch { current_epoch };
-        }
-
-        let head = self.ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest();
-
-        if cursor.next_sequence < oldest {
-            return FeedRead::Overrun {
-                oldest_sequence: oldest,
-            };
-        }
-        if cursor.next_sequence >= head {
-            return FeedRead::Empty;
-        }
-
-        let mut units: Vec<Bytes> = Vec::new();
-        let mut seq = cursor.next_sequence;
-        let mut total_bytes = 0usize;
-
-        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
-            match self.ring.read_at(seq as usize) {
-                Some(pkt) => {
-                    total_bytes += pkt.payload.len();
-                    // Clone is O(1) — `Bytes` is reference-counted.
-                    units.push(pkt.payload.clone());
-                    seq += 1;
-                }
-                None => {
-                    let new_oldest = self.refresh_oldest();
-                    return FeedRead::Overrun {
-                        oldest_sequence: new_oldest,
-                    };
-                }
-            }
-        }
-
-        if units.is_empty() {
-            return FeedRead::Empty;
-        }
-
-        FeedRead::Units {
-            units,
-            next_cursor: FeedCursor::new(cursor.epoch, seq),
-        }
+        let mut units = Vec::new();
+        let read = self.read_from_into(cursor, budget, &mut units);
+        into_owned(read, units)
     }
 
     fn read_from_into(
@@ -656,46 +615,17 @@ impl EgressFeed for TsFeed {
         budget: ReadBudget,
         units: &mut Vec<Self::Unit>,
     ) -> FeedRead<()> {
-        let current_epoch = self.epoch.current();
-        if cursor.epoch != current_epoch {
-            return FeedRead::EpochMismatch { current_epoch };
-        }
-
-        let head = self.ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest();
-        if cursor.next_sequence < oldest {
-            return FeedRead::Overrun {
-                oldest_sequence: oldest,
-            };
-        }
-        if cursor.next_sequence >= head {
-            return FeedRead::Empty;
-        }
-
         units.clear();
-        let mut seq = cursor.next_sequence;
-        let mut total_bytes = 0usize;
-        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
-            match self.ring.read_at(seq as usize) {
-                Some(pkt) => {
-                    total_bytes += pkt.payload.len();
-                    units.push(pkt.payload.clone());
-                    seq += 1;
-                }
-                None => {
-                    return FeedRead::Overrun {
-                        oldest_sequence: self.refresh_oldest(),
-                    };
-                }
-            }
-        }
-        if units.is_empty() {
-            return FeedRead::Empty;
-        }
-        FeedRead::Units {
-            units: Vec::new(),
-            next_cursor: FeedCursor::new(cursor.epoch, seq),
-        }
+        // `Bytes` clones are O(1): reference-counted.
+        read_ring(
+            &self.ring,
+            self.epoch.current(),
+            &self.cached_oldest,
+            cursor,
+            budget,
+            units,
+            |packet| packet.payload.clone(),
+        )
     }
 
     fn latest_sync_point(&self) -> Option<FeedCursor> {
@@ -721,7 +651,7 @@ impl EgressFeed for TsFeed {
             if self
                 .ring
                 .read_at(idx as usize)
-                .is_some_and(|p| p.is_keyframe)
+                .is_some_and(|p| p.is_video_keyframe())
             {
                 return Some(FeedCursor::new(epoch, idx));
             }

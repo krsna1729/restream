@@ -100,6 +100,34 @@ pub struct MediaPacket {
     pub payload: Bytes,
 }
 
+impl MediaPacket {
+    /// A video keyframe: where a reader resuming mid-stream starts video again.
+    #[inline]
+    pub fn is_video_keyframe(&self) -> bool {
+        self.media_type == MediaType::Video && self.is_keyframe
+    }
+
+    /// A video frame that decodes only against earlier frames. A reader that
+    /// resumes mid-stream skips these until the next keyframe. Codec
+    /// configuration is not one: an FLV sequence header carries frame type 1
+    /// (legacy and enhanced RTMP) though ingest does not flag it a keyframe.
+    #[inline]
+    pub fn is_video_interframe(&self) -> bool {
+        if self.media_type != MediaType::Video || self.is_keyframe {
+            return false;
+        }
+        match self.format {
+            // Frame type: 2 inter, 3 disposable inter (bit 7 is the
+            // enhanced-RTMP header flag).
+            PayloadFormat::Flv => self
+                .payload
+                .first()
+                .is_some_and(|tag| matches!((tag >> 4) & 0x07, 2 | 3)),
+            PayloadFormat::Raw => true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +202,38 @@ mod tests {
         let (framing, record) = header.split_at(5);
         assert_eq!(framing, [0x17, 0, 0, 0, 0]);
         assert_eq!(parse_avcc_config(record), (4, annexb.to_vec()));
+    }
+
+    /// A reader resuming mid-stream skips exactly the frames it cannot
+    /// decode; codec configuration, keyframes and audio pass, however the
+    /// ingest flagged them.
+    #[test]
+    fn only_dependent_video_frames_are_interframes() {
+        let packet = |media_type, format, is_keyframe, tag: &'static [u8]| MediaPacket {
+            media_type,
+            format,
+            is_keyframe,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: bytes::Bytes::from_static(tag),
+        };
+        let flv = |is_keyframe, tag| packet(MediaType::Video, PayloadFormat::Flv, is_keyframe, tag);
+        // Legacy AVC: sequence header (ingest flags it no keyframe), inter,
+        // disposable inter, key.
+        assert!(!flv(false, &[0x17, 0]).is_video_interframe());
+        assert!(flv(false, &[0x27, 1]).is_video_interframe());
+        assert!(flv(false, &[0x37, 1]).is_video_interframe());
+        assert!(!flv(true, &[0x17, 1]).is_video_interframe());
+        // Enhanced RTMP: sequence start (frame type 1), coded inter frames.
+        assert!(!flv(false, &[0x90, b'h', b'v', b'c', b'1']).is_video_interframe());
+        assert!(flv(false, &[0xA1, b'h', b'v', b'c', b'1']).is_video_interframe());
+        // Raw (Annex B, TS chunks): configuration rides with the keyframe.
+        assert!(packet(MediaType::Video, PayloadFormat::Raw, false, &[0]).is_video_interframe());
+        assert!(!packet(MediaType::Video, PayloadFormat::Raw, true, &[0]).is_video_interframe());
+        assert!(!packet(MediaType::Audio, PayloadFormat::Raw, false, &[0]).is_video_interframe());
+        assert!(
+            !packet(MediaType::Audio, PayloadFormat::Flv, false, &[0xAF, 1]).is_video_interframe()
+        );
     }
 }

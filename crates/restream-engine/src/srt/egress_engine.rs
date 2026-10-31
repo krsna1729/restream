@@ -209,7 +209,7 @@ mod tests {
         let ring = TsChunkRing::new(8, CancellationToken::new());
         let feed = TsFeed::new(&ring, Arc::new(FeedEpoch::new()));
         let cursor = FeedCursor::new(feed.epoch(), feed.head_sequence());
-        ring.push(unit, true);
+        ring.push(unit, restream_core::MediaType::Video, true);
         (feed, cursor)
     }
 
@@ -297,7 +297,11 @@ mod tests {
         let feed = TsFeed::new(&ring, Arc::new(FeedEpoch::new()));
         let mut cursor = FeedCursor::new(feed.epoch(), feed.head_sequence());
         for _ in 0..40 {
-            ring.push(Bytes::from(vec![0x47u8; 3_000]), true);
+            ring.push(
+                Bytes::from(vec![0x47u8; 3_000]),
+                restream_core::MediaType::Video,
+                true,
+            );
         }
         let mut engine = SrtEgressEngine::default();
         let mut sent = 0usize;

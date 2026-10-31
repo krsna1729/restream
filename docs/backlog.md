@@ -16,7 +16,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
-- [Q-092 no descendants of a dropped dependency](#q-092-resilience-opus-never-emit-descendants-of-a-dropped-dependency-bearing-unit)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
@@ -133,15 +132,6 @@ the [assurance roadmap](assurance-roadmap.md).
   refused promotion when the window cannot cover the gap.
 - Gates: differential cases against srtgo's state model; a harness mode that
   kills the active SRT output mid-stream and checks receiver continuity.
-
-### Q-092 [resilience] [opus] Never emit descendants of a dropped dependency-bearing unit
-- Goal: every fanout boundary that drops a video unit under pressure (ring
-  overrun, MoQ group eviction, WebTransport pressure, HLS discontinuity,
-  recirculation, RTMP congestion) also suppresses dependent units until the
-  next keyframe; where a boundary cannot see keyframes, document and test the
-  fallback.
-- Gates: a test per boundary that drops one unit and asserts no dependent unit
-  is emitted before the keyframe; removing the suppression fails it.
 
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
 - Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced

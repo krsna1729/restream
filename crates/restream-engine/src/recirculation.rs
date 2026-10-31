@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::egress::journal::{FeedEpoch, RingFeed};
+use crate::egress::visit::live_start_cursor;
 use crate::engine::IngestRegistration;
 use crate::engine::{EgressRegistration, MediaEngine};
 use crate::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
@@ -204,7 +205,7 @@ async fn drive_recirculation_until_blocked(driver: RecirculationDriver<'_>) {
             ReadBudget::new(MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES),
         ) {
             FeedRead::Units { units, next_cursor } => {
-                let first_sequence = driver.cursor.next_sequence as usize;
+                let first_sequence = next_cursor.next_sequence as usize - units.len();
                 *driver.cursor = next_cursor;
                 let outcome = driver.publisher.publish(
                     &driver.feed.current_ring(),
@@ -230,12 +231,7 @@ async fn drive_recirculation_until_blocked(driver: RecirculationDriver<'_>) {
             }
             FeedRead::Empty => break,
             FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
-                if let Some(sync_cursor) = driver.feed.latest_sync_point() {
-                    *driver.cursor = sync_cursor;
-                } else {
-                    *driver.cursor =
-                        FeedCursor::new(driver.feed.epoch(), driver.feed.head_sequence());
-                }
+                *driver.cursor = live_start_cursor(driver.feed);
             }
         }
     }
@@ -494,6 +490,102 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(engine.connected_input_count("pipe-target").await, 0);
+        engine.unregister_egress("out-pipeline").await;
+    }
+
+    /// An overrun with no keyframe left in the source window resumes at the
+    /// live edge: the target ring gets no interframe between the gap and the
+    /// next keyframe.
+    #[tokio::test]
+    async fn recirculation_forwards_no_interframe_after_a_resync_without_a_retained_keyframe() {
+        let engine = Arc::new(MediaEngine::new());
+        let source_ring = engine.get_or_create_pipeline("pipe-source").await;
+        let target_ring = engine.get_or_create_pipeline("pipe-target").await;
+        let egress_registration = engine
+            .register_egress_attempt(
+                "out-pipeline",
+                "pipe-source",
+                "pipeline://pipe-target/input-backup",
+                None,
+            )
+            .await;
+        let task = tokio::spawn(start_pipeline_recirculation(
+            "out-pipeline".to_string(),
+            source_ring.clone(),
+            "pipe-target".to_string(),
+            "input-backup".to_string(),
+            engine.clone(),
+            egress_registration.clone(),
+        ));
+        let caught_up = |ring: &RingBuffer| {
+            ring.reader_snapshots().iter().any(|reader| {
+                reader.name == "pipeline_egress:out-pipeline" && reader.lag_slots == 0
+            })
+        };
+        timeout(Duration::from_secs(1), async {
+            while engine.connected_input_count("pipe-target").await == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            engine
+                .select_pipeline_input("pipe-target", "input-backup")
+                .await
+        );
+        source_ring.push((*packet(MediaType::Video, 10, true)).clone());
+        timeout(Duration::from_secs(1), async {
+            while target_ring.get_write_idx() < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        // The recirculation falls a whole window behind (it cannot run while
+        // this test does not yield): the keyframe is gone.
+        for index in 0..source_ring.capacity() as i64 + 8 {
+            source_ring.push((*packet(MediaType::Video, 20 + index, false)).clone());
+        }
+        timeout(Duration::from_secs(1), async {
+            while !caught_up(&source_ring) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            target_ring.get_write_idx(),
+            1,
+            "nothing of the lapped window"
+        );
+
+        source_ring.push((*packet(MediaType::Video, 5_000, false)).clone());
+        source_ring.push((*packet(MediaType::Video, 5_040, true)).clone());
+        source_ring.push((*packet(MediaType::Video, 5_080, false)).clone());
+        timeout(Duration::from_secs(1), async {
+            while !caught_up(&source_ring) || target_ring.get_write_idx() < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let forwarded: Vec<bool> = (1..target_ring.get_write_idx())
+            .map(|sequence| target_ring.read_at(sequence).unwrap().is_keyframe)
+            .collect();
+        assert_eq!(
+            forwarded,
+            [true, false],
+            "the keyframe is the first unit after the gap"
+        );
+
+        egress_registration.cancel_token.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
         engine.unregister_egress("out-pipeline").await;
     }
 }

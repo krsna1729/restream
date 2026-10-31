@@ -31,10 +31,13 @@
 //!
 //! # Overflow & Recovery
 //!
-//! When a reader falls behind by ≥ capacity slots, `pull()` detects the gap
-//! and calls `fast_forward()`, which jumps to the most recent keyframe via
-//! an O(1) atomic read of `last_keyframe_idx`. This avoids decoding artifacts
-//! by always resuming from an IDR frame.
+//! When a reader falls behind by ≥ capacity slots, or finds its slot already
+//! holds a later lap's packet (a batch writes slots before it moves the write
+//! index), `pull()` calls `fast_forward()`, which jumps to the most recent
+//! keyframe via an O(1) atomic read of `last_keyframe_idx`, or to the live
+//! edge when no keyframe is retained. Until the next video keyframe the
+//! reader then skips video interframes, whose references it never delivered;
+//! audio passes.
 //!
 //! # Why ArcSwap
 //!
@@ -673,9 +676,21 @@ impl RingBuffer {
         total
     }
 
-    pub fn read_at(&self, idx: usize) -> Option<Arc<MediaPacket>> {
-        let slot_idx = idx % self.capacity;
-        self.slots[slot_idx].data.load_full()
+    /// The packet published at `sequence`, or `None` when its slot holds no
+    /// packet or another sequence's: one a later publication wrote over it,
+    /// even a batch that has not yet stored its write index. The caller
+    /// bounds `sequence` by the write index.
+    ///
+    /// Publication stores a slot's unit word, tagged with its sequence,
+    /// before the packet; reading the packet first and the word second
+    /// therefore sees a newer packet's word whenever it got the newer packet
+    /// (`tests/ring_frame_unit_loom.rs`).
+    #[inline]
+    pub fn read_at(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
+        let slot = &self.slots[sequence % self.capacity];
+        let packet = slot.data.load_full()?;
+        FrameUnit::unpack(slot.unit.load(Ordering::Acquire), sequence)?;
+        Some(packet)
     }
 
     /// When the packet at `sequence` was published, in microseconds since

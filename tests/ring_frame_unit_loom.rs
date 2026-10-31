@@ -1,10 +1,14 @@
-//! Loom model-check for `RingBuffer::frame_unit`, the lock-free read of the
-//! per-slot frame-unit side table. Reduced to the slot unit atomics and the
-//! write index: the producer stores each slot's unit word (Release), tagged
-//! with its sequence, and stores the write index (Release) only after the
-//! whole publication; for a batch that is after several slots. A reader
-//! loads the write index, keeps only the retained window, loads the unit
-//! (both Acquire) and accepts it only when its tag names the sequence asked.
+//! Loom model-check for the lock-free reads of a ring slot by sequence:
+//! `RingBuffer::frame_unit` (the per-slot frame-unit side table) and
+//! `RingBuffer::read_sequence` (the packet itself). Reduced to the slot
+//! atomics and the write index: the producer stores each slot's unit word
+//! (Release), tagged with its sequence, then the slot's packet (the
+//! `ArcSwap` store, a SeqCst swap, modelled as a Release store of the
+//! sequence), and stores the write index (Release) only after the whole
+//! publication; for a batch that is after several slots. A reader loads the
+//! write index, keeps only the retained window, loads what it needs (all
+//! Acquire) and accepts it only when the unit's tag names the sequence
+//! asked.
 
 #[cfg(loom)]
 mod loom_tests {
@@ -19,6 +23,8 @@ mod loom_tests {
     struct FakeRing {
         write_idx: AtomicUsize,
         units: [AtomicU64; CAPACITY],
+        /// The sequence whose packet the slot holds (`usize::MAX`: none).
+        data: [AtomicUsize; CAPACITY],
     }
 
     /// The generation the producer records for `sequence`.
@@ -35,14 +41,17 @@ mod loom_tests {
             Arc::new(Self {
                 write_idx: AtomicUsize::new(0),
                 units: std::array::from_fn(|_| AtomicU64::new(0)),
+                data: std::array::from_fn(|_| AtomicUsize::new(usize::MAX)),
             })
         }
 
-        /// `push_batch`: every slot first, then one write-index store.
+        /// `push_batch`: every slot first (unit word, then packet), then one
+        /// write-index store.
         fn push_batch(&self, count: usize) {
             let start = self.write_idx.load(Ordering::Relaxed);
             for sequence in start..start + count {
                 self.units[sequence % CAPACITY].store(pack(sequence), Ordering::Release);
+                self.data[sequence % CAPACITY].store(sequence, Ordering::Release);
             }
             self.write_idx.store(start + count, Ordering::Release);
         }
@@ -53,9 +62,27 @@ mod loom_tests {
                 return None;
             }
             let raw = self.units[sequence % CAPACITY].load(Ordering::Acquire);
-            (raw & PRESENT != 0 && (raw >> 32) & TAG_MASK == sequence as u64 & TAG_MASK)
-                .then_some(raw as u32)
+            unpack(raw, sequence)
         }
+
+        /// `read_sequence`: the packet first, then its unit word; a packet
+        /// is accepted only when the word names `sequence`.
+        fn read_sequence(&self, sequence: usize) -> Option<usize> {
+            let packet = self.data[sequence % CAPACITY].load(Ordering::Acquire);
+            if packet == usize::MAX {
+                return None;
+            }
+            unpack(
+                self.units[sequence % CAPACITY].load(Ordering::Acquire),
+                sequence,
+            )?;
+            Some(packet)
+        }
+    }
+
+    fn unpack(raw: u64, sequence: usize) -> Option<u32> {
+        (raw & PRESENT != 0 && (raw >> 32) & TAG_MASK == sequence as u64 & TAG_MASK)
+            .then_some(raw as u32)
     }
 
     /// Whatever the interleaving with a producer that laps the ring one
@@ -108,6 +135,33 @@ mod loom_tests {
             reader.join().unwrap();
             let last = 2 * CAPACITY - 1;
             assert_eq!(ring.frame_unit(last), Some(generation_of(last)));
+        });
+    }
+
+    /// A reader racing a batch that laps its sequence gets either nothing or
+    /// the packet of exactly the sequence asked: a newer packet in the slot
+    /// always comes with its newer unit word.
+    #[test]
+    fn loom_read_sequence_never_returns_another_sequences_packet() {
+        loom::model(|| {
+            let ring = FakeRing::new();
+            ring.push_batch(CAPACITY);
+            let reader_ring = ring.clone();
+
+            let reader = thread::spawn(move || {
+                for sequence in 0..CAPACITY {
+                    if let Some(packet) = reader_ring.read_sequence(sequence) {
+                        assert_eq!(packet, sequence, "sequence {sequence}");
+                    }
+                }
+            });
+
+            ring.push_batch(CAPACITY);
+
+            reader.join().unwrap();
+            let last = 2 * CAPACITY - 1;
+            assert_eq!(ring.read_sequence(last), Some(last));
+            assert_eq!(ring.read_sequence(0), None, "lapped");
         });
     }
 }

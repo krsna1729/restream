@@ -489,7 +489,9 @@ proptest! {
 
 /// P7: if the old ring overflows while the reader is lagging and then a seal
 /// fires, the reader fast-forwards on the old ring and migrates cleanly —
-/// no panic, no duplication of post-seal packets.
+/// no panic, no duplication of post-seal packets. The overflow left no
+/// keyframe, so the reader skips video interframes until the next one; the
+/// post-seal stream opens on a keyframe and arrives whole.
 #[test]
 fn p7_overflow_then_seal() {
     let rt = Runtime::new().unwrap();
@@ -505,7 +507,10 @@ fn p7_overflow_then_seal() {
 
         // Now seal and write to new ring.
         let new = seal(&old, 128);
-        push_seq(&new, 100, 5);
+        let mut keyframe = pkt(100);
+        keyframe.is_keyframe = true;
+        new.push(keyframe);
+        push_seq(&new, 101, 4);
 
         r.wait_for_data().await;
         let post: Vec<u64> = drain(&mut r);
@@ -516,20 +521,12 @@ fn p7_overflow_then_seal() {
             post.windows(2).all(|w| w[1] > w[0]),
             "P7: monotone after overflow+migrate"
         );
-        // All new-ring packets must appear.
-        assert!(
-            post.iter().any(|&s| s >= 100),
-            "P7: new-ring packets present after overflow+migrate"
-        );
-        // No post-seal packets duplicated.
+        // Every post-seal packet arrives, once and in order.
         let post_seal: Vec<u64> = post.into_iter().filter(|&s| s >= 100).collect();
-        let mut deduped = post_seal.clone();
-        deduped.sort_unstable();
-        deduped.dedup();
         assert_eq!(
-            deduped.len(),
-            post_seal.len(),
-            "P7: no duplicates from new ring"
+            post_seal,
+            (100..105).collect::<Vec<u64>>(),
+            "P7: the post-seal stream arrives whole after overflow+migrate"
         );
     });
 }

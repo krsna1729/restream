@@ -97,16 +97,22 @@ The fabric reads a bounded, sequence-addressed, immutable feed through the
 | Method | Contract |
 |---|---|
 | `head_sequence`, `oldest_sequence` | Retained window; a cursor below `oldest_sequence` is overrun |
-| `read_from` / `read_from_into` | Non-blocking; bounded by `ReadBudget` (default 64 units, 512 KiB) |
+| `read_from` / `read_from_into` | Non-blocking; bounded by `ReadBudget` (default 64 units, 512 KiB); one contiguous run ending at the returned cursor. A slot the producer already lapped is an overrun |
 | `latest_sync_point`, `sync_point_at_or_after` | Positions a protocol can start from, such as a keyframe |
 | `epoch` | Bumped by `FeedEpoch::advance` on a discontinuity |
 
-A `FeedCursor` holds only `epoch` and `next_sequence`. It does not pin
-entries. A slow leaf cannot make the feed grow.
+A `FeedCursor` holds `epoch`, `next_sequence` and `awaiting_keyframe`. It
+does not pin entries. A slow leaf cannot make the feed grow. A cursor
+awaiting a keyframe skips the video interframes at its position (they do
+not count against the budget), and the run stops before the next one; the
+first video keyframe ends the wait. Audio and codec configuration pass: an
+FLV sequence header is not flagged a keyframe, but references nothing
+(`MediaPacket::is_video_interframe`).
 
 A leaf starts with a placeholder cursor. On its first visit, `visit_leaf`
 (`visit.rs`) primes it with `live_start_cursor`: the latest retained sync
-point, or the head when none is retained. `HandshakeComplete` re-anchors the
+point, or the head when none is retained, awaiting a keyframe there.
+`HandshakeComplete` re-anchors the
 cursor the same way, because handshake states never read the feed. The
 start is never `oldest_sequence`; that would put the leaf a full retention
 window behind live.

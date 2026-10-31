@@ -51,9 +51,10 @@ use restream_core::metadata::AudioMeta;
 use restream_sync::{PublishSubscribers, PublishWake};
 
 use super::egress::media::MediaConverter;
-use super::egress::publish::{HangBroadcast, Pump, RingPublisher, live_start};
+use super::egress::publish::{HangBroadcast, Pump, RingPublisher};
 use super::egress::{MoqPublishStartup, publish_startup};
 use super::transport::{self, Accepted};
+use crate::egress::visit::live_start_cursor;
 use restream_moq::media::VideoCodec;
 
 pub(crate) use token::TokenError;
@@ -816,7 +817,7 @@ async fn watch_track_set(
 
 /// Feed the broadcast from the ring until the broadcast closes.
 async fn pump(feed: RingFeed, mut publisher: RingPublisher, wake: flume::Receiver<()>) {
-    let mut cursor = live_start(&feed);
+    let mut cursor = live_start_cursor(&feed);
     let budget = ReadBudget::new(PUMP_BATCH_UNITS, PUMP_BATCH_BYTES);
     loop {
         match publisher.pump(&feed, &mut cursor, budget) {
@@ -829,7 +830,7 @@ async fn pump(feed: RingFeed, mut publisher: RingPublisher, wake: flume::Receive
                     return;
                 }
             }
-            Pump::Overrun => cursor = live_start(&feed),
+            Pump::Overrun => cursor = live_start_cursor(&feed),
             Pump::Failed(reason) => {
                 tracing::warn!(%reason, "MoQ origin broadcast ended");
                 return;

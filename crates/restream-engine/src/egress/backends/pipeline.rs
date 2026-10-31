@@ -77,7 +77,7 @@ impl ProtocolEngine for PipelineEngine<RingFeed> {
         );
         match feed.read_from(*cursor, read_budget) {
             FeedRead::Units { units, next_cursor } => {
-                let first_sequence = cursor.next_sequence as usize;
+                let first_sequence = next_cursor.next_sequence as usize - units.len();
                 *cursor = next_cursor;
                 let outcome = transport.publisher.publish(
                     &feed.current_ring(),

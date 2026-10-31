@@ -361,6 +361,9 @@ async fn publish_next_chunk(
         publisher.select_rendition(release.rendition, || {
             container.unwrap_or(Container::Ts).demux()
         });
+        if release.after_gap {
+            publisher.after_gap();
+        }
         let mark = match release.reanchor {
             Reanchor::None => None,
             Reanchor::Clock => Some(DiscontinuityKind::Clock),
