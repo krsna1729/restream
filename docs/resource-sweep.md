@@ -86,7 +86,9 @@ its trust root to Restream.
 For remote SRT receivers, set `RESOURCE_SWEEP_SRT_PEER_HOSTS` to a
 comma-separated host list and run `srt-sink` on each host. The remote
 state endpoints supply same-window drop counters. Configure
-`SRT_SINK_PORTS` and `SRT_SINK_STATE_PORT` using
+`SRT_SINK_PORTS` (default: `HARNESS_SRT_SINK_PORTS_PER_PEER` ports from the
+SRT base; list every port the measuring host spreads outputs over) and
+`SRT_SINK_STATE_PORT` using
 [`srt_sink.rs`](../crates/test_harness/src/test_harness/srt_sink.rs), and check
 [`peer_state_config`](../crates/test_harness/src/test_harness/resource_sweep/config.rs)
 for endpoint overrides. Remote counters must be reachable to grade the
@@ -114,7 +116,7 @@ Configuration is parsed by
 | `MSR_PEER` | `mediamtx` or `sink` |
 | `PEER_COUNT` | Peer instances/ports, default 1 |
 | `RESOURCE_SWEEP_SRT_PEER_HOSTS` | Remote SRT receiver hosts; unset means loopback |
-| `HARNESS_SRT_SINK_OWNERS_PER_PORT` | Owners per harness SRT sink port, default 2 (clamped to 1–4); the sink refuses a port that already has a UDP socket, so a leftover same-user sink cannot join its `SO_REUSEPORT` group |
+| `HARNESS_SRT_SINK_PORTS_PER_PEER` | `MSR_PEER=sink` only: SRT ports per peer instance, one production Owner each, default 2 (clamped to 1–4); outputs spread over every port by name (MSR: by ordinal) |
 | `RESOURCE_SWEEP_HLS_TLS` | `1` selects HTTPS on the counting HLS sink |
 | `RESOURCE_SWEEP_RTMPS_CERT`, `RESOURCE_SWEEP_RTMPS_KEY` | Certificate/key pair for MediaMTX or the counting RTMPS listener |
 | `RESOURCE_SWEEP_NO_CLEANUP` | `1` skips final stack cleanup; retaining a live workload also requires `cumulative` |

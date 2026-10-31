@@ -390,16 +390,23 @@ pub(super) fn spawn_msr_publisher(
 /// round-robin distribution `msr_output_url` publishes with. Shared by
 /// every place that needs to reach the same peer an output actually landed
 /// on: publish URL, read-back URL, and per-instance path-health grouping.
+/// SRT outputs then take the instance's sink ports in turn (`srt_peer_port`).
 pub(super) fn msr_peer_instance(ordinal: usize, peer_count: usize) -> usize {
     ordinal % peer_count.max(1)
 }
 
+fn msr_srt_port(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> u16 {
+    super::super::peer_ports::srt_peer_port(env, output.ordinal as u64)
+}
+
 pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
     let instance = msr_peer_instance(output.ordinal, env.peer_count);
-    let (rtmp_port, _, srt_port, _) = super::super::peer_ports::peer_instance_ports(env, instance);
+    let rtmp_port = super::super::peer_ports::peer_instance_ports(env, instance).0;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
-        MsrProtocol::Srt => harness_srt_standard_publish_url(srt_port, &output.name),
+        MsrProtocol::Srt => {
+            harness_srt_standard_publish_url(msr_srt_port(env, output), &output.name)
+        }
     }
 }
 
@@ -439,12 +446,16 @@ pub(super) fn msr_group_expected_paths_by_instance(
 
 pub(super) fn msr_read_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
     let instance = msr_peer_instance(output.ordinal, env.peer_count);
-    let (rtmp_port, _, srt_port, _) = super::super::peer_ports::peer_instance_ports(env, instance);
+    let rtmp_port = super::super::peer_ports::peer_instance_ports(env, instance).0;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
         MsrProtocol::Srt => {
-            let mut url =
-                harness_srt_ffmpeg_url(srt_port, &output.name, HarnessSrtMode::Read, None);
+            let mut url = harness_srt_ffmpeg_url(
+                msr_srt_port(env, output),
+                &output.name,
+                HarnessSrtMode::Read,
+                None,
+            );
             if let Some(secs) = std::env::var("MSR_SRT_READ_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())

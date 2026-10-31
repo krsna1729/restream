@@ -241,12 +241,12 @@ fn summary_markdown(provenance: &Value, rows: &[Rung]) -> String {
             ),
             format!("- kernel {}; {}", field("kernel", "?"), field("memory", "")),
             format!(
-                "- Restream CPUs `{}`, harness/sink CPUs `{}`, egress shards {}, SRT sink ports {}, Owners per port {}, malloc arenas {}",
+                "- Restream CPUs `{}`, harness/sink CPUs `{}`, egress shards {}, SRT sink instances {}, SRT ports per instance {}, malloc arenas {}",
                 field("restream_cpus", "None"),
                 field("harness_cpus", "None"),
                 field("egress_shards", "None"),
                 field("peer_count", "None"),
-                field("sink_owners_per_port", "None"),
+                field("sink_ports_per_peer", "None"),
                 field("malloc_arena_max", "restream provisional default")
             ),
             format!("- host jitter (gaps > 5 ms on each Restream CPU, nothing else scheduled): {jitter}"),

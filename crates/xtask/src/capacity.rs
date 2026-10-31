@@ -44,9 +44,10 @@ Environment (all optional):
   CAPACITY_HARNESS_CPUS    cpuset for harness, publisher and sinks (default: the rest)
   CAPACITY_EGRESS_SHARDS   RESTREAM_EGRESS_SHARDS override (default: product default,
                            CPU-derived and clamped 2..=8)
-  CAPACITY_PEER_COUNT      SRT sink instances / ports (default: CPUs in the harness set)
-  HARNESS_SRT_SINK_OWNERS_PER_PORT
-                           Owner threads per SRT sink port (default 2, clamped 1..=4)
+  CAPACITY_PEER_COUNT      SRT sink instances (default: CPUs in the harness set)
+  HARNESS_SRT_SINK_PORTS_PER_PEER
+                           SRT sink ports per instance, one Owner thread each
+                           (default 2, clamped 1..=4)
   CAPACITY_STOP_AFTER_FAIL stop a protocol's ladder after a rung where no repeat
                            passed (default 1)
   CAPACITY_ARTIFACT_ROOT   output root (default .local/artifacts/capacity-ramp/<utc stamp>)
@@ -169,8 +170,8 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         expand_cpu_list(&harness_cpus)?.len() as u64,
     )?;
     // Default 2 and range 1..=4 mirror the harness's
-    // `DEFAULT_SINK_OWNERS_PER_PORT`/`MAX_SINK_OWNERS_PER_PORT` (another crate).
-    let sink_owners_per_port = env_number("HARNESS_SRT_SINK_OWNERS_PER_PORT", 2)?.clamp(1, 4);
+    // `DEFAULT_SINK_PORTS_PER_PEER`/`MAX_SINK_PORTS_PER_PEER` (another crate).
+    let sink_ports_per_peer = env_number("HARNESS_SRT_SINK_PORTS_PER_PEER", 2)?.clamp(1, 4);
 
     // --- Preflight ---------------------------------------------------------
     for process in ["restream", "mediamtx", "ffmpeg"] {
@@ -293,7 +294,7 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         "build_profile": build_profile,
         "egress_shards": egress_shards.clone().unwrap_or_else(|| "default".into()),
         "malloc_arena_max": arena_max.clone().unwrap_or_else(|| "restream provisional default".into()),
-        "sink_owners_per_port": sink_owners_per_port,
+        "sink_ports_per_peer": sink_ports_per_peer,
         "host_jitter": host_jitter,
         "peer_count": peer_count,
         "bitrate": bitrate,
@@ -332,8 +333,8 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         ("MSR_PEER", "sink".into()),
         ("PEER_COUNT", peer_count.to_string()),
         (
-            "HARNESS_SRT_SINK_OWNERS_PER_PORT",
-            sink_owners_per_port.to_string(),
+            "HARNESS_SRT_SINK_PORTS_PER_PEER",
+            sink_ports_per_peer.to_string(),
         ),
         (
             "RESTREAM_BIN",

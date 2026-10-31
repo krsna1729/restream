@@ -12,12 +12,12 @@ use super::{
     HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, PublishTrackSelection, RampApi,
     RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
-    configured_owners_per_port, create_backup_input, create_output, create_output_with_rtmp_mode,
-    decode_pcm_quality, default_restream_bin, default_work_db_path, env_secs, env_usize,
-    ffprobe_live_sample, file_tail_lines, harness_admin_password, harness_port_defaults,
-    harness_srt_crypto_from_env, harness_srt_ffmpeg_url, harness_srt_standard_publish_url,
-    parse_srt_crypto_variants, plain_mediamtx_config, probe_dims_ramp, run_ffmpeg_filter_log,
-    safe_artifact_stem, signal_report_json, spawn_mediamtx, spawn_publisher_with_selection,
+    create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
+    default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
+    file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
+    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, parse_srt_crypto_variants,
+    plain_mediamtx_config, probe_dims_ramp, run_ffmpeg_filter_log, safe_artifact_stem,
+    signal_report_json, spawn_mediamtx, spawn_publisher_with_selection,
     start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
     sweep_fixture, validate_signal_quality_with_tolerances, wait_for_api_input_live,
     wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
@@ -61,7 +61,9 @@ mod hls_sink;
 mod peer_ports;
 #[path = "resource_sweep/thread_cpu.rs"]
 mod thread_cpu;
-use peer_ports::{instance_suffixed_path, peer_instance_ports, resource_output_url};
+use peer_ports::{
+    instance_suffixed_path, peer_instance_ports, resource_output_url, srt_peer_ports,
+};
 #[cfg(test)]
 use peer_ports::{peer_instance_for, srt_url_on_host, validate_peer_instance_ports};
 #[path = "resource_sweep/packet_contract.rs"]
@@ -109,10 +111,8 @@ struct ResourceSweepStack {
 }
 
 /// In-process harness-native sink peers: one RTMP accept-and-discard
-/// listener per `PEER_COUNT` instance, plus one `HarnessSrtSinkPool` spanning
-/// every instance's SRT port with two production SRT Owner threads per port
-/// by default (`HARNESS_SRT_SINK_OWNERS_PER_PORT` configures the count).
-/// Kernel `SO_REUSEPORT` dispatches independent source flows across the Owners.
+/// listener per `PEER_COUNT` instance, plus one `HarnessSrtSinkPool` with one
+/// production SRT Owner thread per sink port (`srt_peer_ports`).
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
@@ -320,18 +320,15 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
     Ok(children)
 }
 
-/// Starts one in-process harness-native sink-peer instance: an RTMP
-/// accept-and-discard listener plus an SRT one, bound directly to
-/// `rtmp_port`/`srt_port` -- no readiness polling needed, unlike spawning a
+/// Starts the in-process harness-native sink peers: per instance an RTMP
+/// accept-and-discard listener, plus one SRT Owner thread per sink port
+/// (`srt_peer_ports`) -- no readiness polling needed, unlike spawning a
 /// separate process, since a synchronous bind either succeeds or fails
 /// immediately.
 /// `PEER_SKIP_START` is not honoured here: it exists for pre-started
 /// external processes (mediamtx), which an in-process listener has no
 /// equivalent of -- a harness sink peer is always started fresh, bound
 /// directly by this harness process.
-///
-/// The SRT pool runs the configured number of production Owner threads per
-/// `PEER_COUNT` port (`HarnessSrtSinkPool`).
 async fn start_harness_sink_peers(
     env: &ResourceSweepEnv,
     needs: LocalPeerNeeds,
@@ -340,7 +337,7 @@ async fn start_harness_sink_peers(
     let mut rtmp_metrics = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
-        let (rtmp_port, rtmps_port, srt_port, _api) = peer_instance_ports(env, index);
+        let (rtmp_port, rtmps_port, _, _api) = peer_instance_ports(env, index);
         if needs.rtmp
             && let Some((cert, key)) = &env.rtmps_tls
         {
@@ -382,13 +379,12 @@ async fn start_harness_sink_peers(
                 }
             }
         }
-        srt_ports.push(srt_port);
+        srt_ports.extend(srt_peer_ports(env, index));
     }
 
     let srt_pool = if needs.srt {
         let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
-        let owners_per_port = configured_owners_per_port();
-        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, owners_per_port) {
+        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer) {
             Ok(pool) => Some(pool),
             Err(err) => {
                 for server in rtmp {
