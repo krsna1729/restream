@@ -877,13 +877,4 @@ fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[path = "alerts_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "alerts_signal_tests.rs"]
-mod signal_tests;
-
-#[cfg(test)]
-#[path = "alerts_naming_tests.rs"]
-mod naming_tests;

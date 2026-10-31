@@ -1,7 +1,7 @@
 //! Alerts from the picture and sound checks and from destination
 //! baselines.
 
-use super::*;
+use super::super::*;
 use serde_json::json;
 
 fn snapshot_with_pipeline(pipeline_id: &str, input_status: &str) -> serde_json::Value {
