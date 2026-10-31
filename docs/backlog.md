@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-026 frozen-SRT-destination RSS gate](#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
 - [Q-027 residual SRT×100 repeat failure](#q-027-performance-opus-find-why-srt100-still-fails-a-repeat-with-the-multi-owner-sink)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
@@ -35,19 +34,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
-- Goal: explain the historical ~70 MB RSS growth of `fault.srt-output-stall`'s
-  frozen-destination case (then a plateau), then remove the cause or
-  recalibrate the 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from that attribution.
-- Files: `crates/test_harness/src/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
-  in `crates/restream-engine/src/egress/backends/srt*.rs`.
-- Context: current runs pass well under the gate and the opt-in attribution
-  census does not reproduce the old growth. Closing needs allocation stacks,
-  live-vs-free data and feed/transport ownership snapshots that explain or
-  reproduce that shape. Keep the gate unchanged until then.
-- Gates: `cargo xtask harness fault.srt-output-stall -- --no-netns`; its
-  `samples.jsonl` is the RSS time series.
 
 ### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
 - Goal: SRT capacity rungs measure Restream, not the receiver.

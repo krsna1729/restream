@@ -315,6 +315,32 @@ pub(super) fn sampled_summary(samples: &[ProcessSample], sigstop: f64) -> Value 
     })
 }
 
+/// Retry-window RSS growth limit. Current runs grow ~3.5 MiB; the historical
+/// per-retry shard-churn staircase grew 58.5 MiB over the same window.
+const MAX_RETRY_RSS_GROWTH_KB: u64 = 16 * 1024;
+
+/// The pass gate: peak RSS between retry observation and output stop over
+/// the first sample at or after retry observation. Ring warm-up before the
+/// first retry stays out of the baseline. No sample in the window is not
+/// evidence of bounded memory.
+pub(super) fn retry_window_rss(samples: &[ProcessSample], markers: &CaptureMarkers) -> Value {
+    let mut window = samples
+        .iter()
+        .filter(|sample| (markers.retry_observed..=markers.output_stopped).contains(&sample.t))
+        .map(|sample| sample.rss_kb);
+    let baseline = window.next().filter(|kb| *kb > 0);
+    let peak = baseline.map(|baseline| window.fold(baseline, u64::max));
+    let growth = baseline.zip(peak).map(|(baseline, peak)| peak - baseline);
+    json!({
+        "available": growth.is_some(),
+        "bounded": growth.is_some_and(|growth| growth <= MAX_RETRY_RSS_GROWTH_KB),
+        "baselineKb": baseline,
+        "peakKb": peak,
+        "growthKb": growth,
+        "limitKb": MAX_RETRY_RSS_GROWTH_KB,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +509,70 @@ mod tests {
 
         let no_baseline = sampled_summary(&samples, 0.0);
         assert!(no_baseline["peakRssGrowthKb"].is_null(), "{no_baseline}");
+    }
+
+    /// [`complete_capture`] markers with SIGSTOP just before a retry window
+    /// set to `window`.
+    fn window_markers(window: std::ops::RangeInclusive<f64>) -> CaptureMarkers {
+        CaptureMarkers {
+            sigstop: *window.start() - 0.5,
+            retry_observed: *window.start(),
+            output_stopped: *window.end(),
+            ..complete_capture().1
+        }
+    }
+
+    fn series(rss: &[u64]) -> Vec<ProcessSample> {
+        (0u32..)
+            .zip(rss)
+            .map(|(t, kb)| sample(f64::from(t), *kb))
+            .collect()
+    }
+
+    #[test]
+    fn retry_window_gate_rejects_the_historical_shard_churn_staircase() {
+        // Recorded RSS (KB) from retry observation through each 6-shard
+        // spawn step to the end of the old frozen-peer baseline run.
+        let samples = series(&[141_788, 160_632, 160_632, 175_120, 187_088, 201_708]);
+        let gate = retry_window_rss(&samples, &window_markers(0.0..=5.0));
+        assert_eq!(gate["growthKb"], 59_920, "{gate}");
+        assert_eq!(gate["bounded"], false, "{gate}");
+    }
+
+    #[test]
+    fn retry_window_gate_ignores_pre_retry_warm_up() {
+        // +12.5 MB of ring warm-up between SIGSTOP and retry, then flat.
+        let samples = series(&[129_196, 135_000, 141_696, 141_696, 141_696]);
+        let markers = CaptureMarkers {
+            sigstop: 0.5,
+            ..window_markers(2.0..=4.0)
+        };
+        let gate = retry_window_rss(&samples, &markers);
+        assert_eq!(gate["baselineKb"], 141_696, "{gate}");
+        assert_eq!(gate["growthKb"], 0, "{gate}");
+        assert_eq!(gate["bounded"], true, "{gate}");
+    }
+
+    #[test]
+    fn retry_window_gate_requires_a_sample_in_the_window() {
+        for samples in [series(&[100, 200]), series(&[100, 200, 0, 300]), Vec::new()] {
+            let gate = retry_window_rss(&samples, &window_markers(2.0..=3.5));
+            assert_eq!(gate["available"], false, "{gate}");
+            assert_eq!(gate["bounded"], false, "{gate}");
+            assert!(gate["growthKb"].is_null(), "{gate}");
+        }
+    }
+
+    #[test]
+    fn retry_window_gate_takes_the_peak_and_keeps_the_16_mib_boundary() {
+        for (peak, bounded) in [
+            (100 + MAX_RETRY_RSS_GROWTH_KB, true),
+            (101 + MAX_RETRY_RSS_GROWTH_KB, false),
+        ] {
+            let samples = series(&[100, peak, 100]);
+            let gate = retry_window_rss(&samples, &window_markers(0.0..=2.0));
+            assert_eq!(gate["peakKb"], peak, "{gate}");
+            assert_eq!(gate["bounded"], bounded, "{gate}");
+        }
     }
 }
