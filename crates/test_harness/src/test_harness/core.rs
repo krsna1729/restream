@@ -19,14 +19,15 @@ pub(crate) use history::{
 #[allow(unused_imports)]
 pub(crate) use ports::{
     HarnessPortDefaults, PEER_PORT_STRIDE, TestPorts, env_or_allocated_port,
-    env_or_allocated_port_range, harness_port_defaults,
+    env_or_allocated_port_range, harness_port_defaults, reserve_port_range,
 };
 #[allow(unused_imports)]
 pub(crate) use process::{
-    FfmpegStats, append_line, ffmpeg_pipe1_stats, login_api, proc_net_has_listening_port,
-    process_cpu_pct, process_rss_kb, start_restream_api, start_restream_child,
-    start_restream_child_in_media_dir, start_restream_child_opts, start_restream_child_with_env,
-    wait_for_http_ok, wait_for_tcp_listener_ready,
+    FfmpegStats, append_line, ffmpeg_pipe1_stats, login_api, plain_mediamtx_config,
+    proc_net_has_listening_port, process_cpu_pct, process_rss_kb, spawn_logged_ffmpeg,
+    spawn_mediamtx, start_restream_api, start_restream_child, start_restream_child_in_media_dir,
+    start_restream_child_opts, start_restream_child_with_env, wait_for_http_ok,
+    wait_for_tcp_listener_ready,
 };
 #[allow(unused_imports)]
 pub(crate) use profile::{
@@ -39,8 +40,8 @@ pub(crate) use profile::{
 #[allow(unused_imports)]
 pub(crate) use setup::{
     MEDIAMTX_CONFIG_ENV_NAMES, absolute_path, artifact_path, command_with_optional_cgroup,
-    env_flag, env_secs, env_usize, maybe_global_process_cleanup, maybe_prune_old_artifacts,
-    mixed_command_artifact_path, remove_mediamtx_config_env,
+    env_flag, env_secs, env_usize, finish_mode_report, maybe_global_process_cleanup,
+    maybe_prune_old_artifacts, mixed_command_artifact_path, remove_mediamtx_config_env,
 };
 pub(crate) use srt_crypto::{
     HarnessSrtCrypto, append_srt_crypto, apply_harness_srt_listener_env, apply_srt_listener_env,

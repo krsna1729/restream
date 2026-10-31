@@ -207,20 +207,8 @@ pub(in super::super) async fn run_mixed_anchor_config(
 
     // Live egress sink probe: assert DTS monotonicity, video+audio
     // presence, and keyframe cadence on the live egress.
-    let sink_port = harness_port_defaults()
-        .sink
-        .checked_add(env.sink_port_offset as u16)
-        .ok_or("mixed sink probe port overflowed")?;
-    let (sink_probe_result, sink_probe_failure) = run_optional_mixed_sink_probe(
-        env,
-        api,
-        &pipeline_id,
-        cfg,
-        sink_port,
-        &mut output_ids,
-        resume,
-    )
-    .await?;
+    let (sink_probe_result, sink_probe_failure) =
+        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
 
     let mut hls_put_probe_result = None;
     if env.check_selected("hls-put-probe")
@@ -357,10 +345,8 @@ pub(in super::super) async fn run_mixed_anchor_config(
                 "deleted": delete_summary["deleted"],
             })),
         )?;
-        log_mixed_ok(env, "lifecycle: all outputs stopped and deleted")?;
-    } else {
-        log_mixed_ok(env, "lifecycle: all outputs stopped and deleted")?;
     }
+    log_mixed_ok(env, "lifecycle: all outputs stopped and deleted")?;
 
     if env.check_selected("runtime-log") {
         let runtime_log_started = Instant::now();
@@ -458,57 +444,20 @@ pub(in super::super) async fn run_mixed_live_config(
 
     let mut output_ids = Vec::with_capacity(total);
     let mut ffmpeg_srt_sinks = Vec::new();
-    let mut next_ffmpeg_srt_sink = 0usize;
     let mut ffmpeg_signal_sinks = Vec::new();
-    let mut next_ffmpeg_signal_sink = 0usize;
-    if case.is_multi_track() {
-        add_mixed_multi_output_cases(
-            env,
-            api,
-            &pipeline_id,
-            restream_pid,
-            cfg,
-            &output_cases,
-            &mut ffmpeg_srt_sinks,
-            &mut next_ffmpeg_srt_sink,
-            &mut ffmpeg_signal_sinks,
-            &mut next_ffmpeg_signal_sink,
-            &mut output_ids,
-        )
-        .await?;
-    } else {
-        add_mixed_output_cases(
-            env,
-            api,
-            &pipeline_id,
-            restream_pid,
-            cfg,
-            &output_cases,
-            &mut ffmpeg_signal_sinks,
-            &mut next_ffmpeg_signal_sink,
-            &mut output_ids,
-        )
-        .await?;
-    }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, &output_cases, resume)
-        .await?;
-    if !ffmpeg_signal_sinks.is_empty() {
-        finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
-    }
-    if env.needs_live_output_progress_gate() {
-        // Mirror the file-ingest gate: under shared HEVC mixed fanout the last
-        // duplicated readers can still be wiring up while the first ffprobe or
-        // signal capture starts. Waiting for bytes-out keeps the live matrix
-        // from turning a startup lag into a false codec/output failure.
-        wait_for_outputs_progress_with_env(
-            api,
-            &pipeline_id,
-            &output_ids,
-            mixed_output_progress_timeout_for_case(case, output_ids.len()),
-            Some(env),
-        )
-        .await?;
-    }
+    add_mixed_outputs_and_gate(
+        env,
+        api,
+        &pipeline_id,
+        restream_pid,
+        case,
+        &output_cases,
+        resume,
+        &mut output_ids,
+        &mut ffmpeg_srt_sinks,
+        &mut ffmpeg_signal_sinks,
+    )
+    .await?;
 
     let rss_min_audio_tracks = case.is_multi_track().then_some(2);
     let rss = record_mixed_rss_delta(
@@ -536,20 +485,8 @@ pub(in super::super) async fn run_mixed_live_config(
     )
     .await?;
 
-    let sink_port = harness_port_defaults()
-        .sink
-        .checked_add(env.sink_port_offset as u16)
-        .ok_or("mixed sink probe port overflowed")?;
-    let (sink_probe_result, sink_probe_failure) = run_optional_mixed_sink_probe(
-        env,
-        api,
-        &pipeline_id,
-        cfg,
-        sink_port,
-        &mut output_ids,
-        resume,
-    )
-    .await?;
+    let (sink_probe_result, sink_probe_failure) =
+        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
 
     stop_child(&mut publisher).await;
     if let Some((_, standby)) = standby_publisher.as_mut() {
@@ -610,9 +547,6 @@ pub(in super::super) async fn run_mixed_live_config(
         },
         "outputs": env.output_registry_json(),
     });
-    if case.is_multi_track() {
-        result["audioTracks"] = json!(2);
-    }
     if let Some(probe) = sink_probe_result {
         result["sinkProbe"] = probe.summary;
         result["sinkProbePassed"] = json!(probe.passed);

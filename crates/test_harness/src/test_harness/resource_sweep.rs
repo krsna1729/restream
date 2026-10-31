@@ -16,8 +16,8 @@ use super::{
     decode_pcm_quality, default_restream_bin, default_work_db_path, env_secs, env_usize,
     ffprobe_live_sample, file_tail_lines, harness_admin_password, harness_port_defaults,
     harness_srt_crypto_from_env, harness_srt_ffmpeg_url, harness_srt_standard_publish_url,
-    parse_srt_crypto_variants, probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log,
-    safe_artifact_stem, signal_report_json, spawn_publisher_with_selection,
+    parse_srt_crypto_variants, plain_mediamtx_config, probe_dims_ramp, run_ffmpeg_filter_log,
+    safe_artifact_stem, signal_report_json, spawn_mediamtx, spawn_publisher_with_selection,
     start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
     sweep_fixture, validate_signal_quality_with_tolerances, wait_for_api_input_live,
     wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
@@ -251,7 +251,6 @@ async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Chi
     let log_path = instance_suffixed_path(&env.mediamtx_log, index);
     let config_path = instance_suffixed_path(&env.mediamtx_config, index);
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
-    let err_log = log.try_clone().map_err(|e| e.to_string())?;
     let rtmp_tls_lines = match &env.rtmps_tls {
         Some((cert, key)) => format!(
             "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
@@ -268,24 +267,15 @@ async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Chi
         ),
     )
     .map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("mediamtx");
-    let mut child = remove_mediamtx_config_env(&mut cmd)
-        .arg(&config_path)
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{api}/v3/paths/list"),
+    spawn_mediamtx(
+        Command::new("mediamtx"),
+        &config_path,
+        log,
+        api,
         Duration::from_secs(30),
+        &format!("mediamtx[{index}]"),
     )
     .await
-    {
-        stop_child(&mut child).await;
-        return Err(format!("mediamtx[{index}] did not become ready: {err}"));
-    }
-    Ok(child)
 }
 
 async fn verify_preexisting_mediamtx_peer(index: usize, api_port: u16) -> Result<Child, String> {

@@ -158,19 +158,13 @@ pub(crate) async fn run_hls_pull_duty(
         failure: None,
         output_id: None,
     };
-    let outcome = session.execute(&options, &plan, started, args).await;
+    let report = session.execute(&options, &plan, started, args).await;
     session.shutdown().await;
-
-    match outcome {
-        Ok(report) => {
-            let report_path = work_dir.join("report.json");
-            if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
-                let _ = std::fs::write(&report_path, bytes);
-            }
-            Ok(report)
-        }
-        Err(error) => Err(error),
+    let report = report?;
+    if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
+        let _ = std::fs::write(work_dir.join("report.json"), bytes);
     }
+    Ok(report)
 }
 
 impl Session {
@@ -191,7 +185,8 @@ impl Session {
             &plan.fixture,
             &plan.rtmp_publish_url("sk-hls-pull-source"),
         );
-        self.publisher = Some(spawn_ffmpeg(
+        // The source publisher: real-time copy of the checked-in fixture over RTMP.
+        self.publisher = Some(spawn_logged_ffmpeg(
             &plan.ffmpeg,
             &publisher_args,
             &plan.work_dir.join("source-publisher.log"),
@@ -749,26 +744,6 @@ pub(crate) async fn wait_for_preview_master(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-}
-
-/// The source publisher: real-time copy of the checked-in fixture over RTMP.
-fn spawn_ffmpeg(
-    ffmpeg: &Path,
-    argv: &[String],
-    log_path: &Path,
-    scope: &str,
-) -> Result<Child, String> {
-    let mut command = command_with_optional_cgroup(ffmpeg, scope);
-    command.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
-    command.args(argv);
-    let log = std::fs::File::create(log_path).map_err(|error| error.to_string())?;
-    let stderr = log.try_clone().map_err(|error| error.to_string())?;
-    command
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("spawn {}: {error}", ffmpeg.display()))
 }
 
 fn round2(value: f64) -> f64 {

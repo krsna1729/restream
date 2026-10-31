@@ -14,25 +14,15 @@ async fn start_local_mediamtx(
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(log_path).map_err(|e| e.to_string())?;
-    let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command = Command::new("mediamtx");
-    let mut child = remove_mediamtx_config_env(&mut command)
-        .arg(config_path)
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr_log))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{}/v3/paths/list", ports.mtx_api),
+    spawn_mediamtx(
+        Command::new("mediamtx"),
+        config_path,
+        log,
+        ports.mtx_api,
         Duration::from_secs(30),
+        "mediamtx",
     )
     .await
-    {
-        stop_child(&mut child).await;
-        return Err(format!("mediamtx did not become ready: {err}"));
-    }
-    Ok(child)
 }
 
 async fn install_bframe_transcode_profiles(api: &RampApi) -> Result<(), String> {

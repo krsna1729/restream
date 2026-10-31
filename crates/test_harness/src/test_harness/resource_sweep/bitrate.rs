@@ -1,4 +1,4 @@
-use super::measurement::round2;
+use super::measurement::{cpu_pcts, round2};
 use super::*;
 
 fn parse_bitrate_specs(name: &str, default: &str) -> Result<Vec<BitrateSpec>, String> {
@@ -343,32 +343,20 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     std::fs::create_dir_all(env.work_dir.join("logs")).map_err(|e| e.to_string())?;
     cleanup_ramp_db(&env.restream_db_path);
     let mediamtx_log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-    let mediamtx_err = mediamtx_log.try_clone().map_err(|e| e.to_string())?;
     std::fs::write(
         &env.mediamtx_config,
-        format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-            env.mtx_rtmp, env.mtx_srt, env.mtx_api
-        ),
+        plain_mediamtx_config(env.mtx_rtmp, env.mtx_srt, env.mtx_api),
     )
     .map_err(|e| e.to_string())?;
-    let mut mediamtx_command = Command::new("mediamtx");
-    let mut mediamtx = remove_mediamtx_config_env(&mut mediamtx_command)
-        .arg(&env.mediamtx_config)
-        .stdout(Stdio::from(mediamtx_log))
-        .stderr(Stdio::from(mediamtx_err))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
+    let mut mediamtx = spawn_mediamtx(
+        Command::new("mediamtx"),
+        &env.mediamtx_config,
+        mediamtx_log,
+        env.mtx_api,
         Duration::from_secs(60),
+        "mediamtx",
     )
-    .await
-    {
-        stop_child(&mut mediamtx).await;
-        return Err(format!("mediamtx did not become ready: {err}"));
-    }
+    .await?;
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;
@@ -467,23 +455,15 @@ async fn sample_bitrate_window(
         let ffmpeg = ffmpeg_children_stats(stack.restream_pid)?;
         let ticks = read_proc_stat_ticks(stack.restream_pid)?;
         let interval_secs = prev_instant.elapsed().as_secs_f64().max(0.001);
-        // SAFETY: sysconf(3) takes no pointers.
-        let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
-        let restream_cpu_pct =
-            100.0 * (ticks.saturating_sub(prev_ticks)) as f64 / clk_tck / interval_secs;
-        let mut ffmpeg_delta_ticks = 0u64;
-        let mut next_ffmpeg_ticks = HashMap::new();
-        for pid in &ffmpeg.pids {
-            if let Ok(current_ticks) = read_proc_stat_ticks(*pid) {
-                let previous_ticks = prev_ffmpeg_ticks.get(pid).copied().unwrap_or(current_ticks);
-                ffmpeg_delta_ticks += current_ticks.saturating_sub(previous_ticks);
-                next_ffmpeg_ticks.insert(*pid, current_ticks);
-            }
-        }
-        let ffmpeg_cpu_pct = 100.0 * ffmpeg_delta_ticks as f64 / clk_tck / interval_secs;
+        let (restream_cpu_pct, ffmpeg_cpu_pct) = cpu_pcts(
+            ticks,
+            prev_ticks,
+            &ffmpeg.pids,
+            &mut prev_ffmpeg_ticks,
+            interval_secs,
+        );
         let total_cpu_pct = restream_cpu_pct + ffmpeg_cpu_pct;
         prev_ticks = ticks;
-        prev_ffmpeg_ticks = next_ffmpeg_ticks;
         prev_instant = Instant::now();
 
         let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;

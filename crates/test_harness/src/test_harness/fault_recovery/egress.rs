@@ -767,15 +767,9 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
     let retry_limit_api = login_api(&ports).await?;
     let mut retry_limit_results = Vec::new();
     for case in retry_budget_cases() {
-        let workflow_result = run_retry_budget_case_via_workflow(
-            &retry_limit_api,
-            &ports,
-            &fixture_h264,
-            sink_port,
-            case,
-        )
-        .await?;
-        retry_limit_results.push(workflow_result);
+        let case_result =
+            run_retry_budget_case(&retry_limit_api, &ports, &fixture_h264, sink_port, case).await?;
+        retry_limit_results.push(case_result);
     }
     stop_child(&mut retry_limit_child).await;
 
@@ -788,16 +782,7 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
         "passed": all_passed,
         "tests": results,
     });
-
-    let result_path = work_dir.join("fault.egress-retry.json");
-    std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("artifact={}", result_path.display());
-
-    if !all_passed {
-        return Err("fault.egress-retry: not all tests passed".to_string());
-    }
-    Ok(result)
+    super::finish_fault_mode(&work_dir, "fault.egress-retry", all_passed, result)
 }
 
 /// Reject silently ignored tuning overrides using the product's effective config.
@@ -875,19 +860,7 @@ pub(crate) async fn fault_output_stall() -> Result<Value, String> {
         "siblingOutputs": sibling_outputs,
         "tests": tests,
     });
-
-    let result_path = work_dir.join("fault.output-stall.json");
-    std::fs::write(
-        &result_path,
-        serde_json::to_string_pretty(&payload).unwrap(),
-    )
-    .map_err(|e| e.to_string())?;
-    println!("artifact={}", result_path.display());
-
-    if !passed {
-        return Err("fault.output-stall: not all tests passed".to_string());
-    }
-    Ok(payload)
+    super::finish_fault_mode(&work_dir, "fault.output-stall", passed, payload)
 }
 
 /// Output retry state observed from both the public status endpoint and engine health.

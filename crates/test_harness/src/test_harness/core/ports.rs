@@ -124,7 +124,7 @@ pub(crate) fn env_or_allocated_port_range(
     port
 }
 
-fn reserve_port_range(start: u16, width: u16, reserved: &mut HashSet<u16>) {
+pub(crate) fn reserve_port_range(start: u16, width: u16, reserved: &mut HashSet<u16>) {
     let width = width.max(1) as u32;
     let start = start as u32;
     for offset in 0..width {

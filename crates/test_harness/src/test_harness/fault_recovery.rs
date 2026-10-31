@@ -23,6 +23,24 @@ pub(crate) use resilience::{
 };
 pub(crate) use srt_stall::fault_srt_output_stall;
 
+/// Writes the mode's `{mode}.json` artifact and fails the mode unless every
+/// test passed.
+fn finish_fault_mode(
+    work_dir: &std::path::Path,
+    mode: &str,
+    passed: bool,
+    result: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let result_path = work_dir.join(format!("{mode}.json"));
+    std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
+        .map_err(|e| e.to_string())?;
+    println!("artifact={}", result_path.display());
+    if !passed {
+        return Err(format!("{mode}: not all tests passed"));
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::egress;

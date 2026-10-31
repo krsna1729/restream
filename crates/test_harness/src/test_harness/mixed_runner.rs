@@ -54,7 +54,7 @@ pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate,
     mixed_output_progress_timeout_for_case, mixed_progress_output_ids, signal_checks_only,
 };
-pub(super) use mixed_executor::{ScenarioExecutionContext, scenario_executor_for_plan};
+pub(super) use mixed_executor::{MIXED_EXECUTOR_STEPS, MixedExecutor};
 pub(super) use mixed_lifecycle::{
     delete_and_verify_mixed_outputs, stop_mixed_outputs, wait_for_outputs_stopped,
 };
@@ -103,8 +103,8 @@ pub(super) use mixed_signal::{
     signal_report_json, validate_signal_quality_with_tolerances, verify_mixed_signal_quality,
 };
 pub(super) use mixed_sinks::{
-    add_mixed_multi_output_cases, add_mixed_output_cases, finish_ffmpeg_signal_sinks,
-    finish_ffmpeg_srt_sinks, run_optional_mixed_sink_probe, validate_signal_capture_artifact,
+    add_mixed_outputs_and_gate, finish_ffmpeg_srt_sinks, run_optional_mixed_sink_probe,
+    validate_signal_capture_artifact,
 };
 pub(super) use mixed_stack::{
     bind_mixed_env_to_shared_stack, start_mixed_harness_stack, stop_mixed_harness_stack,
@@ -442,17 +442,9 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
     let mut resume = MixedResume::new(env.resume_from.clone());
 
     let config_started = Instant::now();
-    let mut executor = scenario_executor_for_plan(plan)?;
-    let executor_name = executor.name();
-    let executor_steps = executor.step_names();
+    let executor = MixedExecutor::for_plan(plan)?;
     let config = executor
-        .execute(ScenarioExecutionContext {
-            env: &env,
-            api,
-            restream_pid,
-            case,
-            resume: &mut resume,
-        })
+        .execute(&env, api, restream_pid, case, &mut resume)
         .await;
     emit_mixed_timing(
         &env,
@@ -506,8 +498,8 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
         "sinkPortOffset": env.sink_port_offset,
         "plan": {
             "sourceAdapter": plan.source.adapter.as_str(),
-            "executor": executor_name,
-            "executorSteps": executor_steps,
+            "executor": executor.name(),
+            "executorSteps": MIXED_EXECUTOR_STEPS,
             "outputCells": plan.output_cells(),
             "checks": plan.check_names(),
             "hlsPreviewTiming": plan.hls_preview_timing.as_str(),
@@ -647,57 +639,20 @@ pub(super) async fn run_mixed_file_config(
 
     let mut output_ids = Vec::with_capacity(total);
     let mut ffmpeg_srt_sinks = Vec::new();
-    let mut next_ffmpeg_srt_sink = 0usize;
     let mut ffmpeg_signal_sinks = Vec::new();
-    let mut next_ffmpeg_signal_sink = 0usize;
-    if case.is_multi_track() {
-        add_mixed_multi_output_cases(
-            env,
-            api,
-            &pipeline_id,
-            restream_pid,
-            cfg,
-            &output_cases,
-            &mut ffmpeg_srt_sinks,
-            &mut next_ffmpeg_srt_sink,
-            &mut ffmpeg_signal_sinks,
-            &mut next_ffmpeg_signal_sink,
-            &mut output_ids,
-        )
-        .await?;
-    } else {
-        add_mixed_output_cases(
-            env,
-            api,
-            &pipeline_id,
-            restream_pid,
-            cfg,
-            &output_cases,
-            &mut ffmpeg_signal_sinks,
-            &mut next_ffmpeg_signal_sink,
-            &mut output_ids,
-        )
-        .await?;
-    }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, &output_cases, resume)
-        .await?;
-    if !ffmpeg_signal_sinks.is_empty() {
-        finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
-    }
-    if env.needs_live_output_progress_gate() {
-        // The first resumed external read can arrive while SRT egresses are
-        // still in "connecting/stalled" even though they do become healthy a
-        // few seconds later. Wait for real bytes-out once per scenario so the
-        // first probed cell does not lose signal to a startup race.
-        wait_for_outputs_progress_with_env(
-            api,
-            &pipeline_id,
-            &output_ids,
-            mixed_output_progress_timeout_for_case(case, output_ids.len()),
-            Some(env),
-        )
-        .await?;
-    }
+    add_mixed_outputs_and_gate(
+        env,
+        api,
+        &pipeline_id,
+        restream_pid,
+        case,
+        &output_cases,
+        resume,
+        &mut output_ids,
+        &mut ffmpeg_srt_sinks,
+        &mut ffmpeg_signal_sinks,
+    )
+    .await?;
 
     let duration_secs: u64 = 10;
     if !ffmpeg_srt_sinks.is_empty() {

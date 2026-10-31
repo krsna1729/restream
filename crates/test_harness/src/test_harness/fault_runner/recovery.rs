@@ -63,10 +63,7 @@ pub(crate) async fn recovery_live_cases(
     let mut results = Vec::new();
 
     for case in recovery_transient_cases() {
-        let workflow_result =
-            run_recovery_transient_case_via_workflow(api, ports, fixture_h264, sink_port, case)
-                .await?;
-        results.push(workflow_result);
+        results.push(run_recovery_transient_case(api, ports, fixture_h264, sink_port, case).await?);
     }
 
     for case in input_promotion_cases() {

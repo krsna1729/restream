@@ -51,15 +51,6 @@
           },
           "foldedInto": "mixed"
         },
-        "generic-sweeps": {
-          "suiteRef": "suites.json#suites.generic-sweeps",
-          "suiteDefault": false,
-          "requires": {
-            "portNamespace": true,
-            "benchProfile": true
-          },
-          "foldedInto": "mixed"
-        },
         "resource-sweep": {
           "suiteRef": "suites.json#suites.resource-sweep",
           "suiteDefault": true,

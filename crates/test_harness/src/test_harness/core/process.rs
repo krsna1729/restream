@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 use crate::{RampApi, cleanup_ramp_db, harness_admin_password, harness_http_client, stop_child};
 
 use super::ports::TestPorts;
-use super::setup::{absolute_path, command_with_optional_cgroup};
+use super::setup::{absolute_path, command_with_optional_cgroup, remove_mediamtx_config_env};
 
 pub(crate) async fn start_restream_child(
     bin: &Path,
@@ -123,6 +123,65 @@ pub(crate) async fn start_restream_child_opts(
         ));
     }
     Ok(child)
+}
+
+/// Spawns `ffmpeg -nostdin -hide_banner -loglevel error <argv>` in cgroup
+/// `scope`, with stdout and stderr in `log_path`.
+pub(crate) fn spawn_logged_ffmpeg(
+    ffmpeg: &Path,
+    argv: &[String],
+    log_path: &Path,
+    scope: &str,
+) -> Result<Child, String> {
+    let mut command = command_with_optional_cgroup(ffmpeg, scope);
+    command.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
+    command.args(argv);
+    let log = std::fs::File::create(log_path).map_err(|error| error.to_string())?;
+    let stderr = log.try_clone().map_err(|error| error.to_string())?;
+    command
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr))
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("spawn {}: {error}", ffmpeg.display()))
+}
+
+/// Spawns MediaMTX from `command` with `config`, both streams in `log`, then
+/// waits up to `ready_timeout` for its API on `api_port`; a peer that never
+/// becomes ready is stopped and reported as `"{label} did not become ready"`.
+pub(crate) async fn spawn_mediamtx(
+    mut command: Command,
+    config: &Path,
+    log: std::fs::File,
+    api_port: u16,
+    ready_timeout: Duration,
+    label: &str,
+) -> Result<Child, String> {
+    let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
+    let mut child = remove_mediamtx_config_env(&mut command)
+        .arg(config)
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr_log))
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    if let Err(err) = wait_for_http_ok(
+        &format!("http://127.0.0.1:{api_port}/v3/paths/list"),
+        ready_timeout,
+    )
+    .await
+    {
+        stop_child(&mut child).await;
+        return Err(format!("{label} did not become ready: {err}"));
+    }
+    Ok(child)
+}
+
+/// MediaMTX config with RTMP and SRT ingest and the API, nothing else.
+pub(crate) fn plain_mediamtx_config(rtmp_port: u16, srt_port: u16, api_port: u16) -> String {
+    format!(
+        "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{rtmp_port}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{srt_port}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api_port}\nmetrics: no\npaths:\n  all:\n"
+    )
 }
 
 pub(crate) async fn wait_for_http_ok(url: &str, timeout: Duration) -> Result<(), String> {

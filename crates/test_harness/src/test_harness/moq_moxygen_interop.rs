@@ -300,22 +300,12 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
             start_output(&api, &pipeline, &output).await?;
         }
         let publish_url = format!("rtmp://127.0.0.1:{}/live/{STREAM_KEY}", ports.rtmp);
-        let log = std::fs::File::create(work_dir.join("publisher.log"))
-            .map_err(|error| error.to_string())?;
-        let stderr = log.try_clone().map_err(|error| error.to_string())?;
-        children.push(
-            command_with_optional_cgroup(&ffmpeg, "moq-moxygen-publisher")
-                .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
-                .args(crate::hls_push_duty::run::rtmp_publisher_args(
-                    &fixture,
-                    &publish_url,
-                ))
-                .stdout(Stdio::from(log))
-                .stderr(Stdio::from(stderr))
-                .kill_on_drop(true)
-                .spawn()
-                .map_err(|error| format!("spawn {}: {error}", ffmpeg.display()))?,
-        );
+        children.push(spawn_logged_ffmpeg(
+            &ffmpeg,
+            &crate::hls_push_duty::run::rtmp_publisher_args(&fixture, &publish_url),
+            &work_dir.join("publisher.log"),
+            "moq-moxygen-publisher",
+        )?);
         wait_for_api_input_live(&api, &pipeline, INPUT_TIMEOUT).await?;
         wait_for_api_input_media_ready(&api, &pipeline, INPUT_TIMEOUT).await?;
 
@@ -400,23 +390,7 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
         "wallClockSecs": round3(started.elapsed().as_secs_f64()),
     });
     let report_path = work_dir.join("report.json");
-    let _ = std::fs::write(
-        &report_path,
-        serde_json::to_vec_pretty(&report).unwrap_or_default(),
-    );
-    println!(
-        "[{MODE}] {}",
-        json!({"phase": "done", "passed": passed, "failedChecks": report["failedChecks"]})
-    );
-    if passed {
-        Ok(report)
-    } else {
-        Err(format!(
-            "{MODE} failed: {}; report={}",
-            report["failedChecks"],
-            report_path.display()
-        ))
-    }
+    finish_mode_report(MODE, &report_path, passed, report)
 }
 
 #[cfg(test)]

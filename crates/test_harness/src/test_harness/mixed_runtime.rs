@@ -37,25 +37,16 @@ pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-    let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command =
-        command_with_optional_cgroup("mediamtx", &format!("mediamtx-{}", env.mtx_api));
-    let mut child = remove_mediamtx_config_env(&mut command)
-        .arg(&env.mediamtx_config)
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr_log))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
+    let command = command_with_optional_cgroup("mediamtx", &format!("mediamtx-{}", env.mtx_api));
+    let mut child = spawn_mediamtx(
+        command,
+        &env.mediamtx_config,
+        log,
+        env.mtx_api,
         Duration::from_secs(30),
+        "mediamtx",
     )
-    .await
-    {
-        stop_child(&mut child).await;
-        return Err(format!("mediamtx did not become ready: {err}"));
-    }
+    .await?;
     if let Err(err) = wait_for_tcp_listener_ready(env.mtx_rtmps, Duration::from_secs(10)).await {
         stop_child(&mut child).await;
         return Err(format!(

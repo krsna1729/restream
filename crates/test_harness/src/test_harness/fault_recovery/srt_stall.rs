@@ -185,18 +185,7 @@ pub(crate) async fn fault_srt_output_stall() -> Result<Value, String> {
         "passed": passed,
         "tests": tests,
     });
-    let result_path = work_dir.join("fault.srt-output-stall.json");
-    std::fs::write(
-        &result_path,
-        serde_json::to_string_pretty(&payload).unwrap(),
-    )
-    .map_err(|e| e.to_string())?;
-    println!("artifact={}", result_path.display());
-
-    if !passed {
-        return Err("fault.srt-output-stall: not all tests passed".to_string());
-    }
-    Ok(payload)
+    super::finish_fault_mode(&work_dir, "fault.srt-output-stall", passed, payload)
 }
 
 const MAX_ACCEPTABLE_RSS_GROWTH_KB: u64 = 64 * 1024;

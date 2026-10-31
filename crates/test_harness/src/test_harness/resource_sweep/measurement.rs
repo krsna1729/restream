@@ -165,20 +165,13 @@ pub(super) async fn sample_resource_window(
         let ticks = read_proc_stat_ticks(stack.restream_pid)?;
         let ffmpeg = ffmpeg_children_stats(stack.restream_pid)?;
         let interval_secs = prev_instant.elapsed().as_secs_f64().max(0.001);
-        // SAFETY: sysconf(3) takes no pointers.
-        let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
-        let restream_cpu_pct =
-            100.0 * (ticks.saturating_sub(prev_ticks)) as f64 / clk_tck / interval_secs;
-        let mut ffmpeg_delta_ticks = 0u64;
-        let mut next_ffmpeg_ticks = HashMap::new();
-        for pid in &ffmpeg.pids {
-            if let Ok(current_ticks) = read_proc_stat_ticks(*pid) {
-                let previous_ticks = prev_ffmpeg_ticks.get(pid).copied().unwrap_or(current_ticks);
-                ffmpeg_delta_ticks += current_ticks.saturating_sub(previous_ticks);
-                next_ffmpeg_ticks.insert(*pid, current_ticks);
-            }
-        }
-        let ffmpeg_cpu_pct = 100.0 * ffmpeg_delta_ticks as f64 / clk_tck / interval_secs;
+        let (restream_cpu_pct, ffmpeg_cpu_pct) = cpu_pcts(
+            ticks,
+            prev_ticks,
+            &ffmpeg.pids,
+            &mut prev_ffmpeg_ticks,
+            interval_secs,
+        );
         let total_cpu_pct = restream_cpu_pct + ffmpeg_cpu_pct;
         let ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
         let voluntary_ctxt_switches_per_sec =
@@ -186,7 +179,6 @@ pub(super) async fn sample_resource_window(
         let nonvoluntary_ctxt_switches_per_sec =
             ctxt.nonvoluntary.saturating_sub(prev_ctxt.nonvoluntary) as f64 / interval_secs;
         prev_ticks = ticks;
-        prev_ffmpeg_ticks = next_ffmpeg_ticks;
         prev_ctxt = ctxt;
         prev_instant = now;
         let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
@@ -377,6 +369,34 @@ pub(super) fn summarize_resource_samples(
 
 pub(super) fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+/// CPU % of Restream (`ticks` since `prev_ticks`) and of the FFmpeg children
+/// in `ffmpeg_pids` over `interval_secs`. A child first seen this sample
+/// counts zero; `prev_ffmpeg_ticks` becomes this sample's per-child ticks.
+pub(super) fn cpu_pcts(
+    ticks: u64,
+    prev_ticks: u64,
+    ffmpeg_pids: &[u32],
+    prev_ffmpeg_ticks: &mut HashMap<u32, u64>,
+    interval_secs: f64,
+) -> (f64, f64) {
+    // SAFETY: sysconf(3) takes no pointers.
+    let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as f64 };
+    let restream_cpu_pct =
+        100.0 * (ticks.saturating_sub(prev_ticks)) as f64 / clk_tck / interval_secs;
+    let mut ffmpeg_delta_ticks = 0u64;
+    let mut next_ffmpeg_ticks = HashMap::new();
+    for pid in ffmpeg_pids {
+        if let Ok(current_ticks) = read_proc_stat_ticks(*pid) {
+            let previous_ticks = prev_ffmpeg_ticks.get(pid).copied().unwrap_or(current_ticks);
+            ffmpeg_delta_ticks += current_ticks.saturating_sub(previous_ticks);
+            next_ffmpeg_ticks.insert(*pid, current_ticks);
+        }
+    }
+    *prev_ffmpeg_ticks = next_ffmpeg_ticks;
+    let ffmpeg_cpu_pct = 100.0 * ffmpeg_delta_ticks as f64 / clk_tck / interval_secs;
+    (restream_cpu_pct, ffmpeg_cpu_pct)
 }
 
 pub(super) fn read_proc_stat_ticks(pid: u32) -> Result<u64, String> {
