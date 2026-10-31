@@ -25,7 +25,7 @@ async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_
 
     // Pipeline-scoped transport views intentionally use an immediate snapshot so
     // alerts and diagnostics reflect current runtime state without grace-window delay.
-    crate::api_runtime_views::health_snapshot(
+    crate::api::runtime_views::health_snapshot(
         &state.engine,
         &state.config,
         pipeline_ids,
@@ -43,7 +43,7 @@ async fn pipeline_health_summary_snapshot(
     let pipeline_ids = std::slice::from_ref(&pipeline_id);
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
 
-    crate::api_runtime_views::health_summary_snapshot(
+    crate::api::runtime_views::health_summary_snapshot(
         &state.engine,
         &state.config,
         pipeline_ids,
@@ -81,7 +81,7 @@ pub async fn pipeline_graph_handler(
     let pipeline_outputs =
         crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let mut graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
@@ -162,7 +162,7 @@ pub async fn pipeline_diagnostics_context_handler(
         &pipeline_outputs,
     );
     let runtime_graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
 
     let mut alert_list = alerts::derive_alerts(&health);
@@ -234,7 +234,7 @@ pub async fn v1_pipeline_summary_handler(
     let pipeline_outputs =
         crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
 
     let graph_nodes = graph["nodes"]

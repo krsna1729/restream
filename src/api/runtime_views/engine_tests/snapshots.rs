@@ -260,7 +260,7 @@ async fn health_and_graph_expose_reader_lag_overflow_and_packet_age() {
         "health reader metrics should expose unread packet age"
     );
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[]).await;
     let source = graph["nodes"]
         .as_array()
         .unwrap()

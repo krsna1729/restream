@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
+use crate::api::runtime_views::{ResourceMapOptions, ResourceMapView};
 use crate::diag;
 use restream_engine::events;
 use restream_health::alerts;
@@ -264,8 +264,8 @@ pub async fn status_get_handler(
     }
 
     let bonding_available = state.engine.bonding_available();
-    let (mut status, _) = crate::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = crate::system_sampling::sampled_system(system_status);
+    let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
+    status["os"] = crate::host::system_sampling::sampled_system(system_status);
 
     Json(status).into_response()
 }
@@ -308,7 +308,7 @@ pub async fn status_sbom_get_handler(
     }
 
     let bonding_available = state.engine.bonding_available();
-    let (_, sbom) = crate::runtime_info::status_and_sbom(bonding_available);
+    let (_, sbom) = crate::host::runtime_info::status_and_sbom(bonding_available);
     (
         [
             (
@@ -334,8 +334,8 @@ pub async fn v1_engine_resource_map_handler(
         return response;
     }
 
-    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
-    let snapshot = crate::api_runtime_views::resource_map(
+    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let snapshot = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,
         process,
@@ -380,8 +380,8 @@ pub async fn v1_capacity_scenario_handler(
         Ok(query) => query,
         Err(rejection) => return rejection.into_response(),
     };
-    let change = crate::capacity::ScenarioChange {
-        outputs: crate::capacity::OutputsByProtocol {
+    let change = crate::application::capacity::ScenarioChange {
+        outputs: crate::application::capacity::OutputsByProtocol {
             rtmp: query.add_rtmp,
             rtmps: query.add_rtmps,
             srt: query.add_srt,
@@ -389,11 +389,15 @@ pub async fn v1_capacity_scenario_handler(
         stages: query.add_stages,
         pipeline_id: query.pipeline_id,
     };
-    let scenario = match crate::capacity::capacity_scenario(&state.engine, &state.config, &change)
-        .await
+    let scenario = match crate::application::capacity::capacity_scenario(
+        &state.engine,
+        &state.config,
+        &change,
+    )
+    .await
     {
         Ok(scenario) => scenario,
-        Err(crate::capacity::NoLiveIngest(pipeline_id)) => {
+        Err(crate::application::capacity::NoLiveIngest(pipeline_id)) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
@@ -417,7 +421,7 @@ pub async fn v1_capacity_scenario_handler(
         "addStages": change.stages,
         "ratedBy": scenario.rated_by,
         "ingest": scenario.ingest,
-        "calibration": crate::capacity::capacity_calibration(&state.config),
+        "calibration": crate::application::capacity::capacity_calibration(&state.config),
         // The output reconnect policy, so a what-if (the Stability Lab)
         // replays the engine's own backoff rather than a guessed one.
         "retryPolicy": retry_policy,
@@ -479,7 +483,7 @@ pub async fn v1_overview_handler(
         .unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let snapshot = crate::api_runtime_views::health_snapshot(
+    let snapshot = crate::api::runtime_views::health_snapshot(
         &state.engine,
         &state.config,
         &pipeline_ids,
@@ -546,7 +550,7 @@ pub async fn v1_engine_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api_runtime_views::engine_telemetry(&state.engine).await).into_response()
+    Json(crate::api::runtime_views::engine_telemetry(&state.engine).await).into_response()
 }
 
 /// Fixed-shape counters for capacity sampling: counts and byte sums
@@ -562,7 +566,8 @@ pub async fn v1_measure_handler(
         Ok(ids) => ids.len(),
         Err(error) => return error.into_response(),
     };
-    Json(crate::api_runtime_views::measure_snapshot(&state.engine, pipelines).await).into_response()
+    Json(crate::api::runtime_views::measure_snapshot(&state.engine, pipelines).await)
+        .into_response()
 }
 
 pub async fn v1_pipeline_telemetry_handler(
@@ -573,7 +578,7 @@ pub async fn v1_pipeline_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api_runtime_views::pipeline_telemetry(&state.engine, &pipeline_id).await)
+    Json(crate::api::runtime_views::pipeline_telemetry(&state.engine, &pipeline_id).await)
         .into_response()
 }
 
@@ -585,7 +590,7 @@ pub async fn v1_stage_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match crate::api_runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
+    match crate::api::runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
         Some(val) => Json(val).into_response(),
         None => (StatusCode::NOT_FOUND, "Stage not found").into_response(),
     }
@@ -598,7 +603,7 @@ mod tests {
         dashboard_runtime_requested_pipeline, snapshot_generated_at, summary_view_requested,
         unauthorized_json_response,
     };
-    use crate::api_runtime_views::ResourceMapView;
+    use crate::api::runtime_views::ResourceMapView;
     use axum::http::StatusCode;
 
     #[test]

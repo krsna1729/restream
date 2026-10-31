@@ -54,7 +54,7 @@ async fn agent_health_snapshot(
     pipeline_ids: &[String],
 ) -> (std::collections::HashMap<String, bool>, serde_json::Value) {
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
+    let health = crate::api::runtime_views::health_snapshot(
         &state.engine,
         &state.config,
         pipeline_ids,

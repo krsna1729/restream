@@ -15,7 +15,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::capacity::{CapacityModel, CapacitySnapshot, FlowStatus, ServiceCenter, shard_flow};
+use crate::application::capacity::{
+    CapacityModel, CapacitySnapshot, FlowStatus, ServiceCenter, shard_flow,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,7 +188,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::capacity::{CapacityLimits, Workload};
+    use crate::application::capacity::{CapacityLimits, Workload};
 
     fn priors(stages: u32) -> CapacitySnapshot {
         // Four FFmpeg stages fit the limit: 1 stage is 25%, 4 are 100%.

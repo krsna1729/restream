@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::api_view_models;
+use crate::api::view_models;
 use crate::application::services::ServiceError;
 use crate::application::srt_ingest::serialize_persisted_srt_ingest_policy;
 use restream_domain::domain::srt_ingest::SrtPipelineIngestConfig;
@@ -153,7 +153,7 @@ pub async fn pipelines_get_handler(
             let pipelines = pipelines
                 .iter()
                 .map(|pipeline| {
-                    api_view_models::pipeline_response_json(
+                    view_models::pipeline_response_json(
                         pipeline,
                         &ingest_host,
                         state.ports.rtmp,
@@ -189,13 +189,13 @@ pub async fn pipeline_detail_handler(
     let ingest_host = state.pipeline_service.get_ingest_host().await;
 
     Json(serde_json::json!({
-        "pipeline": api_view_models::pipeline_response_json(
+        "pipeline": view_models::pipeline_response_json(
             &pipeline,
             &ingest_host,
             state.ports.rtmp,
             state.ports.srt
         ),
-        "outputs": api_view_models::output_response_json_list(&outputs),
+        "outputs": view_models::output_response_json_list(&outputs),
     }))
     .into_response()
 }
@@ -267,7 +267,7 @@ pub async fn pipelines_post_handler(
                     StatusCode::CREATED,
                     Json(serde_json::json!({
                         "message": "Pipeline created",
-                        "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
+                        "pipeline": view_models::pipeline_response_json_with_file_ingest(
                             &pipeline,
                             &ingest_host,
                             state.ports.rtmp,
@@ -372,7 +372,7 @@ pub async fn pipelines_update_handler(
             let ingest_host = state.pipeline_service.get_ingest_host().await;
             Json(serde_json::json!({
                 "message": "Pipeline updated",
-                "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
+                "pipeline": view_models::pipeline_response_json_with_file_ingest(
                     &updated,
                     &ingest_host,
                     state.ports.rtmp,
@@ -435,7 +435,7 @@ pub async fn pipeline_probe_handler(
     let ingests = state.engine.ingests.active.read().await;
     match ingests.get(&pipeline_id) {
         Some(ingest) => {
-            let probe = crate::api_view_models::probe_snapshot(&pipeline_id, ingest);
+            let probe = crate::api::view_models::probe_snapshot(&pipeline_id, ingest);
             Json(probe).into_response()
         }
         None => (StatusCode::NOT_FOUND, "No active ingest for this pipeline").into_response(),

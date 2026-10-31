@@ -9,7 +9,7 @@ async fn egress_error_during_sending_transitions_to_failed() {
     engine.update_egress_phase("out-1", EP::Sending).await;
     engine.record_egress_progress("out-1", 5000).await;
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["phase"], "sending");
@@ -18,7 +18,7 @@ async fn egress_error_during_sending_transitions_to_failed() {
         .record_egress_error("out-1", "send", "connection reset by peer")
         .await;
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["phase"], "failed");
@@ -36,7 +36,7 @@ async fn egress_cleaned_up_after_unregister() {
     engine.record_egress_progress("out-1", 2048).await;
 
     assert!(
-        crate::api_runtime_views::output_status(&engine, "out-1")
+        crate::api::runtime_views::output_status(&engine, "out-1")
             .await
             .is_some()
     );
@@ -44,12 +44,12 @@ async fn egress_cleaned_up_after_unregister() {
     engine.unregister_egress("out-1").await;
     assert!(token.is_cancelled());
     assert!(
-        crate::api_runtime_views::output_status(&engine, "out-1")
+        crate::api::runtime_views::output_status(&engine, "out-1")
             .await
             .is_some(),
         "output_status must preserve the last classified egress state after unregister"
     );
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "stopped");
@@ -74,7 +74,7 @@ async fn recent_egress_failure_survives_unregister_and_preserves_error_fields() 
 
     engine.unregister_egress("out-1").await;
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "failed");
@@ -161,7 +161,7 @@ async fn late_retry_state_update_is_ignored_after_output_restarts() {
 
     assert!(engine.egress_retry_state("out-1").await.is_none());
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "running");
@@ -220,7 +220,7 @@ async fn repeated_late_retry_updates_cannot_poison_newest_output_attempt() {
         "the newest active attempt should retain the recent failure window for flapping visibility"
     );
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "running");
@@ -263,7 +263,7 @@ async fn health_snapshot_surfaces_flapping_after_repeated_egress_recoveries() {
     engine.update_egress_phase("out-1", EP::Sending).await;
     engine.record_egress_progress("out-1", 4096).await;
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "running");
@@ -296,7 +296,7 @@ async fn output_status_surfaces_retry_backoff_after_failure() {
         .update_egress_retry_state("out-1", 2, 20_000, 15_000)
         .await;
 
-    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+    let status = crate::api::runtime_views::output_status(&engine, "out-1")
         .await
         .unwrap();
     assert_eq!(status["status"], "retrying");

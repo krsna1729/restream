@@ -8,7 +8,7 @@
 const TOKIO_THREAD_NAME: &str = "restream-tokio";
 
 fn main() {
-    restream::malloc_tuning::apply_from_env();
+    restream::host::malloc_tuning::apply_from_env();
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {
@@ -18,9 +18,9 @@ fn main() {
             }
             let mut out = std::io::stdout().lock();
             std::process::exit(if flag == "host-check" {
-                restream::host_tuning::host_check(&mut out)
+                restream::host::host_tuning::host_check(&mut out)
             } else {
-                restream::host_tuning::host_tune(&mut out)
+                restream::host::host_tuning::host_tune(&mut out)
             });
         }
         if flag == "ffmpeg-fetch" {

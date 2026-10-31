@@ -18,7 +18,7 @@ async fn test_health_snapshot(
     pipeline_ids: &[String],
     recording_enabled: &HashMap<String, bool>,
 ) -> serde_json::Value {
-    crate::api_runtime_views::health_snapshot(
+    crate::api::runtime_views::health_snapshot(
         engine,
         &crate::AppConfig::default(),
         pipeline_ids,
@@ -34,7 +34,7 @@ async fn test_health_snapshot_with_disconnect_grace(
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
 ) -> serde_json::Value {
-    crate::api_runtime_views::health_snapshot(
+    crate::api::runtime_views::health_snapshot(
         engine,
         &crate::AppConfig::default(),
         pipeline_ids,
@@ -45,7 +45,7 @@ async fn test_health_snapshot_with_disconnect_grace(
 }
 
 async fn test_health_summary_snapshot(engine: &MediaEngine) -> serde_json::Value {
-    crate::api_runtime_views::health_summary_snapshot(
+    crate::api::runtime_views::health_summary_snapshot(
         engine,
         &crate::AppConfig::default(),
         &[],

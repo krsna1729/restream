@@ -511,8 +511,8 @@ Each shard publishes an `EgressShardSnapshot` once per loop iteration.
 | Consumer | Source |
 |---|---|
 | `GET /metrics/system` | `src/api/telemetry/system.rs` |
-| Status and resource map | `src/api_runtime_views/status.rs`, `resource_map.rs` |
-| Runtime state, capacity | `src/application/runtime_state/`, `src/capacity.rs` |
+| Status and resource map | `src/api/runtime_views/status.rs`, `resource_map.rs` |
+| Runtime state, capacity | `src/application/runtime_state/`, `src/application/capacity.rs` |
 
 Heartbeat health is `Healthy`, `Stalled` (no loop progress for
 `SHARD_STALL_AFTER`, 10 s), `Stopped` or `Panicked`. Fields include loop

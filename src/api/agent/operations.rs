@@ -628,7 +628,7 @@ async fn verify_operation(
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
         graphs.push(
-            crate::api_runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
+            crate::api::runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
         );
     }
     let active_graph_nodes = graphs
@@ -677,10 +677,10 @@ async fn verify_operation(
         restream_agent::plane::new_critical_alerts(&before.critical_ids, &after_critical),
         restream_agent::plane::capacity_state(
             before.projected_utilization,
-            crate::capacity::capacity_priors(&state.engine, &state.config)
+            crate::application::capacity::capacity_priors(&state.engine, &state.config)
                 .await
                 .projected_utilization,
-            crate::capacity::CapacityModel::default().safe_utilization,
+            crate::application::capacity::CapacityModel::default().safe_utilization,
         ),
     ];
     let success = gates.iter().all(|gate| gate.passed);
@@ -775,9 +775,12 @@ async fn apply_baseline(
     restream_agent::execution::ApplyBaseline {
         alerts_total: alerts.len(),
         critical_ids: restream_agent::plane::critical_ids_on(&alerts, changed),
-        projected_utilization: crate::capacity::capacity_priors(&state.engine, &state.config)
-            .await
-            .projected_utilization,
+        projected_utilization: crate::application::capacity::capacity_priors(
+            &state.engine,
+            &state.config,
+        )
+        .await
+        .projected_utilization,
     }
 }
 

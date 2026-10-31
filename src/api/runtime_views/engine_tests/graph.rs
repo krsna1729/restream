@@ -59,7 +59,7 @@ async fn processing_graph_marks_cancelled_recording_and_hls_inactive() {
         .unwrap();
     hls_token.cancel();
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[]).await;
     let nodes = graph["nodes"].as_array().unwrap();
 
     let recording = nodes
@@ -91,7 +91,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
         config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
     let nodes = graph["nodes"].as_array().unwrap();
     let edges = graph["edges"].as_array().unwrap();
 
@@ -153,7 +153,7 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
         .await;
     engine.record_egress_progress("out-recirc", 512).await;
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
     let nodes = graph["nodes"].as_array().unwrap();
     let edges = graph["edges"].as_array().unwrap();
 
@@ -214,7 +214,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
         config: restream_domain::domain::output_spec::OutputConfig::source(),
     };
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
     let nodes = graph["nodes"].as_array().unwrap();
     let egress = nodes
         .iter()
@@ -298,7 +298,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         "test precondition: stale codec-edge stage should still exist in the engine registry"
     );
 
-    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
+    let graph = crate::api::runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
     let nodes = graph["nodes"].as_array().unwrap();
 
     assert!(

@@ -113,7 +113,7 @@ Implementation ownership and test-package selection are not identical:
 |---|---|
 | `crates/restream-core/src/codec/` | `cargo test -p restream-core --lib`; also `cargo test -p restream-engine --lib codec::tests` for retained consumer tests |
 | `crates/restream-domain/src/` | `cargo test -p restream-domain`, `cargo test --test architecture` and `cargo test -p restream --lib application::runtime_state` for the TypeScript drift test |
-| `crates/restream-engine/src/` | `cargo test -p restream-engine --lib <module>::`; the root `api_runtime_views`, `application` and `capacity` suites for engine consumers |
+| `crates/restream-engine/src/` | `cargo test -p restream-engine --lib <module>::`; the `api::runtime_views`, `application` and `application::capacity` suites for engine consumers |
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
 | `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
@@ -123,7 +123,7 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream-engine --lib moq::` for retained integration/consumer tests |
 | `crates/restream-agent-contract/src/` | `cargo test -p restream-agent-contract` and `cargo test -p restream --test api agent::` for discovery |
 | `crates/restream-mcp/src/` | `cargo test -p restream-mcp --features mcp-http-backend` |
-| `crates/restream-health/src/` | `cargo test -p restream-health` and `cargo test -p restream --lib api_runtime_views::stage_phase_tests` for the status/graph/alert phase table |
+| `crates/restream-health/src/` | `cargo test -p restream-health` and `cargo test -p restream --lib api::runtime_views::stage_phase_tests` for the status/graph/alert phase table |
 | `crates/restream-agent/src/` | `cargo test -p restream-agent --features agent-execution`, `cargo test -p restream --test api agent::` (default, `--no-default-features` and `--no-default-features --features agent-plane`) |
 
 For extracted-library source and manifest changes, run the owning unit suite

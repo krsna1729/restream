@@ -4,7 +4,7 @@
 //! runtime attribution. Stage and queue memory is useful directional evidence,
 //! but the process RSS remains the authoritative measured total.
 
-use crate::system_sampling::{
+use crate::host::system_sampling::{
     ChildProcessResourceSnapshot, ProcessResourceSnapshot, sample_child_process_resources,
 };
 use restream_engine::engine::MediaEngine;
@@ -589,7 +589,7 @@ pub(crate) async fn resource_map(
     nodes.extend(egresses.iter().map(egress_node));
     super::node_judgement::judge_nodes(
         &mut nodes,
-        &crate::capacity::capacity_priors(engine, config).await,
+        &crate::application::capacity::capacity_priors(engine, config).await,
     );
 
     let srt_sender_limit = 512u64;

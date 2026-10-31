@@ -31,6 +31,7 @@ pub mod pipeline_observability;
 pub mod pipelines;
 pub mod router;
 pub mod runtime_state;
+pub(crate) mod runtime_views;
 pub mod schedules;
 pub mod settings;
 pub mod share;
@@ -39,6 +40,7 @@ pub mod static_assets;
 pub mod stream_qa;
 pub mod team;
 pub mod telemetry;
+pub mod view_models;
 
 /// Storage-neutral application services consumed by the HTTP boundary.
 pub struct AppServices {

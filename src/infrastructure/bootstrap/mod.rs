@@ -75,17 +75,19 @@ pub async fn run_app(config: Arc<AppConfig>) {
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
-    crate::host_tuning::warn_unmet();
+    crate::host::host_tuning::warn_unmet();
     restream_engine::ffmpeg_binary::ffmpeg_bin_path();
     tokio::spawn(restream_engine::ffmpeg_capabilities::check_at_startup());
-    match crate::malloc_tuning::applied() {
-        Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
-        | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(
-            event_class = "lifecycle",
-            event_type = "restream.malloc.arenas",
-            setting = %setting,
-            "malloc arena policy not applied as requested",
-        ),
+    match crate::host::malloc_tuning::applied() {
+        Some(setting @ crate::host::malloc_tuning::ArenaSetting::Failed { .. })
+        | Some(setting @ crate::host::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => {
+            warn!(
+                event_class = "lifecycle",
+                event_type = "restream.malloc.arenas",
+                setting = %setting,
+                "malloc arena policy not applied as requested",
+            )
+        }
         Some(setting) => info!(
             event_class = "lifecycle",
             event_type = "restream.malloc.arenas",

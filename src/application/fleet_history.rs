@@ -12,9 +12,9 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
+use crate::application::capacity::CapacitySnapshot;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
-use crate::capacity::CapacitySnapshot;
 use crate::config::AppConfig;
 use restream_domain::domain::state::DesiredOutputState;
 use restream_engine::engine::MediaEngine;
@@ -253,7 +253,7 @@ pub async fn run_fleet_sampler(
             _ = ticks.tick() => {}
         }
         hub.refresh_on_demand(&pool, &engine).await;
-        let capacity = crate::capacity::capacity_snapshot(&engine, &config).await;
+        let capacity = crate::application::capacity::capacity_snapshot(&engine, &config).await;
         let at_ms = MediaEngine::now_epoch_ms();
         let mut sample = hub
             .read(|projection| take_fleet_sample(at_ms, projection.outputs.values(), &capacity))

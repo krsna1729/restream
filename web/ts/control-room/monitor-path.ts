@@ -9,7 +9,7 @@ import { formatBps, formatPercent } from "./format.js";
 import { ringFromGraph } from "./inspect-model.js";
 
 /** Below this delivery ratio an output is not keeping up (the engine's
- * per-feed delivery floor, `feed_delivery` in `api_runtime_views/telemetry.rs`). */
+ * per-feed delivery floor, `feed_delivery` in `api/runtime_views/telemetry.rs`). */
 export const DELIVERY_FLOOR = 0.95;
 
 function finite(value: unknown): number | null {
