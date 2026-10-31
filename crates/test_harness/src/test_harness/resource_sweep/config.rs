@@ -202,6 +202,15 @@ impl ResourceSweepEnv {
             work_dir,
         };
         super::peer_ports::validate_peer_instance_ports(&env)?;
+        if let Some(filter) = &env.scenario_filter {
+            let unknown = unknown_scenarios(filter);
+            if !unknown.is_empty() {
+                return Err(format!(
+                    "RESOURCE_SWEEP_SCENARIOS names no scenario: {}",
+                    unknown.join(", ")
+                ));
+            }
+        }
         Ok(env)
     }
 
@@ -251,6 +260,30 @@ impl ResourceSweepEnv {
             .as_ref()
             .is_none_or(|filter| filter.contains(scenario))
     }
+}
+
+/// Scenarios `resource-sweep` runs besides the egress rows in
+/// `resource_egress_scenarios.json`.
+const BUILT_IN_SCENARIOS: [&str; 4] = [
+    "baseline-empty",
+    "ingest-only",
+    "ingest-growth-same",
+    "ingest-growth-mixed",
+];
+
+/// Filter names that select no scenario, sorted. A filter that matches
+/// nothing would otherwise finish with no measurements and pass.
+pub(super) fn unknown_scenarios(filter: &HashSet<String>) -> Vec<&str> {
+    let mut unknown: Vec<&str> = filter
+        .iter()
+        .map(String::as_str)
+        .filter(|name| {
+            !BUILT_IN_SCENARIOS.contains(name)
+                && super::catalog::resource_egress_scenario(name).is_none()
+        })
+        .collect();
+    unknown.sort_unstable();
+    unknown
 }
 
 pub(super) fn parse_usize_list(name: &str, default: &str) -> Vec<usize> {
