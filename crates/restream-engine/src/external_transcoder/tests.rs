@@ -61,9 +61,9 @@ fn test_audio_track(track_index: u32) -> AudioMeta {
     }
 }
 
-include!("external_transcoder_tests/arguments.rs");
-include!("external_transcoder_tests/metadata.rs");
-include!("external_transcoder_tests/hevc_pipeline.rs");
-include!("external_transcoder_tests/h264_pipeline.rs");
-include!("external_transcoder_tests/hevc_fixtures.rs");
-include!("external_transcoder_tests/reap.rs");
+include!("tests/arguments.rs");
+include!("tests/metadata.rs");
+include!("tests/hevc_pipeline.rs");
+include!("tests/h264_pipeline.rs");
+include!("tests/hevc_fixtures.rs");
+include!("tests/reap.rs");

@@ -44,5 +44,5 @@ fn preset_for_probe_property(case: u8, audio_track_count: usize) -> String {
     }
 }
 
-include!("ffmpeg_process_tests/arguments.rs");
-include!("ffmpeg_process_tests/transcoding.rs");
+include!("tests/arguments.rs");
+include!("tests/transcoding.rs");

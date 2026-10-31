@@ -117,7 +117,7 @@ Implementation ownership and test-package selection are not identical:
 | `crates/restream-sync/src/ring_buffer.rs` and readers | `cargo test -p restream-sync --lib ring_buffer::tests` |
 | `crates/restream-sync/src/byte_queue.rs` | `cargo test -p restream-sync --lib byte_queue::tests` |
 | `crates/restream-sync/src/standby_gop.rs` | `cargo test -p restream-sync --lib` and `cargo test -p restream --test standby_gop` for retained consumers |
-| `crates/restream-mpegts/src/` | `cargo test -p restream-mpegts --lib`; also `cargo test -p restream-engine --lib mpegts_allocation_tests` for the allocation/ordered-output consumer guard |
+| `crates/restream-mpegts/src/` | `cargo test -p restream-mpegts --lib`; also `cargo test -p restream-engine --lib tests::mpegts_allocation` for the allocation/ordered-output consumer guard |
 | `crates/restream-rtmp/src/` | `cargo test -p restream-rtmp --lib`; also `cargo test -p restream-engine --lib rtmp::tests` for retained engine/network consumers |
 | `crates/restream-srt/src/` | `cargo test -p restream-srt --lib` and `cargo test -p restream-engine --lib srt::` for retained consumers |
 | `crates/restream-moq/src/` | `cargo test -p restream-moq --lib` and `cargo test -p restream-engine --lib moq::` for retained integration/consumer tests |
@@ -203,7 +203,7 @@ touch raw syscall and FFI memory.
 | CI job | Modules | Why |
 |---|---|---|
 | `miri` | `restream-engine`'s `egress::tls::ktls::tests::ancillary`, `egress::leaf_arena`, `egress::scheduler`; separately `restream-core`'s `codec::bits::tests` | the kTLS cmsg parser is project `unsafe`; the rest check std and dependency use without sockets or child processes |
-| `asan` | `restream-engine`'s `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests` (which also selects `egress::backends::rtmp::tests`), `tcp_stats`, `mpegts_allocation_tests`; the root `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
+| `asan` | `restream-engine`'s `egress::tls`, `egress::backends::compio_tcp`, `external_transcoder`, `timing`, `rtmp::listener`, `rtmp::tests` (which also selects `egress::backends::rtmp::tests`), `tcp_stats`, `tests::mpegts_allocation`; the root `runtime_info`; separately the `restream-sync` and `restream-mpegts` library targets | kTLS, socket, SQLite/glibc FFI, child-pipe memory, MPEG-TS behavior/allocation and synchronization; leak detection off |
 
 `cargo xtask miri` and `cargo xtask asan` set the job's filters and
 environment on each command; the sanitizer flags never reach the xtask

@@ -606,5 +606,4 @@ fn run(shared: &Shared) {
 }
 
 #[cfg(test)]
-#[path = "stream_inspector_tests.rs"]
 mod tests;

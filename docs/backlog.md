@@ -251,9 +251,9 @@ the [assurance roadmap](assurance-roadmap.md).
   `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
   (`tests/hls_push_ingest.rs`) each failed once in the CI coverage job, and
   `a_playlist_parse_does_not_block_the_pull_task_worker`
-  (`crates/restream-engine/src/hls_pull/tests_guards.rs`, 200 ms worker-delay bound) and
+  (`crates/restream-engine/src/hls_pull/tests/guards.rs`, 200 ms worker-delay bound) and
   `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`
-  (`crates/restream-engine/src/external_transcoder_tests/hevc_pipeline.rs`, output deadline)
+  (`crates/restream-engine/src/external_transcoder/tests/hevc_pipeline.rs`, output deadline)
   each failed once in a full local `--lib` run; each passes when rerun.
   `container_timeout_reaps_engine_client` (`crates/xtask/src/container/tests.rs`)
   failed once in CI: its fake engine had not written its `pid` file when the

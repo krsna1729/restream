@@ -69,8 +69,6 @@ pub use moq::bench_entry as moq_bench_entry;
 pub use moq::fuzz_entry as moq_fuzz_entry;
 #[doc(hidden)]
 pub use moq::subscribe_entry as moq_subscribe_entry;
-#[cfg(test)]
-mod mpegts_allocation_tests;
 pub mod panic_boundary;
 pub mod pipe_metrics;
 pub mod profiles;
@@ -90,6 +88,8 @@ pub mod stage_runtime;
 pub mod startup_policy;
 pub mod stream_inspector;
 pub mod stream_qa;
+#[cfg(test)]
+mod tests;
 
 pub mod ffmpeg;
 pub mod ingest_publisher;

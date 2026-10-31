@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use super::{PacketFeedConfig, TsPacketFeeder};
+use super::super::{PacketFeedConfig, TsPacketFeeder};
 use restream_core::metadata::VideoMeta;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 

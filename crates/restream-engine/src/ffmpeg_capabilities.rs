@@ -379,5 +379,4 @@ pub async fn check_at_startup() {
 }
 
 #[cfg(test)]
-#[path = "ffmpeg_capabilities_tests.rs"]
 mod tests;

@@ -515,5 +515,4 @@ fn actionable_external_ffmpeg_stderr(text: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "ffmpeg_process_tests.rs"]
 mod tests;

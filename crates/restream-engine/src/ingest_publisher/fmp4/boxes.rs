@@ -400,5 +400,4 @@ pub fn is_init_segment(bytes: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "boxes_tests.rs"]
 mod tests;

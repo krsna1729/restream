@@ -688,5 +688,4 @@ fn audio_stage_op_from_routing(routing: &AudioRouting) -> Option<AudioStageOp> {
 }
 
 #[cfg(test)]
-#[path = "stage_runtime_tests.rs"]
 mod tests;

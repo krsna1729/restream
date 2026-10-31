@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
-use super::tests::harness;
-use super::*;
+use super::super::tests::harness;
+use super::super::*;
 use restream_core::PayloadFormat;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 

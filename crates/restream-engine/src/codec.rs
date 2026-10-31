@@ -11,5 +11,4 @@ pub use captions::{FrameCaptions, frame_captions};
 pub use video::{video_for_ts, video_for_ts_into};
 
 #[cfg(test)]
-#[path = "codec_tests.rs"]
 mod tests;

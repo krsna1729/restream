@@ -775,5 +775,4 @@ fn convert_sample(
 }
 
 #[cfg(test)]
-#[path = "fmp4_tests.rs"]
 mod tests;

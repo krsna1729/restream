@@ -217,7 +217,7 @@ A stage identity is a typed `StageKey { pipeline, kind }`
 
 The audio key embeds its upstream key, so outputs with different presets or
 codecs never share audio stages. `same_encoding_outputs_share_one_transcoder_stage`
-(`crates/restream-engine/src/engine_stage_tests/transcoder.rs`) checks that equal requests
+(`crates/restream-engine/src/engine/tests/stage/transcoder.rs`) checks that equal requests
 share one ring.
 
 ### Stage lifetime

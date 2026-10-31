@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use super::{PacketFeedConfig, TsPacketFeeder};
+use super::super::{PacketFeedConfig, TsPacketFeeder};
 use crate::codec::{audio_for_ts_into, video_for_ts_into};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType, PayloadFormat};

@@ -73,10 +73,7 @@ fn production_transport_stays_on_io_uring_owners() {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if name.ends_with("_tests.rs")
-            || name == "tests.rs"
-            || path.components().any(|part| part.as_os_str() == "tests")
-        {
+        if name == "tests.rs" || path.components().any(|part| part.as_os_str() == "tests") {
             return;
         }
         let production = strip_test_items(source);
