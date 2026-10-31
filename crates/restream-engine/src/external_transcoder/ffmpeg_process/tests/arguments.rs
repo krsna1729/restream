@@ -468,7 +468,7 @@ async fn kill_and_wait_on_child_without_piped_stdin_does_not_hang() {
 
 /// Captions (CEA-608/708) travel in the video's SEI. A transcode decodes
 /// them into frame side data, and the encoder writes them back only when
-/// asked: FFmpeg 8.1's libx265 defaults `a53cc` off, so the pinned build
+/// asked: FFmpeg's libx265 defaults `a53cc` off, so the pinned build
 /// dropped every caption of an H.265 source without it.
 #[test]
 fn stage_args_keep_closed_captions_through_either_encoder() {

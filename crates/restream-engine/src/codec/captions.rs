@@ -208,4 +208,6 @@ fn a53_captions(message: &[u8]) -> FrameCaptions {
 }
 
 #[cfg(test)]
+pub(crate) mod test_data;
+#[cfg(test)]
 mod tests;

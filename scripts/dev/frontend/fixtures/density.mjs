@@ -1025,8 +1025,8 @@ export function createDeployment({ preset = "plant", seed = 7, nowMs = Date.now(
       toolchain: { rustc: "1.93.0", target: "x86_64-unknown-linux-gnu" },
       nativeLibraries: { srt: { version: "srt-rs", license: "Apache-2.0" }, sqlite: { version: "3.50.4", license: "blessing" } },
       externalTools: {
-        ffmpeg: { path: "/usr/local/bin/ffmpeg", version: "n8.1.3-9-g29e619e767-20260930", error: null },
-        ffprobe: { path: "/usr/local/bin/ffprobe", version: "n8.1.3-9-g29e619e767-20260930", error: null },
+        ffmpeg: { path: "/usr/local/bin/ffmpeg", version: "n9.0.2-17-g2a571b6068-20260930", error: null },
+        ffprobe: { path: "/usr/local/bin/ffprobe", version: "n9.0.2-17-g2a571b6068-20260930", error: null },
         features: ["transcoding", "fileIngest", "recordingRemux", "posters", "pictureAndSoundChecks", "mediaAnalysis"].map((feature) => ({ feature, available: true, missing: [] })),
       },
       sbom: { endpoint: "/api/v1/engine/sbom", componentCount: 612, licensesIncluded: true },

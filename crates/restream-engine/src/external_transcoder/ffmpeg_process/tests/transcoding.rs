@@ -521,3 +521,107 @@ fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
     let _ = child.wait();
     let _ = reader.join();
 }
+
+/// Start of the first picture slice's start code in an Annex B access unit.
+fn first_slice_start(payload: &[u8], hevc: bool) -> Option<usize> {
+    let mut at = 0;
+    while let Some(found) = memchr::memmem::find(&payload[at..], &[0, 0, 1]) {
+        let code = at + found;
+        let header = *payload.get(code + 3)?;
+        let slice = if hevc {
+            (header >> 1) & 0x3F < 32
+        } else {
+            matches!(header & 0x1F, 1..=5)
+        };
+        if slice {
+            return Some(if code > 0 && payload[code - 1] == 0 {
+                code - 1
+            } else {
+                code
+            });
+        }
+        at = code + 3;
+    }
+    None
+}
+
+/// Every input frame carries one CEA-608 cue in its SEI; a transcoding stage
+/// must hand each one to the encoder and back out, through either encoder.
+#[test]
+fn stage_transcode_keeps_every_cea608_cue_through_libx264_and_libx265() {
+    use crate::codec::caption_test_data::{a53, sei_nal};
+    use crate::codec::frame_captions;
+    use restream_core::MediaType;
+
+    for (fixture, codec) in [("h264", "h264"), ("h265", "hevc")] {
+        let hevc = codec == "hevc";
+        let (video, audio_tracks, mut packets) =
+            crate::test_fixtures::primary_av_packets_for_codec(fixture).expect("AV fixture");
+        let sei = [
+            &[0, 0, 0, 1][..],
+            &sei_nal(&a53(&[(0, b'H' | 0x80, b'E')]), hevc),
+        ]
+        .concat();
+        for packet in packets
+            .iter_mut()
+            .filter(|packet| packet.media_type == MediaType::Video)
+        {
+            let at = first_slice_start(&packet.payload, hevc).expect("a picture slice");
+            let mut payload = packet.payload[..at].to_vec();
+            payload.extend_from_slice(&sei);
+            payload.extend_from_slice(&packet.payload[at..]);
+            packet.payload = payload.into();
+        }
+
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            std::sync::Arc::new(audio_tracks),
+            PacketFeedConfig::default(),
+        );
+        let mut ts_bytes = Vec::new();
+        let mut packet_buf = Vec::new();
+        for packet in &packets {
+            packet_buf.clear();
+            if feeder.extend_ts_for_packet(packet, &mut packet_buf) {
+                ts_bytes.extend_from_slice(&packet_buf);
+            }
+        }
+        let input_path = write_temp_ts_artifact(&format!("captions-{codec}"), &ts_bytes);
+        let output_path = input_path
+            .parent()
+            .expect("temp artifact dir")
+            .join("output.ts");
+        let mut args = build_stage_ffmpeg_args("720p", codec);
+        let input_pos = args.iter().position(|arg| arg == "-i").expect("-i");
+        args[input_pos + 1] = input_path.to_string_lossy().to_string();
+        *args.last_mut().expect("output") = output_path.to_string_lossy().to_string();
+        let output = std::process::Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn ffmpeg transcode");
+        assert!(
+            output.status.success(),
+            "{codec}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut demuxer = TsDemuxer::new();
+        let mut out = Vec::new();
+        demuxer.feed(&std::fs::read(&output_path).expect("read transcoded TS"));
+        demuxer.flush();
+        demuxer.drain_into(&mut out);
+        let frames: Vec<_> = out
+            .iter()
+            .filter(|packet| packet.media_type == MediaType::Video)
+            .collect();
+        let cued = frames
+            .iter()
+            .filter(|packet| frame_captions(packet.format, &packet.payload, hevc).text)
+            .count();
+        assert!(!frames.is_empty(), "{codec}: no video out");
+        assert_eq!(cued, frames.len(), "{codec}: output frames without their cue");
+    }
+}

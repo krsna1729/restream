@@ -187,10 +187,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN case "${TARGETARCH:-amd64}" in \
-        amd64) asset=ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz \
-            sha256=97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79 ;; \
-        arm64) asset=ffmpeg-n8.1.3-9-g29e619e767-linuxarm64-gpl-8.1.tar.xz \
-            sha256=10523d1e0be6b3ce62a9708cc50815c4b5eb5f36ae147fbe2afeecda6f2d6845 ;; \
+        amd64) asset=ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz \
+            sha256=68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269 ;; \
+        arm64) asset=ffmpeg-n9.0.2-17-g2a571b6068-linuxarm64-gpl-9.0.tar.xz \
+            sha256=91afcd7695d4bbbb9e0057aa10baaf9875ec4e1a97303f9059ec971336a2ab46 ;; \
         *) echo "no FFmpeg build for ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && cd /tmp \

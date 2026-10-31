@@ -35,12 +35,12 @@ pub struct Asset {
 pub fn pinned_asset(arch: &str) -> Option<Asset> {
     match arch {
         "x86_64" => Some(Asset {
-            name: "ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz",
-            sha256: "97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79",
+            name: "ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz",
+            sha256: "68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269",
         }),
         "aarch64" => Some(Asset {
-            name: "ffmpeg-n8.1.3-9-g29e619e767-linuxarm64-gpl-8.1.tar.xz",
-            sha256: "10523d1e0be6b3ce62a9708cc50815c4b5eb5f36ae147fbe2afeecda6f2d6845",
+            name: "ffmpeg-n9.0.2-17-g2a571b6068-linuxarm64-gpl-9.0.tar.xz",
+            sha256: "91afcd7695d4bbbb9e0057aa10baaf9875ec4e1a97303f9059ec971336a2ab46",
         }),
         _ => None,
     }
@@ -51,7 +51,7 @@ pub fn pinned_asset(arch: &str) -> Option<Asset> {
 pub enum Channel {
     /// The pinned release, verified against the digest in this source.
     Pinned,
-    /// BtbN's floating `latest` 8.1 build, verified against that release's
+    /// BtbN's floating `latest` 9.0 build, verified against that release's
     /// own checksum list (`--latest`).
     Latest,
 }
@@ -205,8 +205,8 @@ fn fallback(fetched: &Path, path_env: Option<OsString>, configured: Option<Strin
 
 fn latest_asset_name(arch: &str) -> Option<&'static str> {
     match arch {
-        "x86_64" => Some("ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"),
-        "aarch64" => Some("ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"),
+        "x86_64" => Some("ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz"),
+        "aarch64" => Some("ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz"),
         _ => None,
     }
 }
@@ -261,7 +261,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// `restream ffmpeg-fetch [--latest]`: download the BtbN FFmpeg 8.1 static
+/// `restream ffmpeg-fetch [--latest]`: download the BtbN FFmpeg 9.0 static
 /// GPL build for this architecture (the pinned release, or `latest`), verify
 /// its SHA-256, and install `ffmpeg` and `ffprobe` under
 /// `.restream/runtime/ffmpeg/`. Progress and errors go to `out`. Optional: a
@@ -281,7 +281,7 @@ pub fn fetch(channel: Channel, out: &mut impl Write) -> i32 {
         Channel::Pinned => PINNED_RELEASE,
         Channel::Latest => "latest",
     };
-    let _ = writeln!(out, "downloading the BtbN FFmpeg 8.1 build ({which}) ...");
+    let _ = writeln!(out, "downloading the BtbN FFmpeg 9.0 build ({which}) ...");
     match runtime.block_on(fetch_into(channel, Path::new(FETCH_DIR))) {
         Ok(path) => {
             let version = std::process::Command::new(&path)
@@ -477,13 +477,13 @@ mod tests {
     #[test]
     fn checksum_lookup_matches_the_exact_asset_name() {
         let listing = format!(
-            "{a}  ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz\n\
-             {b} *ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz\n",
+            "{a}  ffmpeg-n9.0-latest-linux64-gpl-shared-9.0.tar.xz\n\
+             {b} *ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz\n",
             a = "a".repeat(64),
             b = "b".repeat(64),
         );
         assert_eq!(
-            expected_sha256(&listing, "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"),
+            expected_sha256(&listing, "ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz"),
             Some("b".repeat(64).as_str())
         );
         assert_eq!(expected_sha256(&listing, "missing.tar.xz"), None);

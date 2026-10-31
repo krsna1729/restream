@@ -267,11 +267,11 @@ missing is logged at startup with what it lacks, reported in
 `externalTools` on `GET /api/v1/engine`, and fails when used; the rest work.
 
 `restream ffmpeg-fetch` installs the pinned
-[BtbN](https://github.com/BtbN/FFmpeg-Builds) FFmpeg 8.1 static GPL build
+[BtbN](https://github.com/BtbN/FFmpeg-Builds) FFmpeg 9.0 static GPL build
 for the host architecture (see [FFmpeg versions](ffmpeg-versions.md)),
 verifies its SHA-256 against the digest in the source, and installs
 `ffmpeg` and `ffprobe`. `restream ffmpeg-fetch --latest` takes BtbN's
-floating `latest` 8.1 build instead, verified against that release's
+floating `latest` 9.0 build instead, verified against that release's
 checksum list. It needs GNU `tar` with xz. The container images install the
 pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 `FFPROBE_BIN_PATH=/usr/local/bin/ffprobe`.

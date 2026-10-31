@@ -254,7 +254,7 @@ mod tests {
         )));
         assert!(scanned_for_generators(Path::new("tests/transcoder.rs")));
         assert!(!scanned_for_generators(Path::new(
-            "test/fixtures/ffmpeg/btbn-n8.1.3/filters.txt"
+            "test/fixtures/ffmpeg/btbn-n9.0.2/filters.txt"
         )));
     }
 

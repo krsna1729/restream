@@ -257,9 +257,6 @@ Decoders:
  VF...D utvideo              Ut Video
  VFS..D v210                 Uncompressed 4:2:2 10-bit
  V....D v210x                Uncompressed 4:2:2 10-bit
- V....D v308                 Uncompressed packed 4:4:4
- V....D v408                 Uncompressed packed QT 4:4:4:4
- VFS..D v410                 Uncompressed 4:4:4 10-bit
  V....D vb                   Beam Software VB
  VF...D vble                 VBLE Lossless Codec
  V.S..D vbn                  Vizrt Binary Image
@@ -298,6 +295,7 @@ Decoders:
  VF...D wbmp                 WBMP (Wireless Application Protocol Bitmap) image
  V....D wcmv                 WinCAM Motion Video
  VF...D webp                 WebP image
+ V.S..D webp_anim            Animated WebP image
  V...BD wmv1                 Windows Media Video 7
  V...BD wmv2                 Windows Media Video 8
  V....D wmv3                 Windows Media Video 9
@@ -520,7 +518,6 @@ Decoders:
  A....D siren                Siren
  A....D smackaud             Smacker audio (codec smackaudio)
  A....D sol_dpcm             DPCM Sol
- A..X.D sonic                Sonic
  A....D speex                Speex
  AF...D tak                  TAK (Tom's lossless Audio Kompressor)
  A....D truehd               TrueHD

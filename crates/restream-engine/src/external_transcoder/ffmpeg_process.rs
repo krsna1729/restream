@@ -256,8 +256,8 @@ fn build_stage_ffmpeg_args_inner(
                 .unwrap_or_else(|| "veryfast".to_string()),
         ]);
         // Keep CEA-608/708 captions: the decoder hands them to the encoder
-        // as side data, which writes them back only when asked (FFmpeg
-        // 8.1's libx265 defaults this off; libx264 defaults it on).
+        // as side data, which writes them back only when asked (FFmpeg's
+        // libx265 defaults this off; libx264 defaults it on).
         args.extend(["-a53cc".to_string(), "1".to_string()]);
         if encoder == "libx265" {
             args.extend([
