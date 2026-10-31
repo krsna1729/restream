@@ -1,9 +1,12 @@
 //! HLS push ingest end to end on a real HTTP server: FFmpeg pushes the
 //! checked-in TS fixture over PUT and over POST, as MPEG-TS and as fMP4
-//! segments, and a raw client carries a whole stream over one persistent
-//! connection. Each run must publish the whole fixture, in order, and end
-//! its session on `EXT-X-ENDLIST`.
+//! segments, a raw client carries a whole stream over one persistent
+//! connection, and FFmpeg's separate-rendition output is replayed in the
+//! order FFmpeg wrote it. Each run must publish the whole fixture, in order,
+//! and end its session on `EXT-X-ENDLIST`.
 
+use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +14,7 @@ use std::time::Duration;
 use restream_core::MediaType;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::engine::MediaEngine;
+use restream_engine::hls_ingest::playlist::{self, MediaPlaylist, Playlist, SegmentEntry};
 use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
 use restream_engine::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
@@ -293,52 +297,95 @@ async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
     .await;
 }
 
-/// FFmpeg's separate-rendition fMP4 HLS (`-var_stream_map`), at media pace
-/// as a live encoder pushes: a master whose variant is video only and whose
-/// audio is an `EXT-X-MEDIA` rendition with its own playlist and `EXT-X-MAP`
-/// init. FFmpeg writes the master only after every rendition's first
-/// playlist, so what a rendition uploads before the master names it may be
-/// lost (the first video segment, at most); everything after reaches the
-/// ring, both renditions merged in DTS order.
+/// FFmpeg's separate-rendition fMP4 HLS (`-var_stream_map`): a master whose
+/// variant is video only and whose audio is an `EXT-X-MEDIA` rendition with
+/// its own playlist and `EXT-X-MAP` init. FFmpeg writes it to a directory,
+/// logging each object as it opens it, and one persistent connection
+/// replays that log as FFmpeg pushes it live: every object in FFmpeg's
+/// order, each playlist write as the `-hls_list_size 3` window it listed
+/// then, every reply read before the next object. With a connection per
+/// object the order would be the server's (see
+/// `a_segment_can_reach_the_session_before_a_playlist_uploaded_first`).
+///
+/// FFmpeg writes the master only after every rendition's first segment and
+/// playlist: the audio playlist, first, is followed as rendition 0, and the
+/// video playlist ahead of the master looks like another variant's. Its
+/// first segment stays held until the master selects it, so every frame
+/// reaches the ring, both renditions merged in DTS order.
 #[tokio::test]
 async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
-    let server = serve().await;
-    let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
-    let start = ring.get_write_idx();
-    let url = format!(
-        "http://{}/ingest/hls/{STREAM_KEY}/stream_%v/index.m3u8",
-        server.address
-    );
-    let status = tokio::process::Command::new(restream_engine::ffmpeg_binary::ffmpeg_bin_path())
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-re",
-            "-i",
-        ])
-        .arg(Codec::H264.fixture())
+    let dir =
+        std::env::temp_dir().join(format!("restream-hls-renditions-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // FFmpeg runs in `dir`, so its binary and input need absolute paths.
+    let ffmpeg = std::path::absolute(restream_engine::ffmpeg_binary::ffmpeg_bin_path()).unwrap();
+    let fixture = std::path::absolute(Codec::H264.fixture()).unwrap();
+    let output = tokio::process::Command::new(ffmpeg)
+        .current_dir(&dir)
+        // `info` logs every object FFmpeg opens for writing, in its order.
+        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-i"])
+        .arg(fixture)
         .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
         .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
-        .args(["-hls_list_size", "3", "-hls_segment_type", "fmp4"])
+        .args(["-hls_list_size", "0", "-hls_segment_type", "fmp4"])
         .args([
             "-var_stream_map",
             "v:0,agroup:aud a:0,agroup:aud,default:yes",
         ])
-        .args(["-master_pl_name", "master.m3u8"])
-        .args(["-hls_flags", "delete_segments", "-method", "PUT"])
-        .args(["-http_persistent", "0"])
-        .arg(url)
+        .args(["-master_pl_name", "master.m3u8", "stream_%v/index.m3u8"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
         .kill_on_drop(true)
-        .status();
-    let status = tokio::time::timeout(Duration::from_secs(60), status)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(60), output)
         .await
         .expect("ffmpeg finished")
         .expect("ffmpeg ran");
-    assert!(status.success(), "ffmpeg exited with {status}");
+    assert!(
+        output.status.success(),
+        "ffmpeg exited with {}",
+        output.status
+    );
+    let log = String::from_utf8(output.stderr).unwrap();
+    let writes: Vec<&str> = log
+        .lines()
+        .filter_map(|line| {
+            line.split_once("Opening '")?
+                .1
+                .strip_suffix("' for writing")
+        })
+        .collect();
+    let media = |path: &str| {
+        let bytes = std::fs::read(dir.join(path)).unwrap();
+        match playlist::parse(&bytes, path).unwrap() {
+            Playlist::Media(media) => media,
+            Playlist::Master(_) => panic!("{path} is a master playlist"),
+        }
+    };
+    let (video_playlist, audio_playlist) =
+        (media("stream_0/index.m3u8"), media("stream_1/index.m3u8"));
+
+    let server = serve().await;
+    let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
+    let start = ring.get_write_idx();
+    let mut stream = tokio::net::TcpStream::connect(server.address)
+        .await
+        .unwrap();
+    let mut written = HashSet::new();
+    for (index, &write) in writes.iter().enumerate() {
+        // FFmpeg writes a playlist to `<name>.tmp` and renames it.
+        let (path, body) = match write.strip_suffix(".tmp") {
+            Some(path) => {
+                let last = !writes[index + 1..].contains(&write);
+                (path, live_window(&media(path), &written, last).into_bytes())
+            }
+            None => (write, std::fs::read(dir.join(write)).unwrap()),
+        };
+        let status = request(&mut stream, path, &body).await;
+        assert!((200..300).contains(&status), "{path} answered {status}");
+        written.insert(path.to_string());
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+
     tokio::time::timeout(Duration::from_secs(30), async {
         while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -368,25 +415,60 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
             .collect()
     };
     let (video, audio) = (dts(MediaType::Video), dts(MediaType::Audio));
-    // 8 s of 30 fps video (its first 2 s segment precedes the master and is
-    // lost) and of 48 kHz AAC (375 frames, all of them).
-    assert!(video.len() >= 150, "only {} video packets", video.len());
-    assert!(audio.len() >= 340, "only {} audio packets", audio.len());
+    // The fixture's video is 30 fps and its audio 48 kHz AAC, 1024 samples a
+    // frame: every frame the playlists list.
+    let frames = |segments: &[SegmentEntry], rate: f64| {
+        let seconds: f64 = segments
+            .iter()
+            .map(|segment| segment.duration.as_secs_f64())
+            .sum();
+        (seconds * rate).round() as usize
+    };
+    let video_frames = frames(&video_playlist.segments, 30.0);
+    let audio_frames = frames(&audio_playlist.segments, 48_000.0 / 1024.0);
+    assert!(
+        video.len() >= video_frames,
+        "{} of {video_frames} video packets",
+        video.len()
+    );
+    assert_eq!(audio.len(), audio_frames, "every audio frame");
     for track in [&video, &audio] {
         assert!(
             track.windows(2).all(|pair| pair[1] > pair[0]),
             "a track goes backwards"
         );
     }
+    // Every segment starts on a keyframe.
     let keyframes = packets
         .iter()
         .filter(|packet| packet.media_type == MediaType::Video && packet.is_keyframe)
         .count();
-    assert!(keyframes >= 3, "only {keyframes} keyframes");
-    // Merged by DTS: no packet trails the newest one before it by more than
-    // a frame or two.
+    assert!(
+        keyframes >= video_playlist.segments.len(),
+        "only {keyframes} keyframes"
+    );
+    // Before the master names it the audio rendition, the audio playlist is
+    // followed alone and its first segment is published at once (no wait
+    // for a master that a single-variant push never sends): only that
+    // segment may precede the first video packet.
+    let first_video = packets
+        .iter()
+        .position(|packet| packet.media_type == MediaType::Video)
+        .expect("video reached the ring");
+    let first_audio_segment_ms =
+        i64::try_from(audio_playlist.segments[0].duration.as_millis()).unwrap();
+    for packet in &packets[..first_video] {
+        assert!(
+            packet.dts < first_audio_segment_ms,
+            "{:?} at {} precedes the first video packet",
+            packet.media_type,
+            packet.dts
+        );
+    }
+    // From the first video packet on, both renditions merge by DTS: no
+    // packet trails the newest one before it by more than a frame or two.
     let mut newest = i64::MIN;
-    for packet in &packets {
+    for packet in &packets[first_video..] {
         assert!(
             packet.dts >= newest.saturating_sub(100),
             "{:?} at {} trails {newest}",
@@ -397,14 +479,97 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     }
 }
 
+/// What a live `-hls_list_size 3` push uploads for `playlist` once the
+/// objects in `written` exist: its newest three written segments, with
+/// `EXT-X-ENDLIST` on the `last` write. URIs stay relative to the playlist.
+fn live_window(playlist: &MediaPlaylist, written: &HashSet<String>, last: bool) -> String {
+    let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+    let listed = playlist
+        .segments
+        .iter()
+        .take_while(|segment| written.contains(&segment.path))
+        .count();
+    let window = &playlist.segments[listed.saturating_sub(3)..listed];
+    let mut text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{}\n",
+        playlist.target_duration.as_secs(),
+        window.first().map_or(0, |segment| segment.sequence)
+    );
+    if let Some(map) = &playlist.map_uri {
+        writeln!(text, "#EXT-X-MAP:URI=\"{}\"", name(map)).unwrap();
+    }
+    for segment in window {
+        let seconds = segment.duration.as_secs_f64();
+        writeln!(text, "#EXTINF:{seconds:.6},\n{}", name(&segment.path)).unwrap();
+    }
+    if last && playlist.ended {
+        text.push_str("#EXT-X-ENDLIST\n");
+    }
+    text
+}
+
+/// An upload is complete for the encoder once its last byte is sent, but
+/// objects on separate connections reach the session in the order their
+/// handlers dispatch them: a playlist is parsed on the blocking pool first,
+/// a segment is not. With that pool busy, a segment sent after the playlist
+/// that lists it reaches the session first (held, `202`), and the playlist
+/// releases it later. An encoder that reads no replies, like FFmpeg with a
+/// connection per object, gets no order between its objects.
+#[test]
+fn a_segment_can_reach_the_session_before_a_playlist_uploaded_first() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let server = serve().await;
+        let ring = server.engine.get_or_create_pipeline(PIPELINE_ID).await;
+        let start = ring.get_write_idx();
+        // The only blocking thread waits here, so a playlist parse queues.
+        let (gate, gated) = std::sync::mpsc::channel::<()>();
+        let busy = tokio::task::spawn_blocking(move || gated.recv());
+        let fixture = std::fs::read(fixture_path()).unwrap();
+        let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nindex0.ts\n#EXT-X-ENDLIST\n";
+
+        let mut first = tokio::net::TcpStream::connect(server.address)
+            .await
+            .unwrap();
+        send(&mut first, "index.m3u8", playlist.as_bytes()).await;
+        let mut second = tokio::net::TcpStream::connect(server.address)
+            .await
+            .unwrap();
+        assert_eq!(
+            request(&mut second, "index0.ts", &fixture).await,
+            202,
+            "the segment reached the session before the playlist"
+        );
+        gate.send(()).unwrap();
+        busy.await.unwrap().unwrap();
+        assert_eq!(reply(&mut first).await, 200);
+
+        assert_whole_fixture_published(&server, &ring, start, None).await;
+    });
+}
+
 /// Send one PUT on `stream` and read its whole reply; returns the status.
 async fn request(stream: &mut tokio::net::TcpStream, path: &str, body: &[u8]) -> u16 {
+    send(stream, path, body).await;
+    reply(stream).await
+}
+
+/// Send one PUT on `stream`, all of it.
+async fn send(stream: &mut tokio::net::TcpStream, path: &str, body: &[u8]) {
     let head = format!(
         "PUT /ingest/hls/{STREAM_KEY}/{path} HTTP/1.1\r\nHost: ingest\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
     stream.write_all(head.as_bytes()).await.unwrap();
     stream.write_all(body).await.unwrap();
+}
+
+/// Read one whole reply from `stream`; returns its status.
+async fn reply(stream: &mut tokio::net::TcpStream) -> u16 {
     let mut reply = Vec::new();
     while !reply.ends_with(b"\r\n\r\n") {
         let mut byte = [0u8; 1];

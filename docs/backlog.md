@@ -18,7 +18,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
-- [Q-106 separate-rendition HLS push order](#q-106-testing-opus-separate-rendition-hls-push-depends-on-server-arrival-order)
 - [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
 - [Q-109 SRT group receive skips a lost sequence](#q-109-protocol-opus-an-srt-group-receiver-skips-a-sequence-every-member-lost)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
@@ -136,23 +135,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
 - Gates: misspelt and reordered requests reach the same command the buttons
   would; nothing applies without the approval step.
-
-### Q-106 [testing] [opus] Separate-rendition HLS push depends on server arrival order
-- Goal: `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
-  (`tests/hls_push_ingest.rs`) failed once in the CI coverage job. FFmpeg
-  with `-http_persistent 0` reads no replies, and a playlist goes through
-  the blocking-pool parse while a segment does not, so the session's arrival
-  order is the server's, not FFmpeg's.
-- Finding: a deterministic replay of FFmpeg's own write order (from its
-  `Opening '…' for writing` log) over one persistent connection fails every
-  run: audio up to 8 s reaches the ring before video at 2 s, which suggests
-  the session follows the audio rendition until FFmpeg's final master write.
-  The replay test is parked at `.local/parked/q106-hls_push_ingest.rs`
-  (local only). Decide whether that order is a product defect (a live
-  separate-rendition encoder would see it) or a replay artefact, then fix
-  the product or the replay.
-- Gates: the test is deterministic (no wall-clock budget) and passes 200
-  consecutive runs under `cargo llvm-cov` on a loaded host.
 
 ### Q-108 [performance] [opus] Explain the ring producer bench shift after the engine move
 - Goal: `ring_buffer/producer/push_one_at_a_time/4` measured +17.5% and
