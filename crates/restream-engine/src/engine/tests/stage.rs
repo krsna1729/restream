@@ -10,13 +10,8 @@ fn engine_with_srt_muxer_caps(max_outputs_per_shard: usize, max_shards: usize) -
     }))
 }
 
-#[path = "engine_stage_tests/hls.rs"]
-mod hls_tests;
-#[path = "engine_stage_tests/routing.rs"]
-mod routing_tests;
-#[path = "engine_stage_tests/runtime.rs"]
-mod runtime_tests;
-#[path = "engine_stage_tests/srt_muxer.rs"]
-mod srt_muxer_tests;
-#[path = "engine_stage_tests/transcoder.rs"]
-mod transcoder_tests;
+mod hls;
+mod routing;
+mod runtime;
+mod srt_muxer;
+mod transcoder;

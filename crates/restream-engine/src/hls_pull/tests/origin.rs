@@ -15,10 +15,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
 
-use super::fetch::{
+use super::super::fetch::{
     AuthScope, FetchError, RequestAuth, build_client, fetch_small, pump_body, send,
 };
-use super::*;
+use super::super::*;
 use crate::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, STREAM_KEY, test_ingest};
 use restream_core::MediaType;
 use restream_domain::domain::pipeline_input::{PullAuth, VariantRule};

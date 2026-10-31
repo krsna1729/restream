@@ -957,5 +957,4 @@ fn drain_bounded<T>(
 }
 
 #[cfg(test)]
-#[path = "ingress_owner_tests.rs"]
 mod tests;

@@ -9,11 +9,13 @@ use srt_transport::compio::Owner;
 
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
-use super::ingress_admission::ReceiverGroupId;
-use super::ingress_owner::{IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle};
-use super::tokio_ingress::SrtIngestPolicyStore;
+use super::super::ingress_admission::ReceiverGroupId;
+use super::super::ingress_owner::{
+    IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle,
+};
+use super::super::tokio_ingress::SrtIngestPolicyStore;
 
-use super::ingress_test_support::*;
+use super::super::ingress_test_support::*;
 
 // ---------------------------------------------------------------------------
 // Bridges and thread ownership
@@ -224,7 +226,10 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     assert_eq!(snapshot.media_unattached_dropped, 0, "{snapshot:?}");
     assert_eq!(
         (snapshot.owners, snapshot.tx_capacity),
-        (2, 2 * super::ingress_owner::INGRESS_TX_CAPACITY as u64),
+        (
+            2,
+            2 * super::super::ingress_owner::INGRESS_TX_CAPACITY as u64
+        ),
         "each Owner reports itself and adds its TX capacity"
     );
     let exit = handle.shutdown(None).await;
@@ -248,11 +253,11 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
 fn test_publisher_media(
     ring: Arc<restream_sync::RingBuffer>,
 ) -> (
-    Box<super::ingress_media::SrtPublisherMedia>,
+    Box<super::super::ingress_media::SrtPublisherMedia>,
     Arc<std::sync::atomic::AtomicU64>,
 ) {
     let bytes_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let media = Box::new(super::ingress_media::SrtPublisherMedia {
+    let media = Box::new(super::super::ingress_media::SrtPublisherMedia {
         registration: crate::engine::IngestRegistration {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             attempt_id: 1,

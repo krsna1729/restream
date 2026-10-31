@@ -249,5 +249,4 @@ fn quote(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "digest_tests.rs"]
 mod tests;

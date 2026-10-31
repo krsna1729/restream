@@ -1,16 +1,16 @@
 //! HLS pull ingest: the guards a real origin can prove — where credentials
 //! may go, where the first cycle enters a window, an expired variant URL, a
 //! stuck object, and cancellation. The origin stub and its helpers live in
-//! `tests_origin.rs`; this module imports them.
+//! `tests/origin.rs`; this module imports them.
 
 use std::time::Duration;
 
-use super::fetch::{AuthScope, RequestAuth, build_client};
-use super::tests_origin::{
+use super::super::fetch::{AuthScope, RequestAuth, build_client};
+use super::super::*;
+use super::origin::{
     CapturedMessages, Origin, identity, limits, media_playlist, source, ts_segment, wait_for_media,
     wait_for_request,
 };
-use super::*;
 use crate::hls_ingest::test_support::{
     INPUT_ID, PIPELINE_ID, STREAM_KEY, authenticated, test_ingest,
 };

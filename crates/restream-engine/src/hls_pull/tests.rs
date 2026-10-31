@@ -1,6 +1,13 @@
 //! HLS pull ingest: the fetch plans, the parser's refusal rules and the
 //! guards that are pure functions or state. What needs a real origin is in
-//! `tests_origin.rs`, which also owns the log capture these tests borrow.
+//! `tests/origin.rs`, which also owns the log capture these tests borrow.
+
+// The integration halves: `origin` owns the origin stub and the helpers
+// both integration modules use, `guards` the guards a real origin can
+// prove. Split because one file of them would break the 999-line cap.
+mod auth;
+mod guards;
+mod origin;
 
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -8,11 +15,11 @@ use std::time::Duration;
 
 use super::fetch::{log_url, redirect_refusal};
 use super::namespace::{live_start, map_name};
-use super::tests_origin::{AUDIO_MASTER, CapturedMessages, source};
 use super::*;
 use crate::hls_ingest::playlist;
 use crate::hls_ingest::playlist::Playlist;
 use crate::hls_ingest::test_support::authenticated;
+use origin::{AUDIO_MASTER, CapturedMessages, source};
 use restream_domain::domain::pipeline_input::{HeaderPair, PullAuth, VariantRule};
 use tracing_subscriber::layer::SubscriberExt as _;
 

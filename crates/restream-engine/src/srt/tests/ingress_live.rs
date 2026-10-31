@@ -17,7 +17,7 @@ use srt_proto::handshake::GroupType;
 
 use crate::ingest_auth::AuthenticatedPipeline;
 
-use super::ingress_test_support::*;
+use super::super::ingress_test_support::*;
 
 // ---------------------------------------------------------------------------
 // Publish (direct, plaintext / encrypted / refused)
@@ -202,7 +202,7 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
     let feeder_server = server.server.clone();
     let feeder = tokio::spawn(async move {
         let stats = crate::snapshots::SrtIngressOwnerStats::default();
-        let mut media = super::ingress_media::IngressMedia::<u64>::default();
+        let mut media = super::super::ingress_media::IngressMedia::<u64>::default();
         let _ = media.attach_publisher(0, publisher_media, &stats);
         for chunk in ts_chunks(5000) {
             if let Some(probe) = media.on_payload(0, chunk, &stats) {
@@ -344,8 +344,8 @@ async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
     let before = crate::panic_boundary::contained_panics();
 
     let mut poison = vec![0u8; CHUNK];
-    poison[..super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
-        .copy_from_slice(super::ingress_media::INJECTED_PANIC_PAYLOAD);
+    poison[..super::super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
+        .copy_from_slice(super::super::ingress_media::INJECTED_PANIC_PAYLOAD);
     let poison = vec![Bytes::from(poison); 50];
     let doomed = blocking(move || {
         let mut publish = publish_step(poison);
@@ -429,8 +429,8 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
         .await;
     let mut message = Vec::with_capacity(4096 * CHUNK);
     let mut poison = vec![0u8; CHUNK];
-    poison[..super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
-        .copy_from_slice(super::ingress_media::INJECTED_PANIC_PAYLOAD);
+    poison[..super::super::ingress_media::INJECTED_PANIC_PAYLOAD.len()]
+        .copy_from_slice(super::super::ingress_media::INJECTED_PANIC_PAYLOAD);
     message.extend_from_slice(&poison);
     for chunk in ts_chunks(512).iter().cycle().take(4095) {
         message.extend_from_slice(chunk);
@@ -485,7 +485,7 @@ async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_si
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
-    use super::ingress_media::IngressMedia;
+    use super::super::ingress_media::IngressMedia;
     use crate::snapshots::SrtIngressOwnerStats;
 
     const PIPELINE: &str = "pipeline-probe-identity";
@@ -559,7 +559,7 @@ async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
-    use super::ingress_media::IngressMedia;
+    use super::super::ingress_media::IngressMedia;
     use crate::engine::MediaEngine;
     use crate::snapshots::SrtIngressOwnerStats;
     use restream_core::metadata::VideoMeta;

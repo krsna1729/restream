@@ -476,5 +476,4 @@ pub fn normalize_path(path: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "playlist_tests.rs"]
 mod tests;

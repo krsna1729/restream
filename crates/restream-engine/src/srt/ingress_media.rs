@@ -512,5 +512,4 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
 pub(crate) const INJECTED_PANIC_PAYLOAD: &[u8] = b"restream-test-injected-panic";
 
 #[cfg(test)]
-#[path = "ingress_media_tests.rs"]
 mod tests;

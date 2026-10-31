@@ -1,3 +1,5 @@
+mod rendition;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

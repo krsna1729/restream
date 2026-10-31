@@ -305,5 +305,4 @@ async fn resolve(hosts: Vec<String>) -> Result<Vec<Vec<SocketAddr>>, String> {
 }
 
 #[cfg(test)]
-#[path = "calls_tests.rs"]
 mod tests;

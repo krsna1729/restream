@@ -904,26 +904,9 @@ impl HlsIngest {
     }
 }
 
-/// Tests live in `registry_tests.rs` (this file is at the line cap); the
-/// pull-registry cases live in `pull_registry_tests.rs`, and the session-start
-/// window in `session_start_tests.rs`, which keeps that file's growth bounded
+/// Tests live in `registry/tests.rs` (this file is at the line cap); the
+/// pull-registry cases live in `registry/tests/pull.rs`, and the session-start
+/// window in `registry/tests/session_start.rs`, which keeps that file's growth bounded
 /// too.
 #[cfg(test)]
-#[path = "registry_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "key_state_tests.rs"]
-mod key_state_tests;
-
-#[cfg(test)]
-#[path = "pull_registry_tests.rs"]
-mod pull_tests;
-
-#[cfg(test)]
-#[path = "session_start_tests.rs"]
-mod session_start_tests;
-
-#[cfg(test)]
-#[path = "session_end_tests.rs"]
-mod session_end_tests;

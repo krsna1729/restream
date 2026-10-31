@@ -459,5 +459,4 @@ pub(crate) fn derive_hls_upload_url(playlist_url: &Url, file_name: &str) -> Url 
 }
 
 #[cfg(test)]
-#[path = "upload_tests.rs"]
 mod tests;

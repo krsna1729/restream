@@ -1,7 +1,7 @@
 //! Session-start tests: the window between an attempt's registration and the
 //! session owner that takes it over.
 
-use super::*;
+use super::super::*;
 use crate::hls_ingest::test_support::{PIPELINE_ID, STREAM_KEY, test_ingest};
 
 /// A dispatch dropped after it registered the attempt, but before the owner

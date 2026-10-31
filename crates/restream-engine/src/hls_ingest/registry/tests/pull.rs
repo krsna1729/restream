@@ -1,11 +1,11 @@
 //! The pull registry's tests: starting, replacing and cancelling a pull task
 //! from its row, and what a pull session does across a promotion.
 //!
-//! Kept apart from `registry_tests.rs`, which is near the source-audit line
+//! Kept apart from `registry/tests.rs`, which is near the source-audit line
 //! cap; the shared helpers live there and are `pub(super)`.
 
-use super::tests::{fixture, published, send_pull, wait_for_ring};
-use super::*;
+use super::super::tests::{fixture, published, send_pull, wait_for_ring};
+use super::super::*;
 use crate::hls_ingest::test_support::{INPUT_ID, PIPELINE_ID, stalled_origin, test_ingest};
 use crate::hls_pull::{PullIdentity, PullSource};
 use restream_domain::domain::pipeline_input::{PullAuth, VariantRule};

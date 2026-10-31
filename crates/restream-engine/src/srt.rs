@@ -1,6 +1,5 @@
 //! SRT API surface backed by the external `srt-rs` protocol implementation.
 
-#[path = "srt/calls.rs"]
 mod calls;
 #[path = "srt/egress_connect.rs"]
 pub(crate) mod egress_connect;
@@ -10,15 +9,7 @@ pub(crate) mod egress_stats;
 mod ingress_admission;
 #[path = "srt/ingress_bridge.rs"]
 mod ingress_bridge;
-#[cfg(test)]
-#[path = "srt/ingress_bridge_tests.rs"]
-mod ingress_bridge_tests;
-#[cfg(test)]
-#[path = "srt/ingress_live_tests.rs"]
-mod ingress_live_tests;
-#[path = "srt/ingress_media.rs"]
 mod ingress_media;
-#[path = "srt/ingress_owner.rs"]
 mod ingress_owner;
 #[path = "srt/ingress_quality.rs"]
 mod ingress_quality;
@@ -27,12 +18,13 @@ mod ingress_quality;
 pub(crate) mod ingress_test_support;
 #[path = "srt/knobs.rs"]
 mod knobs;
-#[path = "srt/shared_muxer.rs"]
 mod shared_muxer;
 #[path = "srt/egress_engine.rs"]
 pub(crate) mod srt_egress_engine;
 #[path = "srt_policy.rs"]
 mod srt_policy;
+#[cfg(test)]
+mod tests;
 mod tokio_ingress;
 
 pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;
