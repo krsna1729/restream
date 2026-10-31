@@ -38,6 +38,13 @@ use restream_mpegts::DemuxProbe;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
+/// Most samples one demux step converts. A step runs inside one MEDIA poll,
+/// and converting a sample allocates and copies its payload: a fragment of
+/// [`boxes::MAX_SEGMENT_SAMPLES`] tiny samples, all released by one chunk,
+/// took 1–3 ms to convert in one call on a Zen 1 VM. Chunks pace FFmpeg's
+/// samples, whose fragments hold hundreds, so they rarely need extra steps.
+pub const MAX_SAMPLES_PER_STEP: usize = 256;
+
 fn malformed(message: impl Into<String>) -> MediaRejection {
     MediaRejection::Malformed(message.into())
 }
@@ -229,9 +236,13 @@ impl Fmp4Demux {
     }
 
     /// Plan each fragment the arrived bytes reach, and convert the samples
-    /// whose share of their fragment has arrived. Conversion follows release,
-    /// so a call converts what its chunk released: about one chunk of payload.
-    fn advance(&mut self) -> Result<(), MediaRejection> {
+    /// whose share of their fragment has arrived, spending at most `budget`
+    /// samples: converting one costs an allocation and a payload copy, and a
+    /// fragment of tiny samples could otherwise release thousands in one
+    /// chunk. Opening a fragment (decoding its `moof` and planning it) is
+    /// charged its sample count, so it never shares a step with more than a
+    /// budget's worth of other work.
+    fn advance(&mut self, mut budget: usize) -> Result<(), MediaRejection> {
         let Self {
             init,
             object,
@@ -250,7 +261,7 @@ impl Fmp4Demux {
                 let Some(range) = fragments.get(object.next_fragment).cloned() else {
                     break;
                 };
-                if range.start >= object.arrived {
+                if range.start >= object.arrived || budget == 0 {
                     break;
                 }
                 let fragment = object
@@ -264,6 +275,7 @@ impl Fmp4Demux {
                         malformed(format!("fMP4 fragment at byte {}: {error}", range.start))
                     })?;
                 let plans = plan_fragment(&init.tracks, &samples, &range)?;
+                budget = budget.saturating_sub(plans.len().max(1));
                 object.releasing = Some(Releasing {
                     range,
                     plans,
@@ -277,7 +289,8 @@ impl Fmp4Demux {
                 .bytes
                 .get(releasing.range.clone())
                 .ok_or_else(|| malformed("fMP4 fragment runs past the object"))?;
-            while let Some(plan) = releasing.plans.get(releasing.next)
+            while budget > 0
+                && let Some(plan) = releasing.plans.get(releasing.next)
                 && plan.release_at <= object.arrived
             {
                 let track = init
@@ -299,6 +312,7 @@ impl Fmp4Demux {
                     data,
                 )?);
                 releasing.next = releasing.next.saturating_add(1);
+                budget = budget.saturating_sub(1);
             }
             if releasing.next < releasing.plans.len() {
                 break;
@@ -390,7 +404,25 @@ impl SegmentDemux for Fmp4Demux {
             .arrived
             .saturating_add(chunk.len())
             .min(object.bytes.len());
-        self.advance()
+        self.advance(MAX_SAMPLES_PER_STEP)
+    }
+
+    /// A released sample is not converted yet, or the arrived bytes reach a
+    /// fragment that is not opened yet.
+    fn pending(&self) -> bool {
+        let Some(object) = &self.object else {
+            return false;
+        };
+        match &object.releasing {
+            Some(releasing) => releasing
+                .plans
+                .get(releasing.next)
+                .is_some_and(|plan| plan.release_at <= object.arrived),
+            None => self
+                .fragments
+                .get(object.next_fragment)
+                .is_some_and(|range| range.start < object.arrived),
+        }
     }
 
     fn drain_into(&mut self, out: &mut Vec<MediaPacket>) -> usize {
@@ -399,13 +431,14 @@ impl SegmentDemux for Fmp4Demux {
         moved
     }
 
-    /// The whole object has arrived: release the rest of it. A sample that
-    /// fails here fails the segment like one that fails mid-object.
+    /// The whole object has arrived: release the rest of it, unbudgeted (the
+    /// session calls this only once nothing is pending). A sample that fails
+    /// here fails the segment like one that fails mid-object.
     fn end_object(&mut self) -> Result<(), MediaRejection> {
         if let Some(object) = self.object.as_mut() {
             object.arrived = object.bytes.len();
         }
-        let released = self.advance();
+        let released = self.advance(usize::MAX);
         self.object = None;
         released
     }
@@ -419,7 +452,7 @@ impl SegmentDemux for Fmp4Demux {
         {
             object.arrived = object.arrived.max(releasing.range.end);
         }
-        if let Err(error) = self.advance() {
+        if let Err(error) = self.advance(usize::MAX) {
             tracing::warn!(
                 %error,
                 "[hls] fMP4 fragment tail dropped at end of stream"

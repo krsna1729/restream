@@ -293,3 +293,34 @@ fn a_segment_declaring_too_many_samples_is_refused() {
     let over = [fragment_with_samples(half), fragment_with_samples(half + 1)].concat();
     assert_eq!(walk(&over).unwrap_err(), WalkError::TooManySamples);
 }
+
+/// A fragment whose `moof` carries `free_children` empty `free` boxes
+/// besides its `mfhd` and `traf` (`tfhd`, `tfdt`).
+fn fragment_with_nested_frees(free_children: usize) -> Vec<u8> {
+    let children = moof(0)[8..].to_vec();
+    let frees = bx(b"free", &[]).repeat(free_children);
+    [
+        bx(b"moof", &[children, frees].concat()),
+        bx(b"mdat", &[0; 4]),
+    ]
+    .concat()
+}
+
+/// Boxes inside a `moof` count toward the walk bound like top-level ones,
+/// so a segment cannot hide millions of walk iterations in nested padding.
+#[test]
+fn nested_boxes_count_toward_the_walk_bound() {
+    // moof, mfhd, traf, tfhd, tfdt: five walks; the mdat shares the moof's.
+    let at_bound = fragment_with_nested_frees(MAX_BOXES - 5);
+    assert!(walk(&at_bound).is_ok());
+    assert_eq!(
+        walk(&fragment_with_nested_frees(MAX_BOXES - 4)).unwrap_err(),
+        WalkError::TooManyBoxes
+    );
+    // The count runs across fragments: two halves over the bound together.
+    let half = fragment_with_nested_frees(MAX_BOXES / 2);
+    assert_eq!(
+        walk(&[half.clone(), half].concat()).unwrap_err(),
+        WalkError::TooManyBoxes
+    );
+}

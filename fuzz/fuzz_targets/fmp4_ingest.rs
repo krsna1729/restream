@@ -3,7 +3,8 @@
 //! (`handle_media_segment` per fragment, sample conversion) on untrusted
 //! bytes uploaded by any stream key holder. The first two bytes are the init
 //! segment's length (big-endian); the rest is one media segment, fed in
-//! chunks as a session publishes it.
+//! chunks as a session publishes it, each followed by the empty-chunk steps
+//! its pending work takes.
 #![no_main]
 
 use bytes::Bytes;
@@ -33,11 +34,17 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let mut out = Vec::new();
     let media = Bytes::copy_from_slice(media);
     if demux.begin_object(&media).is_ok() {
-        for chunk in media.chunks(CHUNK) {
+        'object: for chunk in media.chunks(CHUNK) {
             if demux.feed(chunk).is_err() {
                 break;
             }
             demux.drain_into(&mut out);
+            while demux.pending() {
+                if demux.feed(&[]).is_err() {
+                    break 'object;
+                }
+                demux.drain_into(&mut out);
+            }
         }
         let _ = demux.end_object();
     }

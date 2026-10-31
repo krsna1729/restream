@@ -24,12 +24,12 @@ use std::ops::Range;
 /// cannot force unbounded demux work.
 pub const MAX_FRAGMENTS: usize = 64;
 
-/// Walk iterations one media segment may take, one per top-level box except
-/// that a `moof` and its paired `mdat` share one: the walk runs inside a poll
-/// on a shared MEDIA executor, so a segment of tiny boxes must not be able to
-/// hold a worker for millions of iterations. Past this it is refused, so a
-/// segment carries at most this many counted boxes plus one `mdat` per
-/// fragment (itself capped by [`MAX_FRAGMENTS`]).
+/// Walk iterations one media segment may take: one per box, the boxes inside
+/// each `moof` and `traf` included, except that a `moof`'s paired `mdat`
+/// shares the `moof`'s. The walk runs inside a poll on a shared MEDIA
+/// executor, so a segment of tiny boxes, top-level or nested, must not be
+/// able to hold a worker for millions of iterations (64 `moof`s packed with
+/// empty `free` boxes took 6 ms uncounted). Past this it is refused.
 pub const MAX_BOXES: usize = 4096;
 
 /// Largest `moof` accepted. The demuxer decodes a whole `moof` (every `traf`
@@ -79,7 +79,7 @@ pub enum WalkError {
     },
     NoFragments,
     TooManyFragments,
-    /// More top-level boxes than [`MAX_BOXES`]: the walk is per poll.
+    /// More boxes than [`MAX_BOXES`]: the walk is per poll.
     TooManyBoxes,
     /// A `moof` larger than [`MAX_MOOF_BYTES`].
     MoofTooLarge {
@@ -124,10 +124,7 @@ impl fmt::Display for WalkError {
                 write!(f, "media segment has more than {MAX_FRAGMENTS} fragments")
             }
             Self::TooManyBoxes => {
-                write!(
-                    f,
-                    "media segment takes more than {MAX_BOXES} top-level box walks"
-                )
+                write!(f, "media segment takes more than {MAX_BOXES} box walks")
             }
             Self::MoofTooLarge { offset } => {
                 write!(
@@ -254,10 +251,7 @@ pub fn media_fragments(
     let mut walked = 0usize;
     let mut samples = 0usize;
     while offset < bytes.len() {
-        walked = walked.saturating_add(1);
-        if walked > MAX_BOXES {
-            return Err(WalkError::TooManyBoxes);
-        }
+        count_box(&mut walked)?;
         let span = read_box(bytes, offset)?;
         match &span.kind {
             b"moof" => {
@@ -270,6 +264,7 @@ pub fn media_fragments(
                 check_moof(
                     bytes.get(span.body..span.end).unwrap_or_default(),
                     &mut samples,
+                    &mut walked,
                 )?;
                 if span.end >= bytes.len() {
                     return Err(WalkError::MoofWithoutMdat { offset });
@@ -304,9 +299,10 @@ pub fn media_fragments(
 
 /// Refuse a `moof` whose `traf`s set an explicit `base_data_offset` or
 /// lack a `tfdt`, and add its `trun` sample counts to `samples`, refusing
-/// the segment past [`MAX_SEGMENT_SAMPLES`].
-fn check_moof(moof: &[u8], samples: &mut usize) -> Result<(), WalkError> {
-    for_each_child(moof, |child, body| {
+/// the segment past [`MAX_SEGMENT_SAMPLES`]; every box inside counts toward
+/// `walked`.
+fn check_moof(moof: &[u8], samples: &mut usize, walked: &mut usize) -> Result<(), WalkError> {
+    for_each_child(moof, walked, |child, body, walked| {
         if &child.kind != b"traf" {
             return Ok(());
         }
@@ -314,7 +310,7 @@ fn check_moof(moof: &[u8], samples: &mut usize) -> Result<(), WalkError> {
         // `tfdt` and would otherwise place it at zero, silently gluing a
         // restarted segment's timeline onto the previous one.
         let mut has_tfdt = false;
-        for_each_child(body, |child, body| match &child.kind {
+        for_each_child(body, walked, |child, body, _| match &child.kind {
             b"tfdt" => {
                 has_tfdt = true;
                 Ok(())
@@ -351,20 +347,36 @@ fn check_moof(moof: &[u8], samples: &mut usize) -> Result<(), WalkError> {
     })
 }
 
-/// Visit each child box of a container payload; size 0 is refused inside a
-/// container (it would swallow its siblings).
+/// Visit each child box of a container payload, counting each toward
+/// `walked`; size 0 is refused inside a container (it would swallow its
+/// siblings).
 fn for_each_child(
     payload: &[u8],
-    mut visit: impl FnMut(&BoxSpan, &[u8]) -> Result<(), WalkError>,
+    walked: &mut usize,
+    mut visit: impl FnMut(&BoxSpan, &[u8], &mut usize) -> Result<(), WalkError>,
 ) -> Result<(), WalkError> {
     let mut offset = 0usize;
     while offset < payload.len() {
+        count_box(walked)?;
         let span = read_box(payload, offset)?;
         if span.to_end {
             return Err(WalkError::SizeToEnd { kind: span.kind });
         }
-        visit(&span, payload.get(span.body..span.end).unwrap_or_default())?;
+        visit(
+            &span,
+            payload.get(span.body..span.end).unwrap_or_default(),
+            walked,
+        )?;
         offset = span.end;
+    }
+    Ok(())
+}
+
+/// One more box walked; past [`MAX_BOXES`] the segment is refused.
+fn count_box(walked: &mut usize) -> Result<(), WalkError> {
+    *walked = walked.saturating_add(1);
+    if *walked > MAX_BOXES {
+        return Err(WalkError::TooManyBoxes);
     }
     Ok(())
 }
