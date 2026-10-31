@@ -264,5 +264,4 @@ pub async fn run_fleet_sampler(
 }
 
 #[cfg(test)]
-#[path = "fleet_history_tests.rs"]
 mod tests;

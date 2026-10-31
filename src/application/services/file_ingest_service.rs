@@ -387,5 +387,4 @@ impl FileIngestService {
 }
 
 #[cfg(test)]
-#[path = "file_ingest_service/tests.rs"]
 mod tests;

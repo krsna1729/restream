@@ -326,5 +326,4 @@ pub async fn converge_srt_call_inputs(pool: &SqlitePool, engine: &MediaEngine) -
 }
 
 #[cfg(test)]
-#[path = "topology_tests.rs"]
 mod tests;

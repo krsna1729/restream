@@ -47,5 +47,4 @@ pub(super) fn spawn_pipeline_hls_segmenter(
 }
 
 #[cfg(test)]
-#[path = "hls_segmenter_tests.rs"]
 mod tests;

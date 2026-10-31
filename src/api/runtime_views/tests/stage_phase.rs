@@ -1,8 +1,8 @@
 //! One stage-phase table read three ways: the status JSON, the processing
 //! graph node and the derived alerts must agree on every phase.
 
-use super::graph_projection::processing_graph_stage_node;
-use super::stage_projection::stage_runtime_snapshot_json;
+use super::super::graph_projection::processing_graph_stage_node;
+use super::super::stage_projection::stage_runtime_snapshot_json;
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::domain::state::{StageBackendKind, StagePhase};
 use restream_domain::runtime::stage::{StageRuntimeSnapshot, phase_name};

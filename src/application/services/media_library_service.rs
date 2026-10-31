@@ -659,5 +659,4 @@ fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
 }
 
 #[cfg(test)]
-#[path = "media_library_service/tests.rs"]
 mod tests;

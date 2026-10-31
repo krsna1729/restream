@@ -133,5 +133,4 @@ fn min_option(current: Option<f64>, next: Option<f64>) -> Option<f64> {
 }
 
 #[cfg(test)]
-#[path = "measure_tests.rs"]
 mod tests;

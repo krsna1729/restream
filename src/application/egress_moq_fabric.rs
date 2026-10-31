@@ -111,5 +111,4 @@ pub(crate) async fn prepare_moq_fabric_startup(
 }
 
 #[cfg(test)]
-#[path = "egress_moq_fabric_tests.rs"]
 mod tests;

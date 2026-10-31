@@ -399,5 +399,4 @@ impl NotifyService {
 }
 
 #[cfg(test)]
-#[path = "notify_service/tests.rs"]
 mod tests;
