@@ -548,51 +548,33 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
     );
     let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, _lease43, is_new) = manager
-        .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+        .ensure_stage(stage_key, source_ring.clone(), None)
         .await;
     assert!(is_new);
     let output_ring = handle.ring.clone();
     let mut reader = Reader::new_live("test_hevc_video_only_output".to_string(), output_ring);
     let cancel = handle.cancel.clone();
 
+    // As in `hevc_hls_preview_stage_uses_hevc_input_and_emits_h264`: the
+    // source ring is filled and ended before the stage starts, FFmpeg flushes
+    // at end of input, and the stage ends its output ring before it cancels.
+    source_ring.push_batch(packets.drain(..));
+    source_ring.mark_end_of_stream();
     manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
-    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
-    loop {
-        if source_ring
-            .reader_snapshots()
-            .iter()
-            .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < ready_deadline,
-            "video-only HEVC codec edge reader did not attach after the audio-absence grace"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-
-    source_ring.push_batch(packets.drain(..));
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    cancel.cancel();
-
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
     let mut output_packets = Vec::new();
     loop {
+        let stage_ended = cancel.is_cancelled();
         while let Ok(Some(packet)) = reader.pull() {
             output_packets.push(packet);
         }
-        if output_packets
-            .iter()
-            .any(|packet| packet.media_type == MediaType::Video)
-        {
+        if stage_ended || reader.is_caught_up_to_end_of_stream() {
             break;
         }
-        if tokio::time::Instant::now() >= output_deadline {
-            break;
+        tokio::select! {
+            _ = reader.wait_for_data() => {}
+            _ = cancel.cancelled() => {}
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     assert!(
