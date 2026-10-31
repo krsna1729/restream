@@ -1,5 +1,4 @@
 use super::*;
-use crate::application::models::Ingest;
 use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture, IngestUpdateFuture,
     IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError, MetaStoreWriter,
@@ -8,6 +7,7 @@ use crate::application::ports::{
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
 use restream_domain::domain::ids::RecordingId;
+use restream_domain::models::Ingest;
 use std::sync::Mutex;
 
 fn sqlite_pipeline_service(pool: &sqlx::SqlitePool) -> PipelineService {
@@ -234,7 +234,7 @@ async fn list_media_files_groups_recording_companions_and_ingest_counts() {
         false,
         "",
         false,
-        crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
     )
     .await
     .unwrap();
@@ -363,7 +363,7 @@ async fn rename_media_file_moves_companions_and_updates_ingests() {
         true,
         "00:00:01",
         true,
-        crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
     )
     .await
     .unwrap();
@@ -787,7 +787,7 @@ async fn delete_media_file_rejects_configured_ingests() {
         false,
         "",
         false,
-        crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
     )
     .await
     .unwrap();

@@ -649,7 +649,7 @@ async fn verify_operation(
         .filter(|transition| !transition["to"].is_null())
         .filter_map(|transition| transition["outputId"].as_str())
         .collect();
-    let wanted: Vec<&crate::application::models::Output> = outputs
+    let wanted: Vec<&restream_domain::models::Output> = outputs
         .iter()
         // Desired running, not `wants_running`: an output whose retries ran
         // out after the change is a failure, not an output it stopped.

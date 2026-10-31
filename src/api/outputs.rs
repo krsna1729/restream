@@ -329,7 +329,7 @@ fn bad_request(message: impl Into<String>) -> Response {
 
 fn output_response_body(
     message: &'static str,
-    output: &crate::application::models::Output,
+    output: &restream_domain::models::Output,
 ) -> serde_json::Value {
     serde_json::json!({
         "message": message,
@@ -340,7 +340,7 @@ fn output_response_body(
 fn output_state_response(
     message: &'static str,
     desired_state: &'static str,
-    output: &crate::application::models::Output,
+    output: &restream_domain::models::Output,
 ) -> Response {
     Json(serde_json::json!({
         "message": message,
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn output_state_response_uses_ok_status() {
-        let output = crate::application::models::Output {
+        let output = restream_domain::models::Output {
             id: "output-1".to_string(),
             pipeline_id: "pipe-1".to_string(),
             name: "Primary Output".to_string(),

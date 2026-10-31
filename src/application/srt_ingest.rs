@@ -3,13 +3,13 @@
 
 use std::collections::HashMap;
 
-use crate::application::models::Pipeline;
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{
     SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
 };
+use restream_domain::models::Pipeline;
 use restream_engine::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
 
@@ -153,7 +153,6 @@ fn srt_global_config_from_appconfig(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::Pipeline;
     use crate::application::pipeline_inputs::{
         InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
         PipelineInputStore, PipelineInputStoreError,
@@ -167,6 +166,7 @@ mod tests {
     use restream_domain::domain::srt_ingest::{
         DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
     };
+    use restream_domain::models::Pipeline;
 
     struct FakeMetaStore {
         value: Option<String>,

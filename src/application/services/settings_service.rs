@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use crate::application::models::{Job, Pipeline};
 use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
@@ -21,6 +20,7 @@ use crate::application::{
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
+use restream_domain::models::{Job, Pipeline};
 use restream_engine::security::IngestSecurityService;
 use restream_engine::srt::SrtIngestPolicyStore;
 
@@ -196,7 +196,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
-    use crate::application::models::JobStatus;
     use crate::application::ports::{
         JobListFuture, MetaLookupError, MetaLookupFuture, MetaWriteFuture,
     };
@@ -204,6 +203,7 @@ mod tests {
     use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use restream_domain::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
+    use restream_domain::models::JobStatus;
     use restream_engine::security::IngestSecurityService;
     use restream_engine::srt::SrtIngestPolicyStore;
 

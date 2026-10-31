@@ -1,4 +1,4 @@
-use crate::application::models::{Ingest, Job, JobStatus, Pipeline};
+use restream_domain::models::{Ingest, Job, JobStatus, Pipeline};
 
 impl From<JobStatus> for crate::db::JobStatusRecord {
     fn from(status: JobStatus) -> Self {

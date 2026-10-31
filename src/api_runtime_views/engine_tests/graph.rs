@@ -80,7 +80,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
     let engine = MediaEngine::new();
     let pipeline_id = "pipeline-srt-graph";
     let _source = engine.get_or_create_pipeline(pipeline_id).await;
-    let output = crate::application::models::Output {
+    let output = restream_domain::models::Output {
         id: "out-srt".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "SRT Target".to_string(),
@@ -125,7 +125,7 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
         .try_register_ingest(pipeline_id, "recirc-source-key", "rtmp")
         .await
         .expect("source ingest should register");
-    let output = crate::application::models::Output {
+    let output = restream_domain::models::Output {
         id: "out-recirc".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Target input".to_string(),
@@ -203,7 +203,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
         .record_egress_error("out-failed", "send", "connection refused")
         .await;
 
-    let output = crate::application::models::Output {
+    let output = restream_domain::models::Output {
         id: "out-failed".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Failed Target".to_string(),
@@ -247,7 +247,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         )
         .await;
 
-    let stale_source_output = crate::application::models::Output {
+    let stale_source_output = restream_domain::models::Output {
         id: "out-graph-stale-codec".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Graph RTMP".to_string(),
@@ -261,7 +261,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
     let _stale =
         crate::application::egress::prepare_output_ring(&engine, &stale_source_output).await;
 
-    let output = crate::application::models::Output {
+    let output = restream_domain::models::Output {
         id: "out-graph-stale-codec".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Graph RTMP".to_string(),

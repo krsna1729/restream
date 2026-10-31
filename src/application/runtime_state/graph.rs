@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::application::models::Output;
 use restream_domain::domain::output_spec::{RecirculationTarget, VideoCodecKind};
 use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::models::Output;
 use restream_domain::planner::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
 use restream_engine::engine::MediaEngine;
 

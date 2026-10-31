@@ -4,9 +4,9 @@ use bytes::Bytes;
 use rml_rtmp::sessions::StreamMetadata;
 
 use crate::application::egress::PreparedOutput;
-use crate::application::models::Output;
 use restream_core::metadata::AudioMeta;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::models::Output;
 use restream_engine::egress::journal::{FeedEpoch, RingFeed};
 use restream_engine::egress::policy::LeafPolicy;
 use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};

@@ -1,5 +1,5 @@
-use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::application::srt_ingest::parse_persisted_srt_ingest_policy;
+use restream_domain::models::{Ingest, Job, Output, Pipeline};
 
 pub(crate) use crate::api_runtime_views::probe_snapshot;
 
@@ -120,9 +120,9 @@ pub(crate) fn latest_job_response_json_list(jobs: &[Job]) -> Vec<serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::JobStatus;
     use crate::application::srt_ingest::serialize_persisted_srt_ingest_policy;
     use restream_domain::domain::srt_ingest::{SrtPipelineIngestConfig, SrtPipelineIngestMode};
+    use restream_domain::models::JobStatus;
 
     #[test]
     fn pipeline_responses_preserve_pipeline_and_file_ingest_shape() {

@@ -25,7 +25,7 @@ async fn config_get_returns_structured_data() {
         "j1",
         "p1",
         "o1",
-        restream::application::models::JobStatus::Running,
+        restream_domain::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
     .await

@@ -416,17 +416,17 @@ fn recording_metadata_persistence_is_infrastructure_owned() {
 }
 
 #[test]
-fn application_records_do_not_live_in_root_types_module() {
+fn catalog_records_do_not_live_in_root_types_module() {
     let lib_rs = include_str!("../../src/lib.rs");
     assert!(
         !lib_rs.contains("pub mod types;"),
-        "application records should live under application::models, not a root types module"
+        "catalog records should live under restream_domain::models, not a root types module"
     );
 
-    let application_mod = include_str!("../../src/application/mod.rs");
-    assert!(application_mod.contains("pub mod models;"));
+    let domain_lib = include_str!("../../crates/restream-domain/src/lib.rs");
+    assert!(domain_lib.contains("pub mod models;"));
 
-    let models = include_str!("../../src/application/models.rs");
+    let models = include_str!("../../crates/restream-domain/src/models.rs");
     assert!(models.contains("pub struct Pipeline"));
     assert!(models.contains("pub struct Output"));
     assert!(models.contains("pub struct Ingest"));

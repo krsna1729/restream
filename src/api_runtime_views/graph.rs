@@ -5,11 +5,11 @@
 //! each node's details and counters for the HTTP view.
 
 use super::graph_projection as api_view_models;
-use crate::application::models::Output;
 use crate::application::runtime_state::graph::{
     GraphNode, GraphRuntime, NodeSource, pipeline_graph,
 };
 use restream_domain::domain::stage::StageKey;
+use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 use std::collections::HashMap;
 

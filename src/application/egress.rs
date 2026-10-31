@@ -1,11 +1,11 @@
 //! Application-layer output preparation that turns persisted output settings
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
-use crate::application::models::Output;
 use restream_domain::domain::output_spec::{
     EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
 };
 use restream_domain::domain::stage::{StageKey, StageKind};
+use restream_domain::models::Output;
 use restream_domain::planner::PlannedOutput;
 use restream_engine::egress::journal::{FeedEpoch, RingFeed, TsFeed};
 use restream_engine::egress::policy::LeafPolicy;

@@ -13,7 +13,6 @@ pub mod hls_preview;
 pub mod ingest;
 pub mod ingest_security;
 pub mod logs;
-pub mod models;
 pub mod notify;
 pub mod outputs;
 pub mod pipeline_inputs;

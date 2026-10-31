@@ -17,7 +17,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
-use crate::application::models::Output;
+use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 
 /// Requests to the reconciler. The output pass runs only when

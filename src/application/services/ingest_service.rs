@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::application::models::Ingest;
 use crate::application::ports::{IngestLookup, IngestWriter};
+use restream_domain::models::Ingest;
 
 use super::error::{ServiceError, ServiceResult};
 

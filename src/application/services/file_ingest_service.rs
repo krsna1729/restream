@@ -13,8 +13,8 @@ use crate::application::ingest::{
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
-use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
+use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
 use restream_engine::external_file_ingest::{
     ExternalFileIngestRuntime, ExternalFileIngestSource, start_external_file_ingest,

@@ -73,7 +73,7 @@ fn wants_latest_jobs(query: &ConfigGetQuery) -> bool {
 fn config_response_json(
     settings: &crate::application::settings::SettingsSnapshot,
     pipelines: Vec<serde_json::Value>,
-    outputs: &[crate::application::models::Output],
+    outputs: &[restream_domain::models::Output],
     jobs_json: Vec<serde_json::Value>,
     dashboard_password_change_recommended: bool,
     is_dashboard_view: bool,
