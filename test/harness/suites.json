@@ -53,22 +53,6 @@
         "modeTimeoutDefaultSeconds": 900
       }
     },
-    "generic-sweeps": {
-      "version": 1,
-      "id": "generic-sweeps",
-      "runtimeProfile": "mixed",
-      "coverage": "scenarios/mixed.json#coverageSlices.genericSweeps",
-      "workflow": "workflows/mixed-slice.json",
-      "execution": {
-        "stackPolicy": "perSlice",
-        "continueOnFail": false
-      },
-      "artifact": {
-        "path": "${runtime.artifactRoot}/generic-sweeps/scenario.json"
-      },
-      "selector": "scenarios/mixed.json#selectors.generic-sweeps",
-      "coverageFromSelector": true
-    },
     "mixed.fast-breadth": {
       "version": 1,
       "id": "mixed.fast-breadth",

@@ -193,32 +193,19 @@ pub(crate) fn cleanup_ramp_db(path: &Path) {
 async fn start_ramp_mediamtx(env: &RampEnv) -> Result<Child, String> {
     std::fs::write(
         &env.mediamtx_config,
-        format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-            env.mtx_rtmp, env.mtx_srt, env.mtx_api
-        ),
+        plain_mediamtx_config(env.mtx_rtmp, env.mtx_srt, env.mtx_api),
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-    let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command = Command::new("mediamtx");
-    let mut child = remove_mediamtx_config_env(&mut command)
-        .arg(&env.mediamtx_config)
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr_log))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
+    spawn_mediamtx(
+        Command::new("mediamtx"),
+        &env.mediamtx_config,
+        log,
+        env.mtx_api,
         Duration::from_secs(30),
+        "mediamtx",
     )
     .await
-    {
-        stop_child(&mut child).await;
-        return Err(format!("mediamtx did not become ready: {err}"));
-    }
-    Ok(child)
 }
 
 async fn run_ramp_config(

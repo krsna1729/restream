@@ -203,20 +203,13 @@ pub(crate) struct RelayPorts {
 pub(crate) fn planned_harness_ports() -> HashSet<u16> {
     let defaults = harness_port_defaults();
     let mut reserved = HashSet::new();
-    let mut reserve = |start: u16, width: u16| {
-        for offset in 0..width {
-            if let Some(port) = start.checked_add(offset) {
-                reserved.insert(port);
-            }
-        }
-    };
     for port in [
         defaults.restream_http,
         defaults.restream_rtmp,
         defaults.restream_srt,
         defaults.mtx_hls,
     ] {
-        reserve(port, 1);
+        reserve_port_range(port, 1, &mut reserved);
     }
     for port in [
         defaults.mtx_rtmp,
@@ -224,12 +217,12 @@ pub(crate) fn planned_harness_ports() -> HashSet<u16> {
         defaults.mtx_srt,
         defaults.mtx_api,
     ] {
-        reserve(port, PEER_PORT_STRIDE.saturating_mul(16));
+        reserve_port_range(port, PEER_PORT_STRIDE.saturating_mul(16), &mut reserved);
     }
-    reserve(defaults.sink, 256);
-    reserve(defaults.hls_put, 16);
-    reserve(defaults.ffmpeg_srt_sink_base, 1024);
-    reserve(defaults.ffmpeg_signal_sink_base, 1024);
+    reserve_port_range(defaults.sink, 256, &mut reserved);
+    reserve_port_range(defaults.hls_put, 16, &mut reserved);
+    reserve_port_range(defaults.ffmpeg_srt_sink_base, 1024, &mut reserved);
+    reserve_port_range(defaults.ffmpeg_signal_sink_base, 1024, &mut reserved);
     reserved
 }
 

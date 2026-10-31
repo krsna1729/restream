@@ -39,7 +39,6 @@ impl HarnessCatalog {
         for path in [
             self.catalog.pointer("/modes"),
             self.catalog.pointer("/runtime/profiles"),
-            self.catalog.pointer("/runtime/ports"),
             self.catalog.pointer("/runtime/protocols"),
             self.catalog.pointer("/runtime/services"),
             self.catalog.pointer("/checks/registry"),

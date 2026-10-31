@@ -244,23 +244,7 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
         "wallClockSecs": round3(started.elapsed().as_secs_f64()),
     });
     let report_path = work_dir.join("report.json");
-    let _ = std::fs::write(
-        &report_path,
-        serde_json::to_vec_pretty(&report).unwrap_or_default(),
-    );
-    println!(
-        "[{MODE}] {}",
-        json!({"phase": "done", "passed": passed, "failedChecks": report["failedChecks"]})
-    );
-    if passed {
-        Ok(report)
-    } else {
-        Err(format!(
-            "{MODE} failed: {}; report={}",
-            report["failedChecks"],
-            report_path.display()
-        ))
-    }
+    finish_mode_report(MODE, &report_path, passed, report)
 }
 
 impl Session {
@@ -522,17 +506,12 @@ impl Session {
     }
 
     fn spawn_publisher(&mut self, label: &str, argv: &[String]) -> Result<(), String> {
-        let log_path = self.work_dir.join(format!("{label}.log"));
-        let log = std::fs::File::create(&log_path).map_err(|error| error.to_string())?;
-        let stderr = log.try_clone().map_err(|error| error.to_string())?;
-        let child = command_with_optional_cgroup(&self.ffmpeg, &format!("moq-{label}"))
-            .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
-            .args(argv)
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(stderr))
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| format!("spawn {}: {error}", self.ffmpeg.display()))?;
+        let child = spawn_logged_ffmpeg(
+            &self.ffmpeg,
+            argv,
+            &self.work_dir.join(format!("{label}.log")),
+            &format!("moq-{label}"),
+        )?;
         self.publishers.push(child);
         Ok(())
     }

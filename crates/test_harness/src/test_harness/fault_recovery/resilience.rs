@@ -211,16 +211,7 @@ pub(crate) async fn recovery() -> Result<Value, String> {
         "tests": results,
         "historyContract": history_contract,
     });
-
-    let result_path = work_dir.join("recovery.json");
-    std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("artifact={}", result_path.display());
-
-    if !all_passed {
-        return Err("recovery: not all tests passed".to_string());
-    }
-    Ok(result)
+    super::finish_fault_mode(&work_dir, "recovery", all_passed, result)
 }
 
 async fn terminate_restream_gracefully(
@@ -625,14 +616,5 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
         "historyContract": history_contract,
         "externalTranscoderHistory": external_transcoder_history,
     });
-
-    let result_path = work_dir.join("fault.resilience.json");
-    std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("artifact={}", result_path.display());
-
-    if !all_passed {
-        return Err("fault.resilience: not all tests passed".to_string());
-    }
-    Ok(result)
+    super::finish_fault_mode(&work_dir, "fault.resilience", all_passed, result)
 }

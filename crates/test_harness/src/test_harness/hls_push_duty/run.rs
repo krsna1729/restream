@@ -126,19 +126,13 @@ pub(crate) async fn run_hls_push_duty(
         tasks: Vec::new(),
         publishers: Vec::new(),
     };
-    let outcome = session.execute(&options, &plan, started, args).await;
+    let report = session.execute(&options, &plan, started, args).await;
     session.shutdown().await;
-
-    match outcome {
-        Ok(report) => {
-            let report_path = work_dir.join("report.json");
-            if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
-                let _ = std::fs::write(&report_path, bytes);
-            }
-            Ok(report)
-        }
-        Err(error) => Err(error),
+    let report = report?;
+    if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
+        let _ = std::fs::write(work_dir.join("report.json"), bytes);
     }
+    Ok(report)
 }
 
 impl Session {
@@ -344,7 +338,7 @@ impl Session {
             } else {
                 rtmp_publisher_args(&plan.fixture, &plan.rtmp_publish_url(&task.stream_key))
             };
-            let child = spawn_ffmpeg(
+            let child = spawn_logged_ffmpeg(
                 &plan.ffmpeg,
                 &argv,
                 &log_path,
@@ -634,25 +628,6 @@ pub(crate) fn hls_publisher_args(
     argv.extend(segment_type.ffmpeg_args().iter().map(|arg| arg.to_string()));
     argv.push(url.to_string());
     argv
-}
-
-fn spawn_ffmpeg(
-    ffmpeg: &Path,
-    argv: &[String],
-    log_path: &Path,
-    scope: &str,
-) -> Result<Child, String> {
-    let mut command = command_with_optional_cgroup(ffmpeg, scope);
-    command.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
-    command.args(argv);
-    let log = std::fs::File::create(log_path).map_err(|error| error.to_string())?;
-    let stderr = log.try_clone().map_err(|error| error.to_string())?;
-    command
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("spawn {}: {error}", ffmpeg.display()))
 }
 
 /// The RTMP sink for each pipeline needs its own port so the sink summary can

@@ -42,6 +42,8 @@ mod catalog;
 mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
+#[path = "test_harness/fault_case_routines.rs"]
+mod fault_case_routines;
 #[path = "test_harness/fault_input_promotion.rs"]
 mod fault_input_promotion;
 #[path = "test_harness/fault_manifest.rs"]
@@ -108,12 +110,11 @@ mod suite;
 #[cfg(test)]
 #[path = "test_harness/udp_drain.rs"]
 mod udp_drain;
-#[path = "test_harness/workflow_exec.rs"]
-mod workflow_exec;
 
 use api_client::*;
 use catalog_cli::*;
 use core::*;
+use fault_case_routines::*;
 use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
@@ -136,7 +137,6 @@ use srt_raw_sink::*;
 use srt_slow_peer::*;
 use srt_urls::*;
 use suite::*;
-use workflow_exec::*;
 
 fn mixed_scenario_check_id(scenario: &str, check: &str) -> String {
     format!("{scenario}.{check}")

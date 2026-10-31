@@ -1212,91 +1212,6 @@
         "kind": "output-slice"
       }
     ],
-    "genericSweeps": [
-      {
-        "id": "sweep.h264-rtmp",
-        "foldedInto": "mixed.live.rtmp.h264.a1.bf2",
-        "sourceScenario": "mixed.live.rtmp.h264.a1.bf2",
-        "rationale": "H.264 RTMP sweep is covered by mixed RTMP/H.264/single-audio with B-frame reorder",
-        "checkBundle": "media.deep",
-        "checks": [
-          "ffprobe",
-          "audio-route",
-          "decode-scan",
-          "stage-sharing",
-          "load"
-        ],
-        "kind": "scenario-slice"
-      },
-      {
-        "id": "sweep.h264-srt",
-        "foldedInto": "mixed.live.srt.h264.a1.bf2",
-        "sourceScenario": "mixed.live.srt.h264.a1.bf2",
-        "rationale": "H.264 SRT sweep is covered by mixed SRT/H.264/single-audio with B-frame reorder",
-        "checkBundle": "media.deep",
-        "checks": [
-          "ffprobe",
-          "audio-route",
-          "decode-scan",
-          "stage-sharing",
-          "load"
-        ],
-        "kind": "scenario-slice"
-      },
-      {
-        "id": "sweep.h265-srt",
-        "foldedInto": "mixed.live.srt.h265.a1.bf2",
-        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
-        "rationale": "HEVC SRT sweep is covered by mixed SRT/HEVC/single-audio with B-frame reorder",
-        "checkBundle": "media.deep",
-        "checks": [
-          "ffprobe",
-          "audio-route",
-          "decode-scan",
-          "stage-sharing",
-          "load"
-        ],
-        "kind": "scenario-slice"
-      },
-      {
-        "id": "sweep.mixed.live.srt.h264.a2.bf2",
-        "foldedInto": "mixed.live.srt.h264.a2.bf2",
-        "sourceScenario": "mixed.live.srt.h264.a2.bf2",
-        "rationale": "multi-audio H.264 SRT sweep directly names the mixed scenario",
-        "checkBundle": "media.deep",
-        "extraChecks": [
-          "adaptive-source-ring"
-        ],
-        "checks": [
-          "ffprobe",
-          "audio-route",
-          "decode-scan",
-          "stage-sharing",
-          "adaptive-source-ring",
-          "load"
-        ],
-        "kind": "scenario-slice"
-      },
-      {
-        "id": "sweep.mixed.live.srt.h265.a2.bf2",
-        "foldedInto": "mixed.live.srt.h265.a2.bf2",
-        "sourceScenario": "mixed.live.srt.h265.a2.bf2",
-        "rationale": "multi-audio HEVC SRT sweep directly names the mixed scenario",
-        "checkBundle": "media.deep",
-        "extraChecks": [
-          "adaptive-source-ring"
-        ],
-        "checks": [
-          "ffprobe",
-          "audio-route",
-          "decode-scan",
-          "stage-sharing",
-          "adaptive-source-ring",
-          "load"
-        ],
-        "kind": "scenario-slice"
-      }
-    ],
     "resourceEgress": [
       {
         "id": "resource.egress-growth-source-same",
@@ -1903,10 +1818,6 @@
   "selectors": {
     "ramp-family": {
       "coverage": "coverageSlices.rampFamily",
-      "workflow": "mixed-slice"
-    },
-    "generic-sweeps": {
-      "coverage": "coverageSlices.genericSweeps",
       "workflow": "mixed-slice"
     },
     "resource-sweep": {

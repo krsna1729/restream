@@ -42,6 +42,33 @@ pub(crate) fn artifact_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Writes `report` to `report_path`, prints the `done` line, and fails the
+/// mode with its `failedChecks` unless `passed`.
+pub(crate) fn finish_mode_report(
+    mode: &str,
+    report_path: &Path,
+    passed: bool,
+    report: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let _ = std::fs::write(
+        report_path,
+        serde_json::to_vec_pretty(&report).unwrap_or_default(),
+    );
+    println!(
+        "[{mode}] {}",
+        serde_json::json!({"phase": "done", "passed": passed, "failedChecks": report["failedChecks"]})
+    );
+    if passed {
+        Ok(report)
+    } else {
+        Err(format!(
+            "{mode} failed: {}; report={}",
+            report["failedChecks"],
+            report_path.display()
+        ))
+    }
+}
+
 pub(crate) fn env_flag(name: &str) -> bool {
     std::env::var(name)
         .ok()

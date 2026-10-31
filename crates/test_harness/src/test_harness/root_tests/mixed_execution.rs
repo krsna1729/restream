@@ -21,11 +21,8 @@ fn every_mode_spec_has_dispatch_arm() {
         if spec.name == MIXED_MATRIX_MODE
             || spec.name == MIXED_SIGNAL_MODE
             || spec.name == MIXED_FAST_BREADTH_MODE
-            || spec.name == "generic-sweeps"
             || mixed_input_case_for_command(&spec.name).is_some()
         {
-            // "generic-sweeps" is a manifest-only suite-composition entry
-            // (folded into "mixed"); it has no standalone Rust runner.
             continue;
         }
         let arm = format!("\"{}\" =>", spec.name);

@@ -4,7 +4,6 @@
   "modes": "modes.json",
   "runtime": {
     "profiles": "runtime/profiles.json",
-    "ports": "runtime/ports.json",
     "protocols": "runtime/protocols.json",
     "services": "runtime/services.json"
   },
@@ -22,8 +21,6 @@
   },
   "workflows": {
     "mixedScenario": "workflows/mixed-scenario.json",
-    "mixedSlice": "workflows/mixed-slice.json",
-    "faultRetryBudget": "workflows/fault-retry-budget.json",
-    "faultRecoveryTransient": "workflows/fault-recovery-transient.json"
+    "mixedSlice": "workflows/mixed-slice.json"
   }
 }

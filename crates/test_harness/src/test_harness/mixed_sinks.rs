@@ -28,10 +28,13 @@ pub(crate) async fn run_optional_mixed_sink_probe(
     api: &RampApi,
     pipeline_id: &str,
     cfg: &str,
-    sink_port: u16,
     output_ids: &mut Vec<String>,
     resume: &mut MixedResume,
 ) -> Result<(Option<SinkProbeResult>, Option<String>), String> {
+    let sink_port = harness_port_defaults()
+        .sink
+        .checked_add(env.sink_port_offset as u16)
+        .ok_or("mixed sink probe port overflowed")?;
     let probe_id = mixed_scenario_check_id(cfg, "sink_probe");
     if !env.check_selected("sink-probe") || !resume.allows(&probe_id) {
         return Ok((None, None));
@@ -99,6 +102,77 @@ pub(crate) async fn run_optional_mixed_sink_probe(
             Ok((None, Some(format!("{cfg}: sink probe error: {error}"))))
         }
     }
+}
+
+/// Adds every output of `output_cases` (with their direct FFmpeg sinks),
+/// checks stage sharing, finishes the signal sinks, and, when the scenario
+/// needs it, waits for bytes-out on every output.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn add_mixed_outputs_and_gate(
+    env: &MixedEnv,
+    api: &RampApi,
+    pipeline_id: &str,
+    restream_pid: u32,
+    case: MixedInputCase,
+    output_cases: &[MixedOutputCase],
+    resume: &mut MixedResume,
+    output_ids: &mut Vec<String>,
+    srt_sinks: &mut Vec<FfmpegSrtSink>,
+    signal_sinks: &mut Vec<FfmpegSignalSink>,
+) -> Result<(), String> {
+    let cfg = case.scenario_id();
+    let mut next_signal_sink = 0usize;
+    if case.is_multi_track() {
+        let mut next_srt_sink = 0usize;
+        add_mixed_multi_output_cases(
+            env,
+            api,
+            pipeline_id,
+            restream_pid,
+            cfg,
+            output_cases,
+            srt_sinks,
+            &mut next_srt_sink,
+            signal_sinks,
+            &mut next_signal_sink,
+            output_ids,
+        )
+        .await?;
+    } else {
+        add_mixed_output_cases(
+            env,
+            api,
+            pipeline_id,
+            restream_pid,
+            cfg,
+            output_cases,
+            signal_sinks,
+            &mut next_signal_sink,
+            output_ids,
+        )
+        .await?;
+    }
+    verify_mixed_graph_stage_sharing(env, api, cfg, pipeline_id, case, output_cases, resume)
+        .await?;
+    if !signal_sinks.is_empty() {
+        finish_ffmpeg_signal_sinks(env, signal_sinks, resume).await?;
+    }
+    if env.needs_live_output_progress_gate() {
+        // The first external read can arrive while egresses are still
+        // connecting, and under shared HEVC fanout the last duplicated readers
+        // can still be wiring up. Waiting once for real bytes-out keeps the
+        // first probed cell from turning a startup lag into a false codec or
+        // output failure.
+        wait_for_outputs_progress_with_env(
+            api,
+            pipeline_id,
+            output_ids,
+            mixed_output_progress_timeout_for_case(case, output_ids.len()),
+            Some(env),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

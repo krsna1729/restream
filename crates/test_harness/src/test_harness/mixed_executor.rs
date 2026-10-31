@@ -1,168 +1,75 @@
 //! Scenario-executor selection for mixed-matrix input rows.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use super::*;
 
-type ScenarioExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + 'a>>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ScenarioExecutorStep {
-    Prepare,
-    StartInput,
-    PreFanoutChecks,
-    CreateOutputs,
-    WaitForProgress,
-    RunProbes,
-    Cleanup,
-}
-
-impl ScenarioExecutorStep {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Prepare => "prepare",
-            Self::StartInput => "startInput",
-            Self::PreFanoutChecks => "preFanoutChecks",
-            Self::CreateOutputs => "createOutputs",
-            Self::WaitForProgress => "waitForProgress",
-            Self::RunProbes => "runProbes",
-            Self::Cleanup => "cleanup",
-        }
-    }
-}
-
-const DEFAULT_SCENARIO_STEPS: [ScenarioExecutorStep; 7] = [
-    ScenarioExecutorStep::Prepare,
-    ScenarioExecutorStep::StartInput,
-    ScenarioExecutorStep::PreFanoutChecks,
-    ScenarioExecutorStep::CreateOutputs,
-    ScenarioExecutorStep::WaitForProgress,
-    ScenarioExecutorStep::RunProbes,
-    ScenarioExecutorStep::Cleanup,
+/// Step names reported in the scenario artifact's `plan.executorSteps`.
+pub(crate) const MIXED_EXECUTOR_STEPS: [&str; 7] = [
+    "prepare",
+    "startInput",
+    "preFanoutChecks",
+    "createOutputs",
+    "waitForProgress",
+    "runProbes",
+    "cleanup",
 ];
 
-pub(crate) struct ScenarioExecutionContext<'a> {
-    pub(crate) env: &'a MixedEnv,
-    pub(crate) api: &'a RampApi,
-    pub(crate) restream_pid: u32,
-    pub(crate) case: MixedInputCase,
-    pub(crate) resume: &'a mut MixedResume,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MixedExecutor {
+    FileIngest,
+    LiveSrtSingleTrack,
+    LiveSrtMultiTrack,
+    LiveRtmp,
 }
 
-#[allow(dead_code)]
-pub(crate) trait ScenarioExecutor {
-    fn name(&self) -> &'static str;
-
-    fn steps(&self) -> &'static [ScenarioExecutorStep] {
-        &DEFAULT_SCENARIO_STEPS
-    }
-
-    fn step_names(&self) -> Vec<&'static str> {
-        self.steps().iter().map(|step| step.as_str()).collect()
-    }
-
-    fn execute<'a>(
-        &'a mut self,
-        ctx: ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, Value>;
-}
-
-#[derive(Default)]
-struct FileIngestExecutor;
-
-#[derive(Default)]
-struct LiveSrtSingleTrackExecutor;
-
-#[derive(Default)]
-struct LiveSrtMultiTrackExecutor;
-
-#[derive(Default)]
-struct LiveRtmpExecutor;
-
-impl ScenarioExecutor for FileIngestExecutor {
-    fn name(&self) -> &'static str {
-        "file-ingest"
-    }
-
-    fn execute<'a>(
-        &'a mut self,
-        ctx: ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, Value> {
-        Box::pin(async move {
-            run_mixed_file_config(ctx.env, ctx.api, ctx.restream_pid, ctx.case, ctx.resume).await
-        })
-    }
-}
-
-impl ScenarioExecutor for LiveSrtSingleTrackExecutor {
-    fn name(&self) -> &'static str {
-        "live-srt-single-track"
-    }
-
-    fn execute<'a>(
-        &'a mut self,
-        ctx: ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, Value> {
-        Box::pin(async move {
-            run_mixed_anchor_config(ctx.env, ctx.api, ctx.restream_pid, ctx.case, ctx.resume).await
-        })
-    }
-}
-
-impl ScenarioExecutor for LiveSrtMultiTrackExecutor {
-    fn name(&self) -> &'static str {
-        "live-srt-multi-track"
-    }
-
-    fn execute<'a>(
-        &'a mut self,
-        ctx: ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, Value> {
-        Box::pin(async move {
-            run_mixed_live_config(ctx.env, ctx.api, ctx.restream_pid, ctx.case, ctx.resume).await
-        })
-    }
-}
-
-impl ScenarioExecutor for LiveRtmpExecutor {
-    fn name(&self) -> &'static str {
-        "live-rtmp"
-    }
-
-    fn execute<'a>(
-        &'a mut self,
-        ctx: ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, Value> {
-        Box::pin(async move {
-            run_mixed_live_config(ctx.env, ctx.api, ctx.restream_pid, ctx.case, ctx.resume).await
-        })
-    }
-}
-
-pub(crate) fn scenario_executor_for_plan(
-    plan: MixedScenarioPlan,
-) -> Result<Box<dyn ScenarioExecutor>, String> {
-    match (
-        plan.source.adapter,
-        plan.input.codec(),
-        plan.input.is_multi_track(),
-    ) {
-        (MixedSourceAdapter::FileIngest, _, _) => Ok(Box::new(FileIngestExecutor)),
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, false) => {
-            Ok(Box::new(LiveSrtSingleTrackExecutor))
+impl MixedExecutor {
+    pub(crate) fn for_plan(plan: MixedScenarioPlan) -> Result<Self, String> {
+        match (
+            plan.source.adapter,
+            plan.input.codec(),
+            plan.input.is_multi_track(),
+        ) {
+            (MixedSourceAdapter::FileIngest, _, _) => Ok(Self::FileIngest),
+            (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, false) => {
+                Ok(Self::LiveSrtSingleTrack)
+            }
+            (MixedSourceAdapter::SrtPublisher, _, true)
+            | (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
+                Ok(Self::LiveSrtMultiTrack)
+            }
+            (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => Ok(Self::LiveRtmp),
+            _ => Err(format!(
+                "unsupported mixed input case {}",
+                plan.input.scenario_id()
+            )),
         }
-        (MixedSourceAdapter::SrtPublisher, _, true) => Ok(Box::new(LiveSrtMultiTrackExecutor)),
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
-            Ok(Box::new(LiveSrtMultiTrackExecutor))
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::FileIngest => "file-ingest",
+            Self::LiveSrtSingleTrack => "live-srt-single-track",
+            Self::LiveSrtMultiTrack => "live-srt-multi-track",
+            Self::LiveRtmp => "live-rtmp",
         }
-        (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => {
-            Ok(Box::new(LiveRtmpExecutor))
+    }
+
+    pub(crate) async fn execute(
+        self,
+        env: &MixedEnv,
+        api: &RampApi,
+        restream_pid: u32,
+        case: MixedInputCase,
+        resume: &mut MixedResume,
+    ) -> Result<Value, String> {
+        match self {
+            Self::FileIngest => run_mixed_file_config(env, api, restream_pid, case, resume).await,
+            Self::LiveSrtSingleTrack => {
+                run_mixed_anchor_config(env, api, restream_pid, case, resume).await
+            }
+            Self::LiveSrtMultiTrack | Self::LiveRtmp => {
+                run_mixed_live_config(env, api, restream_pid, case, resume).await
+            }
         }
-        _ => Err(format!(
-            "unsupported mixed input case {}",
-            plan.input.scenario_id()
-        )),
     }
 }
 
@@ -174,7 +81,7 @@ mod tests {
     fn scenario_executor_selection_names_live_and_file_shapes() {
         for case in mixed_input_cases() {
             let plan = MixedScenarioPlan::for_input(*case);
-            let executor = scenario_executor_for_plan(plan)
+            let executor = MixedExecutor::for_plan(plan)
                 .unwrap_or_else(|error| panic!("{}: {error}", case.scenario_id()));
             let expected = match (case.protocol(), case.codec(), case.is_multi_track()) {
                 (MixedInputProtocol::File, _, _) => "file-ingest",
@@ -184,21 +91,6 @@ mod tests {
                 (MixedInputProtocol::Rtmp, _, _) => "live-rtmp",
             };
             assert_eq!(executor.name(), expected, "{}", case.scenario_id());
-        }
-    }
-
-    #[test]
-    fn scenario_executors_expose_symmetric_phase_f_steps() {
-        for case in mixed_input_cases() {
-            let plan = MixedScenarioPlan::for_input(*case);
-            let executor = scenario_executor_for_plan(plan)
-                .unwrap_or_else(|error| panic!("{}: {error}", case.scenario_id()));
-            assert_eq!(
-                executor.steps(),
-                &DEFAULT_SCENARIO_STEPS,
-                "{} should expose the canonical prepare/start/check/fanout/progress/probe/cleanup order",
-                case.scenario_id()
-            );
         }
     }
 }
