@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::*;
+use super::super::*;
 
 #[test]
 fn alert_titles_name_their_pipeline_and_output() {

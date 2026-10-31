@@ -219,5 +219,4 @@ impl DestinationBaselines {
 }
 
 #[cfg(test)]
-#[path = "destination_baselines_tests.rs"]
 mod tests;
