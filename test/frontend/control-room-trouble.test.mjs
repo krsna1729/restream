@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { explainCause, explainError, outputTrouble, troubleTitle } = await loadCompiledFrontendModule("control-room/trouble-model.js");
+import {
+  explainCause,
+  explainError,
+  outputTrouble,
+  troubleTitle,
+} from "../../web/ts/control-room/trouble-model.ts";
 
 test("known failure texts read as what went wrong and what to do", () => {
   assert.equal(explainError("[connect] Connection refused (os error 111)").summary, "The server refused the connection");

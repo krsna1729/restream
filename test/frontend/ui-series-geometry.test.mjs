@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { axisLabels } = await loadCompiledFrontendModule("ui/series-geometry.js");
+import { axisLabels } from "../../web/ts/ui/series-geometry.ts";
 
 test("an axis never prints the same tick twice", () => {
   const bytes = (value) => `${Math.round(value)} b`;
@@ -13,7 +11,7 @@ test("an axis never prints the same tick twice", () => {
 });
 
 test("a count agrees with its noun", async () => {
-  const { counted } = await loadCompiledFrontendModule("control-room/format.js");
+  const { counted } = await import("../../web/ts/control-room/format.ts");
   assert.equal(counted(1, "destination"), "1 destination");
   assert.equal(counted(0, "destination"), "0 destinations");
   assert.equal(counted(1200, "sample"), "1,200 samples");

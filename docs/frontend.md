@@ -821,8 +821,8 @@ sequenceDiagram
 
 ## Proof
 
-Node tests in `test/frontend/`: `control-room-fleet`,
-`control-room-fleet-history`, `control-room-pipelines`,
+Node tests in `test/frontend/` (tsx, against the `web/ts` sources):
+`control-room-fleet`, `control-room-fleet-history`, `control-room-pipelines`,
 `control-room-operate`, `control-room-operate-group`,
 `control-room-state-views`, `control-room-input`, `control-room-inspect`,
 `control-room-monitor`, `control-room-incidents`, `control-room-media`,

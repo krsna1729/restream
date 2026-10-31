@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installFakeDom, loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import { installFakeDom } from "../support/helpers/fake-dom.mjs";
+import {
   AUTH_COOKIES_NOTE,
   AUTH_COOKIES_PLACEHOLDER,
   AUTH_KINDS,
@@ -21,7 +20,7 @@ const {
   replacePushAuth,
   storedPushAuthNote,
   storedAuthNote,
-} = await loadCompiledFrontendModule("control-room/input-model.js");
+} from "../../web/ts/control-room/input-model.ts";
 
 const RTMP = "rtmp://host:1935/live/key-a";
 const SRT = "srt://host:8890?streamid=publish:key-a";
@@ -185,7 +184,7 @@ test("saving a stored credential untouched sends no auth at all", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  const api = await loadCompiledFrontendModule("core/api.js");
+  const api = await import("../../web/ts/core/api.ts");
   await api.updatePipelineInput("pipe-1", stored.id, body);
   assert.equal(requests[0].method, "PATCH");
   assert.ok(!("auth" in requests[0].body));
@@ -350,7 +349,7 @@ test("HLS push credentials preserve, replace, clear, and clear on source switch"
       status: 200, headers: { "content-type": "application/json" },
     });
   };
-  const api = await loadCompiledFrontendModule("core/api.js");
+  const api = await import("../../web/ts/core/api.ts");
   await api.updatePipelineInput("pipe-1", stored.id, inputWrite(draft, stored));
   await api.updatePipelineInput("pipe-1", stored.id, inputWrite(replacement, stored));
   assert.ok(!("pushAuth" in requests[0]));

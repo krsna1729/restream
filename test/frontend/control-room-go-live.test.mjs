@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { encoderFields, goLiveChecks } = await loadCompiledFrontendModule("control-room/go-live-model.js");
+import { encoderFields, goLiveChecks } from "../../web/ts/control-room/go-live-model.ts";
 
 const READY = { sourceOn: true, maxGopSec: 2, destinations: 3, wanted: 3, delivering: 3, utilization: 0.4, safeUtilization: 0.8 };
 const states = (facts) => goLiveChecks(facts).map((check) => `${check.key}:${check.state}`);

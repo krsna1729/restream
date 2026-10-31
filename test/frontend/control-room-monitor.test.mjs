@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { destinationOutlier, inputTransport, mediaPath } = await loadCompiledFrontendModule(
-  "control-room/monitor-path.js",
-);
+import {
+  destinationOutlier,
+  inputTransport,
+  mediaPath,
+} from "../../web/ts/control-room/monitor-path.ts";
 
 function output(id, overrides = {}) {
   return {

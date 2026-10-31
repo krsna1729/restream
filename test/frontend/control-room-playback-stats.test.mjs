@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { MAX_PLAYBACK_SAMPLES, appendSample, playbackReport, summarizePlayback } = await loadCompiledFrontendModule(
-  "control-room/playback-stats.js",
-);
+import {
+  MAX_PLAYBACK_SAMPLES,
+  appendSample,
+  playbackReport,
+  summarizePlayback,
+} from "../../web/ts/control-room/playback-stats.ts";
 
 function sample(atMs, overrides = {}) {
   return {

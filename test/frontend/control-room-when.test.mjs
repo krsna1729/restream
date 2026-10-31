@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { absoluteTime, duration, fullTime, relativeTime, zoneName } = await loadCompiledFrontendModule("control-room/when.js");
+import {
+  absoluteTime,
+  duration,
+  fullTime,
+  relativeTime,
+  zoneName,
+} from "../../web/ts/control-room/when.ts";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -47,7 +51,7 @@ test("durations drop units that do not matter", () => {
 });
 
 test("a retry says which attempt and when the next one comes", async () => {
-  const { countdown, retryWords } = await loadCompiledFrontendModule("control-room/when.js");
+  const { countdown, retryWords } = await import("../../web/ts/control-room/when.ts");
   assert.equal(countdown(45_000), "45 s");
   assert.equal(countdown(99_000), "1 min 39 s");
   assert.equal(countdown(120_000), "2 min");

@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  installFakeDom,
-  loadCompiledFrontendModule,
-} from "../support/helpers/fake-dom.mjs";
+import { installFakeDom } from "../support/helpers/fake-dom.mjs";
 
 function makeResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -31,7 +28,7 @@ test("audio caps load and detection logic normalizes payloads and URL inference"
     });
   };
 
-  const audioCaps = await loadCompiledFrontendModule("core/audio-caps.js");
+  const audioCaps = await import("../../web/ts/core/audio-caps.ts");
 
   assert.equal(audioCaps.isAudioCapsLoaded(), false);
   await audioCaps.loadAudioCaps();
@@ -60,9 +57,7 @@ test("audio caps load and detection logic normalizes payloads and URL inference"
 });
 
 test("editor output-url helpers resolve presets, protocols, and SRT fields", async () => {
-  const outputUrl = await loadCompiledFrontendModule(
-    "core/output-url.js",
-  );
+  const outputUrl = await import("../../web/ts/core/output-url.ts");
 
   assert.equal(outputUrl.protocolUsesOutputServerPresets("hls"), true);
   assert.equal(

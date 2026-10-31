@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { MAX_WATCHED_TILES, buildWall, prunedWatched, toggleWatched, wallColumns, wallScreenFit, watchAll } =
-  await loadCompiledFrontendModule("control-room/wall-model.js");
+import {
+  MAX_WATCHED_TILES,
+  buildWall,
+  prunedWatched,
+  toggleWatched,
+  wallColumns,
+  wallScreenFit,
+  watchAll,
+} from "../../web/ts/control-room/wall-model.ts";
 
 function row(id, name, overrides = {}) {
   return {

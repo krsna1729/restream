@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
+import {
+  buildResourceRows,
+  nodeCards,
+  ringFromGraph,
+  shardsFrom,
+} from "../../web/ts/control-room/inspect-model.ts";
+import { incidentOnsets, takeSample } from "../../web/ts/control-room/monitor-model.ts";
+import { appendSample } from "../../web/ts/control-room/sample-window.ts";
+import { sparkline } from "../../web/ts/ui/series-geometry.ts";
 
-const { buildResourceRows, nodeCards, ringFromGraph, shardsFrom } =
-  await loadCompiledFrontendModule("control-room/inspect-model.js");
-const { incidentOnsets, takeSample } = await loadCompiledFrontendModule(
-  "control-room/monitor-model.js",
-);
-const { appendSample } = await loadCompiledFrontendModule(
-  "control-room/sample-window.js",
-);
-const { sparkline } = await loadCompiledFrontendModule("ui/series-geometry.js");
 const ingest = (sample) => sample.ingestBps;
 const DIAGNOSED = {
   flow: "stalled",

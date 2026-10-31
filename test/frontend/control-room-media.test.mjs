@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
+import * as mediaModel from "../../web/ts/control-room/media-model.ts";
 
-const mediaModel = await loadCompiledFrontendModule("control-room/media-model.js");
 const { mediaKey, recordingTimeline, sourceDraft } = mediaModel;
 
 const START = "2026-10-15T13:00:00Z";

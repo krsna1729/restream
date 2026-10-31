@@ -262,12 +262,16 @@ Three layers. Use the lowest one that can catch the bug.
 | App in a browser | login, navigation, playback, network wiring against an isolated app | `npm run test:e2e` |
 | Backend media path | the preview segments the browser plays | `cargo test hls_fmp4`, `cargo bench --bench hls_fmp4_cost` |
 
-- `npm run test:frontend` runs the Node suites from a sourcemapped build of
-  `web/ts/**`, then a smaller smoke pass over the shipped `public/js/**`.
-- `npm run test:frontend:coverage` is the same split with coverage mapped to
-  the TypeScript modules. The `frontend` job runs it. Like the Rust
-  `coverage` job, it reports and never fails on a percentage.
-- `npm run test:frontend:js-smoke` checks only the compiled `public/js/**`.
+- `npm run test:frontend` runs the Node suites (`node --import tsx --test`)
+  straight against the `web/ts/**` sources, then a smaller smoke pass over
+  the shipped `public/js/**`. Unit suites import the `.ts` modules
+  directly; the suites shared with the smoke pass load modules through
+  `test/support/helpers/frontend-module-loader.mjs`, which reads `web/ts` unless
+  `FRONTEND_MODULES_DIR` points elsewhere.
+- `npm run test:frontend:coverage` is the same split with Node's built-in
+  coverage over the TypeScript modules. The `frontend` job runs it. Like the
+  Rust `coverage` job, it reports and never fails on a percentage.
+- `npm run test:frontend:js-smoke` checks only the built `public/js/**`.
 - `npm run test:e2e` builds the debug app and frontend, seeds a checked-in
   multi-audio fixture into `.local/e2e/`, waits for `/healthz`, runs
   Playwright and stops only the app it started. Do not start a dashboard

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { LOG_ROWS_KEPT, diagnosticsFile, diagnosticsVerdict, logFieldsText, logFilters, withLiveRow } =
-  await loadCompiledFrontendModule("control-room/diagnose-model.js");
+import {
+  LOG_ROWS_KEPT,
+  diagnosticsFile,
+  diagnosticsVerdict,
+  logFieldsText,
+  logFilters,
+  withLiveRow,
+} from "../../web/ts/control-room/diagnose-model.ts";
 
 test("each scope asks the engine for its own rows, with one filter set for history and stream", () => {
   assert.deepEqual(logFilters({ kind: "all" }, "info", false), { level: "info" });

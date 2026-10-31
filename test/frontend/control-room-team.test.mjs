@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { atLeast, canOpen, viewAsChoices, describeChange, auditOutcome, filterAudit } =
-  await loadCompiledFrontendModule("control-room/team-model.js");
-const { navGroupsFor } = await loadCompiledFrontendModule("control-room/shell/nav.js");
-const { WORKSPACES } = await loadCompiledFrontendModule("control-room/route.js");
+import {
+  atLeast,
+  canOpen,
+  viewAsChoices,
+  describeChange,
+  auditOutcome,
+  filterAudit,
+} from "../../web/ts/control-room/team-model.ts";
+import { navGroupsFor } from "../../web/ts/control-room/shell/nav.ts";
+import { WORKSPACES } from "../../web/ts/control-room/route.ts";
 
 test("roles are ordered, and a member views only as a lower role", () => {
   assert.ok(atLeast("admin", "operator") && atLeast("operator", "operator"));

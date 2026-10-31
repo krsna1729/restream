@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { buildFleetModel, filterPipelineRows, OPERATIONAL } =
-  await loadCompiledFrontendModule("control-room/fleet-model.js");
-const { protocolMix, sharedStages } = await loadCompiledFrontendModule(
-  "control-room/pipelines-model.js",
-);
+import {
+  buildFleetModel,
+  filterPipelineRows,
+  OPERATIONAL,
+} from "../../web/ts/control-room/fleet-model.ts";
+import { protocolMix, sharedStages } from "../../web/ts/control-room/pipelines-model.ts";
 
 function pipeline(id, overrides = {}) {
   return {

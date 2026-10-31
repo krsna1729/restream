@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { MIN_SPAN_MS, clampWindow, fromDrag, incidentWindow, lastSpan, pointsFor, windowLabel, zoom } =
-  await loadCompiledFrontendModule("control-room/stability/replay-window.js");
+import {
+  MIN_SPAN_MS,
+  clampWindow,
+  fromDrag,
+  incidentWindow,
+  lastSpan,
+  pointsFor,
+  windowLabel,
+  zoom,
+} from "../../web/ts/control-room/stability/replay-window.ts";
 
 const MIN = 60_000;
 const NOW = Date.UTC(2026, 9, 23, 14, 0);

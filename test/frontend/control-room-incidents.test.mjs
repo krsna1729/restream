@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   evidenceExport,
   evidencePacket,
   fleetSpanSettled,
@@ -13,8 +11,7 @@ const {
   resolvedMayBeIncomplete,
   timelineMayBeIncomplete,
   visibleResolved,
-} =
-  await loadCompiledFrontendModule("control-room/incidents-model.js");
+} from "../../web/ts/control-room/incidents-model.ts";
 
 function alert(id, overrides = {}) {
   return {

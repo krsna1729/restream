@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { occurrences, agenda, nextUp, resultTone, toLocalInput, fromLocalInput, untilLabel } = await loadCompiledFrontendModule(
-  "control-room/schedule-model.js",
-);
+import {
+  occurrences,
+  agenda,
+  nextUp,
+  resultTone,
+  toLocalInput,
+  fromLocalInput,
+  untilLabel,
+} from "../../web/ts/control-room/schedule-model.ts";
 
 const DAY = 86_400_000;
 const T = Date.UTC(2026, 9, 20, 9, 0);
@@ -48,7 +52,7 @@ test("the next event for a pipeline is its soonest enabled one", () => {
 });
 
 test("recordings that started on a day are its events, oldest first; one still writing has no end", async () => {
-  const { recordingsOn, localDay } = await loadCompiledFrontendModule("control-room/schedule-model.js");
+  const { recordingsOn, localDay } = await import("../../web/ts/control-room/schedule-model.ts");
   const day = localDay(Date.UTC(2026, 9, 23, 12));
   const at = (hours) => new Date(day + hours * 3_600_000).toISOString();
   const files = [

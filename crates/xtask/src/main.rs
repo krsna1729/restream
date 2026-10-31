@@ -137,7 +137,7 @@ workflows (each prints its own usage):
   parallel-fast-breadth three port-isolated harness groups, merged report
   harness-segregated <restream args>
                         exec REAL_RESTREAM under segregated CPU masks
-  frontend node-tests [--coverage] | e2e [args]
+  frontend e2e [args]
   release prepare-build-tree|package-binaries|tag-and-publish|app-native|
           shards --json [args]
   qualify local-due-diligence|release-artifact-smoke|release-evidence|

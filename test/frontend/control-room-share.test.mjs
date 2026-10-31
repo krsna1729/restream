@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { watchUrl, embedSnippet, linkState } = await loadCompiledFrontendModule("control-room/share-model.js");
+import { watchUrl, embedSnippet, linkState } from "../../web/ts/control-room/share-model.ts";
 
 test("the watch URL keeps the dashboard's origin and proxy prefix, not its query", () => {
   assert.equal(watchUrl("https://ops.example/restream/?w=operate&p=x#y", "abc"), "https://ops.example/restream/watch/abc");
