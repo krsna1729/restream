@@ -51,3 +51,4 @@ hyper-util = { version = "0.1", features = ["tokio", "service"] }
 
 [dev-dependencies]
 proptest = "1"
+restream-srt = { path = "../restream-srt" }
