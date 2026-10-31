@@ -9,20 +9,23 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-027 SRT×100 harness sink drops](#q-027-performance-opus-the-harness-srt-sink-drops-datagrams-at-srt100)
-- [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
-- [Q-071 HLS-to-HLS passthrough](#q-071-architecture-sonnet-hls-to-hls-passthrough)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
-- [Q-097 MediaMTX MoQ dialect interoperability](#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
-- [Q-102 plain-language command palette](#q-102-frontend-sonnet-plain-language-command-palette)
+- [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
 - [Q-106 separate-rendition HLS push order](#q-106-testing-opus-separate-rendition-hls-push-depends-on-server-arrival-order)
 - [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
+- [Q-109 SRT group receive skips a lost sequence](#q-109-protocol-opus-an-srt-group-receiver-skips-a-sequence-every-member-lost)
+- [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
+- [Not planned](#not-planned)
+  - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
+  - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
+  - [Q-097 MediaMTX MoQ dialect interoperability](#q-097-mediamtx-moq-dialect-interoperability)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -46,22 +49,6 @@ the [assurance roadmap](assurance-roadmap.md).
   SRT×100.
 - Gates: the run above passes 7 of 7 with zero sink kernel drops.
 
-### Q-033 [architecture] [opus] Run egress shards from one host-level pool instead of per-feed groups
-- Goal: shards are a host pool that serves every feed, not one group per
-  (protocol, feed), without widening failure domains.
-- Files: `crates/restream-engine/src/egress/runtime.rs`, `crates/restream-engine/src/engine_*_egress_fabric.rs`,
-  `crates/restream-engine/src/egress/sizing.rs`, `crates/restream-engine/src/egress/backends/sink_shard.rs`.
-- Context: a pooled prototype cut shard CPU at 16 feeds × 2 outputs by more
-  than half, but an injected Owner fault failed both feeds in a shared pool
-  ([per-feed shard isolation](runtime-crossings.md#per-feed-shard-isolation)).
-  Production keeps per-feed groups until a design preserves the failure
-  domains or that contract is explicitly changed.
-- Gates: in the many-feed matrix, shard threads stop growing with feeds and
-  per-feed shard CPU falls toward the per-output cost, every output
-  delivered; frozen-destination, feed-teardown and structural Owner/shard
-  faults keep their failure domains; loom for the shared publish wake
-  (`WakeGate`).
-
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
   delivering and the excess is refused with an operator-visible reason.
@@ -74,38 +61,24 @@ the [assurance roadmap](assurance-roadmap.md).
   remaining fabric.
 
 ### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
-- Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC objects;
-  `moqt-19` against moq-relay, drafts 16 and 18 against moxygen), Cloudflare's draft-16 (token in the URL path) and the MediaMTX
-  v1.21.2 subset, beside moq-lite + hang.
+- Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC
+  objects) beside moq-lite + hang: drafts 16, 18 and 19 against moq-relay
+  and the `moq` CLI (`--connect-version moq-transport-16/18/19`), drafts 16
+  and 18 against moxygen.
 - Done so far: wire-codec fuzzing (`moq_wire`, `moq_ingest`) and moxygen
   interop (`moq-moxygen-interop`, draft-16 and draft-18).
-- Open: the MediaMTX subset (blocked on Q-097) and Cloudflare's draft-16 relay,
-  which needs an account relay and a publish-capable token.
-- Gates: a harness interop mode per peer.
+- Gates: a harness interop mode per draft against moq-relay with the `moq`
+  CLI as subscriber; moxygen stays the independent wire check.
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
-- Goal: an IETF MOQT `moqt-19` publisher (MSF catalog, LOC objects) feeds a
-  pipeline input through the existing MoQ listener. The stream key comes from
-  the connection path, else the track namespace; the input registers as
+- Goal: an IETF MOQT publisher (MSF catalog, LOC objects) feeds a pipeline
+  input through the existing MoQ listener. The stream key comes from the
+  connection path, else the track namespace; the input registers as
   protocol `"moq"`.
-- Blocked: pinned moxygen has no MSF/LOC publisher and MediaMTX waits on
-  Q-097. Closing waits for an upstream MSF/LOC publisher (user decision).
-- Gates: interop with moxygen and MediaMTX as publishers (one harness mode).
-
-### Q-071 [architecture] [sonnet] HLS-to-HLS passthrough
-- Goal: an HLS PUT output relays the selected HLS input's segments into the
-  `HlsStore` the shard already reads, skipping the ring, demuxer and segmenter.
-- Conditions: no stage between input and output; matching container, codecs
-  and segment boundaries; self-initializing input; validated at apply time
-  with a fallback to the normal path and a stated reason.
-- Costs: capacity accounting, preview and pipeline health need an answer for
-  outputs that skip the ring; failover (`crates/restream-engine/src/input_gate.rs`) must be
-  rebuilt at segment level (switch on a boundary, `EXT-X-DISCONTINUITY`,
-  monotonic media sequence) or the relay must not ship.
-- Trigger: telemetry showing meaningful CPU in HLS demux plus segmenting for
-  HLS-to-HLS pipelines.
-- Gates: a harness mode relaying pushed HLS, checked against a normal-path run;
-  a test that an ineligible pipeline falls back with the reason recorded.
+- Publishers: GStreamer `moqsink` with `container=loc`, and the `moq` CLI
+  through moq-relay.
+- Gates: one harness mode ingesting from each publisher, with frame counts
+  and monotonic timestamps checked on read-back.
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
@@ -140,25 +113,6 @@ the [assurance roadmap](assurance-roadmap.md).
   with identical arrival stamps; a bench of per-datagram cost with and without
   GRO.
 
-### Q-097 [protocol] [opus] Align MediaMTX MoQ dialect with IETF interop
-- Goal: unmodified upstream MediaMTX interoperates with Restream's IETF
-  MSF/LOC profile in both directions. No proprietary MediaMTX fork or profile.
-- Blockers in MediaMTX v1.21.2 (pinned source, against MOQT-19, LOC-04 and
-  MSF-00):
-  - no PUBLISH_NAMESPACE (`0x6`) dispatch in `controlmessage.Read`;
-  - `performSetup` waits for the server's SETUP, as moq-net's server does for
-    the client's, so MediaMTX→Restream stalls;
-  - one codec frame per group with a `0x06` timestamp in codec ticks and no
-    timescale, where LOC uses `0x10`/`0x08` and MSF wants a GOP per group;
-  - the catalog emits `channels`/`clockrate` (MSF: `timescale`,
-    `channelConfig`) and `ToStream` accepts only `avc3`/`hev1`, not
-    Restream's `avc1`/`hvc1`.
-- Files: `crates/test_harness/src/test_harness/moq_relay_interop/`. Keep `moq-relay-interop`
-  diagnostic-only; `moq-dev-interop --ietf` is the IETF gate.
-- Gates: real egress and forwarded-ingest read-back with H.264/AAC, monotonic
-  timestamps and frame counts against an unmodified upstream release; then
-  enable the MediaMTX CI gate.
-
 ### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
 - Goal: the MCP server (`crates/restream-mcp/`) asks for input or approval during a
   plan (elicitation), reports progress on long operations, and returns small
@@ -167,20 +121,21 @@ the [assurance roadmap](assurance-roadmap.md).
   approval leaves no change; panel payloads are contract-tested.
 
 ### Q-101 [agent] [opus] Explain an incident and approve its fix in one place
-- Goal: "Explain this incident" reads the incident's flight-recorder window
-  and proposes a fix as an agent-plane plan; approval shows what the change
-  touches, approves one action at a time by role, and can come from Slack or
-  a push notification.
+- Goal: "Explain this incident" reads the incident's flight-recorder window,
+  diagnoses it deterministically and proposes a fix as an agent-plane plan;
+  approval shows what the change touches and approves one action at a time
+  by role, in the product only.
 - Files: `web/ts/control-room/incidents*.tsx`, `crates/restream-agent/src/plane/`.
 - Gates: a recorded incident yields a plan that names the right layer; an
   approval from a role below the action's minimum is refused and audited.
 
-### Q-102 [frontend] [sonnet] Plain-language command palette
-- Goal: the ⌘K palette also takes a request in words and acts through the
-  agent plane, showing the plan before anything runs.
+### Q-102 [frontend] [sonnet] Fuzzy command palette
+- Goal: the ⌘K palette matches loosely worded requests to the existing
+  commands (fuzzy matching, no language model) and shows the resulting plan
+  before anything runs.
 - Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
-- Gates: a request maps to the same plan the buttons would make; nothing
-  applies without the approval step.
+- Gates: misspelt and reordered requests reach the same command the buttons
+  would; nothing applies without the approval step.
 
 ### Q-106 [testing] [opus] Separate-rendition HLS push depends on server arrival order
 - Goal: `ffmpeg_hls_with_a_separate_audio_rendition_publishes_both`
@@ -209,3 +164,47 @@ the [assurance roadmap](assurance-roadmap.md).
   bench binaries and either confirm layout or find the cause.
 - Gates: a written cause backed by counter or disassembly evidence; if the
   product path is affected, a fix with a before/after Criterion A/B.
+
+### Q-109 [protocol] [opus] An SRT group receiver skips a sequence every member lost
+- Goal: when no group member delivers the next sequence before its TSBPD
+  deadline, the group receiver releases the following packet instead of
+  waiting forever. Today `srt_group/mod.rs:564` (srt-rs `2119264`) returns
+  `None` while `next_receive_sequence` is missing from `pending`, so one
+  sequence lost on every link stalls the group.
+- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): skip to the
+  oldest pending sequence once the missing one's deadline passes, and count
+  the skip as a group drop.
+- Gates: a deterministic srt-proto test in which every member loses one
+  sequence and later packets are delivered in order with one counted drop.
+
+### Q-110 [platform] [sonnet] Move from chrono to jiff after jiff 1.0
+- Goal: no crate depends on chrono. Its maintainer has soft-deprecated it
+  ([chrono#1768](https://github.com/chronotope/chrono/issues/1768)), and a
+  RustSec "unmaintained" advisory waits for jiff 1.0; with no ignore in
+  `deny.toml`, that advisory would fail the Cargo deny job.
+- Scope: 5 crates and about 40 files, mostly `Utc::now`, RFC 3339 output
+  and `from_timestamp` conversions; `serde_with`'s chrono feature also
+  pulls it in.
+- Gates: contract tests pin today's serialized timestamps (API JSON and
+  SQLite rows) before the switch and pass unchanged after it;
+  `cargo tree -i chrono` is empty.
+
+## Not planned
+
+### Q-033 host-level shard pool
+A pooled prototype cut shard CPU at 16 feeds × 2 outputs by more than half,
+but an injected Owner fault failed both feeds in a shared pool. Production
+keeps per-feed shard groups
+([per-feed shard isolation](runtime-crossings.md#per-feed-shard-isolation));
+reopen only if that failure-domain contract changes.
+
+### Q-071 HLS-to-HLS passthrough
+Relaying pushed HLS segments past the ring would need separate capacity
+accounting, preview and health for ring-less outputs, and segment-level
+failover. No telemetry shows HLS demux plus segmenting as a meaningful cost.
+
+### Q-097 MediaMTX MoQ dialect interoperability
+Blocked upstream: MediaMTX v1.21.2 has no PUBLISH_NAMESPACE dispatch, waits
+for the server's SETUP, puts one frame per group with codec-tick timestamps
+and no timescale, and emits a non-MSF catalog. Restream carries no MediaMTX
+profile; `moq-relay-interop` stays diagnostic-only.
