@@ -138,3 +138,33 @@ fn a_scenario_filter_that_selects_nothing_is_reported() {
         ["ingest", "resource.egress-growth-source-same"]
     );
 }
+
+/// Restream sends every SRT output of an egress shard from one UDP socket, so
+/// the sink's parallelism comes only from the ports the harness spreads outputs
+/// over, never from kernel hashing (Q-027). The capacity ramp's SRT x100 rung
+/// on two sink peers must use all four Owner ports (the default two per peer),
+/// each with about a quarter of the outputs.
+#[test]
+fn srt_outputs_spread_over_every_sink_owner_port() {
+    let mut env = test_env();
+    env.peer_count = 2;
+    env.peer_mode = ResourceSweepPeer::Sink;
+    let mut per_port = std::collections::BTreeMap::<u16, usize>::new();
+    for index in 1..=100 {
+        let name = format!("egress-growth-source-srt-srt-source-{index}");
+        let (url, _) =
+            resource_output_url(&env, sweep_configs()[0], SweepOutputKind::SrtSource, &name);
+        let port = url
+            .strip_prefix("srt://127.0.0.1:")
+            .and_then(|rest| rest.split('?').next())
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or_else(|| panic!("unexpected SRT output URL {url}"));
+        *per_port.entry(port).or_default() += 1;
+    }
+    assert_eq!(
+        per_port.keys().copied().collect::<Vec<_>>(),
+        [8891, 8892, 8895, 8896],
+        "{per_port:?}"
+    );
+    assert!(per_port.values().all(|&count| count <= 32), "{per_port:?}");
+}

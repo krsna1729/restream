@@ -171,7 +171,7 @@ buffers.
 | `PEER_COUNT` | `1` | Peer instances; output `ordinal % PEER_COUNT` picks one. Each instance offsets its ports by `index * 4` |
 | `PEER_SKIP_START` | unset | `mediamtx` only: peers are already running; the harness checks them |
 | `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` | `sink` only: `SO_RCVBUF`/`SO_SNDBUF` per SRT socket; `0` keeps host defaults |
-| `HARNESS_SRT_SINK_OWNERS_PER_PORT` | `2` (clamped to 1–4) | `sink` only: production SRT Owners per port, sharing a `SO_REUSEPORT` listener group |
+| `HARNESS_SRT_SINK_PORTS_PER_PEER` | `2` (clamped to 1–4) | `sink` only: SRT ports per peer instance, one production SRT Owner each; SRT outputs of an instance take its ports in turn by ordinal |
 | `MSR_SINK_SAMPLE_SECS` | `3` | MediaMTX path-health window before the resource window |
 | `MSR_SINK_POST_SAMPLE_SECS` | `2` | MediaMTX path-health window after it |
 | `MSR_SINK_TIMEOUT_SECS` | `60` | Timeout for MediaMTX path-health checks |
@@ -195,17 +195,17 @@ Sink mode details:
   (`rml_rtmp::sessions::ServerSession`) before discarding media. It counts
   wire bytes per connection. With `RESOURCE_SWEEP_RTMPS_CERT`/`_KEY` set, an
   RTMPS listener also starts.
-- The SRT pool runs two production `srt_transport::compio::Owner` threads per
-  port by default, built like the SRT ingress Owners. Each port uses one
-  `SO_REUSEPORT` listener group; `HARNESS_SRT_SINK_OWNERS_PER_PORT` sets the
-  group size (1–4). Payload bytes are counted per logical connection
-  (`LogicalPeerId`), since callers share UDP sockets. `srtSinkDrops` records
-  kernel drops per socket (local port and inode), the aggregate Owner-RX
-  `dropped`, `bufferExhaustions` and `truncated` totals, and `ownerFaults`:
-  a faulted Owner stops the whole pool, because a reuseport group member
-  that exits rehashes its sessions onto members that drop them. The pool
-  refuses a port that already has a UDP socket, so a leftover sink cannot
-  join its group.
+- The SRT pool runs one production `srt_transport::compio::Owner` thread per
+  port, built like the SRT ingress Owners. Each peer instance listens on
+  `HARNESS_SRT_SINK_PORTS_PER_PEER` consecutive ports (1–4, default 2) and
+  its SRT outputs take them in turn: Restream sends every output of an
+  egress shard from one UDP socket, so the sink's parallelism comes from
+  these ports rather than kernel `SO_REUSEPORT` hashing. Payload bytes are
+  counted per logical connection (`LogicalPeerId`), since callers share UDP
+  sockets. `srtSinkDrops` records kernel drops per socket (local port and
+  inode), the aggregate Owner-RX `dropped`, `bufferExhaustions` and
+  `truncated` totals, and `ownerFaults`: a faulted Owner stops serving its
+  port.
 - Read `bytesOutDelta` against the target rate. `outputsPresent` alone does
   not prove sustained throughput.
 

@@ -12,17 +12,17 @@ fn free_udp_ports(count: usize) -> Vec<u16> {
 }
 
 #[test]
-fn owners_per_port_is_bounded() {
-    assert_eq!(clamp_owners_per_port(0), 1);
-    assert_eq!(clamp_owners_per_port(2), 2);
-    assert_eq!(clamp_owners_per_port(usize::MAX), 4);
+fn ports_per_peer_is_bounded() {
+    assert_eq!(clamp_ports_per_peer(0), 1);
+    assert_eq!(clamp_ports_per_peer(2), 2);
+    assert_eq!(clamp_ports_per_peer(usize::MAX), 4);
 }
 
 #[test]
-fn sink_pool_starts_two_owners_per_port_and_stops() {
+fn sink_pool_starts_one_owner_per_port_and_stops() {
     let ports = free_udp_ports(2);
-    let pool = HarnessSrtSinkPool::start(&ports, 0, 2).expect("start multi-owner sink pool");
-    assert_eq!(pool.threads.len(), 4);
+    let pool = HarnessSrtSinkPool::start(&ports, 0).expect("start sink pool");
+    assert_eq!(pool.threads.len(), 2);
     let drops = pool.counters().drops();
     let sockets = drops.socket.expect("/proc/net/udp readable on Linux");
     for port in &ports {
@@ -37,11 +37,15 @@ fn sink_pool_starts_two_owners_per_port_and_stops() {
 const CALLER_TX: usize = 64;
 const CALLER_PAYLOAD: usize = 1316;
 
-/// One srt-rs caller on its own Owner (so its own UDP source port),
-/// driven like the ingress tests' `run_caller`: connect to `sink`, send
-/// `payloads` datagrams, then keep servicing until `done`. Returns whether
-/// it connected and how many payloads it sent.
-fn run_caller(sink: SocketAddr, payloads: usize, done: Arc<AtomicBool>) -> (bool, usize) {
+/// One srt-rs caller Owner with one shared UDP socket, as an egress shard
+/// sends: it opens one session to each of `sinks`, sends `payloads`
+/// datagrams on each, then keeps servicing until `done`. Returns whether each
+/// session connected and how many payloads it sent.
+fn run_shared_caller(
+    sinks: Vec<SocketAddr>,
+    payloads: usize,
+    done: Arc<AtomicBool>,
+) -> Vec<(bool, usize)> {
     use srt_transport::advanced::caller::{LogicalCallerState, PoolOutcome};
     use srt_transport::{CallerConfig, SocketOwnership};
 
@@ -52,77 +56,91 @@ fn run_caller(sink: SocketAddr, payloads: usize, done: Arc<AtomicBool>) -> (bool
     .expect("io_uring runtime for the test caller");
     runtime.block_on(async {
         let mut owner = Owner::new_with_ceiling(CALLER_TX, SRT_OWNER_WIRE_CEILING);
+        // Every session handshakes at once, as an egress Owner's pool allows.
+        owner
+            .set_caller_pool_capacity(NonZeroUsize::new(sinks.len()).expect("at least one sink"))
+            .expect("caller pool capacity");
         let epoch = Instant::now();
         let now = || Timestamp::from_micros(epoch.elapsed().as_micros() as u64);
-        let config = CallerConfig::builder(sink)
-            .ownership(SocketOwnership::Shared)
-            .build()
-            .expect("caller config");
-        let outcome = owner.connect(&config, now()).expect("caller attaches");
-        let PoolOutcome::Admitted(id) = outcome else {
-            panic!("the caller was not admitted immediately: {outcome:?}");
-        };
+        let ids: Vec<_> = sinks
+            .iter()
+            .map(|&sink| {
+                let config = CallerConfig::builder(sink)
+                    .ownership(SocketOwnership::Shared)
+                    .build()
+                    .expect("caller config");
+                match owner.connect(&config, now()).expect("caller attaches") {
+                    PoolOutcome::Admitted(id) => id,
+                    outcome => panic!("the caller was not admitted immediately: {outcome:?}"),
+                }
+            })
+            .collect();
         let payload = bytes::Bytes::from(vec![0x47; CALLER_PAYLOAD]);
-        let (mut connected, mut sent) = (false, 0);
+        let mut reports = vec![(false, 0); ids.len()];
         let mut events = Vec::new();
         while !done.load(Ordering::Acquire) && epoch.elapsed() < Duration::from_secs(20) {
             let at = now();
             let _ = owner.service(at, OwnerServiceBudget::default()).await;
             owner.poll_caller_events(&mut events);
             events.clear();
-            if let Some(mut caller) = owner.logical_caller_mut(&id) {
-                connected |= caller.state() == Some(LogicalCallerState::Connected);
-                while connected
-                    && sent < payloads
+            for (id, (connected, sent)) in ids.iter().zip(&mut reports) {
+                let Some(mut caller) = owner.logical_caller_mut(id) else {
+                    continue;
+                };
+                *connected |= caller.state() == Some(LogicalCallerState::Connected);
+                while *connected
+                    && *sent < payloads
                     && caller.can_send()
                     && matches!(caller.send_shared(payload.clone(), at), Ok(legs) if legs > 0)
                 {
-                    sent += 1;
+                    *sent += 1;
                 }
             }
             owner.wait_for_activity(Duration::from_millis(2)).await;
         }
-        if let Some(mut caller) = owner.logical_caller_mut(&id) {
-            caller.disconnect(now());
+        for id in &ids {
+            if let Some(mut caller) = owner.logical_caller_mut(id) {
+                caller.disconnect(now());
+            }
         }
         let _ = owner.shutdown_and_drain(Duration::from_secs(2)).await;
-        (connected, sent)
+        reports
     })
 }
 
-/// Real callers from distinct source ports reach a 2-Owner reuseport
-/// group: every one is accepted and its bytes counted, and both Owners
-/// publish their own RX counters.
+/// An egress shard's sessions all leave one UDP socket, so they reach
+/// different sink Owners only through the ports `sink_slot` spreads them
+/// over (Q-027). Every port gets its share of the sessions, and every
+/// session's bytes are counted on its port's Owner.
 #[test]
-fn multi_owner_sink_accepts_and_counts_real_callers() {
-    const CALLERS: usize = 8;
+fn shared_socket_caller_sessions_spread_across_sink_owners() {
+    const PORTS: usize = 2;
+    const SESSIONS: u64 = 8;
     const PAYLOADS: usize = 50;
-    let port = free_udp_ports(1)[0];
-    let pool = HarnessSrtSinkPool::start(&[port], 0, 2).expect("start multi-owner sink pool");
-    let sink = SocketAddr::from(([127, 0, 0, 1], port));
-    let done = Arc::new(AtomicBool::new(false));
-    let callers: Vec<_> = (0..CALLERS)
-        .map(|_| {
-            let done = done.clone();
-            std::thread::spawn(move || run_caller(sink, PAYLOADS, done))
+    let ports = free_udp_ports(PORTS);
+    let pool = HarnessSrtSinkPool::start(&ports, 0).expect("start sink pool");
+    let sinks = (0..SESSIONS)
+        .map(|slot| {
+            let (instance, offset) = sink_slot(slot, 1, PORTS);
+            assert_eq!(instance, 0, "one sink instance");
+            SocketAddr::from(([127, 0, 0, 1], ports[usize::from(offset)]))
         })
         .collect();
+    let done = Arc::new(AtomicBool::new(false));
+    let caller = std::thread::spawn({
+        let done = done.clone();
+        move || run_shared_caller(sinks, PAYLOADS, done)
+    });
     let handle = pool.counters();
     let expected = (PAYLOADS * CALLER_PAYLOAD) as u64;
     let delivered = |handle: &SrtSinkCountersHandle| {
         let peers = handle.per_peer_bytes();
-        handle.snapshot().accepted == CALLERS as u64
-            && peers.len() == CALLERS
+        handle.snapshot().accepted == SESSIONS
+            && peers.len() == SESSIONS as usize
             && peers.iter().all(|(_, bytes)| *bytes == expected)
     };
-    let owner_rx_entries = || {
-        lock(&pool.counters.owner_rx)
-            .keys()
-            .filter(|(owner_port, _)| *owner_port == port)
-            .count()
-    };
-    // Checked while the callers are connected: a disconnect retires a
-    // peer's byte row.
+    // Checked while the sessions are connected: a disconnect retires a
+    // session's byte row. Sink counters publish from the Owner threads.
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline && !delivered(&handle) {
         std::thread::sleep(Duration::from_millis(20));
@@ -130,191 +148,49 @@ fn multi_owner_sink_accepts_and_counts_real_callers() {
     let peers = handle.per_peer_bytes();
     let all_delivered = delivered(&handle);
     done.store(true, Ordering::Release);
-    let reports: Vec<_> = callers
-        .into_iter()
-        .map(|caller| caller.join().expect("caller thread"))
+    let reports = caller.join().expect("caller thread");
+    let owner_rx_ports: BTreeMap<u16, OwnerRxDrops> = lock(&pool.counters.owner_rx)
+        .iter()
+        .map(|(port, rx)| (*port, *rx))
         .collect();
+    let snapshot = handle.snapshot();
+    let faults = handle.drops().owner_faults;
+    pool.stop();
     assert!(
         reports.iter().all(|&report| report == (true, PAYLOADS)),
         "{reports:?}"
     );
-    let snapshot = handle.snapshot();
+    for port in &ports {
+        let sessions = peers.iter().filter(|((peer_port, _), _)| peer_port == port);
+        assert_eq!(
+            sessions.count(),
+            SESSIONS as usize / PORTS,
+            "port {port} Owner carries its share of the sessions: {peers:?}"
+        );
+        assert!(
+            owner_rx_ports.contains_key(port),
+            "port {port} Owner publishes its RX row"
+        );
+    }
     assert!(
         all_delivered,
-        "every caller accepted with all its bytes: {snapshot:?} {peers:?}"
+        "every session accepted with all its bytes: {snapshot:?} {peers:?}"
     );
-    assert_eq!(snapshot.accepted, CALLERS as u64, "{snapshot:?}");
-    assert_eq!(snapshot.discarded_bytes, CALLERS as u64 * expected);
-    // Both Owners publish within `PUBLISH_EVERY`, traffic or not.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && owner_rx_entries() < 2 {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(owner_rx_entries(), 2, "each Owner publishes its own RX row");
-    assert_eq!(handle.drops().owner_faults, 0);
-    pool.stop();
+    assert_eq!(snapshot.discarded_bytes, SESSIONS * expected);
+    assert_eq!(faults, 0);
 }
 
-/// A raw Broadcast publisher whose two legs dial from separate sockets,
-/// so the kernel can hash them to different reuseport members (the
-/// srt-rs relocation tests' publisher; theirs is crate-private).
-struct RawBondedPublisher {
-    legs: Vec<(
-        srt_proto::SrtConnection,
-        std::net::UdpSocket,
-        srt_transport::advanced::driver::ManualTimerStore,
-    )>,
-}
-
-impl RawBondedPublisher {
-    fn new(index: u32, sink: SocketAddr, now: Timestamp) -> Self {
-        use srt_proto::handshake::{GroupExtensionData, GroupType, SRTGROUP_MASK};
-        let extension = GroupExtensionData {
-            group_id: SRTGROUP_MASK | (100 + index),
-            group_type: GroupType::Broadcast,
-            flags: 0,
-            weight: 1,
-        };
-        let legs = (0..2)
-            .map(|leg| {
-                let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("leg socket");
-                socket.set_nonblocking(true).expect("nonblocking");
-                socket.connect(sink).expect("leg connects");
-                let mut conn = srt_proto::SrtConnection::new_caller(srt_proto::ConnectionOptions {
-                    socket_id: 5_000 + index * 2 + leg,
-                    initial_seq: Some(700),
-                    group_extension: Some(extension),
-                    ..srt_proto::ConnectionOptions::default()
-                });
-                conn.connect(now).expect("caller starts handshake");
-                (
-                    conn,
-                    socket,
-                    srt_transport::advanced::driver::ManualTimerStore::new(),
-                )
-            })
-            .collect();
-        Self { legs }
-    }
-
-    /// One visit: fire timers, receive, send.
-    fn pump(&mut self, now: Timestamp) {
-        let mut buf = [0u8; 2048];
-        for (conn, socket, timers) in &mut self.legs {
-            timers.fire_expired(now, conn);
-            while let Ok(len) = socket.recv(&mut buf) {
-                let _ = conn.feed_recv_buf(&buf[..len], now);
-            }
-            while let Ok(Some(output)) = conn.poll_output() {
-                match output {
-                    srt_proto::ConnectionOutput::SendPacket(bytes) => {
-                        let _ = socket.send(&bytes);
-                    }
-                    other => timers.apply_output(&other, now),
-                }
-            }
-        }
-    }
-
-    fn connected(&self) -> bool {
-        self.legs
-            .iter()
-            .all(|(conn, ..)| conn.state() == srt_proto::ConnectionState::Connected)
-    }
-
-    /// Send on one leg only, so the group's delivery depends on it.
-    fn send_on(&mut self, leg: usize, payload: &[u8], now: Timestamp) {
-        let _ = self.legs[leg].0.send(payload, now);
-    }
-}
-
-/// Bonded legs the kernel hashes away from their group's member relocate
-/// there with their timers. The second member starts `STAGGER` late and
-/// each publisher sends on one leg only (alternating which), so every
-/// relocated leg must deliver by itself. Only one pool-wide timestamp
-/// origin does that: with per-Owner clocks a relocated leg's TSBPD
-/// schedule is `STAGGER` off, so its data is held back or dropped late.
-#[test]
-fn relocated_bonded_legs_deliver_across_staggered_owners() {
-    const GROUPS: u32 = 32;
-    const PAYLOADS: u32 = 20;
-    const STAGGER: Duration = Duration::from_secs(2);
-    const DELIVER_WITHIN: Duration = Duration::from_secs(1);
-    let port = free_udp_ports(1)[0];
-    let pool = HarnessSrtSinkPool::start_staggered(&[port], 0, 2, STAGGER)
-        .expect("start staggered sink pool");
-    let handle = pool.counters();
-    let sink = SocketAddr::from(([127, 0, 0, 1], port));
-    let epoch = Instant::now();
-    let at = || Timestamp::from_micros(epoch.elapsed().as_micros() as u64);
-    let mut publishers: Vec<_> = (0..GROUPS)
-        .map(|index| RawBondedPublisher::new(index, sink, at()))
-        .collect();
-    let expected = u64::from(PAYLOADS) * 4;
-    let delivered = || {
-        let peers = handle.per_peer_bytes();
-        peers.len() == GROUPS as usize && peers.iter().all(|(_, bytes)| *bytes == expected)
-    };
-    let connect_deadline = Instant::now() + Duration::from_secs(5);
-    let mut sent = 0;
-    let mut sent_all_at: Option<Instant> = None;
-    loop {
-        for publisher in &mut publishers {
-            publisher.pump(at());
-        }
-        if publishers.iter().all(RawBondedPublisher::connected) {
-            if sent < PAYLOADS {
-                for (index, publisher) in publishers.iter_mut().enumerate() {
-                    publisher.send_on(index % 2, &sent.to_be_bytes(), at());
-                }
-                sent += 1;
-            } else if delivered()
-                || sent_all_at.get_or_insert_with(Instant::now).elapsed() > DELIVER_WITHIN
-            {
-                break;
-            }
-        } else if Instant::now() > connect_deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    let connected = publishers
-        .iter()
-        .filter(|publisher| publisher.connected())
-        .count();
-    let all_delivered = delivered();
-    let peers = handle.per_peer_bytes();
-    let snapshot = pool.snapshot();
-    pool.stop();
-    assert_eq!(
-        connected, GROUPS as usize,
-        "every bonded publisher connects"
-    );
-    assert!(
-        all_delivered,
-        "every group delivers {expected} B within {DELIVER_WITHIN:?} of its last send: {peers:?}"
-    );
-    assert_eq!(
-        snapshot.accepted,
-        u64::from(GROUPS),
-        "one stream per bonded publisher: {snapshot:?}"
-    );
-}
-
-/// A same-user socket already in a port's reuseport group (a leftover
-/// sink) refuses the pool instead of being joined.
+/// A same-user `SO_REUSEPORT` socket already on a port (a leftover sink)
+/// refuses the pool instead of sharing the port's datagrams with it.
 #[test]
 fn sink_pool_refuses_to_join_a_foreign_reuseport_socket() {
     let port = free_udp_ports(1)[0];
     let foreign =
         crate::udp_drain::bind_drain_socket(port, 1 << 20, Duration::from_millis(100), true)
             .expect("foreign SO_REUSEPORT socket");
-    match HarnessSrtSinkPool::start(&[port], 0, 2) {
-        Err(error) => assert!(error.contains("already have a UDP socket"), "{error}"),
-        Ok(pool) => {
-            pool.stop();
-            panic!("the sink joined a foreign reuseport group on port {port}");
-        }
+    if let Ok(pool) = HarnessSrtSinkPool::start(&[port], 0) {
+        pool.stop();
+        panic!("the sink shared port {port} with a foreign reuseport socket");
     }
     drop(foreign);
 }
@@ -322,7 +198,7 @@ fn sink_pool_refuses_to_join_a_foreign_reuseport_socket() {
 #[test]
 fn sink_pool_rejects_duplicate_ports() {
     let port = free_udp_ports(1)[0];
-    match HarnessSrtSinkPool::start(&[port, port], 0, 2) {
+    match HarnessSrtSinkPool::start(&[port, port], 0) {
         Err(error) => assert!(error.contains("duplicate port"), "{error}"),
         Ok(pool) => {
             pool.stop();
@@ -336,7 +212,7 @@ fn sink_owner_rx_drops_aggregate_per_owner() {
     let counters = Arc::new(SinkCounters::default());
     lock(&counters.owner_rx).extend([
         (
-            (9000, 0),
+            9000,
             OwnerRxDrops {
                 dropped: 3,
                 buffer_exhaustions: 2,
@@ -344,7 +220,7 @@ fn sink_owner_rx_drops_aggregate_per_owner() {
             },
         ),
         (
-            (9000, 1),
+            9001,
             OwnerRxDrops {
                 dropped: 5,
                 buffer_exhaustions: 4,
@@ -355,7 +231,7 @@ fn sink_owner_rx_drops_aggregate_per_owner() {
     counters.owner_faults.store(1, Ordering::Release);
     let handle = SrtSinkCountersHandle {
         counters,
-        ports: Arc::from([9000]),
+        ports: Arc::from([9000, 9001]),
     };
     let drops = handle.drops();
     assert_eq!(
@@ -378,8 +254,8 @@ fn sink_owner_rx_drops_aggregate_per_owner() {
 #[test]
 fn sink_pool_rejects_a_port_already_bound() {
     let ports = free_udp_ports(1);
-    let pool = HarnessSrtSinkPool::start(&ports, 0, 1).expect("start sink pool");
-    assert!(HarnessSrtSinkPool::start(&ports, 0, 1).is_err());
+    let pool = HarnessSrtSinkPool::start(&ports, 0).expect("start sink pool");
+    assert!(HarnessSrtSinkPool::start(&ports, 0).is_err());
     pool.stop();
 }
 

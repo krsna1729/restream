@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-027 residual SRT×100 repeat failure](#q-027-performance-opus-find-why-srt100-still-fails-a-repeat-with-the-multi-owner-sink)
 - [Q-033 host-level shard pool](#q-033-architecture-opus-run-egress-shards-from-one-host-level-pool-instead-of-per-feed-groups)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
@@ -34,18 +33,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-027 [performance] [opus] Find why SRT×100 still fails a repeat with the multi-Owner sink
-- Goal: SRT capacity rungs measure Restream, not the receiver.
-- Context: with the two-Owner `SO_REUSEPORT` harness sink
-  (`crates/test_harness/src/test_harness/harness_srt_sink.rs`), SRT×100 passed 6 of 7
-  repeats. The failing repeat had 14 destinations at zero delivery and 5 leaves
-  closed by the plain stall sweep (not shard saturation); kernel drops
-  concentrated on one reuseport member per port. Hypothesis, unproven: one
-  sink Owner stopped servicing its sessions. Probe with per-Owner session and
-  ACK counters in the sink.
-- Gates: `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100 CAPACITY_REPEATS=7
-  CAPACITY_PEER_COUNT=2` (Restream on 4 CPUs, harness on 2) passes 7 of 7.
 
 ### Q-033 [architecture] [opus] Run egress shards from one host-level pool instead of per-feed groups
 - Goal: shards are a host pool that serves every feed, not one group per

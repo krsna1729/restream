@@ -95,12 +95,13 @@ record CPU sets that make the intended locality explicit.
 
 - `CAPACITY_EGRESS_SHARDS` overrides the product's shard ceiling. Compare
   the default first; changing the ceiling is a separate experiment.
-- `CAPACITY_PEER_COUNT` sets SRT sink instances and ports (default: the
-  harness CPU count). Each SRT port runs `HARNESS_SRT_SINK_OWNERS_PER_PORT`
-  Owners (default 2, clamped to 1–4) in one `SO_REUSEPORT` group. Keep these
-  settings fixed across A/B runs. The sink refuses a port that already has a
-  UDP socket in `/proc/net/udp{,6}`: a leftover sink from an earlier run would
-  otherwise join the group and take part of the flows.
+- `CAPACITY_PEER_COUNT` sets SRT sink instances (default: the harness CPU
+  count). Each instance listens on `HARNESS_SRT_SINK_PORTS_PER_PEER`
+  consecutive SRT ports (default 2, clamped to 1–4), one production Owner
+  per port, and the harness spreads outputs over every port by name.
+  Restream sends all of a shard's SRT outputs from one UDP socket, so the
+  sink gets its parallelism from these ports, never from kernel
+  `SO_REUSEPORT` hashing. Keep these settings fixed across A/B runs.
 - Sink-port count changes SRT send batching as well as receiver parallelism.
   Outputs to one destination address can share batched sends. A single-port
   sink is not equivalent to independent remote destinations.
