@@ -666,10 +666,21 @@ The capture fails closed. Any sample error (a sample slower than 1.5 s is
 one), a sample without positive RSS, a gap over 2 s, a phase (sampling start,
 SIGSTOP, retry, output stop, pipeline deletion, capture completion) with no
 sample within 2 s, samples that do not span SIGSTOP through pipeline
-deletion, or a retry window under 120 s fails the test. The pass gate is RSS
-growth between the reading before SIGSTOP and the one after the retry
-window. The test JSON also reports sampled peak growth, `rssMbMax` and
-`threadsMax`.
+deletion, or a retry window under 120 s fails the test. The pass gate is the
+retry-window RSS growth from the sampled capture: the peak RSS among samples
+between retry observation and output stop, minus the first sample at or after
+retry observation. It must stay within 16 MiB. Starting at retry observation
+keeps source-ring and TS-ring warm-up out of the measurement, and taking the
+peak catches growth that lands on a retry's shard spawn. The test JSON
+reports this as `rssRetryWindow`, together with sampled peak growth from
+before SIGSTOP, `rssMbMax` and `threadsMax`.
+
+The 16 MiB limit comes from recorded runs. Current runs grow 3.4–3.5 MiB
+across the window. The historical failure, where each retry spawned a whole
+six-shard group under glibc's default malloc arenas, grew in a staircase of
+58.5 MiB from retry observation (141,788 to 201,708 KB). The old 64 MiB limit
+passed that staircase. 16 MiB leaves about 3× headroom over current runs and
+fails at roughly a quarter of the old staircase.
 
 For an attribution run, build release binaries and hold the host
 measurement lock:
@@ -686,10 +697,7 @@ BENCH_BUILD=never \
 
 `RESTREAM_BIN` may name an exec-style allocation-profiler launcher that keeps
 the child PID. RSS and ring payload alone cannot separate live heap from
-allocator retention; pair them with an allocation profiler. The 64 MiB growth
-limit stays unchanged until
-[Q-026](backlog.md#q-026-resilience-opus-attribute-and-recalibrate-the-frozen-srt-destination-rss-gate)
-attributes the RSS growth it guards against.
+allocator retention; pair them with an allocation profiler.
 
 Two more modes qualify SRT egress:
 
