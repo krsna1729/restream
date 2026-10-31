@@ -15,12 +15,12 @@ use super::{
     create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
     default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
     file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
-    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, parse_srt_crypto_variants,
-    plain_mediamtx_config, probe_dims_ramp, run_ffmpeg_filter_log, safe_artifact_stem,
-    signal_report_json, spawn_mediamtx, spawn_publisher_with_selection,
-    start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
-    sweep_fixture, validate_signal_quality_with_tolerances, wait_for_api_input_live,
-    wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
+    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, mediamtx_udp_read_buffer_line,
+    parse_srt_crypto_variants, pinned_mediamtx, plain_mediamtx_config, probe_dims_ramp,
+    run_ffmpeg_filter_log, safe_artifact_stem, signal_report_json, spawn_mediamtx,
+    spawn_publisher_with_selection, start_generalized_sink_server, start_output, stop_child,
+    stop_generalized_sink_server, sweep_fixture, validate_signal_quality_with_tolerances,
+    wait_for_api_input_live, wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -263,12 +263,13 @@ async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Chi
     std::fs::write(
         &config_path,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{rtmp}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{srt}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api}\nmetrics: no\npaths:\n  all:\n"
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\n{udp}rtmp: yes\nrtmpAddress: :{rtmp}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{srt}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api}\nmetrics: no\npaths:\n  all:\n",
+            udp = mediamtx_udp_read_buffer_line(),
         ),
     )
     .map_err(|e| e.to_string())?;
     spawn_mediamtx(
-        Command::new("mediamtx"),
+        Command::new(pinned_mediamtx()?),
         &config_path,
         log,
         api,

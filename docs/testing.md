@@ -371,9 +371,13 @@ One MediaMTX release is pinned, with its per-architecture SHA-256, in
 `scripts/data/mediamtx.tsv`. `scripts/dev/bootstrap-runtime.sh
 --mediamtx-only` installs it as `/usr/local/bin/mediamtx` (the CI harness
 image is built that way), and `cargo xtask fetch mediamtx` installs it as
-`.local/bin/mediamtx` without root. `moq-relay-interop` takes
+`.local/bin/mediamtx` without root. Every mode takes
 `RESTREAM_MEDIAMTX_BIN`, else `.local/bin/mediamtx`, else `mediamtx` on
 `PATH`, and refuses a binary that does not report the pinned version.
+Configs with SRT set `udpReadBufferSize` to the 8 MiB Restream's own SRT
+sockets use, so the one SRT socket every Restream SRT output shares does not
+overflow first. It is capped at `net.core.rmem_max`, because MediaMTX exits
+when the kernel grants less than it asked for.
 
 ### Choosing a live proof
 
