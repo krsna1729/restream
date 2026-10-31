@@ -1,6 +1,6 @@
 use super::*;
-use crate::application::diagnosis::{Cause, Diagnosis, Layer};
 use crate::application::runtime_state::RetryState;
+use restream_health::diagnosis::{Cause, Diagnosis, Layer};
 
 fn output(
     id: &str,

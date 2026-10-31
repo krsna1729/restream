@@ -3186,6 +3186,7 @@ dependencies = [
  "restream-core",
  "restream-domain",
  "restream-engine",
+ "restream-health",
  "restream-mcp",
  "restream-moq",
  "restream-mpegts",
@@ -3303,6 +3304,19 @@ dependencies = [
  "web-transport-proto",
  "web-transport-trait",
  "webpki-roots",
+]
+
+[[package]]
+name = "restream-health"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "restream-engine",
+ "restream-sync",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

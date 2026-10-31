@@ -533,9 +533,10 @@ faults as issues. Buffer exhaustion is informational.
 
 ## Alerts
 
-`derive_alerts` (`src/alerts.rs`, `src/alerts/output.rs`) is a pure function
-of a health snapshot. It returns alerts sorted critical first, then by
-pipeline and id. `AlertTracker` (`src/alerts/tracker.rs`) adds `firstSeen`
+`derive_alerts` (`crates/restream-health/src/alerts.rs`,
+`crates/restream-health/src/alerts/output.rs`) is a pure function of a health
+snapshot. It returns alerts sorted critical first, then by pipeline and id.
+`AlertTracker` (`crates/restream-health/src/alerts/tracker.rs`) adds `firstSeen`
 and `lastSeen`.
 
 Alerts have one evaluator, as rule state does in Prometheus: the notifier
@@ -596,7 +597,7 @@ The picture and sound checks are opt in per pipeline; see
 ### Output alerts
 
 Each output is reduced to `OutputSignals` and diagnosed once
-(`src/application/diagnosis.rs`). The cause picks at most one alert, with id
+(`crates/restream-health/src/diagnosis.rs`). The cause picks at most one alert, with id
 `pipeline:<id>:output:<output>:<code>`. All are warnings.
 
 | Code | Cause |
@@ -612,7 +613,7 @@ Each output is reduced to `OutputSignals` and diagnosed once
 ### Destination anomalies
 
 Each running output also learns its own usual
-(`src/application/destination_baselines.rs`), fed by the flight recorder
+(`crates/restream-health/src/destination_baselines.rs`), fed by the flight recorder
 every 2 s. The signals are the delivery ratio (bad when low), the round
 trip (SRT's, else the TCP socket's) and SRT retransmits per second (both
 bad when high).

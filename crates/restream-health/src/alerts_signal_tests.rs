@@ -92,7 +92,7 @@ fn a_still_slate_and_a_silent_later_track_are_named_for_what_they_are() {
 
 #[test]
 fn a_destination_off_its_usual_is_a_named_warning() {
-    use crate::application::destination_baselines::{Anomaly, Signal};
+    use crate::destination_baselines::{Anomaly, Signal};
     let anomalies = [
         Anomaly {
             pipeline_id: "pipe1".into(),

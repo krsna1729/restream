@@ -103,8 +103,8 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines thirteen packages: the `restream` application,
-ten library crates under `crates/restream-*`, and the `test_harness` and
+The root `Cargo.toml` defines fourteen packages: the `restream` application,
+eleven library crates under `crates/restream-*`, and the `test_harness` and
 `xtask` command packages. They share one `Cargo.lock`; all are default
 workspace members. These are source and compilation boundaries, not separate
 services or additional thread families.
@@ -120,6 +120,9 @@ flowchart TD
     Harness --> Domain
     Harness --> Sync
     App --> Engine["restream-engine"]
+    App --> Health["restream-health"]
+    Health --> Engine
+    Health --> Sync
     App -.->|"agent-plane"| Contract["restream-agent-contract"]
     App -.->|"mcp-core"| Mcp["restream-mcp"]
     Mcp --> Contract
@@ -151,10 +154,10 @@ flowchart TD
 The harness imports the root library and the engine plus the domain
 vocabulary and the poison-tolerant lock helpers; it does not directly depend
 on the core package. `xtask` invokes repository commands and tools rather than
-linking the application. The root application depends on the engine and on
-the seven libraries below it (and, by Cargo feature, on the agent contract and
-MCP crates), so checking a leaf package does not validate its downstream
-integration.
+linking the application. The root application depends on the engine, the
+health crate and the seven libraries below them (and, by Cargo feature, on
+the agent contract and MCP crates), so checking a leaf package does not
+validate its downstream integration.
 
 ### Package boundaries and runtime seams
 
@@ -191,6 +194,12 @@ integration.
   test-only dependency; no `sqlx`). Its `test-support` feature builds the
   media test helpers for dependents' tests, `ts` the TypeScript export
   derives, and `egress-test-driver` / `srt-shard-bench` the benchmark seams.
+- **Health assessment:** `restream-health` owns the typed alerts derived from
+  the health snapshot (`alerts`, `AlertTracker`), the per-output `diagnosis`
+  shared by alerts and the runtime state, and per-destination
+  `destination_baselines`. It is pure derivation; it depends on the engine
+  only for its alert thresholds and on `restream-sync` for lock helpers. Its
+  `ts` feature adds the TypeScript export derives for `Diagnosis`.
 - **Agent contract and MCP sidecar:** `restream-agent-contract` owns the agent
   request types, `AgentBackend`, errors and the agent tool list; it depends on
   the domain vocabulary, `serde` and `serde_json` only. `restream-mcp` owns
@@ -616,6 +625,7 @@ describes where their callers execute.
 | `src/infrastructure/` | Service wiring, SQLite adapters and notification transports |
 | `src/api/` | Router, authentication, REST and SSE handlers, HLS push upload, embedded assets |
 | `src/application/` | Control-plane workflows, `reconcile.rs`, persistence ports and topology requests |
+| `crates/restream-health/src/` | Alerts, output diagnosis and destination baselines derived from health snapshots |
 | `crates/restream-domain/src/domain/` | IDs, `state.rs`, pipeline inputs, output specs, stage identity and validation |
 | `src/db/` | SQLite schema and repositories |
 | `crates/restream-domain/src/planner/` | Pure stage-graph planning |

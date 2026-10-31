@@ -520,7 +520,7 @@ iterations, command depth and capacity, ready depth and high-water mark,
 ready visits, budget exhaustions, feed resyncs, TX/RX counters, completion
 counters and, for SRT, per-family Owner metrics.
 
-Alerts (`src/alerts.rs`), keyed
+Alerts (`crates/restream-health/src/alerts.rs`), keyed
 `engine:egress_fabric:{protocol}:{feed}:{shard}:…`:
 
 | Alert | Severity | Condition |

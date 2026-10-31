@@ -102,13 +102,14 @@ COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-engine/Cargo.toml crates/restream-engine/Cargo.toml
 COPY crates/restream-mcp/Cargo.toml crates/restream-mcp/Cargo.toml
+COPY crates/restream-health/Cargo.toml crates/restream-health/Cargo.toml
 COPY crates/restream-sync/Cargo.toml crates/restream-sync/Cargo.toml
 COPY crates/restream-mpegts/Cargo.toml crates/restream-mpegts/Cargo.toml
 COPY crates/restream-rtmp/Cargo.toml crates/restream-rtmp/Cargo.toml
 COPY crates/restream-moq/Cargo.toml crates/restream-moq/Cargo.toml
 COPY crates/restream-srt/Cargo.toml crates/restream-srt/Cargo.toml
 COPY crates/test_harness/Cargo.toml crates/test_harness/Cargo.toml
-RUN mkdir -p benches src crates/xtask/src crates/restream-agent-contract/src crates/restream-core/src crates/restream-domain/src crates/restream-engine/src crates/restream-engine/benches crates/restream-mcp/src crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
+RUN mkdir -p benches src crates/xtask/src crates/restream-agent-contract/src crates/restream-core/src crates/restream-domain/src crates/restream-engine/src crates/restream-engine/benches crates/restream-health/src crates/restream-mcp/src crates/restream-sync/src crates/restream-mpegts/src crates/restream-rtmp/src crates/restream-moq/src crates/restream-srt/src crates/test_harness/src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("crates/restream-engine/benches/" name ".rs"); in_bench = 0 }' crates/restream-engine/Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs \
@@ -118,6 +119,7 @@ RUN mkdir -p benches src crates/xtask/src crates/restream-agent-contract/src cra
     && : > crates/restream-domain/src/lib.rs \
     && : > crates/restream-domain/src/lib.rs \
     && : > crates/restream-engine/src/lib.rs \
+    && : > crates/restream-health/src/lib.rs \
     && : > crates/restream-mcp/src/lib.rs \
     && printf 'fn main() {}\n' > crates/restream-mcp/src/main.rs \
     && : > crates/restream-sync/src/lib.rs \
@@ -143,6 +145,7 @@ COPY crates/restream-core/ crates/restream-core/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-engine/ crates/restream-engine/
+COPY crates/restream-health/ crates/restream-health/
 COPY crates/restream-mcp/ crates/restream-mcp/
 COPY crates/restream-sync/ crates/restream-sync/
 COPY crates/restream-mpegts/ crates/restream-mpegts/

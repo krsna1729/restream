@@ -53,13 +53,13 @@ pub struct AlertBrief {
     pub output_id: Option<String>,
 }
 
-impl From<&crate::alerts::Alert> for AlertBrief {
-    fn from(alert: &crate::alerts::Alert) -> Self {
+impl From<&restream_health::alerts::Alert> for AlertBrief {
+    fn from(alert: &restream_health::alerts::Alert) -> Self {
         Self {
             id: alert.id.clone(),
             severity: match alert.severity {
-                crate::alerts::Severity::Critical => NotifySeverity::Critical,
-                crate::alerts::Severity::Warning => NotifySeverity::Warning,
+                restream_health::alerts::Severity::Critical => NotifySeverity::Critical,
+                restream_health::alerts::Severity::Warning => NotifySeverity::Warning,
             },
             title: alert.title.clone(),
             cause: alert.cause.clone(),

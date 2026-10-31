@@ -8,6 +8,7 @@ const ROOTS: &[&str] = &[
     "web/assets",
     "src",
     "crates/restream-agent-contract",
+    "crates/restream-health",
     "crates/restream-mcp",
     "tests",
     "test",

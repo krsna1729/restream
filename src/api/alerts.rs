@@ -12,7 +12,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::alerts;
+use restream_health::alerts;
 
 use super::state::{AppState, recording_enabled_map, require_authenticated};
 
@@ -47,8 +47,8 @@ fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
 // Transport shaping for the alert payload stays local to this module so the
 // tracker and derivation code do not need to know the HTTP response schema.
 fn alerts_response(
-    evaluation: crate::alerts::Evaluation,
-    resolved: Option<crate::alerts::ResolvedWindow>,
+    evaluation: restream_health::alerts::Evaluation,
+    resolved: Option<restream_health::alerts::ResolvedWindow>,
 ) -> Response {
     let mut body = serde_json::json!({
         "generatedAt": evaluation.generated_at,
@@ -65,7 +65,7 @@ fn alerts_response(
 /// Evaluate the open alerts now: derive them from the dashboard health
 /// snapshot, track their history and publish the result for readers. Only the
 /// notifier calls this, apart from the very first read before it has run.
-pub async fn evaluate_alerts(state: &AppState) -> Vec<crate::alerts::Alert> {
+pub async fn evaluate_alerts(state: &AppState) -> Vec<restream_health::alerts::Alert> {
     let snapshot = dashboard_alert_snapshot(state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     alert_list.extend(alerts::anomaly_alerts(
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn alerts_response_uses_ok_status() {
-        let response = alerts_response(crate::alerts::Evaluation::default(), None);
+        let response = alerts_response(restream_health::alerts::Evaluation::default(), None);
 
         assert_eq!(response.status(), StatusCode::OK);
     }
