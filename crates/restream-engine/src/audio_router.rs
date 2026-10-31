@@ -88,10 +88,11 @@ pub async fn start_audio_router(
                 if reader.is_caught_up_to_end_of_stream() {
                     break;
                 }
-                let first_sequence = reader.next_sequence();
                 if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
                 }
+                // The burst is a contiguous run ending at the read position.
+                let first_sequence = reader.next_sequence() - packets.len();
                 if !first_input_recorded {
                     first_input_recorded = true;
                     lifecycle.record_first_input();

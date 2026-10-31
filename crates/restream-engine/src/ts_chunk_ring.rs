@@ -21,35 +21,37 @@ impl TsChunkRing {
         }
     }
 
-    pub fn push(&self, payload: Bytes, is_keyframe: bool) {
-        let packet = MediaPacket {
-            media_type: MediaType::Video,
-            track_index: 0,
-            pts: 0,
-            dts: 0,
-            is_keyframe,
-            format: PayloadFormat::Raw,
-            payload,
-        };
-        self.ring.push(packet);
+    /// Publish one muxed chunk: `media_type` and `is_keyframe` describe the
+    /// media packet it carries, so TS readers resynchronize on video
+    /// keyframes and let audio through.
+    pub fn push(&self, payload: Bytes, media_type: MediaType, is_keyframe: bool) {
+        self.ring
+            .push(chunk_packet(payload, media_type, is_keyframe));
     }
 
-    pub fn push_batch<I>(&self, payloads: I) -> usize
+    pub fn push_batch<I>(&self, chunks: I) -> usize
     where
-        I: IntoIterator<Item = (Bytes, bool)>,
+        I: IntoIterator<Item = (Bytes, MediaType, bool)>,
     {
-        let packets = payloads
-            .into_iter()
-            .map(|(payload, is_keyframe)| MediaPacket {
-                media_type: MediaType::Video,
-                track_index: 0,
-                pts: 0,
-                dts: 0,
-                is_keyframe,
-                format: PayloadFormat::Raw,
-                payload,
-            });
-        self.ring.push_batch(packets)
+        self.ring.push_batch(
+            chunks
+                .into_iter()
+                .map(|(payload, media_type, is_keyframe)| {
+                    chunk_packet(payload, media_type, is_keyframe)
+                }),
+        )
+    }
+}
+
+fn chunk_packet(payload: Bytes, media_type: MediaType, is_keyframe: bool) -> MediaPacket {
+    MediaPacket {
+        media_type,
+        track_index: 0,
+        pts: 0,
+        dts: 0,
+        is_keyframe,
+        format: PayloadFormat::Raw,
+        payload,
     }
 }
 
@@ -119,11 +121,11 @@ mod tests {
         let mut r2 = TsChunkReader::new("reader2".to_string(), &ts_ring);
 
         // Push some chunks
-        ts_ring.push(Bytes::from_static(b"chunk1"), true);
-        ts_ring.push(Bytes::from_static(b"chunk2"), false);
+        ts_ring.push(Bytes::from_static(b"chunk1"), MediaType::Video, true);
+        ts_ring.push(Bytes::from_static(b"chunk2"), MediaType::Audio, false);
         ts_ring.push_batch(vec![
-            (Bytes::from_static(b"chunk3"), false),
-            (Bytes::from_static(b"chunk4"), false),
+            (Bytes::from_static(b"chunk3"), MediaType::Video, false),
+            (Bytes::from_static(b"chunk4"), MediaType::Video, false),
         ]);
 
         let mut out1 = Vec::new();
@@ -152,13 +154,13 @@ mod tests {
     fn live_reader_starts_after_existing_chunks() {
         let cancel = CancellationToken::new();
         let ts_ring = TsChunkRing::new(16, cancel);
-        ts_ring.push(Bytes::from_static(b"old"), true);
+        ts_ring.push(Bytes::from_static(b"old"), MediaType::Video, true);
 
         let mut reader = TsChunkReader::new_live("live_reader".to_string(), &ts_ring);
         let mut out = Vec::new();
         assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 0);
 
-        ts_ring.push(Bytes::from_static(b"new"), false);
+        ts_ring.push(Bytes::from_static(b"new"), MediaType::Video, false);
         assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 1);
         assert_eq!(&*out[0].payload, b"new");
     }
@@ -168,7 +170,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let ts_ring = TsChunkRing::new(16, cancel);
         for i in 0..8 {
-            ts_ring.push(Bytes::from(vec![i as u8]), i == 5);
+            ts_ring.push(Bytes::from(vec![i as u8]), MediaType::Video, i == 5);
         }
 
         let mut reader =
@@ -212,7 +214,7 @@ mod tests {
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        ts_ring.push(Bytes::from_static(b"chunk"), true);
+        ts_ring.push(Bytes::from_static(b"chunk"), MediaType::Video, true);
 
         let (result, mut reader) = wait_task.await.unwrap();
         assert_eq!(result, TsChunkWaitResult::Data);
@@ -230,9 +232,9 @@ mod tests {
         assert_eq!(ts_ring.push_batch(std::iter::empty()), 0);
         assert_eq!(
             ts_ring.push_batch(vec![
-                (Bytes::from_static(b"a"), false),
-                (Bytes::from_static(b"b"), false),
-                (Bytes::from_static(b"c"), true),
+                (Bytes::from_static(b"a"), MediaType::Video, false),
+                (Bytes::from_static(b"b"), MediaType::Audio, false),
+                (Bytes::from_static(b"c"), MediaType::Video, true),
             ]),
             3
         );
@@ -242,7 +244,7 @@ mod tests {
     fn pull_burst_with_zero_max_packets_pulls_nothing() {
         let cancel = CancellationToken::new();
         let ts_ring = TsChunkRing::new(16, cancel);
-        ts_ring.push(Bytes::from_static(b"chunk"), true);
+        ts_ring.push(Bytes::from_static(b"chunk"), MediaType::Video, true);
 
         let mut reader = TsChunkReader::new("reader".to_string(), &ts_ring);
         let mut out = Vec::new();

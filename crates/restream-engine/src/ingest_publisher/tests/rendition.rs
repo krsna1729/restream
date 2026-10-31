@@ -165,6 +165,58 @@ async fn two_renditions_reach_the_ring_merged_in_dts_order() {
     assert_eq!(published.len(), 150);
 }
 
+/// A segment that could not be demuxed is dropped. The next segment's video
+/// up to its keyframe references frames the dropped one carried: none of it
+/// reaches the ring, and its audio does.
+#[tokio::test]
+async fn a_segment_after_a_dropped_one_publishes_no_interframe_before_its_keyframe() {
+    let frame = |media_type: MediaType, is_keyframe: bool, dts: i64| MediaPacket {
+        is_keyframe,
+        ..packet(media_type, dts)
+    };
+    let (_engine, target, ring) = harness("dropped-segment").await;
+    let mut publisher = SegmentPublisher::new(
+        Box::new(Scripted {
+            batches: VecDeque::from([
+                vec![
+                    frame(MediaType::Video, true, 0),
+                    frame(MediaType::Video, false, 40),
+                ],
+                vec![
+                    frame(MediaType::Video, false, 160),
+                    frame(MediaType::Audio, false, 170),
+                    frame(MediaType::Video, true, 200),
+                    frame(MediaType::Video, false, 240),
+                ],
+            ]),
+            probe: video_probe(),
+            ..Scripted::default()
+        }),
+        IngestTimestamps::default(),
+    );
+    publisher.publish(&target, b"segment 0").await.unwrap();
+    publisher.end_object(&target).unwrap();
+    let start = ring.get_write_idx();
+
+    // Segment 1 fails to demux and is dropped.
+    publisher.discard_failed_object();
+    publisher.publish(&target, b"segment 2").await.unwrap();
+    publisher.end_object(&target).unwrap();
+
+    let published: Vec<(MediaType, bool)> = (start..ring.get_write_idx())
+        .filter_map(|index| ring.read_at(index))
+        .map(|packet| (packet.media_type, packet.is_keyframe))
+        .collect();
+    assert_eq!(
+        published,
+        [
+            (MediaType::Audio, false),
+            (MediaType::Video, true),
+            (MediaType::Video, false)
+        ]
+    );
+}
+
 /// A rendition that never comes holds the other back for the window, once:
 /// while the queued media spans less than the window it waits; past that the
 /// missing rendition is absent and nothing waits for it again.

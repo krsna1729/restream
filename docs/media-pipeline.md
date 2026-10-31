@@ -644,7 +644,10 @@ Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
   away. A panic ends only that session.
 - **Ordering.** A segment no playlist lists yet is held (`202`). Segments
   publish in `EXT-X-MEDIA-SEQUENCE` order. A gap is skipped after one target
-  duration once later segments are ready. A master playlist selects the
+  duration once later segments are ready. After a skipped segment (a gap, a
+  window slide or a missing init) or a segment that failed to demux, that
+  rendition's video waits for its next keyframe; audio passes. A master
+  playlist selects the
   highest-`BANDWIDTH` variant; other variants get `200` and are dropped.
 - **Separate audio.** When the variant names an `EXT-X-MEDIA` audio rendition
   (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first with a `URI`), that
@@ -1086,7 +1089,10 @@ The diagram shows one MoQ output from its ring to the relay.
   groups and roughly 1 s audio groups, with buffer duration zero. A rewind
   behind the closed-group live edge emits a discontinuity on both tracks
   and advances one shared offset; B-frame reordering within a GOP is kept.
-  A ring overrun resyncs the leaf. `max_age(0)` makes slow subscribers skip
+  A ring overrun resyncs the leaf at the latest retained keyframe, or at
+  the live edge with the feed skipping video interframes until the next
+  keyframe, so an open group never gets frames whose references were lost.
+  `max_age(0)` makes slow subscribers skip
   old groups; it does not free them. Every broadcast's byte budget follows
   twice its tracks' last complete groups (about two GOPs); moq-net always
   retains each live track's newest group.
@@ -1154,7 +1160,8 @@ promoted.
   (`VideoConfigFollower`). From then on packets forward directly.
 - **Failure.** Fabric errors are recorded as `pipeline_fabric_ensure`,
   `pipeline_fabric_dispatch` or `pipeline_fabric_leaf`. A feed overrun
-  resyncs in place.
+  resyncs in place at the latest retained keyframe, or at the live edge
+  with no video interframe forwarded before the next keyframe.
 
 ### Sink
 

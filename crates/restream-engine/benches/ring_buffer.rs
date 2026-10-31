@@ -570,6 +570,48 @@ fn benchmark_seal_and_forward(c: &mut Criterion) {
     group.finish();
 }
 
+/// Egress fabric feed read: `read_from_into` of 32 units from a fixed cursor
+/// 512 units behind the head of a full ring, for the packet feed (RTMP, MoQ,
+/// sink, pipeline leaves) and the TS feed (SRT leaves). Reads do not move
+/// the ring, so every iteration does the same work.
+fn benchmark_egress_feed_read(c: &mut Criterion) {
+    use restream_engine::egress::feed::{EgressFeed, FeedCursor, ReadBudget};
+    use restream_engine::egress::journal::{FeedEpoch, RingFeed, TsFeed};
+    use restream_engine::ts_chunk_ring::TsChunkRing;
+
+    const CAPACITY: usize = 4096;
+    let mut group = c.benchmark_group("egress_feed");
+    group.throughput(Throughput::Elements(32));
+    let budget = ReadBudget::new(32, 512 * 1024);
+    let cursor = FeedCursor::new(0, (CAPACITY - 512) as u64);
+
+    let ring = Arc::new(RingBuffer::new(CAPACITY));
+    for index in 0..CAPACITY {
+        let mut packet = make_packet(1316);
+        packet.is_keyframe = index % 30 == 0;
+        ring.push(packet);
+    }
+    let ring_feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
+    let mut packets = Vec::with_capacity(32);
+    group.bench_function("ring_feed_read_32", |b| {
+        b.iter(|| black_box(ring_feed.read_from_into(cursor, budget, &mut packets)))
+    });
+
+    let ts_ring = TsChunkRing::new(CAPACITY, tokio_util::sync::CancellationToken::new());
+    for index in 0..CAPACITY {
+        let mut packet = make_packet(1316);
+        packet.is_keyframe = index % 30 == 0;
+        ts_ring.ring.push(packet);
+    }
+    let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+    let mut chunks = Vec::with_capacity(32);
+    group.bench_function("ts_feed_read_32", |b| {
+        b.iter(|| black_box(ts_feed.read_from_into(cursor, budget, &mut chunks)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_push_batch_vs_push,
@@ -581,6 +623,7 @@ criterion_group!(
     benchmark_vec_loop_reuse,
     benchmark_burst_drain_alloc,
     benchmark_ts_chunk_burst_alloc,
+    benchmark_egress_feed_read,
     // Run concurrency bench last so 500 threads don't noise-up the pure benchmarks.
     benchmark_ring_buffer_concurrency,
 );

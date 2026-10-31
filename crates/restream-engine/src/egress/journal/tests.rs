@@ -518,8 +518,8 @@ fn wake_gate_coalesces_one_publication_per_shard() {
 fn ts_feed_reads_pushed_chunks() {
     let cancel = CancellationToken::new();
     let ts_ring = TsChunkRing::new(16, cancel);
-    ts_ring.push(Bytes::from_static(b"chunk1"), true);
-    ts_ring.push(Bytes::from_static(b"chunk2"), false);
+    ts_ring.push(Bytes::from_static(b"chunk1"), MediaType::Video, true);
+    ts_ring.push(Bytes::from_static(b"chunk2"), MediaType::Video, false);
 
     let epoch = Arc::new(FeedEpoch::new());
     let feed = TsFeed::new(&ts_ring, epoch);
@@ -551,7 +551,7 @@ fn ts_feed_empty_initially() {
 fn ts_feed_epoch_mismatch_on_advance() {
     let cancel = CancellationToken::new();
     let ts_ring = TsChunkRing::new(16, cancel);
-    ts_ring.push(Bytes::from_static(b"data"), false);
+    ts_ring.push(Bytes::from_static(b"data"), MediaType::Video, false);
     let epoch = Arc::new(FeedEpoch::new());
     epoch.advance();
     let feed = TsFeed::new(&ts_ring, epoch);
@@ -567,7 +567,7 @@ fn ts_feed_retention_snapshot_tracks_retained_bytes() {
     let cancel = CancellationToken::new();
     let ts_ring = TsChunkRing::new(4, cancel);
     for i in 0..6 {
-        ts_ring.push(Bytes::from(vec![i as u8; 2]), i == 4);
+        ts_ring.push(Bytes::from(vec![i as u8; 2]), MediaType::Video, i == 4);
     }
 
     let epoch = Arc::new(FeedEpoch::new());
@@ -587,7 +587,7 @@ fn ts_feed_reports_overrun_at_retention_boundary() {
     let cancel = CancellationToken::new();
     let ts_ring = TsChunkRing::new(4, cancel);
     for i in 0..6 {
-        ts_ring.push(Bytes::from(vec![i as u8]), i == 4);
+        ts_ring.push(Bytes::from(vec![i as u8]), MediaType::Video, i == 4);
     }
 
     let epoch = Arc::new(FeedEpoch::new());
@@ -605,7 +605,7 @@ fn ts_feed_finds_sync_points_without_registered_readers_after_wraparound() {
     let cancel = CancellationToken::new();
     let ts_ring = TsChunkRing::new(4, cancel);
     for i in 0..6 {
-        ts_ring.push(Bytes::from(vec![i as u8]), i == 4);
+        ts_ring.push(Bytes::from(vec![i as u8]), MediaType::Video, i == 4);
     }
 
     let epoch = Arc::new(FeedEpoch::new());
@@ -613,6 +613,266 @@ fn ts_feed_finds_sync_points_without_registered_readers_after_wraparound() {
     assert_eq!(feed.latest_sync_point(), Some(FeedCursor::new(0, 4)));
     assert_eq!(feed.sync_point_at_or_after(2), Some(FeedCursor::new(0, 4)));
     assert_eq!(feed.sync_point_at_or_after(5), None);
+}
+
+// -----------------------------------------------------------------------
+// Lapped slots and resynchronization (both feeds)
+// -----------------------------------------------------------------------
+
+/// A one-byte unit tagged `tag`.
+fn tagged(media_type: MediaType, tag: u8, is_keyframe: bool) -> MediaPacket {
+    MediaPacket {
+        media_type,
+        track_index: 0,
+        pts: i64::from(tag),
+        dts: i64::from(tag),
+        is_keyframe,
+        format: PayloadFormat::Raw,
+        payload: Bytes::copy_from_slice(&[tag]),
+    }
+}
+
+/// What a read returned: the tags of its units, or its kind.
+fn describe<U>(read: &FeedRead<U>, tags: impl IntoIterator<Item = u8>) -> String {
+    match read {
+        FeedRead::Units { .. } => format!("units {:?}", tags.into_iter().collect::<Vec<_>>()),
+        FeedRead::Empty => "empty".to_string(),
+        FeedRead::Overrun { .. } => "overrun".to_string(),
+        FeedRead::EpochMismatch { .. } => "epoch mismatch".to_string(),
+    }
+}
+
+/// The tags of the units a `read_from` returned.
+fn owned_tags<U>(read: &FeedRead<U>, tag: impl Fn(&U) -> u8) -> Vec<u8> {
+    match read {
+        FeedRead::Units { units, .. } => units.iter().map(tag).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Every tag `feed` delivers from `cursor` to its head, read through both
+/// `read_from` and `read_from_into` (which must agree).
+fn drain_tags<F: EgressFeed>(
+    feed: &F,
+    mut cursor: FeedCursor,
+    tag: impl Fn(&F::Unit) -> u8 + Copy,
+) -> Vec<u8> {
+    let mut tags = Vec::new();
+    let mut units = Vec::new();
+    while cursor.next_sequence < feed.head_sequence() {
+        let owned = feed.read_from(cursor, ReadBudget::default());
+        let FeedRead::Units {
+            units: owned_units,
+            next_cursor: owned_cursor,
+        } = owned
+        else {
+            panic!("read_from: expected units, got {}", describe(&owned, []));
+        };
+        let read = feed.read_from_into(cursor, ReadBudget::default(), &mut units);
+        let FeedRead::Units { next_cursor, .. } = read else {
+            panic!(
+                "read_from_into: expected units, got {}",
+                describe(&read, [])
+            );
+        };
+        let batch: Vec<u8> = units.iter().map(tag).collect();
+        assert_eq!(owned_units.iter().map(tag).collect::<Vec<_>>(), batch);
+        assert_eq!(owned_cursor, next_cursor);
+        assert!(
+            next_cursor.next_sequence > cursor.next_sequence,
+            "a read advances"
+        );
+        tags.extend(batch);
+        cursor = next_cursor;
+    }
+    tags
+}
+
+/// A batch writes its slots before it stores the write index. A cursor the
+/// write index still calls retained, whose slot the unfinished batch
+/// already overwrote, is an overrun: neither feed returns the next lap's
+/// unit in its place.
+#[test]
+fn a_lapped_slot_is_an_overrun_not_a_newer_unit() {
+    let ring = Arc::new(RingBuffer::new(4));
+    for tag in 0..12 {
+        ring.push(tagged(MediaType::Video, tag, tag == 0));
+    }
+    let ring_feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let ts_ring = TsChunkRing {
+        ring: ring.clone(),
+        cancel: CancellationToken::new(),
+    };
+    let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+    let cursor = FeedCursor::new(0, 9);
+    let mut reads = Vec::new();
+    let mut next = 12;
+    ring.push_batch(std::iter::from_fn(|| {
+        // 12, 13 and 14 are in their slots (13 over 9's, 14 over 10's) and
+        // the write index is still 12.
+        if next == 15 {
+            assert_eq!(ring.get_write_idx(), 12);
+            let mut packets = Vec::new();
+            let read = ring_feed.read_from_into(cursor, ReadBudget::default(), &mut packets);
+            reads.push(describe(
+                &read,
+                packets.iter().map(|packet| packet.payload[0]),
+            ));
+            let read = ring_feed.read_from(cursor, ReadBudget::default());
+            reads.push(describe(
+                &read,
+                owned_tags(&read, |packet| packet.payload[0]),
+            ));
+            let mut chunks = Vec::new();
+            let read = ts_feed.read_from_into(cursor, ReadBudget::default(), &mut chunks);
+            reads.push(describe(&read, chunks.iter().map(|chunk| chunk[0])));
+            let read = ts_feed.read_from(cursor, ReadBudget::default());
+            reads.push(describe(&read, owned_tags(&read, |chunk| chunk[0])));
+            return None;
+        }
+        next += 1;
+        Some(tagged(MediaType::Video, next - 1, false))
+    }));
+
+    assert_eq!(
+        reads,
+        vec!["overrun"; 4],
+        "every read of a lapped slot overruns"
+    );
+}
+
+/// After a resync that found no retained keyframe the cursor sits at the
+/// live edge; the interframes that follow reference frames the leaf never
+/// sent. Both feeds skip video until the next keyframe and let audio pass.
+#[test]
+fn a_resync_without_a_retained_keyframe_suppresses_interframes() {
+    let after_gap = [
+        (MediaType::Video, 10, false),
+        (MediaType::Audio, 11, false),
+        (MediaType::Video, 12, true),
+        (MediaType::Video, 13, false),
+    ];
+
+    let ring = Arc::new(RingBuffer::new(4));
+    let ring_feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    for tag in 0..10 {
+        ring.push(tagged(MediaType::Video, tag, tag == 0));
+    }
+    let cursor = crate::egress::visit::live_start_cursor(&ring_feed);
+    assert_eq!(cursor.next_sequence, 10, "no keyframe retained: live edge");
+    for (media_type, tag, is_keyframe) in after_gap {
+        ring.push(tagged(media_type, tag, is_keyframe));
+    }
+    assert_eq!(
+        drain_tags(&ring_feed, cursor, |packet| packet.payload[0]),
+        [11, 12, 13]
+    );
+
+    let ts_ring = TsChunkRing::new(4, CancellationToken::new());
+    let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+    ts_ring.push_batch((0..10).map(|tag| (Bytes::from(vec![tag]), MediaType::Video, tag == 0)));
+    let cursor = crate::egress::visit::live_start_cursor(&ts_feed);
+    assert_eq!(cursor.next_sequence, 10, "no keyframe retained: live edge");
+    ts_ring.push_batch(
+        after_gap.into_iter().map(|(media_type, tag, is_keyframe)| {
+            (Bytes::from(vec![tag]), media_type, is_keyframe)
+        }),
+    );
+    assert_eq!(drain_tags(&ts_feed, cursor, |chunk| chunk[0]), [11, 12, 13]);
+}
+
+/// The model of a read from `start`: every unit, except the video
+/// interframes before the first video keyframe while the cursor awaits one.
+fn keyframe_wait_model(units: &[(MediaType, bool)], start: usize, mut awaiting: bool) -> Vec<u8> {
+    (start..units.len())
+        .filter(|&sequence| {
+            let (media_type, is_keyframe) = units[sequence];
+            if awaiting && media_type == MediaType::Video {
+                if !is_keyframe {
+                    return false;
+                }
+                awaiting = false;
+            }
+            true
+        })
+        .map(|sequence| sequence as u8)
+        .collect()
+}
+
+/// Every tag `feed` delivers from `cursor` to its head, reading with the
+/// unit budgets in turn; each read must be one contiguous run ending at the
+/// cursor it returns (consumers index units by sequence from it).
+fn drain_runs<F: EgressFeed>(
+    feed: &F,
+    mut cursor: FeedCursor,
+    budgets: &[usize],
+    tag: impl Fn(&F::Unit) -> u8,
+) -> Vec<u8> {
+    let mut tags = Vec::new();
+    let mut units = Vec::new();
+    for &max_units in budgets.iter().cycle() {
+        let read = feed.read_from_into(cursor, ReadBudget::new(max_units, usize::MAX), &mut units);
+        let FeedRead::Units { next_cursor, .. } = read else {
+            assert!(matches!(read, FeedRead::Empty), "{}", describe(&read, []));
+            return tags;
+        };
+        assert!(units.len() <= max_units, "the budget bounds a read");
+        let end = next_cursor.next_sequence;
+        let run: Vec<u8> = units.iter().map(&tag).collect();
+        let contiguous: Vec<u8> = (end - run.len() as u64..end).map(|s| s as u8).collect();
+        assert_eq!(
+            run, contiguous,
+            "a read is a contiguous run ending at its cursor"
+        );
+        tags.extend(run);
+        cursor = next_cursor;
+    }
+    unreachable!("budgets is not empty")
+}
+
+proptest::proptest! {
+    /// Any media, start and budgets: both feeds deliver exactly the model's
+    /// units, in contiguous runs.
+    #[test]
+    fn feed_reads_follow_the_keyframe_wait_model(
+        units in proptest::collection::vec(
+            (
+                proptest::prop_oneof![
+                    proptest::strategy::Just(MediaType::Video),
+                    proptest::strategy::Just(MediaType::Audio),
+                ],
+                proptest::bool::ANY,
+            ),
+            0..200,
+        ),
+        start in 0usize..200,
+        awaiting in proptest::bool::ANY,
+        budgets in proptest::collection::vec(1usize..8, 1..8),
+    ) {
+        let start = start.min(units.len());
+        let ring = Arc::new(RingBuffer::new(256));
+        for (tag, &(media_type, is_keyframe)) in units.iter().enumerate() {
+            ring.push(tagged(media_type, tag as u8, is_keyframe));
+        }
+        let ring_feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+        let ts_ring = TsChunkRing {
+            ring,
+            cancel: CancellationToken::new(),
+        };
+        let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+        let cursor = if awaiting {
+            FeedCursor::awaiting_keyframe_at(0, start as u64)
+        } else {
+            FeedCursor::new(0, start as u64)
+        };
+
+        let expected = keyframe_wait_model(&units, start, awaiting);
+        proptest::prop_assert_eq!(
+            drain_runs(&ring_feed, cursor, &budgets, |packet| packet.payload[0]),
+            expected.clone()
+        );
+        proptest::prop_assert_eq!(drain_runs(&ts_feed, cursor, &budgets, |chunk| chunk[0]), expected);
+    }
 }
 
 // -----------------------------------------------------------------------

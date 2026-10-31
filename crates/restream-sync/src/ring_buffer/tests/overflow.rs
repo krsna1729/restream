@@ -4,13 +4,7 @@ use super::*;
 fn overflow_triggers_fast_forward_to_keyframe() {
     let rb = Arc::new(RingBuffer::new(8));
 
-    let info = Arc::new(ReaderInfo::new("test_overflow".to_string(), 0));
-    let mut reader = Reader {
-        buffer: rb.clone(),
-        info,
-        read_idx: 0,
-        migration_preroll_packets: 0,
-    };
+    let mut reader = Reader::new_live("test_overflow".to_string(), rb.clone());
 
     // Push 20 packets with a keyframe at index 15
     for i in 0..20 {
@@ -168,6 +162,181 @@ fn fault_injection_rapid_overflow_recovery() {
 
     let pkt = reader.pull().unwrap().unwrap();
     assert!(pkt.pts >= 1000);
+}
+
+/// A batch writes its slots before it stores the write index, so while it
+/// is unfinished a reader whose lag is still "retained" by the write index
+/// can find the next lap's packet in its slot. The reader reports an
+/// overflow; it never returns a packet in place of the one it asked for.
+#[test]
+fn a_reader_never_returns_a_packet_an_unfinished_batch_overwrote() {
+    let ring = Arc::new(RingBuffer::new(4));
+    for sequence in 0..12 {
+        ring.push(video_packet(sequence, sequence, sequence == 0));
+    }
+    let mut reader = Reader::new_live("lapped".to_string(), ring.clone());
+    reader.sync_read_idx(9);
+    let mut pulled = None;
+    let mut next = 12;
+    ring.push_batch(std::iter::from_fn(|| {
+        // 12, 13 and 14 are in their slots (13 over 9's, 14 over 10's) and
+        // the write index is still 12.
+        if next == 15 {
+            assert_eq!(ring.get_write_idx(), 12);
+            let mut out = Vec::new();
+            let result = reader.pull_burst(&mut out, 32);
+            pulled = Some((result, out));
+            return None;
+        }
+        next += 1;
+        Some(video_packet(next - 1, next - 1, false))
+    }));
+
+    let (result, out) = pulled.expect("pulled mid-batch");
+    let returned: Vec<i64> = out.iter().map(|packet| packet.pts).collect();
+    assert!(
+        result.is_err(),
+        "lapped slots are an overflow: {returned:?}"
+    );
+    assert!(
+        returned.is_empty(),
+        "no packet of another lap: {returned:?}"
+    );
+    assert_eq!(reader.info.overflow_count.load(Ordering::Relaxed), 1);
+}
+
+/// After an overflow with no keyframe left in the window the reader resumes
+/// at the live edge. The interframes that follow reference frames it never
+/// delivered: it skips video until the next keyframe, and audio passes.
+#[test]
+fn an_overflow_without_a_retained_keyframe_skips_interframes_until_the_next_keyframe() {
+    let ring = Arc::new(RingBuffer::new(8));
+    let mut reader = Reader::new_live("resync".to_string(), ring.clone());
+    for sequence in 0..10 {
+        ring.push(video_packet(sequence, sequence, sequence == 0));
+    }
+    let mut out = Vec::new();
+    assert!(reader.pull_burst(&mut out, 32).is_err(), "overflow");
+
+    ring.push(video_packet(10, 10, false));
+    ring.push(audio_packet(11, 11));
+    ring.push(video_packet(12, 12, true));
+    ring.push(video_packet(13, 13, false));
+    let mut delivered = Vec::new();
+    while reader.lag() > 0 {
+        out.clear();
+        reader
+            .pull_burst(&mut out, 32)
+            .expect("no further overflow");
+        delivered.extend(out.iter().map(|packet| (packet.media_type, packet.pts)));
+    }
+
+    assert_eq!(
+        delivered,
+        [
+            (MediaType::Audio, 11),
+            (MediaType::Video, 12),
+            (MediaType::Video, 13)
+        ]
+    );
+}
+
+/// `pull` follows the same rule as `pull_burst` after an overflow.
+#[test]
+fn pull_after_an_overflow_without_a_retained_keyframe_starts_at_the_next_keyframe() {
+    let ring = Arc::new(RingBuffer::new(4));
+    let mut reader = Reader::new_live("resync-pull".to_string(), ring.clone());
+    for sequence in 0..10 {
+        ring.push(video_packet(sequence, sequence, sequence == 0));
+    }
+    assert!(reader.pull().is_err(), "overflow");
+
+    ring.push(video_packet(10, 10, false));
+    ring.push(video_packet(11, 11, true));
+
+    assert_eq!(reader.pull().unwrap().map(|packet| packet.pts), Some(11));
+}
+
+/// The packets a reader must deliver from `start` after an overflow: every
+/// one except the video interframes before the first video keyframe.
+fn keyframe_wait_model(units: &[(bool, bool)], start: usize) -> Vec<usize> {
+    let mut awaiting = true;
+    (start..units.len())
+        .filter(|&sequence| {
+            let (video, keyframe) = units[sequence];
+            if awaiting && video {
+                if !keyframe {
+                    return false;
+                }
+                awaiting = false;
+            }
+            true
+        })
+        .collect()
+}
+
+proptest::proptest! {
+    /// Any media after an overflow, published in any chunks and read with
+    /// `pull` or `pull_burst` at any budget: the reader delivers exactly the
+    /// model's packets, each burst a contiguous run ending at
+    /// `next_sequence`.
+    #[test]
+    fn reads_after_an_overflow_follow_the_keyframe_wait_model(
+        units in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY), 20..120),
+        chunk in 1usize..8,
+        budget in 1usize..8,
+        use_pull in proptest::bool::ANY,
+    ) {
+        // (video, keyframe) per sequence; pts is the sequence.
+        let packet = |sequence: usize| {
+            let (video, keyframe) = units[sequence];
+            let pts = sequence as i64;
+            if video {
+                video_packet(pts, pts, keyframe)
+            } else {
+                audio_packet(pts, pts)
+            }
+        };
+        let ring = Arc::new(RingBuffer::new(16));
+        let mut reader = Reader::new_live("model".to_string(), ring.clone());
+        // The first 20 packets lap the reader in a 16-slot ring.
+        for sequence in 0..20 {
+            ring.push(packet(sequence));
+        }
+        let mut out = Vec::new();
+        proptest::prop_assert!(reader.pull_burst(&mut out, budget).is_err());
+        let start = reader.next_sequence();
+
+        let mut delivered = Vec::new();
+        let mut published = 20;
+        loop {
+            while reader.lag() > 0 {
+                if use_pull {
+                    if let Some(packet) = reader.pull().expect("no further overflow") {
+                        proptest::prop_assert_eq!(packet.pts as usize, reader.next_sequence() - 1);
+                        delivered.push(packet.pts as usize);
+                    }
+                } else {
+                    out.clear();
+                    reader.pull_burst(&mut out, budget).expect("no further overflow");
+                    proptest::prop_assert!(out.len() <= budget);
+                    let end = reader.next_sequence();
+                    let run: Vec<usize> = out.iter().map(|packet| packet.pts as usize).collect();
+                    proptest::prop_assert_eq!(&run, &(end - run.len()..end).collect::<Vec<_>>());
+                    delivered.extend(run);
+                }
+            }
+            if published == units.len() {
+                break;
+            }
+            let next = (published + chunk).min(units.len());
+            for sequence in published..next {
+                ring.push(packet(sequence));
+            }
+            published = next;
+        }
+        proptest::prop_assert_eq!(delivered, keyframe_wait_model(&units, start));
+    }
 }
 
 #[test]

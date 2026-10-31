@@ -3,6 +3,7 @@ use moq_net::track;
 
 use super::*;
 use crate::egress::journal::FeedEpoch;
+use crate::egress::visit::live_start_cursor;
 use crate::moq::egress::startup::{MoqPublishStartup, MoqVideoStartup};
 use crate::moq::transport::{self, test_support::run};
 use restream_core::PayloadFormat;
@@ -428,7 +429,69 @@ fn a_cursor_the_ring_overwrote_is_an_overrun_and_live_start_is_a_keyframe() {
             cursor.next_sequence, 0,
             "an overrun leaves the cursor for the caller"
         );
-        assert_eq!(live_start(&feed).next_sequence, 7);
+        assert_eq!(live_start_cursor(&feed).next_sequence, 7);
+    });
+}
+
+/// An overrun with no keyframe left in the window resumes at the live edge.
+/// No interframe after the gap enters the GOP that is still open; the next
+/// group starts at the next keyframe.
+#[test]
+fn a_resync_without_a_retained_keyframe_writes_no_interframe_into_the_open_group() {
+    run(async {
+        let (_origin, broadcast) = broadcast("b", true, false);
+        let startup = MoqPublishStartup {
+            video: Some(MoqVideoStartup {
+                codec: VideoCodec::H264,
+                config: None,
+            }),
+            ..MoqPublishStartup::default()
+        };
+        let mut video = subscribe(&broadcast, VIDEO_TRACK).await;
+        let mut publisher = RingPublisher::new(MediaConverter::new(&startup), broadcast);
+        let ring = Arc::new(RingBuffer::new(8));
+        let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+        let mut cursor = FeedCursor::new(feed.epoch(), 0);
+        let budget = ReadBudget::new(16, 1 << 20);
+        let idr = || vec![0x17, 1, 0, 0, 0, 0, 0, 0, 2, 0x65, 0x88];
+        let delta = || vec![0x27, 1, 0, 0, 0, 0, 0, 0, 1, 0x41];
+
+        let header = build_avcc_sequence_header(PARAMETER_SETS).unwrap();
+        ring.push(flv(false, 0, header.to_vec()));
+        ring.push(flv(true, 40, idr()));
+        ring.push(flv(false, 80, delta()));
+        assert!(matches!(
+            publisher.pump(&feed, &mut cursor, budget),
+            Pump::Sent { units: 3, .. }
+        ));
+        let mut gop = video.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut gop, 2).await, [40_000, 80_000]);
+
+        // The publisher falls a whole window behind: the keyframe is gone.
+        for index in 3..15 {
+            ring.push(flv(false, index * 40, delta()));
+        }
+        assert_eq!(publisher.pump(&feed, &mut cursor, budget), Pump::Overrun);
+        cursor = live_start_cursor(&feed);
+
+        ring.push(flv(false, 600, delta()));
+        ring.push(flv(true, 640, idr()));
+        ring.push(flv(false, 680, delta()));
+        loop {
+            match publisher.pump(&feed, &mut cursor, budget) {
+                Pump::Empty => break,
+                Pump::Sent { .. } => {}
+                other => panic!("pump after the resync: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            marker(&mut gop).await,
+            640_000,
+            "the open GOP ends at the next keyframe with no frame after the gap"
+        );
+        let mut next = video.recv_group().await.unwrap().unwrap();
+        assert_eq!(read(&mut next, 2).await, [640_000, 680_000]);
     });
 }
 

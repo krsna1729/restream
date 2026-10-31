@@ -130,10 +130,12 @@ pub(crate) fn start_shared_ts_muxer(
             );
             let mut video_conv_buf = Vec::<u8>::new();
             let mut audio_conv_buf = Vec::<u8>::new();
-            // `chunk_ends` records (byte_offset_end, is_keyframe) for each muxed chunk so
-            // we can slice a single frozen `Bytes` into per-chunk `Bytes` after the inner loop.
-            // This converts N malloc+memcpy calls (one per chunk) to 1 malloc per burst.
-            let mut chunk_ends: Vec<(usize, bool)> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+            // `chunk_ends` records (byte_offset_end, media type, is_keyframe) for each muxed
+            // chunk so we can slice a single frozen `Bytes` into per-chunk `Bytes` after the
+            // inner loop. This converts N malloc+memcpy calls (one per chunk) to 1 malloc per
+            // burst.
+            let mut chunk_ends: Vec<(usize, MediaType, bool)> =
+                Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
             let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
             loop {
@@ -228,7 +230,11 @@ pub(crate) fn start_shared_ts_muxer(
                                         &mut ts_accum,
                                     );
                                     if ts_accum.len() > before {
-                                        chunk_ends.push((ts_accum.len(), pkt.is_keyframe));
+                                        chunk_ends.push((
+                                            ts_accum.len(),
+                                            pkt.media_type,
+                                            pkt.is_keyframe,
+                                        ));
                                     }
                                 }
                                 if !chunk_ends.is_empty() {
@@ -238,10 +244,10 @@ pub(crate) fn start_shared_ts_muxer(
                                     let frozen = bytes::Bytes::from(ts_accum);
                                     let mut prev = 0usize;
                                     ts_ring_clone.push_batch(chunk_ends.drain(..).map(
-                                        move |(end, is_kf)| {
+                                        move |(end, media_type, is_kf)| {
                                             let chunk = frozen.slice(prev..end);
                                             prev = end;
-                                            (chunk, is_kf)
+                                            (chunk, media_type, is_kf)
                                         },
                                     ));
                                 }

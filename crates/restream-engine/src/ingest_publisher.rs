@@ -255,6 +255,10 @@ struct Rendition {
     /// It had nothing queued when the others' wait for it ran out: they no
     /// longer wait for it until it delivers again.
     absent: bool,
+    /// Media before this point was lost (a dropped or skipped segment): its
+    /// video interframes are dropped until the next video keyframe, since
+    /// they may reference frames that never arrived. Audio passes.
+    awaiting_keyframe: bool,
 }
 
 impl Rendition {
@@ -266,6 +270,7 @@ impl Rendition {
             queue: VecDeque::new(),
             continuous: ContinuousTimestampState::joining(),
             absent: false,
+            awaiting_keyframe: false,
         }
     }
 }
@@ -437,6 +442,7 @@ impl SegmentPublisher {
     /// The current object could not be demuxed. The segment is dropped:
     /// what it had demuxed but not yet published is discarded, and the
     /// timeline is re-anchored for the next segment, like a discontinuity.
+    /// The next segment's video waits for a keyframe ([`Self::after_gap`]).
     pub fn discard_failed_object(&mut self) {
         self.demux().discard_object();
         self.packets.clear();
@@ -444,6 +450,16 @@ impl SegmentPublisher {
         // break that was already marked stays pending (`Clock` never
         // downgrades it), and otherwise a nearby rendition lends its offset.
         self.continuity(self.current).mark_clock_discontinuity();
+        self.after_gap();
+    }
+
+    /// Media of the current rendition was lost before the next object (a
+    /// dropped or skipped segment): drop its video interframes until the
+    /// next video keyframe.
+    pub fn after_gap(&mut self) {
+        if let Some(rendition) = self.renditions.get_mut(self.current) {
+            rendition.awaiting_keyframe = true;
+        }
     }
 
     /// The next bytes start an unrelated stream. `kind` says whether the
@@ -574,6 +590,22 @@ impl SegmentPublisher {
         };
         if rendition.demux.drain_into(&mut self.packets) == 0 {
             return;
+        }
+        if rendition.awaiting_keyframe {
+            // Before continuity: a dropped packet must not become its
+            // stream's last timestamp.
+            let mut awaiting = true;
+            self.packets.retain(|packet| {
+                if !awaiting {
+                    return true;
+                }
+                if packet.is_video_interframe() {
+                    return false;
+                }
+                awaiting = !packet.is_video_keyframe();
+                true
+            });
+            rendition.awaiting_keyframe = awaiting;
         }
         let merged = self.renditions.len() > 1 || self.expected > 1;
         if !merged {
