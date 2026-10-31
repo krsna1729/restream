@@ -957,5 +957,4 @@ pub(super) async fn transmit_worker(
 }
 
 #[cfg(test)]
-#[path = "stream_tests.rs"]
-mod staging_tests;
+mod tests;

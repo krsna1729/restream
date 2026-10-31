@@ -16,10 +16,6 @@ use crate::egress::shard::{
 use crate::egress::sizing::{Saturated, ServiceSample, ShardSizer};
 use restream_sync::{PublishSubscribers, PublishWake, RingBuffer};
 
-#[cfg(test)]
-#[path = "runtime_sizing_tests.rs"]
-mod sizing_tests;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EgressFabricRuntimeError {
     ShardCountMismatch { expected: usize, actual: usize },
@@ -483,5 +479,4 @@ pub(crate) fn subscribe_fabric_wakes(
 }
 
 #[cfg(test)]
-#[path = "runtime_tests.rs"]
 mod tests;

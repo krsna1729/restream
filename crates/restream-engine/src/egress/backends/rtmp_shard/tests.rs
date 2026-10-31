@@ -895,19 +895,13 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     );
 }
 
-#[path = "rtmp_shard_backpressure_tests.rs"]
-mod backpressure_tests;
+mod backpressure;
 
-#[path = "rtmp_shard_drain_tests.rs"]
-mod drain_tests;
-#[path = "rtmp_shard_media_tick_tests.rs"]
-mod media_tick_tests;
-#[path = "rtmp_shard_panic_tests.rs"]
-mod panic_tests;
-#[path = "rtmp_shard_reregistration_tests.rs"]
-mod reregistration_tests;
-#[path = "rtmp_shard_wake_tests.rs"]
-mod wake_tests;
+mod drain;
+mod media_tick;
+mod panic;
+mod reregistration;
+mod wake;
 
 #[test]
 fn shard_work_queues_have_a_hard_leaf_bound() {

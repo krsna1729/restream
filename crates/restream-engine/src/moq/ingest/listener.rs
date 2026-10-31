@@ -310,5 +310,4 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
 }
 
 #[cfg(test)]
-#[path = "listener_tests.rs"]
 mod tests;

@@ -615,5 +615,4 @@ fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPol
 }
 
 #[cfg(test)]
-#[path = "poller_tests.rs"]
 mod tests;

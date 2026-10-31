@@ -449,5 +449,4 @@ fn take_up_to(bytes: &[u8], limit: u64) -> usize {
 }
 
 #[cfg(test)]
-#[path = "http1_tests.rs"]
 mod tests;

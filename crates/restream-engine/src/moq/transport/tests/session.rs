@@ -9,9 +9,9 @@ use moq_net::{Client, Hop, Server, Timestamp};
 use web_transport_trait::Error as _;
 use web_transport_trait::poll::{SendStream as _, Session as _};
 
-use super::session::MoqRecvStream;
-use super::test_support::{Loopback, loopback_client_tls, run};
-use super::*;
+use super::super::session::MoqRecvStream;
+use super::super::test_support::{Loopback, loopback_client_tls, run};
+use super::super::*;
 
 fn origin(hop: u64) -> moq_net::origin::Producer {
     let (producer, driver) =

@@ -259,5 +259,4 @@ fn resolve_request_from_output_spec(
 }
 
 #[cfg(test)]
-#[path = "rtmp_shard_resolve_runtime_tests.rs"]
 mod tests;

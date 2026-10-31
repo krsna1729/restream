@@ -1,5 +1,5 @@
 //! A shard-wide panic in the real RTMP backend, end to end: split out of
-//! `rtmp_shard_tests.rs` to stay under the source-audit line cap.
+//! `rtmp_shard/tests.rs` to stay under the source-audit line cap.
 
 use super::*;
 

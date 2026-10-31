@@ -386,5 +386,4 @@ impl<C: MoqConnector> EgressShardBackend for MoqShardBackend<C> {
 }
 
 #[cfg(test)]
-#[path = "backend_tests.rs"]
 mod tests;

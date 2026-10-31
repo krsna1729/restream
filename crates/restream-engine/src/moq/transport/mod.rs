@@ -231,8 +231,4 @@ fn handshake_timeout() -> TransportError {
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
-mod session_tests;
-#[cfg(test)]
-#[path = "webtransport_tests.rs"]
-mod webtransport_tests;
+mod tests;

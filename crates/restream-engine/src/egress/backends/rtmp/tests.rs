@@ -937,5 +937,4 @@ fn engine_detects_peer_close_during_steady_state_publishing() {
     }
 }
 
-#[path = "rtmp_config_tests.rs"]
 mod config;

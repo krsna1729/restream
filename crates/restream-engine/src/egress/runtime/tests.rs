@@ -1,3 +1,5 @@
+mod sizing;
+
 use super::*;
 use crate::egress::feed::EgressFeed;
 use std::num::NonZeroU32;

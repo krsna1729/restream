@@ -53,7 +53,7 @@ pub mod visit;
 #[allow(clippy::disallowed_methods)]
 pub mod test_driver;
 #[cfg(test)]
-mod visit_tests;
+mod tests;
 
 // Re-export the stable public surface for this phase.
 pub use backend::{

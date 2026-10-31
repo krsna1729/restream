@@ -175,5 +175,4 @@ impl PublisherMedia {
 }
 
 #[cfg(test)]
-#[path = "publisher_tests.rs"]
 mod tests;
