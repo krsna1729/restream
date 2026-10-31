@@ -552,7 +552,7 @@ failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
 (`cargo xtask fetch mediamtx`, `MOQ_INTEROP_MEDIAMTX_BIN`).
 It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
 LOC/MSF dialect mismatches are source/spec-evidenced in
-[Q-097](backlog.md#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
+[Q-097](backlog.md#q-097-mediamtx-moq-dialect-interoperability).
 Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
 MediaMTX-specific profile.
 

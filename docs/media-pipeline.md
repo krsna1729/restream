@@ -1047,8 +1047,8 @@ the root transport and session owners.
 
 A `moqt://` output publishes the pipeline to a moq-lite or IETF relay over
 native QUIC. The pinned IETF interop peer is moq-relay 0.17.7 on `moqt-19`;
-MediaMTX's incompatible dialect is tracked separately in
-[Q-097](backlog.md#q-097-protocol-opus-align-mediamtx-moq-dialect-with-ietf-interop).
+MediaMTX's incompatible dialect is not planned
+([Q-097](backlog.md#q-097-mediamtx-moq-dialect-interoperability)).
 
 ```mermaid
 flowchart LR
