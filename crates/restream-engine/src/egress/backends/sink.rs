@@ -9,6 +9,7 @@ use crate::egress::backend::{
 use crate::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::egress::journal::{FeedEpoch, RingFeed};
 use crate::egress::policy::WorkBudget;
+use crate::egress::visit::live_start_cursor;
 use crate::engine::{EgressRegistration, MediaEngine};
 use bytes::Bytes;
 use restream_core::MediaPacket;
@@ -187,13 +188,7 @@ async fn drive_sink_until_blocked(
                 }
             }
             EngineProgress::Progress { .. } | EngineProgress::Needs(_) => break,
-            EngineProgress::FeedOverrun => {
-                if let Some(sync_cursor) = feed.latest_sync_point() {
-                    *cursor = sync_cursor;
-                } else {
-                    *cursor = FeedCursor::new(feed.epoch(), feed.head_sequence());
-                }
-            }
+            EngineProgress::FeedOverrun => *cursor = live_start_cursor(feed),
             EngineProgress::PeerClosed | EngineProgress::Failed(_) => break,
             EngineProgress::HandshakeComplete | EngineProgress::Yield => break,
         }

@@ -492,13 +492,16 @@ impl MediaPublisher {
             if self.pending_units_index >= self.pending_units.len() {
                 self.pending_units.clear();
                 self.pending_units_index = 0;
-                self.pending_units_start = cursor.next_sequence;
                 match feed.read_from_into(
                     *cursor,
                     ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
                     &mut self.pending_units,
                 ) {
-                    FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
+                    FeedRead::Units { next_cursor, .. } => {
+                        self.pending_units_start =
+                            next_cursor.next_sequence - self.pending_units.len() as u64;
+                        *cursor = next_cursor;
+                    }
                     FeedRead::Empty => {
                         return Self::finish(
                             budget.spent_bytes(),

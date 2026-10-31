@@ -239,7 +239,7 @@ fn resync_falls_back_to_the_live_edge_without_a_sync_point() {
     assert!(matches!(result, EngineVisitResult::Visited(_)));
     assert_eq!(
         common.cursor,
-        FeedCursor::new(feed.epoch(), feed.head_sequence())
+        FeedCursor::awaiting_keyframe_at(feed.epoch(), feed.head_sequence())
     );
     assert_ne!(common.cursor.next_sequence, feed.oldest_sequence());
 }
@@ -373,7 +373,7 @@ fn first_visit_primes_to_the_live_edge_without_a_sync_point() {
     .run();
 
     assert!(matches!(result, EngineVisitResult::Visited(_)));
-    assert_eq!(common.cursor, FeedCursor::new(0, 40));
+    assert_eq!(common.cursor, FeedCursor::awaiting_keyframe_at(0, 40));
     assert_ne!(common.cursor.next_sequence, feed.oldest_sequence());
 }
 
@@ -609,6 +609,11 @@ proptest! {
             cursor.next_sequence >= oldest && cursor.next_sequence <= head,
             "cursor {} must lie within the retained window [{}, {}]",
             cursor.next_sequence, oldest, head,
+        );
+        prop_assert_eq!(
+            cursor.awaiting_keyframe,
+            sync.is_none(),
+            "only the live-edge fallback waits for a keyframe"
         );
 
         match sync {

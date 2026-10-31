@@ -103,10 +103,10 @@ purpose:
 
 | Structure | Under pressure |
 |---|---|
-| `RingBuffer` reader | Falls behind, then recovers at a recent keyframe |
+| `RingBuffer` reader | Falls behind, then recovers at the latest retained keyframe; with none retained it resumes at the live edge and skips video interframes until the next keyframe (audio passes). A slot the producer already lapped is an overflow, never a newer packet |
 | `StandbyGopCache` | Keeps one GOP; clears it entirely past 16 MiB or 2048 packets (defaults) |
-| `TsChunkRing` reader | Detects overwrite and advances to a container boundary |
-| Egress leaf cursor | Overrun resynchronizes at the latest sync point; the feed never grows |
+| `TsChunkRing` reader | Detects overwrite (the slot's sequence tag, not just the write index) and advances to the latest video-keyframe chunk |
+| Egress leaf cursor | Overrun resynchronizes at the latest sync point; with none retained, at the live edge with the cursor awaiting a keyframe (the feed skips video interframes until one). The feed never grows |
 | Recording `MemoryQueue` | Async producer waits for space; blocking file reader waits for data; closure wakes both sides. Capacity is a soft limit and one write/batch can overshoot it |
 | Connection and child-process admission | Rejects or defers new work |
 

@@ -385,7 +385,8 @@ impl RingPublisher {
     }
 
     /// Read up to `budget` units at `cursor` and publish them; `cursor`
-    /// advances past every unit read.
+    /// advances past every unit read (and every interframe a cursor awaiting
+    /// a keyframe skipped).
     pub(crate) fn pump(
         &mut self,
         feed: &RingFeed,
@@ -404,7 +405,7 @@ impl RingPublisher {
                 return Pump::Overrun;
             }
         };
-        let first = cursor.next_sequence;
+        let first = next_cursor.next_sequence - units.len() as u64;
         let mut outcome = Pump::Sent {
             bytes: 0,
             units: units.len(),
@@ -477,14 +478,6 @@ impl RingPublisher {
         }
         Ok(bytes)
     }
-}
-
-/// Where a reader of `feed` starts: its latest sync point, else the live
-/// edge (the egress fabric's own rule).
-pub(crate) fn live_start(feed: &RingFeed) -> FeedCursor {
-    let edge = feed.head_sequence();
-    feed.latest_sync_point()
-        .unwrap_or_else(|| FeedCursor::new(feed.epoch(), edge))
 }
 
 #[cfg(test)]

@@ -24,6 +24,11 @@ pub struct FeedCursor {
     pub epoch: u64,
     /// The sequence number the leaf will read *next*.
     pub next_sequence: u64,
+    /// Set by a resynchronization that found no retained sync point and
+    /// resumed at the live edge: until the next video keyframe, reads skip
+    /// video interframes (they reference frames the leaf never read). Audio
+    /// passes. The read that reaches a keyframe returns a cursor without it.
+    pub awaiting_keyframe: bool,
 }
 
 impl FeedCursor {
@@ -31,6 +36,16 @@ impl FeedCursor {
         Self {
             epoch,
             next_sequence,
+            awaiting_keyframe: false,
+        }
+    }
+
+    /// A cursor at `next_sequence` that skips video interframes until the
+    /// next video keyframe.
+    pub fn awaiting_keyframe_at(epoch: u64, next_sequence: u64) -> Self {
+        Self {
+            awaiting_keyframe: true,
+            ..Self::new(epoch, next_sequence)
         }
     }
 
@@ -78,7 +93,11 @@ impl Default for ReadBudget {
 /// Result of one `EgressFeed::read_from` call.
 #[derive(Debug)]
 pub enum FeedRead<U> {
-    /// One or more units were available and returned.
+    /// The cursor advanced over a contiguous run of sequences ending just
+    /// before `next_cursor`; `units` are the run's units. A cursor awaiting
+    /// a keyframe first skips the video interframes at its position, so the
+    /// run can start after it and `units` can be empty (everything up to the
+    /// head was skipped).
     Units {
         units: Vec<U>,
         /// Updated cursor for the next read.

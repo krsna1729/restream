@@ -4,6 +4,7 @@ use crate::egress::feed::EgressFeed;
 use crate::egress::journal::{FeedEpoch, TsFeed};
 use crate::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
+use restream_core::MediaType::Video;
 use std::sync::{Arc, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -65,7 +66,7 @@ fn fixture(
 #[test]
 fn publication_after_a_wake_head_check_rearms_the_shared_shard_gate() {
     let (handle, rings, gate, received) = fixture(true);
-    rings[0].push(Bytes::from_static(b"first-feed"), true);
+    rings[0].push(Bytes::from_static(b"first-feed"), Video, true);
     handle.deliver_feed_wake().unwrap();
     gate.wait_until_entered();
     assert_eq!(
@@ -75,7 +76,7 @@ fn publication_after_a_wake_head_check_rearms_the_shared_shard_gate() {
 
     // The first feed's head has already been checked. A publication on a
     // different feed must rearm a wake, not coalesce into that past check.
-    rings[1].push(Bytes::from_static(b"second-feed"), true);
+    rings[1].push(Bytes::from_static(b"second-feed"), Video, true);
     handle.deliver_feed_wake().unwrap();
     gate.release();
     let next = received.recv_timeout(Duration::from_secs(2));
@@ -94,7 +95,7 @@ fn a_full_command_queue_cannot_strand_a_feeds_final_publication() {
         .try_send(EgressCommand::Add(output_spec("fill")))
         .unwrap();
 
-    rings[1].push(Bytes::from_static(b"final-publication"), true);
+    rings[1].push(Bytes::from_static(b"final-publication"), Video, true);
     assert_eq!(handle.deliver_feed_wake(), Err(EgressShardSendError::Full));
     gate.release();
     // There is no later publication to retry the hint. The active shard
@@ -169,11 +170,11 @@ fn full_fallback_preserves_an_already_queued_publication_wake() {
     handle
         .try_send(EgressCommand::Add(output_spec("second")))
         .unwrap();
-    rings[0].push(Bytes::from_static(b"full-publication"), true);
+    rings[0].push(Bytes::from_static(b"full-publication"), Video, true);
     assert_eq!(handle.deliver_feed_wake(), Err(EgressShardSendError::Full));
     first_add.release();
     second_add.wait_until_entered();
-    rings[1].push(Bytes::from_static(b"queued-publication"), true);
+    rings[1].push(Bytes::from_static(b"queued-publication"), Video, true);
     handle.deliver_feed_wake().unwrap();
     second_add.release();
     fallback.wait_until_entered();
@@ -181,7 +182,7 @@ fn full_fallback_preserves_an_already_queued_publication_wake() {
 
     // The two-command batch is exhausted: the fallback must leave the queued
     // wake's gate set. This publish coalesces rather than trying the full queue.
-    rings[0].push(Bytes::from_static(b"coalesced-publication"), true);
+    rings[0].push(Bytes::from_static(b"coalesced-publication"), Video, true);
     let coalesced = handle.deliver_feed_wake();
     fallback.release();
     let after = received.recv_timeout(Duration::from_secs(2));

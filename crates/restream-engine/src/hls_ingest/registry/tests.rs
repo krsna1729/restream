@@ -964,3 +964,34 @@ async fn an_upload_whose_input_changed_before_its_body_opens_no_session() {
         "the authorization and the re-check both see the bare IP, not the peer address"
     );
 }
+
+/// A dispatched playlist is parsed on the blocking pool, never on the worker
+/// that dispatches it. The runtime's only blocking thread is held by a gate,
+/// so an offloaded parse queues behind it and the first poll is `Pending`; a
+/// parse run inline would finish inside that poll. No clock is involved.
+#[test]
+fn a_dispatched_playlist_is_parsed_off_the_worker() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let gate = tokio::task::spawn_blocking(move || gate_rx.recv());
+        let text = fmp4_playlist(0, &["a.m4s", "b.m4s"], false);
+        let mut parse = std::pin::pin!(parse_playlist_off_worker(
+            bytes::Bytes::from(text),
+            "live/index.m3u8".to_string(),
+        ));
+        let first =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(parse.as_mut().poll(cx))).await;
+        assert!(first.is_pending(), "the playlist was parsed on the dispatching worker");
+        gate_tx.send(()).unwrap();
+        let parsed = parse.await.ok().and_then(Result::ok);
+        assert!(
+            matches!(&parsed, Some(super::super::playlist::Playlist::Media(media)) if media.segments.len() == 2),
+            "the off-worker parse returned no two-segment media playlist"
+        );
+        gate.await.unwrap().unwrap();
+    });
+}

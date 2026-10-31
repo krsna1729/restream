@@ -288,3 +288,80 @@ fn leaf_resyncs_when_a_pending_keyframe_was_overwritten() {
     drop(client_stream);
     server.join().unwrap();
 }
+
+/// An overrun with no keyframe left in the window resumes at the live edge.
+/// The first video the peer receives after it is the next keyframe, never
+/// an interframe whose references the leaf skipped.
+#[test]
+fn leaf_sends_no_interframe_after_a_resync_without_a_retained_keyframe() {
+    let (mut client_stream, video_rx, server) = connected_client();
+    let ring = Arc::new(RingBuffer::new(8));
+    ring.push_drained_batch_recording_config(&mut vec![
+        raw_video(&[SPS, PPS_A, IDR], true, 0),
+        raw_video(&[P_SLICE], false, 40),
+    ]);
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut cursor = FeedCursor::new(0, 0);
+    let mut received = Vec::new();
+    advance_until_videos(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        &video_rx,
+        &mut received,
+        3,
+    );
+    assert_eq!(&received[1][..2], &[0x17, 0x01], "keyframe");
+    assert_eq!(&received[2][..2], &[0x27, 0x01], "interframe");
+
+    // The leaf falls a whole window behind: the keyframe is gone.
+    ring.push_drained_batch_recording_config(
+        &mut (2..14)
+            .map(|index| raw_video(&[P_SLICE], false, index * 40))
+            .collect(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "no overrun");
+        match engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        ) {
+            EngineProgress::FeedOverrun => break,
+            EngineProgress::Failed(failure) => panic!("engine failed: {failure:?}"),
+            _ => thread::sleep(Duration::from_millis(1)),
+        }
+    }
+    cursor = crate::egress::visit::live_start_cursor(&feed);
+
+    ring.push_drained_batch_recording_config(&mut vec![
+        raw_video(&[P_SLICE], false, 14 * 40),
+        raw_video(&[SPS, PPS_A, IDR], true, 15 * 40),
+        raw_video(&[P_SLICE], false, 16 * 40),
+    ]);
+    advance_until_videos(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        &video_rx,
+        &mut received,
+        5,
+    );
+
+    assert_eq!(
+        &received[3][..2],
+        &[0x17, 0x01],
+        "the first video after the resync is the keyframe"
+    );
+    assert_eq!(&received[4][..2], &[0x27, 0x01], "then its interframe");
+
+    drop(client_stream);
+    server.join().unwrap();
+}

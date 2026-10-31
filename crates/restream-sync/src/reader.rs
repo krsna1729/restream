@@ -6,6 +6,8 @@ use crate::lock::lock;
 use crate::ring_buffer::{BURST_HIST_BUCKETS, RingBuffer, burst_bucket};
 use restream_core::MediaPacket;
 
+const OVERFLOW: &str = "Overflow: reader lagged and was fast-forwarded";
+
 pub struct ReaderInfo {
     pub name: String,
     pub read_idx: AtomicUsize,
@@ -79,6 +81,10 @@ pub struct Reader {
     pub info: Arc<ReaderInfo>,
     pub(crate) read_idx: usize,
     pub(crate) migration_preroll_packets: usize,
+    /// Set by every overflow resync: until the next video keyframe, video
+    /// interframes are skipped (they reference frames this reader never
+    /// delivered); audio passes. A resync onto a keyframe clears it at once.
+    awaiting_keyframe: bool,
 }
 
 impl Drop for Reader {
@@ -116,6 +122,7 @@ impl Reader {
             info,
             read_idx: start_idx,
             migration_preroll_packets,
+            awaiting_keyframe: false,
         }
     }
 
@@ -124,7 +131,10 @@ impl Reader {
     }
 
     /// Ring sequence of the next packet this reader pulls; a successful
-    /// `pull_burst` returns the packets from here on, in sequence order.
+    /// `pull_burst` returns a contiguous run of packets ending just before
+    /// the new `next_sequence()`. After an overflow the run can start past
+    /// the old value: video interframes ahead of the next keyframe are
+    /// skipped.
     pub fn next_sequence(&self) -> usize {
         self.read_idx
     }
@@ -206,52 +216,53 @@ impl Reader {
         self.info.read_idx.store(read_idx, Ordering::Relaxed);
     }
 
+    /// Resynchronize after falling `write_idx - read_idx` behind, or after
+    /// finding the slot at `read_idx` already holds a later lap's packet.
+    fn resync(&mut self, write_idx: usize) -> usize {
+        let lag = write_idx.saturating_sub(self.read_idx);
+        self.read_idx = self.buffer.fast_forward(write_idx);
+        self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
+        self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
+        self.awaiting_keyframe = true;
+        lag
+    }
+
+    fn lags_a_lap(&self, write_idx: usize) -> bool {
+        write_idx > self.read_idx && write_idx - self.read_idx >= self.buffer.capacity
+    }
+
     #[inline]
     pub fn pull(&mut self) -> Result<Option<Arc<MediaPacket>>, &'static str> {
-        let write_idx = self.buffer.get_write_idx();
-
-        if write_idx > self.read_idx && write_idx - self.read_idx >= self.buffer.capacity {
-            let new_idx = self.buffer.fast_forward(write_idx);
-            let lag = write_idx.saturating_sub(self.read_idx);
-            self.read_idx = new_idx;
-            self.info.read_idx.store(new_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            warn!(
-                target: "restream_engine::ring_buffer::reader",
-                reader = %self.info.name,
-                lag_packets = lag,
-                "ring reader overflowed — fast-forwarding to keyframe"
-            );
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        if self.read_idx == write_idx {
-            return Ok(None);
-        }
-
-        let packet = self.buffer.read_at(self.read_idx);
-        let post_write_idx = self.buffer.get_write_idx();
-        if post_write_idx > self.read_idx && post_write_idx - self.read_idx >= self.buffer.capacity
-        {
-            let new_idx = self.buffer.fast_forward(post_write_idx);
-            let lag = post_write_idx.saturating_sub(self.read_idx);
-            self.read_idx = new_idx;
-            self.info.read_idx.store(new_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            warn!(
-                target: "restream_engine::ring_buffer::reader",
-                reader = %self.info.name,
-                lag_packets = lag,
-                "ring reader overflowed mid-read — fast-forwarding to keyframe"
-            );
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        if packet.is_some() {
+        loop {
+            let write_idx = self.buffer.get_write_idx();
+            if self.read_idx == write_idx {
+                return Ok(None);
+            }
+            let packet = if self.lags_a_lap(write_idx) {
+                None
+            } else {
+                self.buffer.read_at(self.read_idx)
+            };
+            let Some(packet) = packet else {
+                let lag = self.resync(write_idx);
+                warn!(
+                    target: "restream_engine::ring_buffer::reader",
+                    reader = %self.info.name,
+                    lag_packets = lag,
+                    "ring reader overflowed — fast-forwarding to keyframe"
+                );
+                return Err(OVERFLOW);
+            };
             self.read_idx += 1;
             self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
+            if self.awaiting_keyframe {
+                if packet.is_video_interframe() {
+                    continue;
+                }
+                self.awaiting_keyframe = !packet.is_video_keyframe();
+            }
+            return Ok(Some(packet));
         }
-        Ok(packet)
     }
 
     pub fn pull_burst(
@@ -264,36 +275,28 @@ impl Reader {
         }
 
         let write_idx = self.buffer.get_write_idx();
-        if write_idx > self.read_idx && write_idx - self.read_idx >= self.buffer.capacity {
-            self.read_idx = self.buffer.fast_forward(write_idx);
-            self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            return Err("Overflow: reader lagged and was fast-forwarded");
+        if self.lags_a_lap(write_idx) {
+            self.resync(write_idx);
+            return Err(OVERFLOW);
         }
 
-        let available = write_idx.saturating_sub(self.read_idx).min(max_packets);
-        output.reserve(available);
         let start_len = output.len();
-
-        for index in self.read_idx..self.read_idx + available {
-            let Some(packet) = self.buffer.read_at(index) else {
-                break;
-            };
-            output.push(packet);
-        }
-
-        let post_write_idx = self.buffer.get_write_idx();
-        if post_write_idx > self.read_idx && post_write_idx - self.read_idx >= self.buffer.capacity
-        {
+        let next = if self.awaiting_keyframe {
+            self.load_after_resync(output, write_idx, max_packets)
+        } else {
+            let available = write_idx.saturating_sub(self.read_idx).min(max_packets);
+            output.reserve(available);
+            self.load(output, self.read_idx, self.read_idx + available)
+        };
+        let Some(next) = next else {
+            // A publication lapped a slot before moving the write index.
             output.truncate(start_len);
-            self.read_idx = self.buffer.fast_forward(post_write_idx);
-            self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
+            self.resync(write_idx);
+            return Err(OVERFLOW);
+        };
 
         let loaded = output.len() - start_len;
-        self.read_idx += loaded;
+        self.read_idx = next;
         self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
         if loaded > 0 {
             self.info.burst_count.fetch_add(1, Ordering::Relaxed);
@@ -303,6 +306,47 @@ impl Reader {
             self.info.burst_hist[burst_bucket(loaded)].fetch_add(1, Ordering::Relaxed);
         }
         Ok(loaded)
+    }
+
+    /// Push the packets of `start..end` onto `output`; the sequence after
+    /// the last, or `None` when a slot no longer holds its packet.
+    #[inline]
+    fn load(&self, output: &mut Vec<Arc<MediaPacket>>, start: usize, end: usize) -> Option<usize> {
+        for sequence in start..end {
+            output.push(self.buffer.read_at(sequence)?);
+        }
+        Some(end)
+    }
+
+    /// `load` while awaiting a keyframe: skip the video interframes at the
+    /// read position (up to the write index), then load a contiguous run of
+    /// at most `max_packets` that stops before the next interframe to skip.
+    /// The first video keyframe ends the wait.
+    fn load_after_resync(
+        &mut self,
+        output: &mut Vec<Arc<MediaPacket>>,
+        write_idx: usize,
+        max_packets: usize,
+    ) -> Option<usize> {
+        let mut sequence = self.read_idx;
+        let mut loaded = 0;
+        while sequence < write_idx && loaded < max_packets {
+            let packet = self.buffer.read_at(sequence)?;
+            if self.awaiting_keyframe {
+                if packet.is_video_interframe() {
+                    if loaded > 0 {
+                        break;
+                    }
+                    sequence += 1;
+                    continue;
+                }
+                self.awaiting_keyframe = !packet.is_video_keyframe();
+            }
+            output.push(packet);
+            loaded += 1;
+            sequence += 1;
+        }
+        Some(sequence)
     }
 
     pub async fn wait_for_data(&mut self) {

@@ -156,6 +156,36 @@ fn sequences_that_slid_out_of_the_window_are_skipped_and_counted() {
     assert_eq!(session.counters().skipped, 2);
 }
 
+/// The release after a skipped segment follows a gap in the media (its
+/// references may be in what was skipped), whether the gap timed out or
+/// slid out of the window; releases in order do not.
+#[test]
+fn a_release_after_a_skipped_segment_follows_a_gap() {
+    let gaps = |session: &mut Session, now: Instant| {
+        let mut out = Vec::new();
+        session.poll(now, &mut out);
+        out.into_iter()
+            .map(|release| (release.sequence, release.after_gap))
+            .collect::<Vec<_>>()
+    };
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    session.on_playlist("index.m3u8", media("", 0, 4, false), t0);
+    seg(&mut session, "index0.ts", t0);
+    assert_eq!(gaps(&mut session, t0), [(0, false)]);
+
+    // 1 never arrives: skipped after a target duration.
+    seg(&mut session, "index2.ts", t0);
+    seg(&mut session, "index3.ts", t0);
+    assert_eq!(gaps(&mut session, t0 + TARGET), [(2, true), (3, false)]);
+
+    // 4 and 5 slide out of the window unseen.
+    seg(&mut session, "index6.ts", t0);
+    session.on_playlist("index.m3u8", media("", 6, 1, false), t0 + TARGET);
+    assert_eq!(gaps(&mut session, t0 + TARGET), [(6, true)]);
+    assert_eq!(session.counters().skipped, 3);
+}
+
 #[test]
 fn a_master_playlist_selects_the_highest_bandwidth_variant() {
     let t0 = Instant::now();
