@@ -48,12 +48,4 @@ pub use parser_budget::{ParserBudget, ParserCharge, held_bytes};
 pub use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 #[cfg(test)]
-mod endpoint_tests;
-#[cfg(test)]
-mod flv_tests;
-#[cfg(test)]
-mod metadata_timestamp_tests;
-#[cfg(test)]
-mod server_response_tests;
-#[cfg(test)]
-mod startup_tests;
+mod tests;
