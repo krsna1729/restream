@@ -111,7 +111,7 @@ pub(super) async fn check_engine_status(
         idx,
         "Engine Status",
         "MediaEngine active state",
-        "api_runtime_views::health_snapshot(...)",
+        "api::runtime_views::health_snapshot(...)",
         lines.join("\n"),
         start.elapsed().as_millis() as u64,
     )
