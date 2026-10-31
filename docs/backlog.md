@@ -28,6 +28,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-104 FFmpeg 9 pin](#q-104-platform-sonnet-move-the-ffmpeg-pin-to-a-90x-point-release)
 - [Q-106 intermittent timing tests](#q-106-testing-sonnet-timing-tests-fail-intermittently-on-a-loaded-host)
 - [Q-107 matrix_throughput transcode benches](#q-107-testing-sonnet-matrix_throughput-transcode-benches-deliver-nothing)
+- [Q-108 ring bench shift after the engine move](#q-108-performance-opus-explain-the-ring-producer-bench-shift-after-the-engine-move)
 
 ### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
 - Goal: qualify the SRT cold prior (64 outputs per shard at 4.8 Mbit/s,
@@ -270,3 +271,14 @@ the [assurance roadmap](assurance-roadmap.md).
   202-215). Make every transcode case deliver.
 - Gates: every `_trans` case runs and reports a time; no change to engine
   behaviour without a failing test.
+
+### Q-108 [performance] [opus] Explain the ring producer bench shift after the engine move
+- Goal: `ring_buffer/producer/push_one_at_a_time/4` measured +17.5% and
+  +21.5% after moving the benches into `crates/restream-engine` (A/B against
+  `2fb586c1`), while a same-code A/A rerun drifted +2.4%. The bench source,
+  `restream-sync` and `restream-core` code and their resolved features are
+  unchanged, so binary layout is the suspected cause, but that is unproven.
+  Compare `perf stat` counters and the disassembly of the push loop in both
+  bench binaries and either confirm layout or find the cause.
+- Gates: a written cause backed by counter or disassembly evidence; if the
+  product path is affected, a fix with a before/after Criterion A/B.
