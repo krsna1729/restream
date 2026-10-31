@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};
@@ -175,6 +176,61 @@ pub(crate) async fn spawn_mediamtx(
         return Err(format!("{label} did not become ready: {err}"));
     }
     Ok(child)
+}
+
+/// Overrides the MediaMTX executable; the version check still applies.
+const MEDIAMTX_BIN_ENV: &str = "RESTREAM_MEDIAMTX_BIN";
+const MEDIAMTX_INSTALL_HINT: &str = "install the pinned release with \
+     scripts/dev/bootstrap-runtime.sh --mediamtx-only or cargo xtask fetch mediamtx";
+
+/// The one MediaMTX release every harness mode runs (`scripts/data/mediamtx.tsv`).
+pub(crate) fn pinned_mediamtx_version() -> &'static str {
+    include_str!("../../../../../scripts/data/mediamtx.tsv")
+        .lines()
+        .find(|line| !line.starts_with('#'))
+        .and_then(|line| line.split('\t').next())
+        .expect("scripts/data/mediamtx.tsv pins a version")
+}
+
+/// The pinned MediaMTX executable: `RESTREAM_MEDIAMTX_BIN`, else
+/// `.local/bin/mediamtx` (`cargo xtask fetch mediamtx`), else `mediamtx` on
+/// `PATH` (`scripts/dev/bootstrap-runtime.sh`). Refused unless it reports the
+/// pinned version, so a stale host cannot run a different peer than CI.
+pub(crate) fn pinned_mediamtx() -> Result<&'static Path, String> {
+    static RESOLVED: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(resolve_pinned_mediamtx)
+        .as_deref()
+        .map_err(Clone::clone)
+}
+
+fn resolve_pinned_mediamtx() -> Result<PathBuf, String> {
+    let local = Path::new(".local/bin/mediamtx");
+    let bin = match std::env::var_os(MEDIAMTX_BIN_ENV) {
+        Some(path) => absolute_path(Path::new(&path))?,
+        None if local.is_file() => absolute_path(local)?,
+        None => PathBuf::from("mediamtx"),
+    };
+    let output = std::process::Command::new(&bin)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("{}: {error}; {MEDIAMTX_INSTALL_HINT}", bin.display()))?;
+    check_mediamtx_version(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|error| format!("{} {error}", bin.display()))?;
+    Ok(bin)
+}
+
+pub(crate) fn check_mediamtx_version(reported: &str) -> Result<(), String> {
+    let pinned = pinned_mediamtx_version();
+    if reported.split_whitespace().next() == Some(pinned) {
+        Ok(())
+    } else {
+        Err(format!(
+            "reports {:?}; the harness is pinned to MediaMTX {pinned}; {MEDIAMTX_INSTALL_HINT}",
+            reported.trim()
+        ))
+    }
 }
 
 /// MediaMTX config with RTMP and SRT ingest and the API, nothing else.

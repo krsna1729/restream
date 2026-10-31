@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="${RESTREAM_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$ROOT/scripts/ci/install-system-deps.sh"
-MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.20.0}"
+MEDIAMTX_PIN="$ROOT/scripts/data/mediamtx.tsv"
 INSTALL_PACKAGES=1
 INSTALL_MEDIAMTX=1
 CHECK_HARNESS_HOST=1
@@ -38,29 +38,31 @@ if [[ "$(uname -s)" != Linux ]] || ! command -v apt-get >/dev/null; then
 fi
 
 install_mediamtx() (
-    local current_version='' archive_name archive_url tmpdir
+    local arch version archive sha current_version='' tmpdir
+    arch="$(uname -m)"
+    [[ "$arch" != arm64 ]] || arch=aarch64
+    read -r version archive sha < <(awk -F'\t' -v arch="$arch" '!/^#/ && $2 == arch { print $1, $3, $4 }' "$MEDIAMTX_PIN") || true
+    if [[ -z "${version:-}" ]]; then
+        echo "bootstrap-runtime: no pinned mediamtx for architecture $arch in $MEDIAMTX_PIN" >&2
+        exit 1
+    fi
     if command -v mediamtx >/dev/null 2>&1; then
         read -r current_version < <(mediamtx --version 2>/dev/null) || true
         current_version="${current_version##* }"
-        if [[ "$current_version" == "$MEDIAMTX_VERSION" ]]; then
-            echo "bootstrap-runtime: mediamtx $MEDIAMTX_VERSION already present"
+        if [[ "$current_version" == "$version" ]]; then
+            echo "bootstrap-runtime: mediamtx $version already present"
             exit 0
         fi
     fi
-    case "$(uname -m)" in
-        x86_64) archive_name="mediamtx_${MEDIAMTX_VERSION}_linux_amd64.tar.gz" ;;
-        aarch64|arm64) archive_name="mediamtx_${MEDIAMTX_VERSION}_linux_arm64v8.tar.gz" ;;
-        armv7l) archive_name="mediamtx_${MEDIAMTX_VERSION}_linux_armv7.tar.gz" ;;
-        *) echo "bootstrap-runtime: unsupported architecture for mediamtx: $(uname -m)" >&2; exit 1 ;;
-    esac
-    archive_url="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/${archive_name}"
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' EXIT
-    echo "bootstrap-runtime: installing mediamtx $MEDIAMTX_VERSION"
+    echo "bootstrap-runtime: installing mediamtx $version"
     curl --fail --show-error --location --connect-timeout 20 \
         --max-time "${RESTREAM_BOOTSTRAP_DOWNLOAD_TIMEOUT_SECS:-120}" \
-        --retry 3 --retry-delay 2 --retry-all-errors "$archive_url" -o "$tmpdir/$archive_name"
-    tar -xzf "$tmpdir/$archive_name" -C "$tmpdir"
+        --retry 3 --retry-delay 2 --retry-all-errors \
+        "https://github.com/bluenviron/mediamtx/releases/download/${version}/${archive}" -o "$tmpdir/$archive"
+    echo "$sha  $tmpdir/$archive" | sha256sum --check --quiet
+    tar -xzf "$tmpdir/$archive" -C "$tmpdir" mediamtx
     if [[ ! -x "$tmpdir/mediamtx" ]]; then
         echo 'bootstrap-runtime: mediamtx archive did not contain an executable binary' >&2
         exit 1

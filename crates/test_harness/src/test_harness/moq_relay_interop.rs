@@ -2,9 +2,8 @@
 //!
 //! MediaMTX v1.21.2 has SETUP, namespace discovery and LOC dialect mismatches
 //! documented with source/spec evidence in the backlog. This is not a passing
-//! IETF gate; use `moq-dev-interop --ietf` for that. The pinned binary is installed by
-//! `cargo xtask fetch mediamtx` under `.local/bin/` (never the
-//! `/usr/local/bin/mediamtx` the other live modes use). Each run generates its
+//! IETF gate; use `moq-dev-interop --ietf` for that. It runs the same pinned
+//! MediaMTX as every other live mode (`scripts/data/mediamtx.tsv`). Each run generates its
 //! own CA and ECDSA P-256 leaf with `openssl` and its own MediaMTX config with
 //! native QUIC, RTSP and RTMP on harness-allocated loopback ports.
 //!

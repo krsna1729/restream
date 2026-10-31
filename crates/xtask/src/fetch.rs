@@ -7,8 +7,8 @@ use std::{
 
 mod moxygen;
 
-const MEDIAMTX_VERSION: &str = "v1.21.2";
-const MEDIAMTX_COMMIT: &str = "914e39535ece709919ac325aaeed98d394ed9093";
+/// The one MediaMTX pin, shared with `scripts/dev/bootstrap-runtime.sh`.
+const MEDIAMTX_PIN: &str = include_str!("../../../scripts/data/mediamtx.tsv");
 const MOQ_DEV_COMMIT: &str = "e2c5b50572cc305afcfffb4f40184200e9965204";
 struct Release {
     tag: &'static str,
@@ -17,13 +17,26 @@ struct Release {
     binary: &'static str,
     target: &'static str,
 }
-const MEDIAMTX: Release = Release {
-    tag: MEDIAMTX_VERSION,
-    archive: "mediamtx_v1.21.2_linux_amd64.tar.gz",
-    sha: "121be6e00397e473a95d83c75f4fcd3819a6af3b0e1a50889cba43ab4fab6a27",
-    binary: "mediamtx",
-    target: "mediamtx-1.21.2",
-};
+/// The pinned linux/amd64 MediaMTX release.
+fn mediamtx_release() -> Result<Release, Error> {
+    MEDIAMTX_PIN
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| {
+            let mut fields = line.split('\t');
+            match (fields.next(), fields.next(), fields.next(), fields.next()) {
+                (Some(tag), Some("x86_64"), Some(archive), Some(sha)) => Some(Release {
+                    tag,
+                    archive,
+                    sha,
+                    binary: "mediamtx",
+                    target: "mediamtx",
+                }),
+                _ => None,
+            }
+        })
+        .ok_or_else(|| "scripts/data/mediamtx.tsv has no x86_64 row".into())
+}
 const MOQ: [Release; 2] = [
     Release {
         tag: "moq-cli-v0.14.7",
@@ -171,29 +184,31 @@ fn mediamtx_flags(args: &[&str]) -> Result<Option<bool>, Error> {
     Ok(Some(print_path))
 }
 fn mediamtx(args: &[&str]) -> WorkflowResult {
+    let release = mediamtx_release()?;
+    let version = release.tag;
     let Some(print_path) = mediamtx_flags(args)? else {
         println!(
-            "Usage: xtask fetch mediamtx [--print-path]\nFetch linux/amd64 MediaMTX {MEDIAMTX_VERSION} (commit {MEDIAMTX_COMMIT}), verify its pinned SHA256, and install .local/bin/{}.",
-            MEDIAMTX.target
+            "Usage: xtask fetch mediamtx [--print-path]\nFetch linux/amd64 MediaMTX {version} (scripts/data/mediamtx.tsv), verify its pinned SHA256, and install .local/bin/{}.",
+            release.target
         );
         return Ok(());
     };
     pinned_host("fetch-mediamtx")?;
-    let target = crate::repo_root().join(".local/bin").join(MEDIAMTX.target);
+    let target = crate::repo_root().join(".local/bin").join(release.target);
     let current = crate::workflow::executable(&target)
-        && installed_version(&target)?.as_deref() == Some(MEDIAMTX_VERSION);
+        && installed_version(&target)?.as_deref() == Some(version);
     if !current {
         let temp = crate::workflow::TempDir::new("restream-xtask")?;
         let url = format!(
             "https://github.com/bluenviron/mediamtx/releases/download/{}/{}",
-            MEDIAMTX.tag, MEDIAMTX.archive
+            release.tag, release.archive
         );
         eprintln!("fetch-mediamtx: downloading {url}");
-        extract(&MEDIAMTX, &url, "mediamtx", temp.path(), &target)?;
+        extract(&release, &url, "mediamtx", temp.path(), &target)?;
         let reported = installed_version(&target)?.unwrap_or_default();
-        if reported != MEDIAMTX_VERSION {
+        if reported != version {
             return Err(format!(
-                "fetch-mediamtx: installed binary reports '{reported}', expected {MEDIAMTX_VERSION}"
+                "fetch-mediamtx: installed binary reports '{reported}', expected {version}"
             )
             .into());
         }
@@ -202,12 +217,12 @@ fn mediamtx(args: &[&str]) -> WorkflowResult {
         println!("{}", target.display());
     } else if current {
         println!(
-            "fetch-mediamtx: {} already reports {MEDIAMTX_VERSION}",
+            "fetch-mediamtx: {} already reports {version}",
             target.display()
         );
     } else {
         println!(
-            "fetch-mediamtx: installed {} ({MEDIAMTX_VERSION}, sha256 verified)",
+            "fetch-mediamtx: installed {} ({version}, sha256 verified)",
             target.display()
         );
     }
@@ -275,7 +290,8 @@ mod tests {
     use super::*;
     #[test]
     fn checksums_reject_wrong_identity() {
-        for release in [&MEDIAMTX, &MOQ[0], &MOQ[1]] {
+        let mediamtx = mediamtx_release().expect("the pin file has an x86_64 row");
+        for release in [&mediamtx, &MOQ[0], &MOQ[1]] {
             assert!(verify(release.sha, release).is_ok());
             assert!(verify(&"0".repeat(64), release).is_err());
             assert_eq!(release.sha.len(), 64);

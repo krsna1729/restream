@@ -112,7 +112,7 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
     std::fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
     let work_dir = absolute_path(&work_dir)?;
 
-    let mediamtx = pinned_mediamtx_bin().await?;
+    let mediamtx = pinned_mediamtx()?.to_path_buf();
     let fixture = restream_engine::test_fixtures::checked_in_fixture(FIXTURE)?;
     let input_fps = fixture_frame_rate(&fixture).await?;
     let ffmpeg = restream_engine::ffmpeg_binary::ffmpeg_bin_path().to_path_buf();
@@ -228,10 +228,10 @@ pub(crate) async fn run_moq_relay_interop() -> Result<Value, String> {
     let report = json!({
         "passed": passed,
         "mode": MODE,
-        "wireProfile": "MOQT draft-19 subset, interop-pinned to MediaMTX v1.21.2",
+        "wireProfile": "MOQT draft-19 subset, against the pinned MediaMTX",
         "environment": {
             "mediamtx": mediamtx.display().to_string(),
-            "mediamtxVersion": PINNED_MEDIAMTX_VERSION,
+            "mediamtxVersion": pinned_mediamtx_version(),
             "restreamBin": default_restream_bin().display().to_string(),
             "fixture": session.fixture.display().to_string(),
             "inputFps": session.input_fps,

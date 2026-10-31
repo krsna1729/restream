@@ -365,6 +365,16 @@ while Restream, MediaMTX or FFmpeg live processes run.
 `MIXED_OUTPUT_GROUPS` (comma-separated row ids such as
 `rtmp.720p.a0,rtmp.720p.a1`) limits a mixed matrix to a few rows.
 
+### Live harness MediaMTX
+
+One MediaMTX release is pinned, with its per-architecture SHA-256, in
+`scripts/data/mediamtx.tsv`. `scripts/dev/bootstrap-runtime.sh
+--mediamtx-only` installs it as `/usr/local/bin/mediamtx` (the CI harness
+image is built that way), and `cargo xtask fetch mediamtx` installs it as
+`.local/bin/mediamtx` without root. `moq-relay-interop` takes
+`RESTREAM_MEDIAMTX_BIN`, else `.local/bin/mediamtx`, else `mediamtx` on
+`PATH`, and refuses a binary that does not report the pinned version.
+
 ### Choosing a live proof
 
 | Change | Mode |
@@ -548,8 +558,8 @@ failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
 `subscriber.log` and the generated TLS material; the harness also writes
 `.local/artifacts/moq-impairment.json`.
 
-`moq-relay-interop` targets unmodified MediaMTX v1.21.2
-(`cargo xtask fetch mediamtx`, `MOQ_INTEROP_MEDIAMTX_BIN`).
+`moq-relay-interop` targets the unmodified pinned MediaMTX (see
+[Live harness MediaMTX](#live-harness-mediamtx)).
 It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
 LOC/MSF dialect mismatches are source/spec-evidenced in
 [Q-097](backlog.md#q-097-mediamtx-moq-dialect-interoperability).
