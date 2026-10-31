@@ -355,6 +355,7 @@ Formats:
  D   wavarc          Waveform Archiver
  D   wc3movie        Wing Commander III movie
  D   webm_dash_manifest WebM DASH Manifest
+ D   webp_anim       Animated WebP
  D   webp_pipe       piped webp sequence
  D   webvtt          WebVTT subtitle
  D   wsaud           Westwood Studios audio

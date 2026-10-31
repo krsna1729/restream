@@ -6,31 +6,31 @@ fn btbn() -> Components {
     for (kind, listing) in [
         (
             Kind::Encoder,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/encoders.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/encoders.txt"),
         ),
         (
             Kind::Decoder,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/decoders.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/decoders.txt"),
         ),
         (
             Kind::Muxer,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/muxers.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/muxers.txt"),
         ),
         (
             Kind::Demuxer,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/demuxers.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/demuxers.txt"),
         ),
         (
             Kind::Filter,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/filters.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/filters.txt"),
         ),
         (
             Kind::Protocol,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/protocols.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/protocols.txt"),
         ),
         (
             Kind::BitstreamFilter,
-            include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/bsfs.txt"),
+            include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/bsfs.txt"),
         ),
     ] {
         components.read(kind, listing);
@@ -76,7 +76,7 @@ fn listings_are_read_by_alias_and_by_direction() {
 
 #[test]
 fn a_build_without_libx265_loses_only_transcoding() {
-    let full = include_str!("../../../../test/fixtures/ffmpeg/btbn-n8.1.3/encoders.txt");
+    let full = include_str!("../../../../test/fixtures/ffmpeg/btbn-n9.0.2/encoders.txt");
     let without: String = full
         .lines()
         .filter(|line| !line.contains(" libx265 "))
@@ -112,10 +112,10 @@ fn a_missing_executable_is_named_on_the_features_it_disables() {
 fn the_version_comes_from_the_banner() {
     assert_eq!(
         version_from_banner(include_str!(
-            "../../../../test/fixtures/ffmpeg/btbn-n8.1.3/version.txt"
+            "../../../../test/fixtures/ffmpeg/btbn-n9.0.2/version.txt"
         ))
         .as_deref(),
-        Some("n8.1.3-9-g29e619e767-20260930")
+        Some("n9.0.2-17-g2a571b6068-20260930")
     );
     assert_eq!(version_from_banner("garbage"), None);
 }

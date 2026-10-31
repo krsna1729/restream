@@ -294,7 +294,7 @@ Restream's muxers and packagers write AAC audio only. Ingest codecs:
 Closed captions (CEA-608/708) ride in the video's SEI, so they pass through
 every passthrough output untouched. A transcoding stage keeps them: its
 FFmpeg decoder hands them to the encoder, which writes them back with
-`-a53cc 1` (FFmpeg 8.1's libx265 defaults it off). SCTE-35 cues and RTMP
+`-a53cc 1` (FFmpeg's libx265 defaults it off). SCTE-35 cues and RTMP
 data messages (`onCuePoint`, `onFI`) are not carried.
 
 The MPEG-TS demuxer (`crates/restream-mpegts/src/demux.rs`) ignores other stream types.

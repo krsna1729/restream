@@ -1484,8 +1484,8 @@ addStages, ratedBy, ingest, calibration, retryPolicy, baseline, projected }`.
   "toolchain": { "rustc": "...", "target": "x86_64-unknown-linux-gnu", "llvm": "...", "gccRuntime": "..." },
   "nativeLibraries": { "srt": {}, "sqlite": {} },
   "externalTools": {
-    "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "version": "n8.1.3-9-g29e619e767-20260930", "error": null },
-    "ffprobe": { "path": "/usr/local/bin/ffprobe", "version": "n8.1.3-9-g29e619e767-20260930", "error": null },
+    "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "version": "n9.0.2-17-g2a571b6068-20260930", "error": null },
+    "ffprobe": { "path": "/usr/local/bin/ffprobe", "version": "n9.0.2-17-g2a571b6068-20260930", "error": null },
     "features": [
       { "feature": "transcoding", "available": false, "missing": ["encoder libx265"] },
       { "feature": "recordingRemux", "available": true, "missing": [] }

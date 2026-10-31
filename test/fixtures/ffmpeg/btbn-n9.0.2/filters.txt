@@ -464,6 +464,7 @@ Filters:
  .. tonemap_vaapi     V->V       VAAPI VPP for tone-mapping
  .. tpad              V->V       Temporarily pad video frames.
  .S transpose         V->V       Transpose input video.
+ .. transpose_cuda    V->V       Transpose input video using CUDA
  .. transpose_opencl  V->V       Transpose input video
  .. transpose_vaapi   V->V       VAAPI VPP for transpose
  .. transpose_vulkan  V->V       Transpose Vulkan Filter
@@ -474,6 +475,7 @@ Filters:
  .. untile            V->V       Untile a frame into a sequence of frames.
  TS uspp              V->V       Apply Ultra Simple / Slow Post-processing filter.
  .S v360              V->V       Convert 360 projection of video.
+ .. v360_vulkan       V->V       Convert 360 projection of video.
  T. vaguedenoiser     V->V       Apply a Wavelet based Denoiser.
  TS varblur           VV->V      Apply Variable Blur filter.
  .. vectorscope       V->V       Video vectorscope.

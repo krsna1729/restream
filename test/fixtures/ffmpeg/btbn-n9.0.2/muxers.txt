@@ -126,6 +126,7 @@ Formats:
   E  oma             Sony OpenMG audio
   E  opus            Ogg Opus
   Ed oss             OSS (Open Sound System) playback
+  E  pdv             PlayDate Video
   E  psp             PSP MP4 (MPEG-4 Part 14)
   Ed pulse           Pulse audio output
   E  rawvideo        raw video

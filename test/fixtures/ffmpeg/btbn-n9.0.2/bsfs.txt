@@ -9,6 +9,7 @@ chomp
 dump_extra
 dca_core
 dovi_rpu
+dovi_split
 dts2pts
 dv_error_marker
 eac3_core

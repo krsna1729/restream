@@ -27,6 +27,7 @@ Input:
   rtmpte
   rtmpts
   rtp
+  shared
   srtp
   subfile
   tcp

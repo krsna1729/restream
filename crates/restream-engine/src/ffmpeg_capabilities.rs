@@ -279,7 +279,7 @@ fn judge(components: Option<&Components>, ffprobe_found: bool) -> Vec<FeatureSta
         .collect()
 }
 
-/// The first line of `-version`: `ffmpeg version n8.1.3-... Copyright ...`.
+/// The first line of `-version`: `ffmpeg version n9.0.2-... Copyright ...`.
 fn version_from_banner(banner: &str) -> Option<String> {
     let first = banner.lines().next()?;
     let rest = first.split_once(" version ")?.1;

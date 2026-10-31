@@ -15,7 +15,7 @@ each choice and how to change the version.
 
 | Input | Value | Owner |
 |---|---|---|
-| `restream ffmpeg-fetch` | BtbN release `autobuild-2026-09-30-13-08`: `ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1` (or `linuxarm64`), SHA-256 pinned per architecture | [crates/restream-engine/src/ffmpeg_binary.rs](../crates/restream-engine/src/ffmpeg_binary.rs) (`PINNED_RELEASE`, `pinned_asset`) |
+| `restream ffmpeg-fetch` | BtbN release `autobuild-2026-09-30-13-08`: `ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0` (or `linuxarm64`), SHA-256 pinned per architecture | [crates/restream-engine/src/ffmpeg_binary.rs](../crates/restream-engine/src/ffmpeg_binary.rs) (`PINNED_RELEASE`, `pinned_asset`) |
 | Container images | The same release and digests, in the `ffmpeg-fetch` stage | [Dockerfile](../Dockerfile) |
 
 Pin a month's last BtbN build: BtbN keeps those for two years and daily

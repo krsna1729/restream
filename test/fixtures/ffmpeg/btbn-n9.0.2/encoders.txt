@@ -94,6 +94,7 @@ Encoders:
  V....D pam                  PAM (Portable AnyMap) image
  V....D pbm                  PBM (Portable BitMap) image
  V....D pcx                  PC Paintbrush PCX image
+ V..X.D pdv                  PDV (PlayDate Video)
  V....D pfm                  PFM (Portable FloatMap) image
  V....D pgm                  PGM (Portable GrayMap) image
  V....D pgmyuv               PGMYUV (Portable GrayMap YUV) image
@@ -124,9 +125,6 @@ Encoders:
  VF...D tiff                 TIFF image
  VF...D utvideo              Ut Video
  VF...D v210                 Uncompressed 4:2:2 10-bit
- V....D v308                 Uncompressed packed 4:4:4
- V....D v408                 Uncompressed packed QT 4:4:4:4
- V....D v410                 Uncompressed 4:4:4 10-bit
  V.S..D vbn                  Vizrt Binary Image
  V..... vnull                null video
  V....D libvpx               libvpx VP8 (codec vp8)
