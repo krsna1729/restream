@@ -972,5 +972,4 @@ fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
 #[cfg(test)]
 // These white-box tests deliberately poison and inspect the raw mutex.
 #[allow(clippy::disallowed_methods)]
-#[path = "ring_buffer_tests.rs"]
 mod tests;

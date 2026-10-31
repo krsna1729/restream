@@ -40,13 +40,9 @@ fn media_packet_with_payload(media_type: MediaType, dts: i64, payload_bytes: usi
     }
 }
 
-#[path = "ring_buffer_tests/concurrency.rs"]
 mod concurrency;
-#[path = "ring_buffer_tests/frame_units.rs"]
 mod frame_units;
-#[path = "ring_buffer_tests/overflow.rs"]
 mod overflow;
-#[path = "ring_buffer_tests/reader.rs"]
 mod reader;
 
 #[test]

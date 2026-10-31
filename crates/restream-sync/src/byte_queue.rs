@@ -280,5 +280,4 @@ impl MemoryQueue {
 #[cfg(test)]
 // These white-box tests deliberately poison and inspect the raw mutex.
 #[allow(clippy::disallowed_methods)]
-#[path = "byte_queue_tests.rs"]
 mod tests;
