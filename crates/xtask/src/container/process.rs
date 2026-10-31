@@ -103,10 +103,23 @@ pub(super) fn execute(
     signals: &Signals,
     limit: Option<Duration>,
 ) -> WorkflowResult {
+    // The limit runs from the first poll after spawn.
+    let mut start = None;
+    execute_until(command, signals, || {
+        limit.is_some_and(|limit| start.get_or_insert_with(Instant::now).elapsed() >= limit)
+    })
+}
+
+/// Like `execute`, but the run times out once `expired` returns true; it is
+/// asked after every poll that finds the child still running and no signal.
+pub(super) fn execute_until(
+    command: &mut Command,
+    signals: &Signals,
+    mut expired: impl FnMut() -> bool,
+) -> WorkflowResult {
     signals.check()?;
     eprintln!("+ {command:?}");
     let mut child = OwnedChild::spawn(command)?;
-    let start = Instant::now();
     loop {
         if let Some(status) = child.poll()? {
             return if status.success() {
@@ -123,7 +136,7 @@ pub(super) fn execute(
                 "container subprocess interrupted",
             ));
         }
-        if limit.is_some_and(|limit| start.elapsed() >= limit) {
+        if expired() {
             child.terminate(libc::SIGTERM, Duration::from_secs(5));
             return Err(Error::exit(124, "container subprocess timed out"));
         }

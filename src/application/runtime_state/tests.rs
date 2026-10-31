@@ -444,13 +444,102 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
     assert!(!projection.pipelines["pipe"].recording);
 }
 
-/// The projector rebuilds only while a stream client is connected: on a
-/// marked change and every interval. With no client, changes cost nothing.
-/// One write is one delta: the rows of a rebuild come from one snapshot of
-/// the production (file, WAL) database, so a pipeline created between two of
-/// its reads never shows its input before itself.
-#[tokio::test]
+/// The projector's schedule, on a paused clock with a counting rebuild:
+/// with no client a change costs nothing; with one, a change rebuilds at
+/// once and the interval rebuilds unreported state; once the last client
+/// leaves, changes cost nothing again. Each barrier is a virtual-clock
+/// sleep, which returns only after the projector has handled every wake due
+/// before it.
+#[tokio::test(start_paused = true)]
 async fn the_projector_rebuilds_only_while_a_client_listens() {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+    let (hub, rebuilds, stop, projector) = counting_projector(INTERVAL);
+    let rebuilt = || rebuilds.load(std::sync::atomic::Ordering::SeqCst);
+
+    hub.mark_changed();
+    tokio::time::sleep(INTERVAL * 10).await;
+    assert_eq!(rebuilt(), 0, "no client: no rebuild");
+
+    let client = hub.subscribe();
+    hub.mark_changed();
+    // Shorter than the interval, so the change is the only cause.
+    tokio::time::sleep(INTERVAL / 2).await;
+    assert_eq!(rebuilt(), 1, "a client gets the change");
+
+    tokio::time::sleep(INTERVAL).await;
+    assert_eq!(
+        rebuilt(),
+        2,
+        "with a client, unreported changes arrive on the interval"
+    );
+
+    // The projector is waiting on its interval sleep for the client.
+    drop(client);
+    hub.mark_changed();
+    tokio::time::sleep(INTERVAL * 10).await;
+    assert_eq!(rebuilt(), 2, "the last client left");
+
+    stop.cancel();
+    projector.await.unwrap();
+}
+
+/// A change storm costs at most one rebuild per interval.
+#[tokio::test(start_paused = true)]
+async fn the_projector_rebuilds_a_change_storm_once_per_interval() {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+    let (hub, rebuilds, stop, projector) = counting_projector(INTERVAL);
+    let rebuilt = || rebuilds.load(std::sync::atomic::Ordering::SeqCst);
+
+    let _client = hub.subscribe();
+    hub.mark_changed();
+    tokio::time::sleep(INTERVAL / 4).await;
+    assert_eq!(rebuilt(), 1);
+
+    for _ in 0..5 {
+        hub.mark_changed();
+    }
+    tokio::time::sleep(INTERVAL / 2).await;
+    assert_eq!(rebuilt(), 1, "inside the interval the storm waits");
+    tokio::time::sleep(INTERVAL / 2).await;
+    assert_eq!(rebuilt(), 2, "the storm costs one rebuild at the interval");
+
+    stop.cancel();
+    projector.await.unwrap();
+}
+
+type CountingProjector = (
+    std::sync::Arc<StateHub>,
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+    tokio_util::sync::CancellationToken,
+    tokio::task::JoinHandle<()>,
+);
+
+/// The projector's schedule with a rebuild that only counts.
+fn counting_projector(interval: std::time::Duration) -> CountingProjector {
+    let hub = std::sync::Arc::new(StateHub::new(ports(), max_retries()));
+    let rebuilds = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let stop = tokio_util::sync::CancellationToken::new();
+    let projector = tokio::spawn({
+        let (hub, rebuilds, stop) = (hub.clone(), rebuilds.clone(), stop.clone());
+        async move {
+            hub.schedule_rebuilds(interval, &stop, || {
+                rebuilds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::ready(())
+            })
+            .await;
+        }
+    });
+    (hub, rebuilds, stop, projector)
+}
+
+/// One write is one delta: the rows of a rebuild come from one snapshot of
+/// the production (file, WAL) database, so a pipeline and its primary input,
+/// inserted in one transaction, arrive in the same delta. A marked change
+/// arrives, and so does an unmarked one on the interval. Event-driven: each
+/// step awaits the delta, and a rebuild that finds nothing new publishes
+/// nothing.
+#[tokio::test]
+async fn the_projector_publishes_one_delta_per_database_write() {
     let dir = std::env::temp_dir().join(format!(
         "restream-projector-{}-{}",
         std::process::id(),
@@ -460,19 +549,30 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
     let url = format!("sqlite:{}?mode=rwc", dir.join("restream.db").display());
     let pool = crate::db::create_pool(&url).await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
-    let engine = std::sync::Arc::new(MediaEngine::new());
     let hub = std::sync::Arc::new(StateHub::new(ports(), max_retries()));
     let stop = tokio_util::sync::CancellationToken::new();
     let projector = tokio::spawn(hub::run_projector(
         hub.clone(),
         pool.clone(),
-        engine,
+        std::sync::Arc::new(MediaEngine::new()),
         std::time::Duration::from_millis(20),
         stop.clone(),
     ));
-    let revision_after = |hub: std::sync::Arc<StateHub>| async move {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        hub.snapshot().await.revision
+    let mut client = hub.subscribe();
+    let created = |delta: &StateDelta| {
+        (
+            delta.revision,
+            delta
+                .pipelines
+                .iter()
+                .map(|pipeline| pipeline.id.clone())
+                .collect::<Vec<_>>(),
+            delta
+                .inputs
+                .iter()
+                .map(|input| input.pipeline_id.clone())
+                .collect::<Vec<_>>(),
+        )
     };
 
     crate::db::create_pipeline(&pool, "pipe", "P", "key", None, None)
@@ -480,33 +580,20 @@ async fn the_projector_rebuilds_only_while_a_client_listens() {
         .unwrap();
     hub.mark_changed();
     assert_eq!(
-        revision_after(hub.clone()).await,
-        0,
-        "no client: no rebuild"
-    );
-
-    let client = hub.subscribe();
-    hub.mark_changed();
-    assert_eq!(
-        revision_after(hub.clone()).await,
-        1,
+        created(&client.recv().await.unwrap()),
+        (1, vec!["pipe".to_string()], vec!["pipe".to_string()]),
         "a client gets the change"
     );
+
     crate::db::create_pipeline(&pool, "pipe-2", "P2", "key-2", None, None)
         .await
         .unwrap();
     assert_eq!(
-        revision_after(hub.clone()).await,
-        2,
+        created(&client.recv().await.unwrap()),
+        (2, vec!["pipe-2".to_string()], vec!["pipe-2".to_string()]),
         "with a client, unreported changes arrive on the interval"
     );
 
-    drop(client);
-    crate::db::create_pipeline(&pool, "pipe-3", "P3", "key-3", None, None)
-        .await
-        .unwrap();
-    hub.mark_changed();
-    assert_eq!(revision_after(hub.clone()).await, 2, "the last client left");
     stop.cancel();
     projector.await.unwrap();
     pool.close().await;
