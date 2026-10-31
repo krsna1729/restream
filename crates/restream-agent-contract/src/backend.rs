@@ -1,7 +1,7 @@
 //! Transport-agnostic backend trait for agent operations.
 
-use crate::agent_core::errors::AgentError;
-use crate::agent_core::types::{
+use crate::errors::AgentError;
+use crate::types::{
     ApprovalRequest, InvestigationRequest, OperationCreateRequest, PlanRequest, VerifyRequest,
 };
 use serde_json::Value;

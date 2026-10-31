@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::agent_core::{AgentToolKind, agent_tool_names};
+use restream_agent_contract::{AgentToolKind, agent_tool_names};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -103,13 +103,14 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines eleven packages: the `restream` application,
-eight library crates under `crates/restream-*`, and the `test_harness` and
+The root `Cargo.toml` defines thirteen packages: the `restream` application,
+ten library crates under `crates/restream-*`, and the `test_harness` and
 `xtask` command packages. They share one `Cargo.lock`; all are default
 workspace members. These are source and compilation boundaries, not separate
 services or additional thread families.
 
-Arrows below are direct workspace dependencies from the manifests. External
+Arrows below are direct workspace dependencies from the manifests; dashed
+arrows are optional dependencies enabled by a Cargo feature. External
 dependencies and runtime interactions are not edges in this graph.
 
 ```mermaid
@@ -119,6 +120,10 @@ flowchart TD
     Harness --> Domain
     Harness --> Sync
     App --> Engine["restream-engine"]
+    App -.->|"agent-plane"| Contract["restream-agent-contract"]
+    App -.->|"mcp-core"| Mcp["restream-mcp"]
+    Mcp --> Contract
+    Contract --> Domain
     App --> Core["restream-core"]
     App --> Domain["restream-domain"]
     App --> Sync["restream-sync"]
@@ -147,8 +152,9 @@ The harness imports the root library and the engine plus the domain
 vocabulary and the poison-tolerant lock helpers; it does not directly depend
 on the core package. `xtask` invokes repository commands and tools rather than
 linking the application. The root application depends on the engine and on
-the seven libraries below it, so checking a leaf package does not validate its
-downstream integration.
+the seven libraries below it (and, by Cargo feature, on the agent contract and
+MCP crates), so checking a leaf package does not validate its downstream
+integration.
 
 ### Package boundaries and runtime seams
 
@@ -184,6 +190,13 @@ downstream integration.
   test-only dependency; no `sqlx`). Its `test-support` feature builds the
   media test helpers for dependents' tests, `ts` the TypeScript export
   derives, and `egress-test-driver` / `srt-shard-bench` the benchmark seams.
+- **Agent contract and MCP sidecar:** `restream-agent-contract` owns the agent
+  request types, `AgentBackend`, errors and the agent tool list; it depends on
+  the domain vocabulary, `serde` and `serde_json` only. `restream-mcp` owns
+  the MCP tool catalog, handlers, transports, the HTTP backend and the
+  `restream-mcp` binary; it reaches the product over HTTP and does not depend
+  on `restream` (its build-identity test uses it as a dev-dependency). The
+  root `mcp-*` features enable it so one build produces both binaries.
 - **Application integration:** `src/api/` owns HTTP/authentication and SSE.
   `src/application/` owns orchestration and `reconcile.rs`; `src/db/` owns SQL.
   `src/infrastructure/` owns bootstrap, service wiring and adapters.
@@ -549,7 +562,7 @@ flowchart TD
 | `media` (`restream-engine`) | Protocols, packet transforms, hot-path storage, media lifecycle | API JSON, persistence |
 | `api` | Authentication, request validation, HTTP and SSE responses | Persistence policy, media internals |
 | `infrastructure` | SQLite adapters, service wiring, bootstrap tasks | Domain policy |
-| `agent_core` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
+| `restream-agent-contract` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
 
 `application::ports` with SQLite adapters in `infrastructure::sqlite_ports`
 is the target shape. Some application modules (for example
@@ -568,8 +581,9 @@ egress tasks, and `src/logging.rs` still call `crate::db` with a pool.
 - `media` is the `restream-engine` crate: it depends on no root module, so
   it cannot import `api`, `application`, `db` or `config` (Cargo enforces it).
   `db` does not import `application`. `application` does not use axum.
-- `agent_core` does not import `agent_plane`, `application`, `media`,
-  Reqwest, axum or sqlx.
+- `restream-agent-contract` depends on no product, engine, Reqwest, axum,
+  sqlx or Tokio crate, and `restream-mcp` on no product or engine crate
+  (`tests/architecture/compliance.rs`).
 - API handlers stay thin. Agent orchestration lives in
   `application::services::agent_service`. API modules do not start FFmpeg or
   transcoder stages.
@@ -619,7 +633,7 @@ describes where their callers execute.
 | `crates/restream-engine/src/hls/`, `crates/restream-engine/src/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
 | `crates/restream-engine/src/external_transcoder/`, `crates/restream-engine/src/ffmpeg/`, `crates/restream-engine/src/audio_router.rs` | FFmpeg child stages, native audio track selection |
 | `crates/restream-engine/src/executor.rs` | MEDIA executor |
-| `src/agent_plane/`, `src/agent_execution.rs`, `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
+| `src/agent_plane/`, `src/agent_execution.rs`, `crates/restream-agent-contract/`, `crates/restream-mcp/` | Agent planning and approval-gated execution, contracts, MCP server |
 | `web/ts/` | Dashboard and control room source; `public/` is generated |
 | `crates/test_harness/src/` | Integration scenarios, peers and live qualification |
 | `crates/xtask/src/` | Build helpers, local gates, source/fixture audits and qualification commands |

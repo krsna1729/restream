@@ -35,7 +35,7 @@ use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputSta
 pub async fn agent_operation_create_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::OperationCreateRequest>,
+    Json(request): Json<restream_agent_contract::OperationCreateRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -97,7 +97,7 @@ pub async fn agent_operation_approve_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(operation_id): Path<String>,
-    Json(request): Json<crate::agent_core::ApprovalRequest>,
+    Json(request): Json<restream_agent_contract::ApprovalRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -205,7 +205,7 @@ pub async fn agent_operation_verify_handler(
 pub async fn agent_verify_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<crate::agent_core::VerifyRequest>,
+    Json(request): Json<restream_agent_contract::VerifyRequest>,
 ) -> impl IntoResponse {
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
@@ -297,7 +297,7 @@ async fn execute_operation(
 async fn apply_change(
     state: &AppState,
     pipeline_id: &str,
-    change: &crate::agent_core::ProposedChange,
+    change: &restream_agent_contract::ProposedChange,
 ) -> Result<serde_json::Value, String> {
     let mutation = match change.kind.as_str() {
         "addOutput" => prepare_add_output(change)?,
@@ -324,7 +324,7 @@ async fn apply_change(
 
 #[cfg(feature = "agent-execution")]
 fn prepare_add_output(
-    change: &crate::agent_core::ProposedChange,
+    change: &restream_agent_contract::ProposedChange,
 ) -> Result<AgentOutputMutation, String> {
     let name = required_change_field(change.name.as_deref(), "name")?;
     let url = required_change_field(change.url.as_deref(), "url")?.trim();
@@ -356,7 +356,7 @@ fn prepare_add_output(
 async fn prepare_update_output(
     state: &AppState,
     pipeline_id: &str,
-    change: &crate::agent_core::ProposedChange,
+    change: &restream_agent_contract::ProposedChange,
 ) -> Result<AgentOutputMutation, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
     let existing = state
@@ -715,7 +715,7 @@ async fn verify_operation(
 #[cfg(feature = "agent-execution")]
 fn change_output_id(
     record: &crate::agent_execution::OperationRecord,
-    change: &crate::agent_core::ProposedChange,
+    change: &restream_agent_contract::ProposedChange,
 ) -> Option<String> {
     if let Some(output_id) = &change.output_id {
         return Some(output_id.clone());
@@ -740,7 +740,7 @@ fn change_output_id(
 
 #[cfg(feature = "agent-execution")]
 fn changed_pipelines(
-    request: &crate::agent_core::OperationCreateRequest,
+    request: &restream_agent_contract::OperationCreateRequest,
 ) -> std::collections::HashSet<String> {
     request
         .proposed_changes
@@ -914,7 +914,7 @@ mod tests {
             Arc::new(restream_engine::engine::MediaEngine::new()),
             logs,
         );
-        let request: crate::agent_core::OperationCreateRequest =
+        let request: restream_agent_contract::OperationCreateRequest =
             serde_json::from_value(serde_json::json!({
                 "intent": "Create a stopped output",
                 "pipelineId": "verify-race",
@@ -933,7 +933,7 @@ mod tests {
             .agent_execution
             .approve(
                 id,
-                crate::agent_core::ApprovalRequest {
+                restream_agent_contract::ApprovalRequest {
                     approved_by: "test".into(),
                     reason: None,
                 },

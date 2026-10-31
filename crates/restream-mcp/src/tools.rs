@@ -202,7 +202,7 @@ pub fn available_tool_catalog() -> Vec<McpToolDefinition> {
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
-    use crate::agent_core::{AGENT_TOOLS, AgentToolKind};
+    use restream_agent_contract::{AGENT_TOOLS, AgentToolKind};
 
     /// The MCP catalog serves exactly the agent tools capability discovery
     /// advertises: discovery once listed seven tools no MCP client could call.

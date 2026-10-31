@@ -1,13 +1,14 @@
 //! Transport-agnostic agent request types and backend abstractions.
 //!
-//! Edge transports and the in-process agent plane depend on this module. It
-//! deliberately exposes a curated root API so its implementation modules can
-//! become a standalone crate without preserving internal module paths.
+//! The product's agent plane and the MCP sidecar (`restream-mcp`) both depend
+//! on this crate; it depends on neither, and on no runtime, SQL or HTTP stack.
 
-pub(crate) mod backend;
-pub(crate) mod errors;
-pub(crate) mod tools;
-pub(crate) mod types;
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
+mod backend;
+mod errors;
+mod tools;
+mod types;
 
 pub use backend::{AgentBackend, AgentFuture, AgentResult};
 pub use errors::AgentError;

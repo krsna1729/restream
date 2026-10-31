@@ -46,11 +46,12 @@ responsibility, then `cargo xtask source-audit`. Apply AGENTS.md contract,
 frontend, concurrency, and benchmark gates to the actual changes.
 
 For MCP/agent feature boundaries, run the `lint` group's
-`--no-default-features` MCP compile matrix (`cargo xtask lint`, defined in `crates/xtask/src/checks.rs`). Lower features must compile with `agent-plane` and
-`agent-execution` disabled; a feature graph that implicitly enables the upper
+`--no-default-features` MCP compile matrix (`cargo xtask lint`, defined in `crates/xtask/src/checks.rs`). The `restream-mcp` crate must compile with
+no agent feature; a feature graph that implicitly enables the upper
 layer does not prove isolation. Keep the `mcp-http-backend` gate beside its
-adapter module. Treat `mcp-embedded` as the intentional `mcp-core` plus
-`agent-plane` combination; it must not enable `agent-execution`.
+adapter module (`crates/restream-mcp/src/lib.rs`). Treat `mcp-embedded` as the
+intentional `mcp-core` plus `agent-plane` combination; it must not enable
+`agent-execution`.
 
 Report the dependency change and whether the result is a lexical split,
 ownership change, or independently justified crate boundary.

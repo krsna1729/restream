@@ -1,10 +1,10 @@
 //! HTTP backend that talks to the existing `/api/v1/agent/*` routes.
 
-use crate::agent_core::{
+use reqwest::header::{CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue};
+use restream_agent_contract::{
     AgentBackend, AgentError, AgentFuture, ApprovalRequest, InvestigationRequest,
     OperationCreateRequest, PlanRequest, VerifyRequest,
 };
-use reqwest::header::{CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn this_builds_engine_status_matches_the_local_identity() {
-        let (status, _) = crate::runtime_info::status_and_sbom(false);
+        let (status, _) = restream::runtime_info::status_and_sbom(false);
         assert_eq!(
             parse_build_identity(&status).expect("engine status carries an identity"),
             local_build_identity()

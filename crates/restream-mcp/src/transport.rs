@@ -5,9 +5,8 @@
 //! and backends; this layer is only responsible for carrying those operations
 //! over MCP transports.
 
-use crate::agent_core::{AgentBackend, AgentError};
-use crate::agent_mcp::handlers::AgentToolHandler;
-use crate::agent_mcp::tools::available_tool_catalog;
+use crate::handlers::AgentToolHandler;
+use crate::tools::available_tool_catalog;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -16,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use bytes::Bytes;
+use restream_agent_contract::{AgentBackend, AgentError};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
@@ -643,7 +643,7 @@ fn method_not_allowed_response(allow: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_core::{
+    use restream_agent_contract::{
         AgentBackend, AgentFuture, ApprovalRequest, InvestigationRequest, OperationCreateRequest,
         PlanRequest, VerifyRequest,
     };
@@ -713,7 +713,7 @@ mod tests {
             "operationId": "op-1",
             "approvedBy": "probe",
         });
-        for tool in crate::agent_core::AGENT_TOOLS {
+        for tool in restream_agent_contract::AGENT_TOOLS {
             let result = handler.dispatch(tool.name, input.clone()).await;
             assert!(result.is_ok(), "{} did not dispatch: {result:?}", tool.name);
         }

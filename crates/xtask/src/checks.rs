@@ -157,19 +157,17 @@ static CLIPPY_MCP: Step = Step::command(
         "warnings",
     ]),
 );
-// The MCP feature matrix selects the product package explicitly: workspace
-// members such as the harness otherwise re-enable its default features.
-// Lower layers compile with agent-plane and agent-execution disabled.
+// The MCP feature matrix selects packages explicitly: workspace members such
+// as the harness otherwise re-enable the product's default features. The MCP
+// sidecar crate compiles without the agent plane or execution.
 static CHECK_MCP_CORE: Step = Step::command(
     "check-mcp-core",
     cargo(&[
         "check",
         "-p",
-        "restream",
+        "restream-mcp",
         "--lib",
         "--no-default-features",
-        "--features",
-        "mcp-core",
     ]),
 );
 static CHECK_MCP_SERVER: Step = Step::command(
@@ -177,7 +175,7 @@ static CHECK_MCP_SERVER: Step = Step::command(
     cargo(&[
         "check",
         "-p",
-        "restream",
+        "restream-mcp",
         "--lib",
         "--no-default-features",
         "--features",
@@ -189,7 +187,7 @@ static CHECK_MCP_BIN: Step = Step::command(
     cargo(&[
         "check",
         "-p",
-        "restream",
+        "restream-mcp",
         "--bin",
         "restream-mcp",
         "--no-default-features",
@@ -211,8 +209,7 @@ static CHECK_MCP_EMBEDDED: Step = Step::command(
         "mcp-embedded",
     ]),
 );
-/// The agent tool list (discovery, MCP catalog, dispatch) and agent output
-/// mutations.
+/// Agent output mutations with the MCP sidecar and execution in one build.
 static TEST_AGENT_EMBEDDED: Step = Step::command(
     "test-agent-embedded",
     cargo(&[
@@ -224,8 +221,20 @@ static TEST_AGENT_EMBEDDED: Step = Step::command(
         "--features",
         "mcp-embedded,agent-execution",
         "--",
-        "agent_mcp",
         "agent_service",
+    ]),
+);
+/// The MCP catalog against the shared agent tool list, and dispatch.
+static TEST_MCP: Step = Step::command(
+    "test-mcp",
+    cargo(&[
+        "test",
+        "-p",
+        "restream-mcp",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "agent-execution",
     ]),
 );
 /// Both compiled-out tests must exist, not merely a passing test binary: a
@@ -457,6 +466,7 @@ static GROUPS: &[Group] = &[
             &CHECK_MCP_BIN,
             &CHECK_MCP_EMBEDDED,
             &TEST_AGENT_EMBEDDED,
+            &TEST_MCP,
             &AGENT_COMPILED_OUT_FILTERS,
             &CLIPPY_NO_DEFAULT,
             &TEST_AGENT_COMPILED_OUT,

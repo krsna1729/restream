@@ -1,6 +1,6 @@
 [package]
 name = "restream"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.96"
 publish = false
@@ -11,9 +11,11 @@ repository = "https://github.com/krsna1729/restream"
 resolver = "3"
 members = [
     "crates/xtask",
+    "crates/restream-agent-contract",
     "crates/restream-core",
     "crates/restream-domain",
     "crates/restream-engine",
+    "crates/restream-mcp",
     "crates/restream-sync",
     "crates/restream-mpegts",
     "crates/restream-rtmp",
@@ -22,6 +24,10 @@ members = [
     "crates/test_harness",
 ]
 default-members = [".", "crates/*"]
+
+# `restream-mcp` checks that its target reports the same version and commit.
+[workspace.package]
+version = "0.1.0"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
@@ -42,17 +48,25 @@ workspace = true
 # Change Studio. `-p restream --no-default-features` removes them without
 # workspace consumers re-enabling defaults through feature unification.
 default = ["agent-execution"]
-agent-plane = []
-agent-execution = ["agent-plane"]
-mcp-core = []
-mcp-server = ["mcp-core"]
-mcp-http-backend = ["mcp-core"]
+agent-plane = ["dep:restream-agent-contract"]
+agent-execution = [
+    "agent-plane",
+    "restream-agent-contract/agent-execution",
+    "restream-mcp?/agent-execution",
+]
+# The MCP sidecar lives in `crates/restream-mcp`; these build it alongside the
+# product (`cargo build --bin restream-mcp --features mcp-server,mcp-http-backend`).
+mcp-core = ["dep:restream-mcp"]
+mcp-server = ["mcp-core", "restream-mcp/mcp-server"]
+mcp-http-backend = ["mcp-core", "restream-mcp/mcp-http-backend"]
 mcp-embedded = ["mcp-core", "agent-plane"]
 # Forwards the engine's benchmark-only SRT shard-count seam to bench-profile
 # `restream` builds (`RESTREAM_BENCH_FEATURES=srt-shard-bench cargo xtask build-bench`).
 srt-shard-bench = ["restream-engine/srt-shard-bench"]
 
 [dependencies]
+restream-agent-contract = { path = "crates/restream-agent-contract", optional = true }
+restream-mcp = { path = "crates/restream-mcp", optional = true }
 restream-core = { path = "crates/restream-core" }
 restream-domain = { path = "crates/restream-domain" }
 restream-engine = { path = "crates/restream-engine" }
@@ -118,11 +132,6 @@ loom = { version = "0.7", features = ["checkpoint"] }
 ts-rs = "12"
 restream-domain = { path = "crates/restream-domain", features = ["ts"] }
 restream-engine = { path = "crates/restream-engine", features = ["test-support", "ts"] }
-
-[[bin]]
-name = "restream-mcp"
-path = "src/bin/restream-mcp.rs"
-required-features = ["mcp-server", "mcp-http-backend"]
 
 [[bench]]
 name = "api_health"

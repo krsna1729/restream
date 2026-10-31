@@ -270,11 +270,12 @@ left out. Fields:
 ## Shared Rust implementation
 
 The `restream-mcp` sidecar uses the shared `AgentBackend` trait
-(`src/agent_core/backend.rs`) and calls the product HTTP surface. MCP is a
-transport adapter, not a second implementation of planning or execution
-policy. `HttpAgentBackend` is the only backend; there is no in-process MCP
-backend. `src/agent_core/tools.rs` holds the one tool list that both
-capability discovery and the MCP catalog follow.
+(`crates/restream-agent-contract/src/backend.rs`) and calls the product HTTP
+surface. MCP is a transport adapter, not a second implementation of planning
+or execution policy. `HttpAgentBackend` is the only backend; there is no
+in-process MCP backend. `crates/restream-agent-contract/src/tools.rs` holds
+the one tool list that both capability discovery and the MCP catalog follow.
+The `restream-mcp` crate depends on the contract crate, not on `restream`.
 
 ## MCP server architecture
 
@@ -285,7 +286,7 @@ This diagram shows how an MCP client reaches the agent plane.
 ```mermaid
 flowchart LR
     Client["MCP client"] -->|"streamable HTTP /mcp or stdio"| Sidecar["restream-mcp"]
-    Sidecar --> Catalog["agent_mcp handlers and tools"]
+    Sidecar --> Catalog["restream-mcp handlers and tools"]
     Catalog --> Backend["HttpAgentBackend"]
     Backend -->|"/api/v1/agent/*"| Server["restream"]
 ```
@@ -295,7 +296,7 @@ The sidecar supports streamable HTTP and stdio. The default HTTP bind is
 
 ### Tool contract
 
-The catalog in `src/agent_mcp/tools.rs` has eleven tools:
+The catalog in `crates/restream-mcp/src/tools.rs` has eleven tools:
 `get_agent_capabilities`, `get_agent_context`,
 `investigate_pipeline_issue`, `plan_pipeline_change`, `validate_change`,
 `preview_graph_diff`, `create_agent_operation`, `get_agent_operation`,
@@ -351,18 +352,20 @@ empty origin list does not grant a wildcard browser origin.
 ### Feature boundaries
 
 `agent-execution` (which enables `agent-plane`) is in the default build. The
-MCP features are opt-in.
+MCP features are opt-in; on `restream` they enable the `restream-mcp` crate
+and its features of the same name.
 
 | Feature | Adds |
 |---|---|
 | `agent-plane` | Agent read and planning API (default) |
 | `agent-execution` | Approval-gated operation execution (default) |
-| `mcp-core` | Shared MCP-facing backend and type contract |
-| `mcp-server` | MCP transport and server |
+| `mcp-core` | The `restream-mcp` crate: tool catalog, handlers, transports |
+| `mcp-server` | The `restream-mcp` binary target |
 | `mcp-http-backend` | HTTP adapter to `/api/v1/agent/*` |
 | `mcp-embedded` | Compile combo of `mcp-core` + `agent-plane` |
 
-`restream-mcp` requires `mcp-server` and `mcp-http-backend` (`Cargo.toml`).
+`restream-mcp` requires `mcp-server` and `mcp-http-backend`
+(`crates/restream-mcp/Cargo.toml`).
 
 ### Embedded mode
 
@@ -374,10 +377,10 @@ binary. Use the `restream-mcp` sidecar.
 
 | Path | Responsibility |
 |---|---|
-| `src/agent_core/` | Backend trait, request types, errors, tool list |
-| `src/agent_backends/http.rs` | `HttpAgentBackend` |
-| `src/agent_mcp/` | Tool catalog, handlers, auth context, transports |
-| `src/bin/restream-mcp.rs` | CLI, environment, compatibility check |
+| `crates/restream-agent-contract/` | Backend trait, request types, errors, tool list |
+| `crates/restream-mcp/src/http.rs` | `HttpAgentBackend` |
+| `crates/restream-mcp/src/` | Tool catalog, handlers, auth context, transports |
+| `crates/restream-mcp/src/main.rs` | CLI, environment, compatibility check |
 | `src/agent_plane.rs`, `src/agent_plane/` | Redaction, investigation, planning, validation, graph and topology preview, verification gates |
 | `src/agent_execution.rs` | Operation store, states, idempotency, audit log |
 | `src/api/agent.rs`, `src/api/agent/` | Authenticated HTTP handlers, apply and verify |

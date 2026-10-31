@@ -18,3 +18,5 @@ ignore:
   - "target/"
   - "benches/"
   - "build.rs"
+  - "build_identity.rs"
+  - "crates/*/build.rs"

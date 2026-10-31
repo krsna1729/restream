@@ -68,7 +68,7 @@ fn main() {
     }
 
     if print_tools {
-        for tool in restream::agent_mcp::tool_catalog() {
+        for tool in restream_mcp::tool_catalog() {
             println!(
                 "{}\tfeature={}\tcompiledIn={}",
                 tool.name, tool.requires_feature, tool.compiled_in
@@ -98,20 +98,20 @@ fn main() {
             std::env::var("RESTREAM_AGENT_SESSION_COOKIE").map(|s| s.trim().to_string())
         {
             if cookie.is_empty() {
-                restream::agent_backends::http::HttpAgentAuth::None
+                restream_mcp::http::HttpAgentAuth::None
             } else {
-                restream::agent_backends::http::HttpAgentAuth::SessionCookie(cookie)
+                restream_mcp::http::HttpAgentAuth::SessionCookie(cookie)
             }
         } else if let Ok(token) =
             std::env::var("RESTREAM_AGENT_BEARER_TOKEN").map(|s| s.trim().to_string())
         {
             if token.is_empty() {
-                restream::agent_backends::http::HttpAgentAuth::None
+                restream_mcp::http::HttpAgentAuth::None
             } else {
-                restream::agent_backends::http::HttpAgentAuth::BearerToken(token)
+                restream_mcp::http::HttpAgentAuth::BearerToken(token)
             }
         } else {
-            restream::agent_backends::http::HttpAgentAuth::None
+            restream_mcp::http::HttpAgentAuth::None
         };
         let allowed_origins = std::env::var("RESTREAM_MCP_ALLOWED_ORIGINS")
             .ok()
@@ -124,12 +124,12 @@ fn main() {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let backend = restream::agent_backends::http::HttpAgentBackend::new(base_url, auth);
-        let config = restream::agent_mcp::TransportConfig {
+        let backend = restream_mcp::http::HttpAgentBackend::new(base_url, auth);
+        let config = restream_mcp::TransportConfig {
             mode: if stdio {
-                restream::agent_mcp::TransportMode::Stdio
+                restream_mcp::TransportMode::Stdio
             } else {
-                restream::agent_mcp::TransportMode::StreamableHttp
+                restream_mcp::TransportMode::StreamableHttp
             },
             bind_addr,
             allowed_origins,
@@ -151,7 +151,7 @@ fn main() {
                 }
             }
         }
-        let result = runtime.block_on(restream::agent_mcp::run_server(config, Arc::new(backend)));
+        let result = runtime.block_on(restream_mcp::run_server(config, Arc::new(backend)));
         if let Err(error) = result {
             eprintln!("{error}");
             std::process::exit(1);
