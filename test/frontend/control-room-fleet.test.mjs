@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
+import * as fleetModel from "../../web/ts/control-room/fleet-model.ts";
+import { appendTrends, telemetryRates } from "../../web/ts/control-room/rates.ts";
+import {
+  parseSearch,
+  placeFromSearch,
+  placeSearch,
+  stringifySearch,
+} from "../../web/ts/control-room/route.ts";
 
-const fleetModel = await loadCompiledFrontendModule("control-room/fleet-model.js");
 const { attentionGroups, buildFleetModel, pipelineHealth } = fleetModel;
-const { appendTrends, telemetryRates } = await loadCompiledFrontendModule(
-  "control-room/rates.js",
-);
-const { parseSearch, placeFromSearch, placeSearch, stringifySearch } =
-  await loadCompiledFrontendModule("control-room/route.js");
 
 const INGEST = { inputId: "in", protocol: "srt", videoCodec: "h264" };
 

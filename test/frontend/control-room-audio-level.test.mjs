@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { FLOOR_DB, channelLabels, declaredChannels, levelDb, meterFraction } = await loadCompiledFrontendModule("control-room/audio-level.js");
+import {
+  FLOOR_DB,
+  channelLabels,
+  declaredChannels,
+  levelDb,
+  meterFraction,
+} from "../../web/ts/control-room/audio-level.ts";
 
 test("a full-scale square wave is 0 dBFS, half scale about -6, silence the floor", () => {
   const square = Float32Array.from({ length: 512 }, (_, index) => (index % 2 ? 1 : -1));

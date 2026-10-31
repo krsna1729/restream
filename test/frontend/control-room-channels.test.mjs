@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
+import * as channelsModel from "../../web/ts/control-room/channels-model.ts";
 
-const channelsModel = await loadCompiledFrontendModule("control-room/channels-model.js");
 const { buildChannels, bulkTargets, channelState, platformOf, platformSummaries, runBulk } = channelsModel;
 
 function output(id, overrides = {}) {

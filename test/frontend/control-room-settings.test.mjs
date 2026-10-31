@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   NEW_PROFILE,
   banLabel,
   nextProfileName,
@@ -13,7 +11,7 @@ const {
   profilesToSave,
   resetOne,
   scopeLabel,
-} = await loadCompiledFrontendModule("control-room/settings-model.js");
+} from "../../web/ts/control-room/settings-model.ts";
 
 test("forgetting one client sends the engine's own scope key, which it accepts", () => {
   // The engine rejects any scope it does not know ("all", "ip") with 400; the

@@ -1,5 +1,3 @@
-import { loadFrontendModule } from "./frontend-module-loader.mjs";
-
 class FakeClassList {
   constructor(owner) {
     this.owner = owner;
@@ -457,15 +455,6 @@ export function installFakeDom() {
     },
     configurable: true,
   });
-  Object.defineProperty(globalThis, "__FRONTEND_MODULE_TOKEN__", {
-    value: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    configurable: true,
-    writable: true,
-  });
 
   return { document: documentStub, window: windowStub };
-}
-
-export async function loadCompiledFrontendModule(relativePath) {
-  return loadFrontendModule(relativePath);
 }

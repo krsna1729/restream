@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { formatDuration, ingestReadiness, searchMedia, splitLibrary, storedForms } =
-  await loadCompiledFrontendModule("control-room/media-model.js");
-const {
+import {
+  formatDuration,
+  ingestReadiness,
+  searchMedia,
+  splitLibrary,
+  storedForms,
+} from "../../web/ts/control-room/media-model.ts";
+import {
   executionTopology,
   hostReadiness,
   kernelCapabilities,
   overallReadiness,
   ownerAttention,
-} = await loadCompiledFrontendModule("control-room/system-model.js");
-const systemModel = await loadCompiledFrontendModule("control-room/system-model.js");
+} from "../../web/ts/control-room/system-model.ts";
+import * as systemModel from "../../web/ts/control-room/system-model.ts";
 
 function file(name, overrides = {}) {
   return { name, size: 1, modifiedAt: "2026-10-12T10:00:00Z", ...overrides };

@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { audioTrackWords, bitrateWords, loudnessWords, overallSeverity, qaCostWords, qaVerdicts, streamVerdicts, trackMeter, loudnessFraction, timelineVerdicts, decoderVerdicts, trackName } = await loadCompiledFrontendModule(
-  "control-room/stream-health-model.js",
-);
+import {
+  audioTrackWords,
+  bitrateWords,
+  loudnessWords,
+  overallSeverity,
+  qaCostWords,
+  qaVerdicts,
+  streamVerdicts,
+  trackMeter,
+  loudnessFraction,
+  timelineVerdicts,
+  decoderVerdicts,
+  trackName,
+} from "../../web/ts/control-room/stream-health-model.ts";
 
 const OUTPUTS = {
   wanted: 0,
@@ -89,7 +98,7 @@ test("frame drops, loss, a long link and a full buffer each have a verdict; no s
 });
 
 test("only a pushed source has a contribution link to judge", async () => {
-  const { contributionTransport } = await loadCompiledFrontendModule("control-room/stream-health-model.js");
+  const { contributionTransport } = await import("../../web/ts/control-room/stream-health-model.ts");
   assert.equal(contributionTransport("srt"), "SRT");
   assert.equal(contributionTransport("RTMP"), "TCP");
   assert.equal(contributionTransport("file"), null);

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   applyChoice,
   choiceKey,
   destinationChoices,
@@ -17,7 +15,7 @@ const {
   pipelineDraft,
   pipelineProblem,
   pipelineWrite,
-} = await loadCompiledFrontendModule("control-room/manage-model.js");
+} from "../../web/ts/control-room/manage-model.ts";
 
 const filePipeline = {
   id: "p1",

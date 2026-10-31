@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  installFakeDom,
-  loadCompiledFrontendModule,
-} from "../support/helpers/fake-dom.mjs";
+import { installFakeDom } from "../support/helpers/fake-dom.mjs";
+import { loadFrontendModule } from "../support/helpers/frontend-module-loader.mjs";
 
 class FakeEventSource {
   static CONNECTING = 0;
@@ -60,7 +58,7 @@ test("managed log stream keeps one connection for one filter and suppresses repl
   installFakeDom();
   installFakeEventSource();
   const { createManagedLogStream } =
-    await loadCompiledFrontendModule("core/log-stream.js");
+    await loadFrontendModule("core/log-stream.js");
   const stream = createManagedLogStream();
   const first = [];
   const updated = [];
@@ -97,7 +95,7 @@ test("managed log stream replaces changed scope and ignores the old generation",
   installFakeDom();
   installFakeEventSource();
   const { createManagedLogStream } =
-    await loadCompiledFrontendModule("core/log-stream.js");
+    await loadFrontendModule("core/log-stream.js");
   const stream = createManagedLogStream();
   const received = [];
 
@@ -128,7 +126,7 @@ test("managed log stream leaves transient reconnect to EventSource and reports t
   installFakeDom();
   installFakeEventSource();
   const { createManagedLogStream } =
-    await loadCompiledFrontendModule("core/log-stream.js");
+    await loadFrontendModule("core/log-stream.js");
   const stream = createManagedLogStream();
   let unavailable = 0;
 

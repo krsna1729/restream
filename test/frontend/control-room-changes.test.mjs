@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   NEW_DRAFT,
   changeRequest,
   convergenceTimeline,
@@ -13,7 +11,7 @@ const {
   scenarioLoad,
   topologyLines,
   verification,
-} = await loadCompiledFrontendModule("control-room/changes-model.js");
+} from "../../web/ts/control-room/changes-model.ts";
 
 test("a change becomes the planner's request; a change to a destination sends only what was filled in", () => {
   const add = { ...NEW_DRAFT, name: " DR ", url: " srt://dr:9000 ", profile: "720p" };

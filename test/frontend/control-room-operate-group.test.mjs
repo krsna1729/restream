@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { buildMediaGraph } = await loadCompiledFrontendModule("control-room/operate-model.js");
-const { inspectGroup } = await loadCompiledFrontendModule(
-  "control-room/operate-group-model.js",
-);
+import { buildMediaGraph } from "../../web/ts/control-room/operate-model.ts";
+import { inspectGroup } from "../../web/ts/control-room/operate-group-model.ts";
 
 function output(id, overrides = {}) {
   return {

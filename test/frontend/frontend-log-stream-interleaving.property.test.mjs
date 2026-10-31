@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fc from "fast-check";
 
-import { installFakeDom, loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
+import { installFakeDom } from "../support/helpers/fake-dom.mjs";
 
 // The reconnect/backoff stream contracts (frontend-log-stream.test.mjs and
 // friends) are all hand-picked scenarios. This is the frontend equivalent of
@@ -80,7 +80,7 @@ test("managed log stream never delivers a superseded source's events, under any 
         installFakeDom();
         installFakeEventSource();
         const { createManagedLogStream } =
-          await loadCompiledFrontendModule("core/log-stream.js");
+          await import("../../web/ts/core/log-stream.ts");
         const stream = createManagedLogStream();
 
         // liveSourceIndex is derived purely from observable driver actions

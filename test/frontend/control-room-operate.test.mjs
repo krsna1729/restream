@@ -1,21 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   buildMediaGraph,
   buildDestinationRows,
   destinationFilterCounts,
   filterDestinationRows,
   isYoutubeUrl,
   youtubeVerdict,
-} = await loadCompiledFrontendModule(
-  "control-room/operate-model.js",
-);
-const { buildFleetModel, filterPipelineRows } = await loadCompiledFrontendModule(
-  "control-room/fleet-model.js",
-);
+} from "../../web/ts/control-room/operate-model.ts";
+import { buildFleetModel, filterPipelineRows } from "../../web/ts/control-room/fleet-model.ts";
 
 function output(id, overrides = {}) {
   return {

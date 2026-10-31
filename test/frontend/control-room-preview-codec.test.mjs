@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const {
+import {
   hlsDecodesHevc,
   isHevc,
   moqUndecodableReason,
   passthroughPreviewUrl,
   programPreviewChoice,
-} = await loadCompiledFrontendModule("control-room/preview-codec.js");
+} from "../../web/ts/control-room/preview-codec.ts";
 
 const URLS = { source: "/hls/p.hevc/master.m3u8", h264: "/hls/p/master.m3u8" };
 const mse = (supported) => ({

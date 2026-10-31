@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { ONBOARDING, PAGE_HELP, moveStep, stepsFor } = await loadCompiledFrontendModule("control-room/help-model.js");
-const { GUIDES, canFollow } = await loadCompiledFrontendModule("control-room/guides-model.js");
+import { ONBOARDING, PAGE_HELP, moveStep, stepsFor } from "../../web/ts/control-room/help-model.ts";
+import { GUIDES, canFollow } from "../../web/ts/control-room/guides-model.ts";
 
 test("a tour shows a role only what it may act on and open", () => {
   const steps = [

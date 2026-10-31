@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { guessKind, channelProblem, newlyOpened, tabTitle, base64UrlToBytes, channelHealth } = await loadCompiledFrontendModule(
-  "control-room/notify-model.js",
-);
+import {
+  guessKind,
+  channelProblem,
+  newlyOpened,
+  tabTitle,
+  base64UrlToBytes,
+  channelHealth,
+} from "../../web/ts/control-room/notify-model.ts";
 
 const draft = (change) => ({ kind: "webhook", name: "ops", target: "https://x.example/h", minSeverity: "critical", onResolved: true, enabled: true, ...change });
 

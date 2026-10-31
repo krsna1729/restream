@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { degradedTotal, sentSince, takeFleetSample } = await loadCompiledFrontendModule(
-  "control-room/fleet-history.js",
-);
-const { worstFirst } = await loadCompiledFrontendModule("control-room/fleet-model.js");
+import {
+  degradedTotal,
+  sentSince,
+  takeFleetSample,
+} from "../../web/ts/control-room/fleet-history.ts";
+import { worstFirst } from "../../web/ts/control-room/fleet-model.ts";
 
 function output(id, overrides = {}) {
   return {

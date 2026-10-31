@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { paletteEntries, rank } = await loadCompiledFrontendModule(
-  "control-room/shell/palette-model.js",
-);
-const { compactCount, navBadges } = await loadCompiledFrontendModule(
-  "control-room/shell/badges.js",
-);
-const { resolveTheme } = await loadCompiledFrontendModule("ui/theme.js");
+import { paletteEntries, rank } from "../../web/ts/control-room/shell/palette-model.ts";
+import { compactCount, navBadges } from "../../web/ts/control-room/shell/badges.ts";
+import { resolveTheme } from "../../web/ts/ui/theme.ts";
 
 function output(id, name, overrides = {}) {
   return {

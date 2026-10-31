@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { ENGINE_POLICY, SCENARIOS, backoffMs, simulate } = await loadCompiledFrontendModule(
-  "control-room/stability/sim-engine.js",
-);
+import {
+  ENGINE_POLICY,
+  SCENARIOS,
+  backoffMs,
+  simulate,
+} from "../../web/ts/control-room/stability/sim-engine.ts";
+import {
+  CELLS,
+  queueCells,
+  storyFromSim,
+  storyFromTrace,
+} from "../../web/ts/control-room/stability/story-model.ts";
 
 const FIXED_1S = { kind: "fixed", baseMs: 1000, maxMs: 1000, maxRetries: 1e9 };
 const IMMEDIATE = { kind: "immediate", baseMs: 0, maxMs: 0, maxRetries: 1e9 };
@@ -65,10 +72,6 @@ test("frames account for every destination and the wasted share is a fraction", 
     assert.ok(frame.wastedShare >= 0 && frame.wastedShare <= 1);
   }
 });
-
-const { CELLS, queueCells, storyFromSim, storyFromTrace } = await loadCompiledFrontendModule(
-  "control-room/stability/story-model.js",
-);
 
 test("queue cells keep the strip's scale and colour by what the queue holds", () => {
   assert.deepEqual(queueCells({ fresh: 0, copy: 0, handshake: 0 }, 100), Array(CELLS).fill("empty"));

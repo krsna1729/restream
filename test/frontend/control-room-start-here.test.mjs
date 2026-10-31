@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { startPath } = await loadCompiledFrontendModule("control-room/start-here-model.js");
+import { startPath } from "../../web/ts/control-room/start-here-model.ts";
 
 function row(id, overrides = {}) {
   return { id, name: id, source: null, protocols: new Map(), delivering: 0, ...overrides };

@@ -92,13 +92,13 @@ function installBrowserStubs() {
   });
 }
 
-async function loadCompiledModule(relativePath) {
+async function loadBrowserModule(relativePath) {
   installBrowserStubs();
   return loadFrontendModule(relativePath);
 }
 
 async function loadApiModule() {
-  return loadCompiledModule("core/api.js");
+  return loadBrowserModule("core/api.js");
 }
 
 test("frontend API helpers call the canonical v1 routes and methods", async () => {

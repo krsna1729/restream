@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  installFakeDom,
-  loadCompiledFrontendModule,
-} from "../support/helpers/fake-dom.mjs";
+import { installFakeDom } from "../support/helpers/fake-dom.mjs";
 
 function output(id, convergence) {
   return {
@@ -57,7 +54,7 @@ class FakeSource {
 
 async function loadStream() {
   installFakeDom();
-  return loadCompiledFrontendModule("core/state-stream.js");
+  return import("../../web/ts/core/state-stream.ts");
 }
 
 test("deltas apply in revision order; removed entities go", async () => {

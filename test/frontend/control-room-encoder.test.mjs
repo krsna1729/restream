@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
-
-const { encoderIdentity, declaredWords, declaredVerdicts } = await loadCompiledFrontendModule("control-room/encoder-model.js");
+import {
+  encoderIdentity,
+  declaredWords,
+  declaredVerdicts,
+} from "../../web/ts/control-room/encoder-model.ts";
 
 test("encoders read as products people know, with their version", () => {
   const cases = [
