@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   NEW_DRAFT,
+  actionApproval,
   changeRequest,
   convergenceTimeline,
   liveConvergence,
@@ -12,6 +13,34 @@ import {
   topologyLines,
   verification,
 } from "../../web/ts/control-room/changes-model.ts";
+
+test("a change is offered for approval only from its required role up", () => {
+  const remove = { index: 1, kind: "removeOutput", requiredRole: "admin", approval: null };
+  const stop = { index: 0, kind: "stopOutput", requiredRole: "operator", approval: null };
+
+  assert.deepEqual(actionApproval(stop, "operator"), {
+    label: "needs operator",
+    canApprove: true,
+    refusal: null,
+  });
+  assert.deepEqual(actionApproval(remove, "operator"), {
+    label: "needs admin",
+    canApprove: false,
+    refusal: "Needs the admin role; this session acts as operator.",
+  });
+  assert.equal(actionApproval(stop, "viewer").canApprove, false);
+  assert.equal(actionApproval(remove, "admin").canApprove, true);
+
+  const approved = {
+    ...remove,
+    approval: { approvedBy: "boss", role: "admin", reason: null, approvedAt: "t" },
+  };
+  assert.deepEqual(actionApproval(approved, "admin"), {
+    label: "approved by boss (admin)",
+    canApprove: false,
+    refusal: null,
+  });
+});
 
 test("a change becomes the planner's request; a change to a destination sends only what was filled in", () => {
   const add = { ...NEW_DRAFT, name: " DR ", url: " srt://dr:9000 ", profile: "720p" };

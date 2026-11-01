@@ -10,8 +10,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-
-- [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Q-111 receiver TLPKTDROP floor](#q-111-protocol-opus-an-unrecovered-loss-stalls-srt-rs-delivery-at-least-one-second)
@@ -55,15 +53,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-101 [agent] [opus] Explain an incident and approve its fix in one place
-- Goal: "Explain this incident" reads the incident's flight-recorder window,
-  diagnoses it deterministically and proposes a fix as an agent-plane plan;
-  approval shows what the change touches and approves one action at a time
-  by role, in the product only.
-- Files: `web/ts/control-room/incidents*.tsx`, `crates/restream-agent/src/plane/`.
-- Gates: a recorded incident yields a plan that names the right layer; an
-  approval from a role below the action's minimum is refused and audited.
 
 ### Q-102 [frontend] [sonnet] Fuzzy command palette
 - Goal: the ⌘K palette matches loosely worded requests to the existing

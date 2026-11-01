@@ -30,6 +30,7 @@ import type { LiveSnapshot } from "./store.js";
 import { When } from "./when-view.js";
 import { absoluteTime, duration } from "./when.js";
 import { incidentWindow } from "./stability/replay-window.js";
+import { Explain } from "./incident-explain.js";
 
 /** Open incidents, what failed and what did not, and what to do. */
 export function Incidents({ live }: { live: LiveSnapshot }) {
@@ -113,13 +114,16 @@ export function Incidents({ live }: { live: LiveSnapshot }) {
           />
           {selected ? (
             <>
-              <Detail
-                key={selected.id}
-                alert={selected}
-                resolvedAt={resolvedAt}
-                events={events}
-                names={names}
-              />
+              <div className="flex min-w-0 flex-col gap-4">
+                <Detail
+                  key={selected.id}
+                  alert={selected}
+                  resolvedAt={resolvedAt}
+                  events={events}
+                  names={names}
+                />
+                <Explain key={`${selected.id}@${selected.firstSeen ?? ""}`} alert={selected} live={live} />
+              </div>
               <Evidence
                 alert={selected}
                 resolvedAt={resolvedAt}
