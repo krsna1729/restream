@@ -90,12 +90,16 @@ impl EgressFabricRuntime {
     /// Admission for a new output (`reason_for` gave `Add`), after the
     /// Add's `rescale`: refused when the shard it would be placed on would
     /// run above `ADMIT_CEILING` with it. Every shard stays under the
-    /// ceiling, whatever the pool's average.
+    /// ceiling, whatever the pool's average. Only a `srt-shard-bench` build
+    /// may skip it (`RESTREAM_BENCH_SRT_ADMISSION=0`).
     pub(crate) fn admit_add(
         &self,
         profile: crate::config::EgressShardProfile,
         output_id: &crate::egress::command::OutputId,
     ) -> Result<(), Saturated> {
+        if profile.admission_bypassed() {
+            return Ok(());
+        }
         let shard = self.manager.assign_output(output_id);
         let shard_outputs = self.manager.desired_count_for_shard(shard) + 1;
         self.sizer

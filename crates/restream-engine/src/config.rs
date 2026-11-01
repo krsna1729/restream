@@ -79,6 +79,20 @@ fn srt_bench_shard_override() -> Option<u32> {
     shards
 }
 
+#[cfg(feature = "srt-shard-bench")]
+const SRT_BENCH_ADMISSION_ENV: &str = "RESTREAM_BENCH_SRT_ADMISSION";
+
+/// Benchmark-only: `RESTREAM_BENCH_SRT_ADMISSION=0` skips SRT admission so a
+/// shard can be measured past the admission ceiling. Default builds always
+/// admit through the ceiling.
+fn srt_bench_admission_off() -> bool {
+    #[cfg(feature = "srt-shard-bench")]
+    let off = env_var(SRT_BENCH_ADMISSION_ENV).is_some_and(|value| value.trim() == "0");
+    #[cfg(not(feature = "srt-shard-bench"))]
+    let off = false;
+    off
+}
+
 impl EgressFabricConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
@@ -515,6 +529,11 @@ impl EgressShardProfile {
             Self::SrtOutputCount => srt_bench_shard_override(),
             Self::OutputCount => None,
         }
+    }
+
+    /// Whether a benchmark build skips admission for this profile.
+    pub(crate) fn admission_bypassed(self) -> bool {
+        self == Self::SrtOutputCount && srt_bench_admission_off()
     }
 }
 

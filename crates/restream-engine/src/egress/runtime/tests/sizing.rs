@@ -196,3 +196,35 @@ fn admission_holds_every_shard_under_the_ceiling() {
     assert!(refused.busy_pct > 60, "{refused:?}");
     runtime.shutdown();
 }
+
+/// The benchmark admission switch exists only in `srt-shard-bench` builds:
+/// there it admits past the ceiling; a default build refuses whatever the
+/// environment says.
+#[test]
+fn the_admission_bypass_is_benchmark_only() {
+    let profile = crate::config::EgressShardProfile::SrtOutputCount;
+    let probes = [Probe::default()];
+    let mut runtime = EgressFabricRuntime::new(
+        EgressManagerConfig::new(1, 1024).unwrap(),
+        group(1, &probes),
+    )
+    .unwrap();
+    runtime.sizer.forecast_feed(4.8e6 * 8.0);
+    for i in 0..9 {
+        runtime
+            .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
+            .unwrap();
+    }
+    let next = output_spec("out-9").id;
+    assert!(
+        runtime.admit_add(profile, &next).is_err(),
+        "past the ceiling"
+    );
+    crate::config::env::with_env_vars(&[("RESTREAM_BENCH_SRT_ADMISSION", "0")], || {
+        assert_eq!(
+            runtime.admit_add(profile, &next).is_ok(),
+            cfg!(feature = "srt-shard-bench")
+        );
+    });
+    runtime.shutdown();
+}
