@@ -294,13 +294,17 @@ static FIXTURE_DISCIPLINE: Step = Step::builtin("fixture-discipline", || {
 });
 
 const MIRI: Tool = Tool {
-    probe: &["cargo", "+nightly", "miri", "--version"],
-    hint: "rustup toolchain install nightly --profile minimal --component miri,rust-src",
+    probe: &["cargo", concat!("+", nightly!()), "miri", "--version"],
+    hint: concat!(
+        "rustup toolchain install ",
+        nightly!(),
+        " --profile minimal --component miri,rust-src"
+    ),
 };
 // The empty RUSTFLAGS keeps nightly lints from failing the gate without a
 // code change.
 const MIRI_ENGINE: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "miri",
     "test",
     "-p",
@@ -317,7 +321,7 @@ const MIRI_ENGINE: Cmd = cargo(&[
     ("RUSTFLAGS", ""),
 ]);
 const MIRI_CORE: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "miri",
     "test",
     "-p",
@@ -341,8 +345,12 @@ static KANI: Step = Step::builtin("kani-proofs", kani).needs(Tool {
 });
 
 const NIGHTLY: Tool = Tool {
-    probe: &["cargo", "+nightly", "--version"],
-    hint: "rustup toolchain install nightly --profile minimal --component rust-src",
+    probe: &["cargo", concat!("+", nightly!()), "--version"],
+    hint: concat!(
+        "rustup toolchain install ",
+        nightly!(),
+        " --profile minimal --component rust-src"
+    ),
 };
 // Rust code is instrumented: build-std with an explicit target, so
 // proc-macros and build scripts are not. The flags apply to these commands
@@ -354,7 +362,7 @@ const ASAN_ENV: &[(&str, &str)] = &[
     ("ASAN_OPTIONS", "detect_leaks=0"),
 ];
 const ASAN_ROOT: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "test",
     "-Zbuild-std",
     "--target",
@@ -367,7 +375,7 @@ const ASAN_ROOT: Cmd = cargo(&[
 ])
 .env(ASAN_ENV);
 const ASAN_ENGINE: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "test",
     "-Zbuild-std",
     "--target",
@@ -387,7 +395,7 @@ const ASAN_ENGINE: Cmd = cargo(&[
 ])
 .env(ASAN_ENV);
 const ASAN_SYNC: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "test",
     "-Zbuild-std",
     "--target",
@@ -400,7 +408,7 @@ const ASAN_SYNC: Cmd = cargo(&[
 ])
 .env(ASAN_ENV);
 const ASAN_MPEGTS: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "test",
     "-Zbuild-std",
     "--target",
@@ -413,7 +421,7 @@ const ASAN_MPEGTS: Cmd = cargo(&[
 ])
 .env(ASAN_ENV);
 const ASAN_EXTRACTED: Cmd = cargo(&[
-    "+nightly",
+    concat!("+", nightly!()),
     "test",
     "-Zbuild-std",
     "--target",
@@ -435,8 +443,12 @@ static ASAN_EXTRACTED_RUN: Step = Step::command("asan-extracted", ASAN_EXTRACTED
 
 static FUZZ_SEED_CORPUS: Step = Step::builtin("fuzz-seed-corpus", fuzz::seed_corpus);
 static FUZZ_TARGETS: Step = Step::builtin("fuzz-targets", fuzz::smoke).needs(Tool {
-    probe: &["cargo", "+nightly", "fuzz", "--version"],
-    hint: "rustup toolchain install nightly --profile minimal && cargo install cargo-fuzz --locked",
+    probe: &["cargo", concat!("+", nightly!()), "fuzz", "--version"],
+    hint: concat!(
+        "rustup toolchain install ",
+        nightly!(),
+        " --profile minimal && cargo install cargo-fuzz --locked"
+    ),
 });
 
 static CARGO_DENY: Step = Step::command(

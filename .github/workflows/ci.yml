@@ -317,8 +317,9 @@ jobs:
         run: npm run build:frontend
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Install nightly and cargo-fuzz
+        # The pinned nightly is `nightly!()` in crates/xtask/src/main.rs.
         run: |
-          rustup toolchain install nightly --profile minimal
+          rustup toolchain install nightly-2026-10-30 --profile minimal
           cargo install cargo-fuzz --locked
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Seed the corpus and run every parser target for 30 s
@@ -343,7 +344,7 @@ jobs:
       - name: Build frontend assets for the library
         run: npm run build:frontend
       - name: Install nightly with Miri
-        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+        run: rustup toolchain install nightly-2026-10-30 --profile minimal --component miri,rust-src
       - name: Run Miri over the selected modules
         run: cargo xtask miri
 
@@ -387,7 +388,7 @@ jobs:
       - name: Build frontend assets for the library
         run: npm run build:frontend
       - name: Install nightly with rust-src
-        run: rustup toolchain install nightly --profile minimal --component rust-src
+        run: rustup toolchain install nightly-2026-10-30 --profile minimal --component rust-src
       - name: Run the FFI-heavy and extracted-crate tests under ASan
         run: cargo xtask asan
 

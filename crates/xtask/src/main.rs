@@ -11,6 +11,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::{LazyLock, OnceLock};
 
+/// The nightly the Miri, ASan and fuzz gates run on. A floating `nightly`
+/// lets one upstream compiler regression fail every PR at once
+/// (`nightly-2026-10-31` could not compile `moq-net`). CI installs this
+/// same name in `.github/workflows/ci.yml`; move both together.
+macro_rules! nightly {
+    () => {
+        "nightly-2026-10-30"
+    };
+}
+
 mod api_drift;
 mod bins;
 mod capacity;
