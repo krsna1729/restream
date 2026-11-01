@@ -4,10 +4,10 @@ use crate::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::egress::factory::spawn_pipeline_fabric_shard_group;
 use crate::egress::journal::RingFeed;
 use crate::egress::manager::{
-    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
+    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -22,8 +22,22 @@ pub enum PipelineFabricEnsureError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineFabricDispatchError {
-    MissingFeed { feed_id: FeedId },
+    MissingFeed {
+        feed_id: FeedId,
+    },
+    /// Admission refused the new output; nothing was dispatched and its
+    /// pending target was dropped.
+    Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+}
+
+impl PipelineFabricDispatchError {
+    pub fn refused(&self) -> Option<&crate::egress::sizing::Saturated> {
+        match self {
+            Self::Saturated(saturated) => Some(saturated),
+            _ => None,
+        }
+    }
 }
 
 impl MediaEngine {
@@ -46,10 +60,14 @@ impl MediaEngine {
                 |_| feed.clone_reader(),
             )
             .map_err(PipelineFabricEnsureError::Spawn)?;
+            // Least-loaded and adaptive, as for the other fabrics (see
+            // `retain_sink_fabric_runtime`).
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
-                .expect("egress fabric manager config is clamped nonzero");
+                .expect("egress fabric manager config is clamped nonzero")
+                .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(PipelineFabricEnsureError::Runtime)?;
+                .map_err(PipelineFabricEnsureError::Runtime)?
+                .adaptive(config.shards);
 
             // Pipeline leaves have no poller either (see
             // `retain_sink_fabric_runtime`'s identical comment), so this is
@@ -124,10 +142,24 @@ impl MediaEngine {
         // shard the first time, instead of connecting once and immediately
         // getting rehomed onto a different shard.
         let mut rescale_inputs = rescale_inputs;
-        if matches!(command, EgressCommand::Add(_))
+        if let EgressCommand::Add(spec) = &command
             && let Some(inputs) = rescale_inputs.take()
         {
-            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
+            let reason = runtime.reason_for(&command);
+            let target_source = inputs.1.clone();
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs, reason);
+            if matches!(reason, ResizeReason::Add)
+                && let Err(saturated) = runtime.admit_add(
+                    crate::config::EgressShardProfile::PipelineOutputCount,
+                    self.config.egress_fabric.shard_config(),
+                    &spec.id,
+                )
+            {
+                // No shard will take the target: release the ring and the
+                // claimed input's registration it holds.
+                target_source.remove(&spec.id);
+                return Err(PipelineFabricDispatchError::Saturated(saturated));
+            }
         }
 
         let outcome = runtime
@@ -135,16 +167,17 @@ impl MediaEngine {
             .map_err(PipelineFabricDispatchError::Dispatch)?;
 
         if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs, ResizeReason::Remove);
         }
 
         Ok(outcome)
     }
 
-    /// Pipeline pools rescale only around commands, so the reconciler calls
-    /// this to replace a panicked shard and release its outputs to retry
-    /// (see `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
-    pub async fn recover_pipeline_fabrics(&self) {
+    /// The reconciler's periodic look: learn what this feed's pipeline
+    /// outputs cost from a fresh delivery window (the price admission
+    /// refuses by), and replace a panicked shard, releasing its outputs to
+    /// retry (see `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
+    pub async fn resize_pipeline_fabrics(&self) {
         let mut registry = self.fabric.pipeline.lock().await;
         let crate::engine_registries::PipelineFabricRegistry {
             runtimes,
@@ -153,10 +186,15 @@ impl MediaEngine {
             ..
         } = &mut *registry;
         for (id, runtime) in runtimes {
-            if runtime.has_panicked_shard()
+            if (runtime.observation_due() || runtime.has_panicked_shard())
                 && let (Some(feed), Some(targets)) = (feeds.get(id), target_sources.get(id))
             {
-                self.rescale_pipeline_fabric(id, runtime, (feed.clone_reader(), targets.clone()));
+                self.rescale_pipeline_fabric(
+                    id,
+                    runtime,
+                    (feed.clone_reader(), targets.clone()),
+                    ResizeReason::Observe,
+                );
             }
         }
     }
@@ -166,14 +204,17 @@ impl MediaEngine {
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         (feed, target_source): (RingFeed, SharedPipelineTargetSource),
+        reason: ResizeReason,
     ) {
+        // Price unmeasured outputs at this feed's rate, as the other fabrics do.
+        runtime.forecast_feed(&feed.publication_ring());
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::config::EgressShardProfile::PipelineOutputCount,
             crate::host_capacity::HostCapacity::get(),
-            crate::egress::runtime::ResizeReason::Remove,
+            reason,
             shard_config,
             |_shard_id| {
                 let feed = feed.clone_reader();

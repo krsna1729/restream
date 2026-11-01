@@ -215,6 +215,14 @@
           },
           "purpose": "the srt.admission gate for sink:// discard outputs (default 4224 per shard): a sink shard's 4,096-leaf table fills long before its CPU, so the excess must be refused for the full table"
         },
+        "pipeline.admission": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "the srt.admission gate for pipeline:// recirculation outputs, each into its own target pipeline (default 160 per shard against a 128-leaf table, ADMISSION_LEAVES), so the excess must be refused for the full table"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

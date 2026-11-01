@@ -32,10 +32,11 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
   delivering and the excess is refused with an operator-visible reason.
-- Context: RTMP, SRT, MoQ and sink refuse an Add whose shard would pass
-  60% busy or has no free leaf (`EgressFabricRuntime::admit_add`,
-  `capacityRefused`; live gates `srt.admission`, `sink.admission`). Each
-  fabric has its own measured cold prior. Still open: HLS PUT and pipeline.
+- Context: RTMP, SRT, MoQ, sink and pipeline refuse an Add whose shard
+  would pass 60% busy or has no free leaf (`EgressFabricRuntime::admit_add`,
+  `capacityRefused`; live gates `srt.admission`, `sink.admission`,
+  `pipeline.admission`). Each fabric has its own measured cold prior. Still
+  open: HLS PUT.
 - Gates: per fabric, a delivery sweep the sizer learns from, a cold prior
   measured live, and an admission gate (`<fabric>.admission`) that refuses
   at whichever limit binds first.

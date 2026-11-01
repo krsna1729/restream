@@ -14,12 +14,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
+use crate::egress::delivery::{DeliveryTracker, LeafServiceSweep};
 use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
+use crate::egress::metrics::ShardMetrics;
 use crate::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -97,6 +100,7 @@ struct PipelineFabricLeaf {
     common: LeafCommon,
     engine: PipelineEngine<RingFeed>,
     transport: PipelineTransport,
+    delivery: DeliveryTracker,
 }
 
 impl PipelineFabricLeaf {
@@ -129,6 +133,9 @@ where
     leaves: LeafArena<PipelineFabricLeaf>,
     output_leaves: HashMap<OutputId, LeafKey>,
     ready: ReadyQueue,
+    /// Rates the leaves' delivery into their targets; its completed rotation
+    /// is published in shard metrics for the fabric's sizer.
+    sweep: LeafServiceSweep,
 }
 
 impl<S> PipelineShardBackend<S>
@@ -143,6 +150,7 @@ where
             leaves: LeafArena::with_capacity(0),
             output_leaves: HashMap::new(),
             ready: ReadyQueue::new(),
+            sweep: LeafServiceSweep::default(),
         }
         .with_leaf_capacity(crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
     }
@@ -182,11 +190,13 @@ where
             common,
             engine: PipelineEngine::default(),
             transport: PipelineTransport::new(target),
+            delivery: DeliveryTracker::default(),
         }) else {
             progress.mark_terminated_unexpectedly();
             return;
         };
         self.output_leaves.insert(output_id, key);
+        self.sweep.track(key);
         self.enqueue(key);
     }
 
@@ -204,6 +214,7 @@ where
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
         self.ready.remove(key);
+        self.sweep.forget(key);
         if let Some(mut leaf) = self.leaves.remove(key) {
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
         }
@@ -242,6 +253,20 @@ where
             }
         }
     }
+
+    /// Rate leaves over each one's last closed delivery window: the payload
+    /// bytes it forwarded into its target against the bytes the feed
+    /// published.
+    fn sweep_service(&mut self, now: Instant) {
+        let offered = self.feed.published_bytes();
+        let leaves = &mut self.leaves;
+        self.sweep.run(now, |key| {
+            leaves.get_mut(key).map(|leaf| {
+                leaf.delivery
+                    .sample(leaf.common.progress.total_bytes_sent, offered, now)
+            })
+        });
+    }
 }
 
 impl<S> EgressShardBackend for PipelineShardBackend<S>
@@ -266,11 +291,17 @@ where
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         self.drain_ready_leaves();
+        self.sweep_service(Instant::now());
         EgressShardCommandEffect::Continue
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        metrics.service = self.sweep.service();
     }
 
     fn on_shutdown(&mut self) {
         self.ready.clear();
+        self.sweep.clear();
         for mut leaf in self.leaves.drain() {
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);

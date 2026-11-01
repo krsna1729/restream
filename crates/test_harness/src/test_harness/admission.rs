@@ -1,12 +1,15 @@
-//! `srt.admission` and `sink.admission`: drive one fabric's shard pool past
-//! its admission ceiling.
+//! `srt.admission`, `sink.admission` and `pipeline.admission`: drive one
+//! fabric's shard pool past its admission ceiling.
 //!
 //! Restream runs with `ADMISSION_SHARDS` (default 1) egress shards at most per
 //! pool (`RESTREAM_EGRESS_SHARDS`) and a ten-minute restart backoff, so an
 //! output refused once stays refused for the watch. One 8 Mbit/s fixture feed
 //! fans out to `ADMISSION_OUTPUTS` outputs of the fabric (default per shard:
-//! 96 SRT; 4224 sink, past its 4,096-leaf table), added one at a time so the
-//! pool grows across them.
+//! 96 SRT; 4224 sink, past its 4,096-leaf table; 160 pipeline, past a
+//! 128-leaf table), added one at a time so the pool grows across them.
+//! Each pipeline output recirculates into its own target pipeline's spare
+//! input, so that run caps the leaf table (`ADMISSION_LEAVES`, default 128)
+//! instead of creating thousands of pipelines.
 //! Gate: at least one output is refused; every refused output reports
 //! `capacityRefused` at the shard layer and sends nothing; every other output
 //! is live and keeps progressing through `ADMISSION_WATCH_SECS` (default 20);
@@ -32,6 +35,8 @@ pub(crate) enum AdmissionFabric {
     /// `sink://` discard outputs: so cheap that a shard's leaf table fills
     /// long before its CPU, so the run adds past the table.
     Sink,
+    /// `pipeline://` recirculation outputs, each into its own target pipeline.
+    Pipeline,
 }
 
 impl AdmissionFabric {
@@ -39,6 +44,7 @@ impl AdmissionFabric {
         match self {
             Self::Srt => "srt.admission",
             Self::Sink => "sink.admission",
+            Self::Pipeline => "pipeline.admission",
         }
     }
 
@@ -46,6 +52,15 @@ impl AdmissionFabric {
         match self {
             Self::Srt => 96,
             Self::Sink => 4224,
+            Self::Pipeline => 160,
+        }
+    }
+
+    /// The leaf table the run gives each shard, when not Restream's default.
+    fn leaves_per_shard(self) -> Option<u64> {
+        match self {
+            Self::Srt | Self::Sink => None,
+            Self::Pipeline => Some(env_u("ADMISSION_LEAVES", 128)),
         }
     }
 }
@@ -107,25 +122,29 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
             .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
             .collect::<Option<Vec<u16>>>()
             .ok_or("sink port overflow")?,
-        AdmissionFabric::Sink => Vec::new(),
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline => Vec::new(),
     };
     let srt_sink = match fabric {
         AdmissionFabric::Srt => Some(HarnessSrtSinkPool::start(&srt_sink_ports, 8 * 1024 * 1024)?),
-        AdmissionFabric::Sink => None,
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline => None,
     };
+    let mut env = vec![
+        ("RESTREAM_EGRESS_SHARDS", shards.to_string()),
+        (
+            "RESTREAM_OUTPUT_RETRY_BASE_MS",
+            RETRY_BACKOFF_MS.to_string(),
+        ),
+        ("RESTREAM_OUTPUT_RETRY_MAX_MS", RETRY_BACKOFF_MS.to_string()),
+    ];
+    if let Some(leaves) = fabric.leaves_per_shard() {
+        env.push(("RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD", leaves.to_string()));
+    }
     let mut child = start_restream_child_with_env(
         &default_restream_bin(),
         &ports,
         &work_dir.join("admission.sqlite"),
         &work_dir.join("restream.log"),
-        &[
-            ("RESTREAM_EGRESS_SHARDS", shards.to_string()),
-            (
-                "RESTREAM_OUTPUT_RETRY_BASE_MS",
-                RETRY_BACKOFF_MS.to_string(),
-            ),
-            ("RESTREAM_OUTPUT_RETRY_MAX_MS", RETRY_BACKOFF_MS.to_string()),
-        ],
+        &env,
     )
     .await?;
     let api = login_api(&ports).await?;
@@ -145,6 +164,17 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
     // Let the feed publish long enough for the sizer's rate forecast.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
+    // Every pipeline output's target (pipeline, spare input), created before
+    // the first output.
+    let mut pipeline_targets = Vec::new();
+    if matches!(fabric, AdmissionFabric::Pipeline) {
+        for index in 0..requested {
+            let target = create_pipeline(&api, &format!("adm-target-{index:03}")).await?;
+            let input = create_backup_input(&api, &target).await?;
+            pipeline_targets.push((target, input.id));
+        }
+    }
+
     let mut ids = Vec::with_capacity(requested);
     for index in 0..requested {
         let name = format!("adm-{index:03}");
@@ -153,6 +183,10 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
                 harness_srt_output_url(srt_sink_ports[index / 32], &name, HarnessSrtMode::Publish)
             }
             AdmissionFabric::Sink => format!("sink://local/{name}"),
+            AdmissionFabric::Pipeline => {
+                let (target, input) = &pipeline_targets[index];
+                format!("pipeline://{target}/{input}")
+            }
         };
         let oid = create_output(&api, &pid, &name, &url, "source").await?;
         start_output(&api, &pid, &oid).await?;
@@ -167,6 +201,16 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
         })
     };
     let (refused, admitted): (Vec<String>, Vec<String>) = ids.iter().cloned().partition(is_refused);
+    // A recirculated input stays a warm standby, forwarding nothing, until
+    // its pipeline selects it: promote every admitted output's target.
+    for (oid, (target, input)) in ids.iter().zip(&pipeline_targets) {
+        if !refused.contains(oid) {
+            api.post_empty(&format!(
+                "/api/v1/pipelines/{target}/inputs/{input}/promote"
+            ))
+            .await?;
+        }
+    }
     let admitted_live = if admitted.is_empty() {
         Err("no output was admitted".to_string())
     } else {

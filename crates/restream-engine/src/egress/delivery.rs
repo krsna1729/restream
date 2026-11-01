@@ -4,7 +4,11 @@
 //! the media path. The harness measures the same thing at the receiver
 //! (`resource_sweep/delivery.rs`), so a disagreement is itself a finding.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+
+use crate::egress::leaf_arena::LeafKey;
+use crate::egress::metrics::{ServiceAccumulator, ShardService};
 
 /// Delivery ratio below which an output is not keeping up with what the feed
 /// offered. Shared by quality reporting and shard sizing.
@@ -81,6 +85,80 @@ impl DeliveryTracker {
             ratio: (offered_bps > 0.0).then(|| delivered_bps / offered_bps),
         };
         self.rates
+    }
+}
+
+/// How often a socketless shard (sink, pipeline) rates its leaves' delivery,
+/// as the RTMP and SRT stall sweeps do.
+const LEAF_SWEEP_EVERY: Duration = Duration::from_secs(1);
+
+/// The service sweep of a shard with no socket to sweep (sink, pipeline):
+/// once a second it rates the next leaves in rotation, at most
+/// `ServiceAccumulator::begin`'s budget per sweep, and publishes each
+/// completed rotation for the sizer. Its rotation holds only live leaves.
+#[derive(Debug, Default)]
+pub(crate) struct LeafServiceSweep {
+    accumulator: ServiceAccumulator,
+    order: VecDeque<LeafKey>,
+    /// The last completed rotation's summary.
+    service: ShardService,
+    next: Option<Instant>,
+}
+
+impl LeafServiceSweep {
+    pub(crate) fn track(&mut self, key: LeafKey) {
+        self.order.push_back(key);
+    }
+
+    /// As the RTMP and SRT sweeps: the key leaves the rotation, which
+    /// restarts so it neither revisits a leaf nor rates a gone one.
+    pub(crate) fn forget(&mut self, key: LeafKey) {
+        self.order.retain(|queued| *queued != key);
+        self.accumulator.invalidate();
+        self.service = ShardService::default();
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.order.clear();
+    }
+
+    pub(crate) fn service(&self) -> ShardService {
+        self.service
+    }
+
+    /// Rate the next leaves if a sweep is due; `rate` samples one leaf's
+    /// tracker (`None` for a key no longer in the arena).
+    pub(crate) fn run(
+        &mut self,
+        now: Instant,
+        mut rate: impl FnMut(LeafKey) -> Option<DeliveryRates>,
+    ) {
+        if self.next.is_some_and(|due| now < due) {
+            return;
+        }
+        self.next = Some(now + LEAF_SWEEP_EVERY);
+        let visits = self.accumulator.begin(self.order.len());
+        for _ in 0..visits {
+            let Some(key) = self.order.pop_front() else {
+                break;
+            };
+            // `forget` keeps the rotation to live keys; a miss is defensive.
+            let Some(rates) = rate(key) else {
+                self.accumulator.add(false, None);
+                continue;
+            };
+            self.accumulator
+                .add(false, rates.ratio.zip(rates.offered_bps));
+            self.order.push_back(key);
+        }
+        if let Some(service) = self.accumulator.finish(now) {
+            self.service = service;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rotation_len(&self) -> usize {
+        self.order.len()
     }
 }
 

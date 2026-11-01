@@ -144,3 +144,93 @@ fn pipeline_shard_backend_rejects_add_with_no_claimed_target() {
     let snapshot = handle.shutdown_and_join();
     assert!(!snapshot.panicked);
 }
+
+fn backend_with_targets(
+    ids: &[&str],
+) -> (
+    Arc<RingBuffer>,
+    PipelineShardBackend<SharedPipelineTargetSource>,
+) {
+    let ring = Arc::new(RingBuffer::new(64));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let target_source = SharedPipelineTargetSource::new();
+    for id in ids {
+        target_source.set(
+            OutputId::new(*id),
+            PipelineTarget {
+                target_ring: Arc::new(RingBuffer::new(64)),
+                input_registration: registration(),
+            },
+        );
+    }
+    let backend = PipelineShardBackend::new(
+        feed,
+        WorkBudgetConfig::new(64, 1 << 20, Duration::from_millis(50)),
+        target_source,
+    );
+    (ring, backend)
+}
+
+/// The fabric prices pipeline outputs from this sweep: over a closed
+/// delivery window a leaf that forwards everything into its target is rated
+/// at the feed's rate, and one that forwarded nothing the feed published
+/// falls under the delivery floor.
+#[test]
+fn the_service_sweep_rates_what_each_leaf_forwarded_into_its_target() {
+    let (ring, mut backend) = backend_with_targets(&["out-pipeline"]);
+    let service = |backend: &PipelineShardBackend<SharedPipelineTargetSource>| {
+        let mut metrics = crate::egress::metrics::ShardMetrics::default();
+        backend.observe_metrics(&mut metrics);
+        metrics.service
+    };
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-pipeline",
+        Arc::new(AtomicU64::new(0)),
+    )));
+    // A new leaf joins at the newest keyframe: let it join before the window.
+    push_video_packet(&ring);
+    backend.drain_ready_leaves();
+    let window = crate::egress::delivery::DELIVERY_WINDOW;
+    let start = std::time::Instant::now();
+    backend.sweep_service(start);
+
+    for _ in 0..10 {
+        push_video_packet(&ring);
+    }
+    backend.on_command(EgressCommand::FeedWake);
+    backend.drain_ready_leaves();
+    backend.sweep_service(start + window);
+    let kept_up = service(&backend);
+    assert_eq!((kept_up.rated, kept_up.under_floor), (1, 0));
+    assert_eq!(kept_up.delivered_bps, kept_up.offered_bps);
+
+    // Published, never forwarded: a starved leaf.
+    for _ in 0..10 {
+        push_video_packet(&ring);
+    }
+    backend.sweep_service(start + 2 * window);
+    let starved = service(&backend);
+    assert_eq!((starved.rated, starved.under_floor), (1, 1));
+    assert_eq!(starved.delivered_bps, 0.0);
+}
+
+/// Replacing and removing pipeline outputs takes their keys out of the sweep
+/// rotation, so it tracks the live leaves however much they churn.
+#[test]
+fn the_sweep_rotation_holds_only_live_pipeline_leaves_under_churn() {
+    let (_ring, mut backend) = backend_with_targets(&["steady", "transient"]);
+    let add = |backend: &mut PipelineShardBackend<SharedPipelineTargetSource>, id: &str| {
+        backend.on_command(EgressCommand::Add(output_spec(
+            id,
+            Arc::new(AtomicU64::new(0)),
+        )));
+    };
+    add(&mut backend, "steady");
+    for _ in 0..1000 {
+        add(&mut backend, "steady");
+        add(&mut backend, "transient");
+        backend.on_command(EgressCommand::Remove(OutputId::new("transient")));
+    }
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.sweep.rotation_len(), 1);
+}
