@@ -138,7 +138,7 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
     recover!(moq, resize_moq_fabrics);
     recover!(sink, resize_sink_fabrics);
     recover!(pipeline, resize_pipeline_fabrics);
-    recover!(hls_put, recover_hls_put_fabrics);
+    recover!(hls_put, resize_hls_put_fabrics);
     engine.release_srt_fabric_runtime(&id).await;
     engine.release_rtmp_fabric_runtime(&id).await;
     engine.release_moq_fabric_runtime(&id).await;

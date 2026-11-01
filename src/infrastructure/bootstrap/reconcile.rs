@@ -134,7 +134,7 @@ impl Reconciler {
                 self.engine.resize_moq_fabrics().await;
                 self.engine.resize_sink_fabrics().await;
                 self.engine.resize_pipeline_fabrics().await;
-                self.engine.recover_hls_put_fabrics().await;
+                self.engine.resize_hls_put_fabrics().await;
                 if self.reconcile_recordings(tick).await {
                     self.reconcile_stream_qa(tick).await;
                     self.sweep_idle_hls().await;

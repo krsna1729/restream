@@ -56,7 +56,7 @@ mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
 #[path = "resource_sweep/hls_sink.rs"]
-mod hls_sink;
+pub(crate) mod hls_sink;
 #[path = "resource_sweep/peer_ports.rs"]
 mod peer_ports;
 #[path = "resource_sweep/thread_cpu.rs"]

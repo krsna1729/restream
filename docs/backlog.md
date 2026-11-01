@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
@@ -28,18 +27,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-034 [resilience] [opus] Define one overload policy for shared service centers
-- Goal: when a shared Owner or shard saturates, viable destinations keep
-  delivering and the excess is refused with an operator-visible reason.
-- Context: RTMP, SRT, MoQ, sink and pipeline refuse an Add whose shard
-  would pass 60% busy or has no free leaf (`EgressFabricRuntime::admit_add`,
-  `capacityRefused`; live gates `srt.admission`, `sink.admission`,
-  `pipeline.admission`). Each fabric has its own measured cold prior. Still
-  open: HLS PUT.
-- Gates: per fabric, a delivery sweep the sizer learns from, a cold prior
-  measured live, and an admission gate (`<fabric>.admission`) that refuses
-  at whichever limit binds first.
 
 ### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
 - Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC

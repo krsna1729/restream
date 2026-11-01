@@ -55,6 +55,18 @@ impl DeliveryTracker {
         offered_bytes: u64,
         now: Instant,
     ) -> DeliveryRates {
+        self.sample_over(DELIVERY_WINDOW, delivered_bytes, offered_bytes, now)
+    }
+
+    /// [`Self::sample`] over a longer `window`, for counters that move in
+    /// bursts (HLS segments).
+    pub(crate) fn sample_over(
+        &mut self,
+        window: Duration,
+        delivered_bytes: u64,
+        offered_bytes: u64,
+        now: Instant,
+    ) -> DeliveryRates {
         let current = DeliveryMark {
             delivered_bytes,
             offered_bytes,
@@ -72,7 +84,7 @@ impl DeliveryTracker {
             return self.rates;
         }
         let elapsed = now.saturating_duration_since(previous.at);
-        if elapsed < DELIVERY_WINDOW {
+        if elapsed < window {
             return self.rates;
         }
         let seconds = elapsed.as_secs_f64();

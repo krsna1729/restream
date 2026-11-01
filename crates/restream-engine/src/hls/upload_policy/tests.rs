@@ -53,7 +53,7 @@ fn listed(playlist: &[u8]) -> (u64, Vec<String>) {
 fn starts_at_the_newest_segment_and_alternates_segment_then_playlist() {
     let now = Instant::now();
     let mut policy = UploadPolicy::new("r1".into());
-    policy.on_publish(&snapshot(40..45, 2.0));
+    policy.on_publish(&snapshot(40..45, 2.0), Instant::now());
 
     let segment = put(&mut policy, now);
     assert_eq!(segment.file_name, "r1-0.ts");
@@ -68,7 +68,7 @@ fn starts_at_the_newest_segment_and_alternates_segment_then_playlist() {
     ok(&mut policy, now);
     assert_eq!(policy.next(now), Next::Wait(None));
 
-    policy.on_publish(&snapshot(41..47, 2.0));
+    policy.on_publish(&snapshot(41..47, 2.0), Instant::now());
     assert_eq!(put(&mut policy, now).file_name, "r1-1.ts");
     ok(&mut policy, now);
     assert_eq!(
@@ -86,7 +86,7 @@ fn client_errors_stop_and_server_errors_retry() {
     for status in [400, 401, 403, 404, 405] {
         let now = Instant::now();
         let mut policy = UploadPolicy::new("r".into());
-        policy.on_publish(&snapshot(0..1, 2.0));
+        policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
         put(&mut policy, now);
         assert_eq!(
             policy.on_result(UploadOutcome::Status(status), now),
@@ -103,7 +103,7 @@ fn client_errors_stop_and_server_errors_retry() {
     ] {
         let now = Instant::now();
         let mut policy = UploadPolicy::new("r".into());
-        policy.on_publish(&snapshot(0..1, 2.0));
+        policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
         put(&mut policy, now);
         assert_eq!(
             policy.on_result(outcome, now),
@@ -134,13 +134,13 @@ fn backoff_doubles_up_to_its_cap() {
 fn a_segment_failing_past_its_duration_is_dropped_and_never_listed() {
     let start = Instant::now();
     let mut policy = UploadPolicy::new("r".into());
-    policy.on_publish(&snapshot(0..1, 2.0));
+    policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
     put(&mut policy, start);
     ok(&mut policy, start);
     put(&mut policy, start); // playlist [0]
     ok(&mut policy, start);
 
-    policy.on_publish(&snapshot(0..3, 2.0));
+    policy.on_publish(&snapshot(0..3, 2.0), Instant::now());
     let mut now = start;
     loop {
         match policy.next(now) {
@@ -172,13 +172,13 @@ fn a_segment_failing_past_its_duration_is_dropped_and_never_listed() {
 fn a_cleared_store_continues_the_output_numbering() {
     let now = Instant::now();
     let mut policy = UploadPolicy::new("r".into());
-    policy.on_publish(&snapshot(7..8, 2.0));
+    policy.on_publish(&snapshot(7..8, 2.0), Instant::now());
     put(&mut policy, now);
     ok(&mut policy, now);
     put(&mut policy, now);
     ok(&mut policy, now);
 
-    policy.on_publish(&snapshot(0..2, 2.0));
+    policy.on_publish(&snapshot(0..2, 2.0), Instant::now());
     let first = put(&mut policy, now);
     assert_eq!(
         (first.file_name.as_str(), first.body),
@@ -193,12 +193,12 @@ fn finish_sends_one_end_playlist() {
     for outcome in [UploadOutcome::Status(200), UploadOutcome::Status(503)] {
         let now = Instant::now();
         let mut policy = UploadPolicy::new("r".into());
-        policy.on_publish(&snapshot(0..1, 2.0));
+        policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
         put(&mut policy, now);
         ok(&mut policy, now);
         put(&mut policy, now);
         ok(&mut policy, now);
-        policy.on_publish(&snapshot(0..2, 2.0));
+        policy.on_publish(&snapshot(0..2, 2.0), Instant::now());
 
         policy.finish();
         let end = put(&mut policy, now);
@@ -218,7 +218,7 @@ fn finish_sends_one_end_playlist() {
 fn finish_during_a_backoff_does_not_wait_for_it() {
     let now = Instant::now();
     let mut policy = UploadPolicy::new("r".into());
-    policy.on_publish(&snapshot(0..1, 2.0));
+    policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
     put(&mut policy, now);
     ok(&mut policy, now);
     put(&mut policy, now);
@@ -241,11 +241,14 @@ fn finish_during_a_backoff_does_not_wait_for_it() {
 fn a_failing_playlist_cannot_pin_an_unbounded_backlog() {
     let mut now = Instant::now();
     let mut policy = UploadPolicy::new("r".into());
-    policy.on_publish(&snapshot(0..1, 2.0));
+    policy.on_publish(&snapshot(0..1, 2.0), Instant::now());
     put(&mut policy, now);
     ok(&mut policy, now);
     for store_next in 2..60u64 {
-        policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, 2.0));
+        policy.on_publish(
+            &snapshot(store_next.saturating_sub(20)..store_next, 2.0),
+            Instant::now(),
+        );
         match policy.next(now) {
             Next::Put(_) => {
                 // A destination failing everything.
@@ -314,7 +317,7 @@ proptest! {
                 Event::Publish { added, duration_tenths } => {
                     store_next += added;
                     let duration = f64::from(duration_tenths) / 10.0;
-                    policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, duration));
+                    policy.on_publish(&snapshot(store_next.saturating_sub(20)..store_next, duration), Instant::now());
                     prop_assert!(policy.pending_segments() <= MAX_PENDING_SEGMENTS, "unbounded backlog");
                 }
                 Event::Advance { millis } => now += Duration::from_millis(millis),
@@ -391,7 +394,7 @@ proptest! {
 fn a_stop_after_the_window_emptied_still_sends_endlist() {
     let mut policy = UploadPolicy::new("rtest".to_string());
     let start = Instant::now();
-    policy.on_publish(&snapshot(0..1, 1.0));
+    policy.on_publish(&snapshot(0..1, 1.0), Instant::now());
     // s0 and its playlist are acknowledged.
     for _ in 0..2 {
         assert!(matches!(policy.next(start), Next::Put(_)));
@@ -399,7 +402,7 @@ fn a_stop_after_the_window_emptied_still_sends_endlist() {
     }
     // Six more segments arrive while nothing is acknowledged: the cap drops
     // one, which clears the window.
-    policy.on_publish(&snapshot(0..7, 1.0));
+    policy.on_publish(&snapshot(0..7, 1.0), Instant::now());
     assert!(policy.backlog_dropped_segments() >= 1);
     policy.finish();
     let Next::Put(request) = policy.next(start) else {
@@ -408,4 +411,30 @@ fn a_stop_after_the_window_emptied_still_sends_endlist() {
     let body = String::from_utf8(request.body.to_vec()).unwrap();
     assert!(body.contains("#EXT-X-ENDLIST"), "{body}");
     assert!(body.contains("#EXT-X-MEDIA-SEQUENCE:0"), "{body}");
+}
+
+/// What the fabric sizes HLS PUT shards from: a segment the destination
+/// acknowledges within its due time is delivered; one still retrying when
+/// it falls due is missed, and a later acknowledgement does not undo that.
+#[test]
+fn the_delivery_totals_count_a_segment_on_time_only_when_acknowledged_before_it_is_due() {
+    let start = Instant::now();
+    let second = Duration::from_secs(1);
+    let mut policy = UploadPolicy::new("r".into());
+    policy.on_publish(&snapshot(0..1, 2.0), start);
+    put(&mut policy, start);
+    ok(&mut policy, start + second);
+    assert_eq!(policy.delivery_totals(start + second), (7, 7));
+
+    put(&mut policy, start + second); // the playlist
+    ok(&mut policy, start + second);
+    policy.on_publish(&snapshot(0..2, 2.0), start + 2 * second);
+    let late = put(&mut policy, start + 2 * second);
+    assert_eq!(late.body, Bytes::from("store-1"));
+    // Still in flight when it falls due: missed.
+    let due = start + 2 * second + delivery::SEGMENT_DUE_AFTER;
+    assert_eq!(policy.delivery_totals(due), (7, 14), "missed when due");
+    // The destination answers afterwards: still missed, counted once.
+    ok(&mut policy, due + second);
+    assert_eq!(policy.delivery_totals(due + second), (7, 14), "late");
 }

@@ -28,6 +28,9 @@ use bytes::Bytes;
 
 use super::HlsStoreSnapshot;
 
+mod delivery;
+use delivery::SegmentDelivery;
+
 pub(crate) const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
 pub(crate) const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
 
@@ -151,6 +154,8 @@ pub(crate) struct UploadPolicy {
     dropped: u64,
     /// Of `dropped`, those dropped by the backlog cap.
     backlog_dropped: u64,
+    /// Which published segments were acknowledged before they were due.
+    delivery: SegmentDelivery,
 }
 
 impl UploadPolicy {
@@ -174,6 +179,7 @@ impl UploadPolicy {
             stopped: None,
             dropped: 0,
             backlog_dropped: 0,
+            delivery: SegmentDelivery::default(),
         }
     }
 
@@ -191,10 +197,16 @@ impl UploadPolicy {
         self.backlog_dropped
     }
 
+    /// Cumulative `(on-time bytes, due bytes)` of this output's segments
+    /// (see `delivery`); neither ever decreases.
+    pub(crate) fn delivery_totals(&mut self, now: Instant) -> (u64, u64) {
+        self.delivery.totals(now)
+    }
+
     /// Take the segments this output has not seen. The first publish yields
     /// only its newest segment. A store that was cleared (its indices went
     /// backwards) yields all of its segments.
-    pub(crate) fn on_publish(&mut self, snapshot: &HlsStoreSnapshot) {
+    pub(crate) fn on_publish(&mut self, snapshot: &HlsStoreSnapshot, now: Instant) {
         if self.ending || self.stopped.is_some() {
             return;
         }
@@ -216,6 +228,11 @@ impl UploadPolicy {
         };
         self.last_store_index = Some(newest);
         for segment in fresh {
+            self.delivery.published(
+                self.next_sequence,
+                u64::try_from(segment.data.len()).unwrap_or(u64::MAX),
+                now,
+            );
             self.pending.push_back(PendingSegment {
                 sequence: self.next_sequence,
                 duration: segment.duration,
@@ -353,6 +370,7 @@ impl UploadPolicy {
                 self.backoff_until = None;
                 match target {
                     UploadTarget::Segment { sequence } => {
+                        self.delivery.acknowledged(sequence, now);
                         if self
                             .pending
                             .front()

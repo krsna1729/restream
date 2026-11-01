@@ -1,15 +1,17 @@
-//! `srt.admission`, `sink.admission` and `pipeline.admission`: drive one
-//! fabric's shard pool past its admission ceiling.
+//! `srt.admission`, `sink.admission`, `pipeline.admission` and
+//! `hls-put.admission`: drive one fabric's shard pool past its admission
+//! ceiling.
 //!
 //! Restream runs with `ADMISSION_SHARDS` (default 1) egress shards at most per
 //! pool (`RESTREAM_EGRESS_SHARDS`) and a ten-minute restart backoff, so an
 //! output refused once stays refused for the watch. One 8 Mbit/s fixture feed
 //! fans out to `ADMISSION_OUTPUTS` outputs of the fabric (default per shard:
 //! 96 SRT; 4224 sink, past its 4,096-leaf table; 160 pipeline, past a
-//! 128-leaf table), added one at a time so the pool grows across them.
-//! Each pipeline output recirculates into its own target pipeline's spare
-//! input, so that run caps the leaf table (`ADMISSION_LEAVES`, default 128)
-//! instead of creating thousands of pipelines.
+//! 128-leaf table; 320 HLS PUT, past a 256-leaf table), added one at a time
+//! so the pool grows across them. Each pipeline output recirculates into its
+//! own target pipeline's spare input, and a shard's HLS PUT CPU ceiling sits
+//! near 7 Gbit/s of loopback uploads, so those runs cap the leaf table
+//! (`ADMISSION_LEAVES`) instead.
 //! Gate: at least one output is refused; every refused output reports
 //! `capacityRefused` at the shard layer and sends nothing; every other output
 //! is live and keeps progressing through `ADMISSION_WATCH_SECS` (default 20);
@@ -37,6 +39,8 @@ pub(crate) enum AdmissionFabric {
     Sink,
     /// `pipeline://` recirculation outputs, each into its own target pipeline.
     Pipeline,
+    /// HLS PUT outputs to one counting receiver, each its own `cid`.
+    HlsPut,
 }
 
 impl AdmissionFabric {
@@ -45,6 +49,7 @@ impl AdmissionFabric {
             Self::Srt => "srt.admission",
             Self::Sink => "sink.admission",
             Self::Pipeline => "pipeline.admission",
+            Self::HlsPut => "hls-put.admission",
         }
     }
 
@@ -53,6 +58,7 @@ impl AdmissionFabric {
             Self::Srt => 96,
             Self::Sink => 4224,
             Self::Pipeline => 160,
+            Self::HlsPut => 320,
         }
     }
 
@@ -61,6 +67,7 @@ impl AdmissionFabric {
         match self {
             Self::Srt | Self::Sink => None,
             Self::Pipeline => Some(env_u("ADMISSION_LEAVES", 128)),
+            Self::HlsPut => Some(env_u("ADMISSION_LEAVES", 256)),
         }
     }
 }
@@ -122,11 +129,18 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
             .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
             .collect::<Option<Vec<u16>>>()
             .ok_or("sink port overflow")?,
-        AdmissionFabric::Sink | AdmissionFabric::Pipeline => Vec::new(),
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => Vec::new(),
     };
     let srt_sink = match fabric {
         AdmissionFabric::Srt => Some(HarnessSrtSinkPool::start(&srt_sink_ports, 8 * 1024 * 1024)?),
-        AdmissionFabric::Sink | AdmissionFabric::Pipeline => None,
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => None,
+    };
+    let hls_put_port = harness_port_defaults().hls_put;
+    let hls_sink = match fabric {
+        AdmissionFabric::HlsPut => {
+            Some(crate::resource_sweep::hls_sink::HlsCountingSink::start(hls_put_port).await?)
+        }
+        AdmissionFabric::Srt | AdmissionFabric::Sink | AdmissionFabric::Pipeline => None,
     };
     let mut env = vec![
         ("RESTREAM_EGRESS_SHARDS", shards.to_string()),
@@ -186,6 +200,9 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
             AdmissionFabric::Pipeline => {
                 let (target, input) = &pipeline_targets[index];
                 format!("pipeline://{target}/{input}")
+            }
+            AdmissionFabric::HlsPut => {
+                format!("http://127.0.0.1:{hls_put_port}/upload?cid={name}&copy=0&file=out.m3u8")
             }
         };
         let oid = create_output(&api, &pid, &name, &url, "source").await?;
@@ -305,6 +322,9 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
     stop_child(&mut publisher).await;
     stop_child(&mut child).await;
     if let Some(sink) = srt_sink {
+        sink.stop();
+    }
+    if let Some(sink) = hls_sink {
         sink.stop();
     }
     if passed {

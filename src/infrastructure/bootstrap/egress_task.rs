@@ -590,12 +590,16 @@ impl EgressTask {
             }
             Err(error) => {
                 let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("hls_put_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "hls_put_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;

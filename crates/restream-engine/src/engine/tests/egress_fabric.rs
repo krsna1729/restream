@@ -759,3 +759,50 @@ async fn a_pipeline_add_past_a_full_leaf_table_is_refused_and_releases_its_targe
 
     engine.release_pipeline_fabric_runtime(&feed_id).await;
 }
+
+/// An HLS PUT pool whose leaf tables are full refuses the next Add before
+/// dispatching it, with a reason an operator can act on, instead of the
+/// shard dropping the leaf as an unexpected termination.
+#[tokio::test]
+async fn an_hls_put_add_past_a_full_leaf_table_is_refused() {
+    use crate::egress::sizing::Saturated;
+
+    let engine = MediaEngine::new_with_config(Arc::new(crate::config::EngineConfig {
+        egress_fabric: crate::config::EgressFabricConfig {
+            shards: 1,
+            max_leaves_per_shard: 1,
+            ..crate::config::EgressFabricConfig::default()
+        },
+        ..crate::config::EngineConfig::default()
+    }));
+    let feed_id = crate::engine_hls_egress_fabric::hls_put_feed_id("pipe-hls-admission");
+    let store = Arc::new(crate::hls::HlsStore::new());
+    engine
+        .retain_hls_put_fabric_runtime(feed_id.clone(), &store)
+        .await
+        .unwrap();
+    let hls = |id: &str| {
+        let mut spec = output_spec(id, &feed_id);
+        spec.protocol = ProtocolSpec::HlsPut {
+            url: format!("http://127.0.0.1:9/{id}/out.m3u8"),
+        };
+        spec
+    };
+    engine
+        .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Add(hls("out-hls-0")))
+        .await
+        .unwrap();
+    let refused = engine
+        .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Add(hls("out-hls-1")))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.refused(),
+        Some(&Saturated::Full {
+            leaves: 1,
+            shards: 1
+        })
+    );
+
+    engine.release_hls_put_fabric_runtime(&feed_id).await;
+}

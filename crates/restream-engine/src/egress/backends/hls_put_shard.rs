@@ -26,6 +26,7 @@ use super::hls_put::{Exchange, ExchangeStep, HlsPutTarget};
 use super::rtmp_shard_poller::RtmpReadinessPoller;
 use super::tcp::{TcpConnectAttempt, TcpReadyLeaf, connect_error};
 use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
+use crate::egress::delivery::{DeliveryTracker, LeafServiceSweep};
 use crate::egress::leaf::EgressProgressSink;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
@@ -53,6 +54,9 @@ const RESOLVE_QUEUE_CAPACITY: usize = 1024;
 /// one, not the shard's other outputs.
 const RESOLVE_THREADS: usize = 4;
 const SCRATCH_BYTES: usize = 16 * 1024;
+/// Rates each output's on-time segment bytes over half a minute: about ten
+/// segments, so the sizer learns from a steady rate, not single segments.
+const DELIVERY_RATE_WINDOW: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Resolve worker
@@ -161,6 +165,7 @@ struct Slot {
     /// The deadline of this slot's live entry in the backend's `deadlines`
     /// heap; `None` once that entry is popped or when nothing is indexed.
     indexed_deadline: Option<Instant>,
+    delivery: DeliveryTracker,
 }
 
 impl Slot {
@@ -217,6 +222,8 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     scheduled: Option<(Instant, OutputId, u64)>,
     tx_bytes: u64,
     tx_units: u64,
+    /// Rates the slots' segment delivery for the fabric's sizer.
+    sweep: LeafServiceSweep,
 }
 
 impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
@@ -242,6 +249,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             scheduled: None,
             tx_bytes: 0,
             tx_units: 0,
+            sweep: LeafServiceSweep::default(),
         })
     }
 
@@ -260,7 +268,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         };
         let mut policy = UploadPolicy::new(crate::hls::upload::upload_session_token());
         if let Some(snapshot) = self.store.snapshot() {
-            policy.on_publish(&snapshot);
+            policy.on_publish(&snapshot, Instant::now());
         }
         let inserted = self.slots.insert_with(|_| Slot {
             output_id: spec.id.clone(),
@@ -281,6 +289,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             resolve_token: 0,
             lookup_in_flight: None,
             indexed_deadline: None,
+            delivery: DeliveryTracker::default(),
         });
         let Some(key) = inserted else {
             tracing::warn!(output_id = %spec.id, "hls put fabric leaf rejected: shard leaf capacity exhausted");
@@ -288,6 +297,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             return;
         };
         self.by_output.insert(spec.id, key);
+        self.sweep.track(key);
         self.enqueue(key);
     }
 
@@ -298,6 +308,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     }
 
     fn close_slot(&mut self, key: LeafKey) {
+        self.sweep.forget(key);
         let Some(slot) = self.slots.remove(key) else {
             return;
         };
@@ -867,8 +878,9 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
             }
             EgressCommand::FeedWake => {
                 if let Some(snapshot) = self.store.snapshot() {
+                    let now = Instant::now();
                     for (key, slot) in self.slots.iter_mut() {
-                        slot.policy.on_publish(&snapshot);
+                        slot.policy.on_publish(&snapshot, now);
                         self.ready.push(key);
                     }
                 }
@@ -915,7 +927,16 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
         if resolved_any {
             self.drive_ready();
         }
-        self.drive_due(Instant::now());
+        let now = Instant::now();
+        self.drive_due(now);
+        let slots = &mut self.slots;
+        self.sweep.run(now, |key| {
+            slots.get_mut(key).map(|slot| {
+                let (on_time, due) = slot.policy.delivery_totals(now);
+                slot.delivery
+                    .sample_over(DELIVERY_RATE_WINDOW, on_time, due, now)
+            })
+        });
         self.after_work()
     }
 
@@ -940,6 +961,7 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
         metrics.tx_bytes = self.tx_bytes;
         metrics.cqes = completions;
         metrics.stale_completions = stale_completions;
+        metrics.service = self.sweep.service();
     }
 
     fn on_shutdown(&mut self) {

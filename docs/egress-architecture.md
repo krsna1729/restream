@@ -360,28 +360,34 @@ starts with one shard.
   shard (`EgressShardProfile::OutputCount`), 64 for SRT
   (`SrtOutputCount`), 10,240 for sink (`SinkOutputCount`: one shard ran
   3,458 sink outputs at 7% busy), 1,024 for pipeline
-  (`PipelineOutputCount`: 128 at 2.7%). An Add also grows the pool until
-  its leaf tables (`RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD`, 4,096) hold every
-  output. New shards serve only new outputs.
-- **Admission.** For RTMP, SRT, MoQ, sink and pipeline, `admit_add` refuses
-  an `Add` if the chosen shard has no free leaf (`Saturated::Full`) or would
-  run above 60% busy (`ADMIT_CEILING`, `Saturated::Busy`). The output
-  reports `capacityRefused` and retries on its backoff; a refused pipeline
-  output releases its claimed target input. Admitted outputs are never shed.
-  A sink shard fills its leaf table long before its CPU.
+  (`PipelineOutputCount`: 128 at 2.7%), 320 for HLS PUT
+  (`HlsPutOutputCount`: 512 at 34% peak). HLS PUT has no feed-rate
+  forecast, so its prior prices at the reference rate. An Add also grows the
+  pool until its leaf tables (`RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD`, 4,096)
+  hold every output. New shards serve only new outputs.
+- **Admission.** For every fabric, `admit_add` refuses an `Add` if the
+  chosen shard has no free leaf (`Saturated::Full`) or would run above 60%
+  busy (`ADMIT_CEILING`, `Saturated::Busy`). The output reports
+  `capacityRefused` and retries on its backoff; a refused pipeline output
+  releases its claimed target input. Admitted outputs are never shed. A sink
+  shard fills its leaf table long before its CPU.
 - **Delivery.** Each shard rates its outputs once a second over a 5 s window
   (`DeliveryTracker`): RTMP by TCP-acknowledged bytes, SRT by
   SRT-acknowledged bytes, sink by the payload bytes each leaf consumed,
   pipeline by the bytes each leaf forwarded into its target, each against
-  what the feed published. Only windows with every output at 95% or more
-  teach `ShardSizer` a demand. A pipeline output into a standby target input
-  forwards nothing until that input is promoted, so its pool keeps the
+  what the feed published. HLS PUT is rated by segment instead
+  (`upload_policy/delivery.rs`) over 30 s: a segment the destination
+  acknowledges within 6 s of its publish counts as delivered, any other as
+  missed, both at the moment it resolves, so a segment in flight at a
+  window's edge is no shortfall. Only windows with every output at 95% or
+  more teach `ShardSizer` a demand. A pipeline output into a standby target
+  input forwards nothing until that input is promoted, so its pool keeps the
   prior meanwhile.
 - **Shrink.** On each reconciler tick, `resize_*_fabrics` (`Observe`) runs
-  for RTMP, SRT, MoQ, sink and pipeline; a runtime observes at most every
-  5 s. After 60 healthy low-load windows, a 5-minute dwell, and projected
-  load under 40% on one shard fewer, new outputs stop going to the tail
-  shard. Its thread stops once its last output leaves.
+  for every fabric; a runtime observes at most every 5 s. After 60 healthy
+  low-load windows, a 5-minute dwell, and projected load under 40% on one
+  shard fewer, new outputs stop going to the tail shard. Its thread stops
+  once its last output leaves.
 - **Ceiling.** The pool never exceeds `clamp(effective CPUs, 2, 8)` or
   `RESTREAM_EGRESS_SHARDS`, whichever is lower.
 
