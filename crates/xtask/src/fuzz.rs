@@ -32,14 +32,14 @@ pub(crate) fn seed_corpus() -> WorkflowResult {
     ]))
 }
 
-/// Runs every target `cargo +nightly fuzz list` reports for 30 s each.
+/// Runs every target `cargo +<pinned nightly> fuzz list` reports for 30 s each.
 pub(crate) fn smoke() -> WorkflowResult {
     let fuzz = crate::repo_root().join("fuzz");
-    let listed = output(
-        Command::new("cargo")
-            .current_dir(&fuzz)
-            .args(["+nightly", "fuzz", "list"]),
-    )?;
+    let listed = output(Command::new("cargo").current_dir(&fuzz).args([
+        concat!("+", nightly!()),
+        "fuzz",
+        "list",
+    ]))?;
     let listed = String::from_utf8_lossy(&listed.stdout);
     let targets: Vec<&str> = listed.split_whitespace().collect();
     if targets.is_empty() {
@@ -48,7 +48,7 @@ pub(crate) fn smoke() -> WorkflowResult {
     for target in targets {
         eprintln!("fuzz target {target}");
         checked(Command::new("cargo").current_dir(&fuzz).args([
-            "+nightly",
+            concat!("+", nightly!()),
             "fuzz",
             "run",
             target,
