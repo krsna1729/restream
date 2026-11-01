@@ -245,11 +245,7 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         _ => return Err("capacity-ramp: CAPACITY_BUILD_PROFILE must be release or bench".into()),
     };
     if env_or("CAPACITY_SKIP_BUILD", "0") != "1" {
-        let log_path = root.join("build.log");
-        let log =
-            File::create(&log_path).map_err(|error| format!("cannot create build log: {error}"))?;
-        capture_into(log, build)
-            .map_err(|_| format!("capacity-ramp: build failed; see {}", log_path.display()))?;
+        build_into_log(&root.join("build.log"), build)?;
     }
     let bin_dir = std::env::current_dir()
         .map_err(|error| format!("cannot resolve working directory: {error}"))?
@@ -616,6 +612,18 @@ pub(crate) fn host_jitter(args: &[&str]) -> StepResult {
     Ok(())
 }
 
+/// Runs the binary build with its output in `log_path`.
+fn build_into_log(log_path: &Path, build: impl FnOnce() -> StepResult) -> StepResult {
+    let log =
+        File::create(log_path).map_err(|error| format!("cannot create build log: {error}"))?;
+    capture_into(log, build).map_err(|error| {
+        format!(
+            "capacity-ramp: build failed: {error}; see {}",
+            log_path.display()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,5 +635,21 @@ mod tests {
             vec![0, 1, 2, 3, 8, 10, 11]
         );
         assert!(expand_cpu_list("0-x").is_err());
+    }
+
+    #[test]
+    fn a_failed_build_reports_its_cause_and_the_log() {
+        let dir = std::env::temp_dir().join(format!("xtask-capacity-build-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("build.log");
+        let error =
+            build_into_log(&log, || Err("cargo build exited with status 101".into())).unwrap_err();
+        assert!(
+            error.contains("cargo build exited with status 101"),
+            "{error}"
+        );
+        assert!(error.contains(&log.display().to_string()), "{error}");
+        build_into_log(&log, || Ok(())).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
