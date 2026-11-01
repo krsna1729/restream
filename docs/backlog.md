@@ -12,14 +12,12 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
-
-- [Q-109 SRT group receive skips a lost sequence](#q-109-protocol-opus-an-srt-group-receiver-skips-a-sequence-every-member-lost)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
+- [Q-111 receiver TLPKTDROP floor](#q-111-protocol-opus-an-unrecovered-loss-stalls-srt-rs-delivery-at-least-one-second)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -82,17 +80,6 @@ the [assurance roadmap](assurance-roadmap.md).
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
 
-### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
-- Goal: when the active sender in an SRT Backup group disappears, the promoted
-  standby replays the group's recent send history before new payload, so the
-  receiver does not lose the interval the active issued but never delivered.
-- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): a bounded
-  recent-send window per group, standby stability qualified by
-  `max(T_min, 2*SRTT + 4*RTTVar)` (as in srtgo), replay on promotion, and
-  refused promotion when the window cannot cover the gap.
-- Gates: differential cases against srtgo's state model; a harness mode that
-  kills the active SRT output mid-stream and checks receiver continuity.
-
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
 - Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced
   datagrams and stamps socket arrival time before queueing, so scheduler
@@ -125,18 +112,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: misspelt and reordered requests reach the same command the buttons
   would; nothing applies without the approval step.
 
-### Q-109 [protocol] [opus] An SRT group receiver skips a sequence every member lost
-- Goal: when no group member delivers the next sequence before its TSBPD
-  deadline, the group receiver releases the following packet instead of
-  waiting forever. Today `srt_group/mod.rs:564` (srt-rs `2119264`) returns
-  `None` while `next_receive_sequence` is missing from `pending`, so one
-  sequence lost on every link stalls the group.
-- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): skip to the
-  oldest pending sequence once the missing one's deadline passes, and count
-  the skip as a group drop.
-- Gates: a deterministic srt-proto test in which every member loses one
-  sequence and later packets are delivered in order with one counted drop.
-
 ### Q-110 [platform] [sonnet] Move from chrono to jiff after jiff 1.0
 - Goal: no crate depends on chrono. Its maintainer has soft-deprecated it
   ([chrono#1768](https://github.com/chronotope/chrono/issues/1768)), and a
@@ -148,6 +123,19 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: contract tests pin today's serialized timestamps (API JSON and
   SQLite rows) before the switch and pass unchanged after it;
   `cargo tree -i chrono` is empty.
+
+### Q-111 [protocol] [opus] An unrecovered loss stalls srt-rs delivery at least one second
+- Goal: a packet that is never retransmitted holds back delivery no longer
+  than libsrt's receiver would. The srt-rs receiver drops it only
+  `max(1.25 × latency, 1 s)` past its play time
+  (`SrtReceiver::tlpktdrop_threshold_us`, srt-rs `e86aa6f`), so at the
+  product's latencies every such loss stalls the output for over a second.
+  Reading libsrt, that one-second floor belongs to its sender's drop and its
+  receiver skips once the following packet is due; confirm that in
+  `srtcore` first. Not measured live.
+- Gates: a deterministic srt-proto test in which a lost, never-resent packet
+  lets the next one out at its own play time; a libsrt interop run that
+  compares the stall.
 
 ## Not planned
 

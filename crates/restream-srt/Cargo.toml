@@ -12,6 +12,6 @@ workspace = true
 [dependencies]
 restream-sync = { path = "../restream-sync" }
 bytes = "1.12"
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "2119264553eab8ccb4c2dfbb56214fbe2333971d" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "2119264553eab8ccb4c2dfbb56214fbe2333971d", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "e86aa6f38d5f77be6c241ec87e00c4332b67b3b5" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "e86aa6f38d5f77be6c241ec87e00c4332b67b3b5", features = ["compio"] }
 percent-encoding = "2"
