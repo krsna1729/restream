@@ -153,3 +153,57 @@ pub(crate) fn resource_egress_scenario(name: &str) -> Option<&'static ResourceEg
         .iter()
         .find(|scenario| scenario.name == name)
 }
+
+/// One planned output: `(index, kind, name)`.
+pub(super) type PlannedOutput = (usize, SweepOutputKind, String);
+
+/// Every output a scenario may create, in creation order: each kind for each
+/// index up to `max_outputs`.
+pub(super) fn plan_outputs(
+    scenario: &str,
+    kinds: &[SweepOutputKind],
+    max_outputs: usize,
+) -> Vec<PlannedOutput> {
+    (1..=max_outputs)
+        .flat_map(|index| {
+            kinds
+                .iter()
+                .map(move |kind| (index, *kind, format!("{scenario}-{}-{index}", kind.label())))
+        })
+        .collect()
+}
+
+/// The outputs live at rung `index`: every planned output in burst mode,
+/// which creates them all up front; those planned up to `index` otherwise.
+pub(super) fn live_output_names(
+    planned: &[PlannedOutput],
+    index: usize,
+    burst: bool,
+) -> impl Iterator<Item = &str> {
+    planned
+        .iter()
+        .filter(move |(planned_index, ..)| burst || *planned_index <= index)
+        .map(|(.., name)| name.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rung's peer expectations count the outputs live at it. Burst mode
+    /// creates every output before the first rung, so all of them count;
+    /// serial mode counts those created so far.
+    #[test]
+    fn live_outputs_are_all_planned_ones_in_burst_mode_and_a_prefix_otherwise() {
+        let planned = plan_outputs(
+            "s",
+            &[SweepOutputKind::SrtSource, SweepOutputKind::RtmpSource],
+            3,
+        );
+        assert_eq!(planned.len(), 6);
+        let serial: Vec<&str> = live_output_names(&planned, 1, false).collect();
+        assert_eq!(serial, ["s-srt-source-1", "s-rtmp-source-1"]);
+        assert_eq!(live_output_names(&planned, 2, false).count(), 4);
+        assert_eq!(live_output_names(&planned, 1, true).count(), 6);
+    }
+}

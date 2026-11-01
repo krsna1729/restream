@@ -205,6 +205,11 @@ pub(super) async fn sample_with(
             destinations.insert(format!("srt-sink:{port}:{peer}"), bytes);
         }
     }
+    if let Some(config) = env.peer_state_config() {
+        destinations.extend(remote_srt_destinations(
+            &super::packet_contract_peers::poll_peers(config).await,
+        ));
+    }
     if let Some(sink) = sinks.hls {
         for (cid, bytes) in sink.per_output_bytes() {
             destinations.insert(
@@ -256,6 +261,27 @@ pub(super) async fn sample_with(
         offered_bytes: measure["ingestBytesReceived"].as_u64().unwrap_or(0),
         pipelines: measure["pipelines"].as_u64().unwrap_or(0) as usize,
         reported,
+    })
+}
+
+/// Each remote SRT sink connection (`srt-sink` mode on a peer host) as a
+/// destination, keyed by host so connections on different hosts never
+/// collide. A peer whose poll failed adds none; the packet contract reports
+/// that peer's failure.
+fn remote_srt_destinations(
+    readings: &[super::packet_contract_peers::PeerReading],
+) -> impl Iterator<Item = (String, u64)> + '_ {
+    readings.iter().flat_map(|reading| {
+        reading
+            .state
+            .iter()
+            .flat_map(|state| &state.per_peer_bytes)
+            .map(|((port, connection), bytes)| {
+                (
+                    format!("srt-remote:{}:{port}:{connection}", reading.host),
+                    *bytes,
+                )
+            })
     })
 }
 
@@ -329,5 +355,40 @@ mod tests {
         summary.add_hls(super::super::hls_sink::HlsWindow::default());
         assert_eq!(summary.destinations, 1);
         assert!((summary.ratio_min - 1.0).abs() < 1e-9);
+    }
+
+    /// A remote rung's SRT destinations are the peers' sink connections,
+    /// parsed from their `/state`; without them a remote rung can never show
+    /// delivery. A peer whose poll failed adds none.
+    #[test]
+    fn remote_srt_sink_connections_count_as_destinations() {
+        use super::super::packet_contract_peers::{PeerReading, peer_state_from_json};
+        let reading = |host: &str, per_peer: Value| PeerReading {
+            host: host.to_string(),
+            observed_at: Instant::now(),
+            state: peer_state_from_json(
+                host,
+                &json!({"runId": "r", "accepted": 3, "closed": 0, "discardedBytes": 0,
+                        "perPeerBytes": per_peer}),
+            ),
+        };
+        let readings = [
+            reading("b", json!([[21300, 0, 1_000], [21304, 1, 2_000]])),
+            reading("c", json!([[21300, 0, 500]])),
+            PeerReading {
+                host: "d".to_string(),
+                observed_at: Instant::now(),
+                state: Err("unreachable".to_string()),
+            },
+        ];
+        let destinations: BTreeMap<String, u64> = remote_srt_destinations(&readings).collect();
+        assert_eq!(
+            destinations,
+            BTreeMap::from([
+                ("srt-remote:b:21300:0".to_string(), 1_000),
+                ("srt-remote:b:21304:1".to_string(), 2_000),
+                ("srt-remote:c:21300:0".to_string(), 500),
+            ])
+        );
     }
 }

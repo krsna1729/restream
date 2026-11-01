@@ -234,6 +234,7 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
                 accepted: 0,
                 closed: 0,
                 discarded_bytes: 0,
+                per_peer_bytes: Vec::new(),
                 udp_in_errors: Some(0),
                 udp_rcvbuf_errors: Some(0),
                 udp_sndbuf_errors: Some(0),
