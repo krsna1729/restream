@@ -12,12 +12,15 @@ import {
   NEW_DRAFT,
   STAGES,
   changeRequest,
+  draftFor,
   progress,
 } from "./changes-model.js";
 import type { ChangeDraft, StageState } from "./changes-model.js";
 import { Impact } from "./changes-impact.js";
 import { Judgement, Operation } from "./change-operation.js";
 import type { Run } from "./change-operation.js";
+import type { ChangeIntent } from "./route.js";
+import { useGo, usePlace } from "./router.js";
 import type { LiveSnapshot } from "./store.js";
 import { PageHeader } from "../ui/page-header.js";
 import { Panel } from "../ui/panel.js";
@@ -42,6 +45,10 @@ export function Changes({ live }: { live: LiveSnapshot }) {
   const [operation, setOperation] = useState<ChangeOperation | null>(null);
   const [plan, setPlan] = useState<ChangePlan | null>(null);
   const [busy, setBusy] = useState(false);
+  // A command from the palette arrives as a change to draft (`c`).
+  const place = usePlace();
+  const go = useGo();
+  const seed = place.change ? { change: place.change, pipelineId: place.pipelineId } : null;
 
   useEffect(() => {
     const operationId = sessionStorage.getItem(OPERATION_KEY);
@@ -88,11 +95,17 @@ export function Changes({ live }: { live: LiveSnapshot }) {
       </div>
       {operation === null ? (
         <DefineChange
+          key={seed ? `${seed.change.kind}:${seed.change.outputId}` : "blank"}
+          seed={seed}
           live={live}
           busy={busy}
           run={run}
           onJudged={setPlan}
-          onCreated={track}
+          onCreated={(created) => {
+            track(created);
+            // The drafted command is now this operation; a new change starts blank.
+            if (seed) go({ workspace: "changes", pipelineId: place.pipelineId });
+          }}
         />
       ) : (
         <Operation
@@ -111,18 +124,32 @@ export function Changes({ live }: { live: LiveSnapshot }) {
   );
 }
 
+/** A palette command: the change to draft and the pipeline it is on. */
+interface Seed {
+  readonly change: ChangeIntent;
+  readonly pipelineId: string | null;
+}
+
 function DefineChange(props: {
+  seed: Seed | null;
   live: LiveSnapshot;
   busy: boolean;
   run: Run;
   onJudged: (plan: ChangePlan | null) => void;
   onCreated: (operation: ChangeOperation) => void;
 }) {
-  const { live, busy, run } = props;
+  const { seed, live, busy, run } = props;
   const pipelines = live.state?.pipelines ?? [];
-  const [intent, setIntent] = useState("");
-  const [pipelineId, setPipelineId] = useState("");
-  const [drafts, setDrafts] = useState<readonly ChangeDraft[]>([NEW_DRAFT]);
+  const [intent, setIntent] = useState(() => {
+    if (!seed) return "";
+    const label = CHANGE_KINDS.find(([kind]) => kind === seed.change.kind)?.[1] ?? seed.change.kind;
+    const output = live.state?.outputs.find((candidate) => candidate.id === seed.change.outputId);
+    return `${label}: ${output?.name ?? seed.change.outputId}`;
+  });
+  const [pipelineId, setPipelineId] = useState(seed?.pipelineId ?? "");
+  const [drafts, setDrafts] = useState<readonly ChangeDraft[]>(() =>
+    seed ? [draftFor(seed.change)] : [NEW_DRAFT],
+  );
   const [profiles, setProfiles] = useState<readonly string[]>([]);
   const [plan, setPlan] = useState<{ key: string; plan: ChangePlan } | null>(null);
 
@@ -136,6 +163,16 @@ function DefineChange(props: {
     [intent, pipelineId, drafts],
   );
   const requestKey = JSON.stringify(request);
+  // A drafted command is judged at once (read-only): its plan shows before
+  // anything can be created or approved.
+  useEffect(() => {
+    if (!seed) return;
+    void run(async () => {
+      const judged = await planChange(request);
+      if (judged) setPlan({ key: requestKey, plan: judged });
+    });
+    // Once per drafted command; the component is keyed on it.
+  }, []);
   // A preview speaks only for the exact change it judged.
   const currentPlan = plan?.key === requestKey ? plan.plan : null;
   const { onJudged } = props;
