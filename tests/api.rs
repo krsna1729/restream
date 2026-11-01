@@ -20,6 +20,9 @@ use tower::ServiceExt;
 
 #[path = "api/agent.rs"]
 mod agent;
+#[cfg(feature = "agent-execution")]
+#[path = "api/agent_panels.rs"]
+mod agent_panels;
 #[path = "api/auth.rs"]
 mod auth;
 #[path = "api/config.rs"]

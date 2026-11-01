@@ -133,6 +133,112 @@ fn stateless_initialize_and_tools_list_answer_without_a_session() {
     assert!(!tools["result"]["tools"].as_array().unwrap().is_empty());
 }
 
+fn reply(message: Value, session: &Session) -> Value {
+    let Inbound::Reply(reply) = classify(message, Some(session), Handshake::NotRequired) else {
+        panic!("expected a reply");
+    };
+    reply
+}
+
+fn session_with(capabilities: Value) -> Session {
+    let session = Session::default();
+    reply(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": { "capabilities": capabilities }}),
+        &session,
+    );
+    session
+}
+
+fn listed_panels(session: &Session) -> Vec<(String, String)> {
+    let tools = reply(
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        session,
+    );
+    tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| {
+            let uri = tool.pointer("/_meta/ui/resourceUri")?.as_str()?;
+            Some((tool["name"].as_str()?.to_owned(), uri.to_owned()))
+        })
+        .collect()
+}
+
+/// Tools name their panels only to a host that renders MCP Apps HTML.
+#[test]
+fn tools_name_their_panels_only_to_a_host_that_renders_them() {
+    use restream_agent_contract::panels::{PANEL_MIME_TYPE, UI_EXTENSION};
+
+    let renders = session_with(json!({
+        "extensions": { UI_EXTENSION: { "mimeTypes": [PANEL_MIME_TYPE] } }
+    }));
+    let expected: Vec<(String, String)> = crate::tools::available_tool_catalog()
+        .iter()
+        .filter_map(|tool| {
+            let panel = restream_agent_contract::tool_panel(tool.name)?;
+            Some((tool.name.to_owned(), panel.uri.to_owned()))
+        })
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(listed_panels(&renders), expected);
+
+    for capabilities in [
+        json!({}),
+        json!({ "extensions": { UI_EXTENSION: { "mimeTypes": ["text/html"] } } }),
+    ] {
+        assert!(
+            listed_panels(&session_with(capabilities.clone())).is_empty(),
+            "{capabilities}"
+        );
+    }
+}
+
+/// Every panel a tool names is readable; an unknown resource is an error.
+#[test]
+fn every_named_panel_is_a_readable_resource() {
+    let session = session_with(json!({}));
+    let listed = reply(
+        json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}),
+        &session,
+    );
+    let uris: Vec<&str> = listed["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|resource| resource["uri"].as_str().unwrap())
+        .collect();
+    for tool in restream_agent_contract::AGENT_TOOLS {
+        if let Some(panel) = tool.panel {
+            assert!(uris.contains(&panel.uri), "{} is not listed", panel.uri);
+        }
+    }
+    for uri in uris {
+        let read = reply(
+            json!({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": uri}}),
+            &session,
+        );
+        let content = &read["result"]["contents"][0];
+        assert_eq!(content["uri"], uri);
+        assert_eq!(
+            content["mimeType"],
+            restream_agent_contract::panels::PANEL_MIME_TYPE
+        );
+        assert!(
+            content["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("<!doctype html>")
+        );
+    }
+    let missing = reply(
+        json!({"jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": {"uri": "ui://restream/none"}}),
+        &session,
+    );
+    assert_eq!(missing["error"]["code"], -32002);
+}
+
 /// An MCP client on the far end of an in-memory stdio pipe.
 struct StdioClient {
     to_server: WriteHalf<DuplexStream>,

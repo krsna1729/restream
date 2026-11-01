@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use restream_agent_contract::panels::{PANEL_MIME_TYPE, UI_EXTENSION};
 use restream_sync::lock::lock;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -23,6 +24,8 @@ pub(super) const CALL_OUTBOX: usize = 32;
 pub(crate) struct Session {
     /// The client declared `capabilities.elicitation` at initialize.
     elicitation: AtomicBool,
+    /// The client renders MCP Apps panels (`io.modelcontextprotocol/ui`).
+    panels: AtomicBool,
     initialize_seen: AtomicBool,
     initialized: AtomicBool,
     next_request: AtomicU64,
@@ -41,11 +44,21 @@ struct Waiters {
 
 impl Session {
     pub(super) fn on_initialize(&self, params: &Value) {
-        let elicitation = params
-            .pointer("/capabilities/elicitation")
+        let capabilities = &params["capabilities"];
+        let elicitation = capabilities
+            .get("elicitation")
             .is_some_and(Value::is_object);
+        let panels = capabilities["extensions"][UI_EXTENSION]["mimeTypes"]
+            .as_array()
+            .is_some_and(|types| types.iter().any(|kind| kind == PANEL_MIME_TYPE));
         self.elicitation.store(elicitation, Ordering::Relaxed);
+        self.panels.store(panels, Ordering::Relaxed);
         self.initialize_seen.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the client renders panels: only then do tools name theirs.
+    pub(super) fn renders_panels(&self) -> bool {
+        self.panels.load(Ordering::Relaxed)
     }
 
     pub(super) fn on_initialized(&self) {

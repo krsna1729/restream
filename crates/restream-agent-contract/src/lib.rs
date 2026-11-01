@@ -7,12 +7,13 @@
 
 mod backend;
 mod errors;
+pub mod panels;
 mod tools;
 mod types;
 
 pub use backend::{AgentBackend, AgentFuture, AgentResult};
 pub use errors::AgentError;
-pub use tools::{AGENT_TOOLS, AgentTool, AgentToolKind, agent_tool_names};
+pub use tools::{AGENT_TOOLS, AgentTool, AgentToolKind, agent_tool_names, tool_panel};
 pub use types::{
     ApprovalRequest, InvestigationRequest, OperationCreateRequest, PlanRequest, ProposedChange,
     VerifyRequest,
