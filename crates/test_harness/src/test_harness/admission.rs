@@ -1,14 +1,17 @@
-//! `srt.admission`: drive one SRT shard pool past its admission ceiling.
+//! `srt.admission` and `sink.admission`: drive one fabric's shard pool past
+//! its admission ceiling.
 //!
 //! Restream runs with `ADMISSION_SHARDS` (default 1) egress shards at most per
 //! pool (`RESTREAM_EGRESS_SHARDS`) and a ten-minute restart backoff, so an
 //! output refused once stays refused for the watch. One 8 Mbit/s fixture feed
-//! fans out to `ADMISSION_OUTPUTS` (default 96 per shard) SRT outputs, added
-//! one at a time so the pool grows across them. Gate: at least one output is
-//! refused; every refused output reports `capacityRefused` at the shard layer
-//! and sends nothing; every other output is live and keeps progressing
-//! through `ADMISSION_WATCH_SECS` (default 20); and no `egress-shard-<n>`
-//! thread runs at or above the 62% busy where one shard began to degrade.
+//! fans out to `ADMISSION_OUTPUTS` outputs of the fabric (default per shard:
+//! 96 SRT; 4224 sink, past its 4,096-leaf table), added one at a time so the
+//! pool grows across them.
+//! Gate: at least one output is refused; every refused output reports
+//! `capacityRefused` at the shard layer and sends nothing; every other output
+//! is live and keeps progressing through `ADMISSION_WATCH_SECS` (default 20);
+//! and no `egress-shard-<n>` thread runs at or above the 62% busy where one
+//! shard began to degrade.
 
 use super::*;
 use crate::thread_cpu::{
@@ -21,6 +24,31 @@ const RETRY_BACKOFF_MS: &str = "600000";
 /// Busy at which one SRT shard began losing outputs (runtime-crossings, SRT
 /// shard capacity).
 const DEGRADED_BUSY: f64 = 0.62;
+
+/// The fabric an admission run drives past its ceiling.
+#[derive(Clone, Copy)]
+pub(crate) enum AdmissionFabric {
+    Srt,
+    /// `sink://` discard outputs: so cheap that a shard's leaf table fills
+    /// long before its CPU, so the run adds past the table.
+    Sink,
+}
+
+impl AdmissionFabric {
+    fn mode(self) -> &'static str {
+        match self {
+            Self::Srt => "srt.admission",
+            Self::Sink => "sink.admission",
+        }
+    }
+
+    fn default_outputs_per_shard(self) -> u64 {
+        match self {
+            Self::Srt => 96,
+            Self::Sink => 4224,
+        }
+    }
+}
 
 fn env_u(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -57,24 +85,34 @@ async fn cause_codes(api: &RampApi) -> Result<HashMap<String, Value>, String> {
         .collect())
 }
 
-pub(crate) async fn srt_admission() -> Result<Value, String> {
+pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> {
+    let mode = fabric.mode();
     let shards = env_u("ADMISSION_SHARDS", 1);
-    let requested = env_u("ADMISSION_OUTPUTS", 96 * shards) as usize;
+    let requested = env_u(
+        "ADMISSION_OUTPUTS",
+        fabric.default_outputs_per_shard() * shards,
+    ) as usize;
     let watch = Duration::from_secs(env_u("ADMISSION_WATCH_SECS", 20));
-    let work_dir = artifact_path("srt.admission");
+    let work_dir = artifact_path(mode);
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
     let ports = TestPorts::from_env();
-    // One sink thread per 32 outputs: the receiver must not be what limits
-    // the outputs at a gigabit and more.
+    // SRT outputs need a receiver: one sink thread per 32 outputs, so the
+    // receiver is not what limits the outputs at a gigabit and more.
     let sink_base = harness_port_defaults()
         .ffmpeg_srt_sink_base
         .checked_add(2002)
         .ok_or("sink port overflow")?;
-    let sink_ports = (0..requested.div_ceil(32))
-        .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
-        .collect::<Option<Vec<u16>>>()
-        .ok_or("sink port overflow")?;
-    let sink = HarnessSrtSinkPool::start(&sink_ports, 8 * 1024 * 1024)?;
+    let srt_sink_ports = match fabric {
+        AdmissionFabric::Srt => (0..requested.div_ceil(32))
+            .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
+            .collect::<Option<Vec<u16>>>()
+            .ok_or("sink port overflow")?,
+        AdmissionFabric::Sink => Vec::new(),
+    };
+    let srt_sink = match fabric {
+        AdmissionFabric::Srt => Some(HarnessSrtSinkPool::start(&srt_sink_ports, 8 * 1024 * 1024)?),
+        AdmissionFabric::Sink => None,
+    };
     let mut child = start_restream_child_with_env(
         &default_restream_bin(),
         &ports,
@@ -110,14 +148,13 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
     let mut ids = Vec::with_capacity(requested);
     for index in 0..requested {
         let name = format!("adm-{index:03}");
-        let oid = create_output(
-            &api,
-            &pid,
-            &name,
-            &harness_srt_output_url(sink_ports[index / 32], &name, HarnessSrtMode::Publish),
-            "source",
-        )
-        .await?;
+        let url = match fabric {
+            AdmissionFabric::Srt => {
+                harness_srt_output_url(srt_sink_ports[index / 32], &name, HarnessSrtMode::Publish)
+            }
+            AdmissionFabric::Sink => format!("sink://local/{name}"),
+        };
+        let oid = create_output(&api, &pid, &name, &url, "source").await?;
         start_output(&api, &pid, &oid).await?;
         ids.push(oid);
     }
@@ -201,7 +238,7 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
         && !peak_busy.is_empty()
         && overloaded.is_empty();
     let result = json!({
-        "mode": "srt.admission",
+        "mode": mode,
         "shardCeiling": shards,
         "requested": requested,
         "admitted": admitted.len(),
@@ -217,16 +254,18 @@ pub(crate) async fn srt_admission() -> Result<Value, String> {
         "passed": passed,
     });
     std::fs::write(
-        work_dir.join("srt.admission.json"),
+        work_dir.join(format!("{mode}.json")),
         serde_json::to_string_pretty(&result).unwrap_or_default(),
     )
     .map_err(|e| e.to_string())?;
     stop_child(&mut publisher).await;
     stop_child(&mut child).await;
-    sink.stop();
+    if let Some(sink) = srt_sink {
+        sink.stop();
+    }
     if passed {
         Ok(result)
     } else {
-        Err(format!("srt.admission: overload gate failed: {result}"))
+        Err(format!("{mode}: overload gate failed: {result}"))
     }
 }

@@ -207,6 +207,14 @@
           },
           "purpose": "one SRT shard pool (ADMISSION_SHARDS at most) driven past its admission ceiling: refused outputs report capacityRefused and send nothing, admitted outputs keep progressing, and no egress shard thread reaches 62% busy"
         },
+        "sink.admission": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "the srt.admission gate for sink:// discard outputs (default 4224 per shard): a sink shard's 4,096-leaf table fills long before its CPU, so the excess must be refused for the full table"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

@@ -713,7 +713,7 @@ BENCH_BUILD=never \
 the child PID. RSS and ring payload alone cannot separate live heap from
 allocator retention; pair them with an allocation profiler.
 
-Three more modes qualify SRT egress:
+More modes qualify SRT egress and fabric admission:
 
 - `srt.slow-peer` pauses application delivery on one `RawSrtSink` receiver
   while protocol timers keep running. Healthy siblings must keep progressing.
@@ -727,6 +727,10 @@ Three more modes qualify SRT egress:
   The sink's MPEG-TS continuity check must see no counter jump, delivery must
   resume at steady pace, and the output must never redial. It runs in the
   `direct-play` shard.
+- `sink.admission` applies the same gate to `sink://` discard outputs,
+  4224 per shard by default. A sink shard's 4,096-leaf table fills long
+  before its CPU (one shard ran 4,096 at 8% busy), so the excess is refused
+  for the full table.
 
 ## Why two test tiers
 

@@ -3,10 +3,10 @@ use crate::egress::command::{EgressCommand, FeedId};
 use crate::egress::factory::spawn_sink_fabric_shard_group;
 use crate::egress::journal::RingFeed;
 use crate::egress::manager::{
-    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
+    EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -21,8 +21,21 @@ pub enum SinkFabricEnsureError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SinkFabricDispatchError {
-    MissingFeed { feed_id: FeedId },
+    MissingFeed {
+        feed_id: FeedId,
+    },
+    /// Admission refused the new output; nothing was dispatched.
+    Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+}
+
+impl SinkFabricDispatchError {
+    pub fn refused(&self) -> Option<&crate::egress::sizing::Saturated> {
+        match self {
+            Self::Saturated(saturated) => Some(saturated),
+            _ => None,
+        }
+    }
 }
 
 impl MediaEngine {
@@ -43,10 +56,15 @@ impl MediaEngine {
                 |_| feed.clone_reader(),
             )
             .map_err(SinkFabricEnsureError::Spawn)?;
+            // Least-loaded placement, as for the other fabrics: a shard grown
+            // for new outputs takes them, and admission's per-shard ceiling
+            // can only refuse when every shard is full.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
-                .expect("egress fabric manager config is clamped nonzero");
+                .expect("egress fabric manager config is clamped nonzero")
+                .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(SinkFabricEnsureError::Runtime)?;
+                .map_err(SinkFabricEnsureError::Runtime)?
+                .adaptive(config.shards);
 
             // Sink leaves have no poller at all (see `sink_shard.rs`'s
             // module doc), so this subscription's `FeedWake` delivery is their
@@ -92,10 +110,20 @@ impl MediaEngine {
         // shard the first time, instead of connecting once and immediately
         // getting rehomed onto a different shard.
         let mut rescale_feed = rescale_feed;
-        if matches!(command, EgressCommand::Add(_))
+        if let EgressCommand::Add(spec) = &command
             && let Some(feed) = rescale_feed.take()
         {
-            self.rescale_sink_fabric(feed_id, runtime, feed);
+            let reason = runtime.reason_for(&command);
+            self.rescale_sink_fabric(feed_id, runtime, feed, reason);
+            if matches!(reason, ResizeReason::Add) {
+                runtime
+                    .admit_add(
+                        crate::config::EgressShardProfile::SinkOutputCount,
+                        self.config.egress_fabric.shard_config(),
+                        &spec.id,
+                    )
+                    .map_err(SinkFabricDispatchError::Saturated)?;
+            }
         }
 
         let outcome = runtime
@@ -103,25 +131,26 @@ impl MediaEngine {
             .map_err(SinkFabricDispatchError::Dispatch)?;
 
         if let Some(feed) = rescale_feed.take() {
-            self.rescale_sink_fabric(feed_id, runtime, feed);
+            self.rescale_sink_fabric(feed_id, runtime, feed, ResizeReason::Remove);
         }
 
         Ok(outcome)
     }
 
-    /// Sink pools rescale only around commands, so the reconciler calls this
-    /// to replace a panicked shard and release its outputs to retry (see
-    /// `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
-    pub async fn recover_sink_fabrics(&self) {
+    /// The reconciler's periodic look: learn what this feed's sink outputs
+    /// cost from a fresh delivery window (the price admission refuses by),
+    /// and replace a panicked shard, releasing its outputs to retry (see
+    /// `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
+    pub async fn resize_sink_fabrics(&self) {
         let mut registry = self.fabric.sink.lock().await;
         let crate::engine_registries::SinkFabricRegistry {
             runtimes, feeds, ..
         } = &mut *registry;
         for (id, runtime) in runtimes {
-            if runtime.has_panicked_shard()
+            if (runtime.observation_due() || runtime.has_panicked_shard())
                 && let Some(feed) = feeds.get(id)
             {
-                self.rescale_sink_fabric(id, runtime, feed.clone_reader());
+                self.rescale_sink_fabric(id, runtime, feed.clone_reader(), ResizeReason::Observe);
             }
         }
     }
@@ -131,14 +160,17 @@ impl MediaEngine {
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         feed: RingFeed,
+        reason: ResizeReason,
     ) {
+        // Price unmeasured outputs at this feed's rate, as the other fabrics do.
+        runtime.forecast_feed(&feed.publication_ring());
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::config::EgressShardProfile::SinkOutputCount,
             crate::host_capacity::HostCapacity::get(),
-            crate::egress::runtime::ResizeReason::Remove,
+            reason,
             shard_config,
             |_shard_id| {
                 let feed = feed.clone_reader();

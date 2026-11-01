@@ -512,6 +512,8 @@ pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
 pub enum EgressShardProfile {
     OutputCount,
     SrtOutputCount,
+    /// `sink://` discard outputs.
+    SinkOutputCount,
 }
 
 impl EgressShardProfile {
@@ -521,13 +523,18 @@ impl EgressShardProfile {
             // Delivery checked at 4.8 Mbit/s/output: one shard delivered 64,
             // began degrading at 96 and collapsed at 128 on the reference VPS.
             Self::SrtOutputCount => 64,
+            // One shard ran 3,458 sink outputs of an 8 Mbit/s feed at 7.0%
+            // busy (6-vCPU KVM EPYC): about 41,000 at 50% and 4.8 Mbit/s. A
+            // quarter of that, for slower hosts; the 4,096-leaf table still
+            // binds first at 8 Mbit/s.
+            Self::SinkOutputCount => 10_240,
         }
     }
 
     pub(crate) fn shard_override(self) -> Option<u32> {
         match self {
             Self::SrtOutputCount => srt_bench_shard_override(),
-            Self::OutputCount => None,
+            Self::OutputCount | Self::SinkOutputCount => None,
         }
     }
 

@@ -88,13 +88,14 @@ impl EgressFabricRuntime {
     }
 
     /// Admission for a new output (`reason_for` gave `Add`), after the
-    /// Add's `rescale`: refused when the shard it would be placed on would
-    /// run above `ADMIT_CEILING` with it. Every shard stays under the
-    /// ceiling, whatever the pool's average. Only a `srt-shard-bench` build
-    /// may skip it (`RESTREAM_BENCH_SRT_ADMISSION=0`).
+    /// Add's `rescale`: refused when the shard it would be placed on has no
+    /// free leaf, or would run above `ADMIT_CEILING` with it. Every shard
+    /// stays under the ceiling, whatever the pool's average. Only a
+    /// `srt-shard-bench` build may skip it (`RESTREAM_BENCH_SRT_ADMISSION=0`).
     pub(crate) fn admit_add(
         &self,
         profile: crate::config::EgressShardProfile,
+        shard_config: EgressShardConfig,
         output_id: &crate::egress::command::OutputId,
     ) -> Result<(), Saturated> {
         if profile.admission_bypassed() {
@@ -102,12 +103,14 @@ impl EgressFabricRuntime {
         }
         let shard = self.manager.assign_output(output_id);
         let shard_outputs = self.manager.desired_count_for_shard(shard) + 1;
+        let shards = self.manager.placement_count().get();
+        let leaves = shard_config.leaf_capacity().get();
+        if shard_outputs > leaves {
+            return Err(Saturated::Full { leaves, shards });
+        }
         self.sizer
             .admit(shard_outputs, profile.outputs_per_shard())
-            .map_err(|busy_pct| Saturated {
-                busy_pct,
-                shards: self.manager.placement_count().get(),
-            })
+            .map_err(|busy_pct| Saturated::Busy { busy_pct, shards })
     }
 
     pub fn observation_due(&self) -> bool {
@@ -328,6 +331,18 @@ impl EgressFabricRuntime {
             }
         } else {
             crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
+        };
+        // An Add also needs a free leaf: grow, within the ceiling, until the
+        // pool's leaf tables hold every output.
+        let leaf_shards = outputs
+            .div_ceil(shard_config.leaf_capacity().get())
+            .try_into()
+            .unwrap_or(u32::MAX)
+            .min(maximum);
+        let target = if matches!(reason, ResizeReason::Add) {
+            target.max(leaf_shards)
+        } else {
+            target
         }
         .max(1) as usize;
 
