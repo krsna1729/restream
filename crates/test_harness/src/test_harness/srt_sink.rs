@@ -23,6 +23,8 @@ use super::peer_state::{
 use super::*;
 
 /// Absolute counters served to the measuring host, plus the run identity.
+/// `perPeerBytes` is `[port, connection, bytes]` per logical connection: the
+/// measuring host's delivery accounting reads destinations from it.
 #[allow(clippy::too_many_arguments)]
 fn state_json(
     run: &str,
@@ -30,6 +32,7 @@ fn state_json(
     cpus_allowed: Option<&str>,
     ports: &[u16],
     counters: SrtSinkCounters,
+    per_peer_bytes: &[((u16, u64), u64)],
     udp_drops: Option<(u64, u64, u64)>,
     nic_rx_dropped: Option<u64>,
     nic_tx_dropped: Option<u64>,
@@ -42,6 +45,10 @@ fn state_json(
         "accepted": counters.accepted,
         "closed": counters.closed,
         "discardedBytes": counters.discarded_bytes,
+        "perPeerBytes": per_peer_bytes
+            .iter()
+            .map(|((port, connection), bytes)| json!([port, connection, bytes]))
+            .collect::<Vec<_>>(),
         "udpInErrors": udp_drops.map(|drops| drops.0),
         "udpRcvbufErrors": udp_drops.map(|drops| drops.1),
         "udpSndbufErrors": udp_drops.map(|drops| drops.2),
@@ -132,6 +139,7 @@ fn sink_state(
         cpus_allowed_list().as_deref(),
         ports,
         sink.snapshot(),
+        &sink.per_peer_bytes(),
         host_udp_drop_counters(),
         nic_rx_dropped,
         nic_tx_dropped,
@@ -274,9 +282,14 @@ mod tests {
             Some("2-5"),
             &[8891],
             counters,
+            &[((8891, 0), 3_000), ((8891, 1), 2_000)],
             Some((3, 7, 1)),
             Some(2),
             Some(0),
+        );
+        assert_eq!(
+            state["perPeerBytes"],
+            json!([[8891, 0, 3_000], [8891, 1, 2_000]])
         );
         assert_eq!(state["runId"], "run-1");
         assert_eq!(state["cpusAllowedList"], "2-5");
@@ -291,7 +304,17 @@ mod tests {
 
         // A host that cannot read /proc/net/snmp or its NIC counters reports
         // null, not zero: the measuring side must see a missing sensor.
-        let state = state_json("run-1", 1_000, None, &[8891], counters, None, None, None);
+        let state = state_json(
+            "run-1",
+            1_000,
+            None,
+            &[8891],
+            counters,
+            &[],
+            None,
+            None,
+            None,
+        );
         assert!(state["udpInErrors"].is_null());
         assert!(state["udpRcvbufErrors"].is_null());
         assert!(state["udpSndbufErrors"].is_null());

@@ -781,34 +781,34 @@ async fn run_resource_egress_growth(
     let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
     wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
     let mut output_ids = Vec::new();
-    let mut output_names: Vec<String> = Vec::new();
     let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
+    let planned = catalog::plan_outputs(scenario_name, output_kinds, max_outputs);
     let mut out = Vec::new();
     let burst_mode = burst::burst_enabled();
     if burst_mode {
-        let mut specs: Vec<burst::BurstSpec> = Vec::new();
-        for index in 1..=max_outputs {
-            for kind in output_kinds {
-                let name = format!("{scenario_name}-{}-{index}", kind.label());
-                let (url, encoding) = resource_output_url(env, config, *kind, &name);
-                specs.push((name, url, encoding, kind.rtmp_mode()));
-            }
-        }
+        let specs: Vec<burst::BurstSpec> = planned
+            .iter()
+            .map(|(_, kind, name)| {
+                let (url, encoding) = resource_output_url(env, config, *kind, name);
+                (name.clone(), url, encoding, kind.rtmp_mode())
+            })
+            .collect();
         for (id, at) in burst::create_and_start_all(&active.api, &pipeline_id, &specs).await? {
             output_ids.push(id.clone());
             output_starts.push((id, at));
         }
     }
     for index in 1..=max_outputs {
-        for kind in output_kinds.iter().filter(|_| !burst_mode) {
-            let name = format!("{scenario_name}-{}-{index}", kind.label());
-            let (url, encoding) = resource_output_url(env, config, *kind, &name);
-            output_names.push(name.clone());
+        let created_now = planned
+            .iter()
+            .filter(|(planned_index, ..)| !burst_mode && *planned_index == index);
+        for (_, kind, name) in created_now {
+            let (url, encoding) = resource_output_url(env, config, *kind, name);
             let output_id = create_output_with_rtmp_mode(
                 &active.api,
                 &pipeline_id,
-                &name,
+                name,
                 &url,
                 &encoding,
                 kind.rtmp_mode(),
@@ -835,7 +835,7 @@ async fn run_resource_egress_growth(
             // so the contract can check delivered payload against the workload
             // instead of trusting it.
             let mut expected_per_host = vec![0_usize; env.srt_peer_hosts.len()];
-            for name in &output_names {
+            for name in catalog::live_output_names(&planned, index, burst_mode) {
                 if let Some(host) = env.srt_peer_host_for(name)
                     && let Some(index) = env.srt_peer_hosts.iter().position(|peer| peer == host)
                 {

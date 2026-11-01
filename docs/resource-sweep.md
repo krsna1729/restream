@@ -85,7 +85,9 @@ its trust root to Restream.
 
 For remote SRT receivers, set `RESOURCE_SWEEP_SRT_PEER_HOSTS` to a
 comma-separated host list and run `srt-sink` on each host. The remote
-state endpoints supply same-window drop counters. Configure
+state endpoints supply same-window drop counters and per-connection payload
+bytes; each remote connection is a delivery destination
+(`srt-remote:<host>:<port>:<connection>`). Configure
 `SRT_SINK_PORTS` (default: `HARNESS_SRT_SINK_PORTS_PER_PEER` ports from the
 SRT base; list every port the measuring host spreads outputs over) and
 `SRT_SINK_STATE_PORT` using

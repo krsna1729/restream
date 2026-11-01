@@ -36,6 +36,8 @@ pub(super) struct PeerState {
     pub(super) accepted: u64,
     pub(super) closed: u64,
     pub(super) discarded_bytes: u64,
+    /// `((sink port, connection), payload bytes)` per logical connection.
+    pub(super) per_peer_bytes: Vec<((u16, u64), u64)>,
     pub(super) udp_in_errors: Option<u64>,
     pub(super) udp_rcvbuf_errors: Option<u64>,
     pub(super) udp_sndbuf_errors: Option<u64>,
@@ -83,11 +85,28 @@ pub(super) fn peer_state_from_json(host: &str, value: &Value) -> Result<PeerStat
             .as_u64()
             .ok_or_else(|| format!("{host}: no {key}"))
     };
+    let per_peer_bytes = value["perPeerBytes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            let field = |index: usize| entry[index].as_u64();
+            match (
+                field(0).and_then(|port| u16::try_from(port).ok()),
+                field(1),
+                field(2),
+            ) {
+                (Some(port), Some(connection), Some(bytes)) => Ok(((port, connection), bytes)),
+                _ => Err(format!("{host}: malformed perPeerBytes entry {entry}")),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(PeerState {
         run_id,
         accepted: required("accepted")?,
         closed: required("closed")?,
         discarded_bytes: required("discardedBytes")?,
+        per_peer_bytes,
         udp_in_errors: value["udpInErrors"].as_u64(),
         udp_rcvbuf_errors: value["udpRcvbufErrors"].as_u64(),
         udp_sndbuf_errors: value["udpSndbufErrors"].as_u64(),
@@ -304,6 +323,7 @@ mod tests {
             accepted: 100,
             closed: 0,
             discarded_bytes: 1_000,
+            per_peer_bytes: Vec::new(),
             udp_in_errors: Some(0),
             udp_rcvbuf_errors: udp_rcvbuf,
             udp_sndbuf_errors: Some(0),
