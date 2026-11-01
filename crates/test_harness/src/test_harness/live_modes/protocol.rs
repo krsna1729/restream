@@ -8,14 +8,18 @@ async fn start_local_mediamtx(
     std::fs::write(
         config_path,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-            ports.mtx_rtmp, ports.mtx_srt, ports.mtx_hls, ports.mtx_api
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\n{udp}rtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            ports.mtx_rtmp,
+            ports.mtx_srt,
+            ports.mtx_hls,
+            ports.mtx_api,
+            udp = mediamtx_udp_read_buffer_line(),
         ),
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(log_path).map_err(|e| e.to_string())?;
     spawn_mediamtx(
-        Command::new("mediamtx"),
+        Command::new(pinned_mediamtx()?),
         config_path,
         log,
         ports.mtx_api,

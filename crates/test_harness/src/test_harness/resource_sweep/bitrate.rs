@@ -349,7 +349,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     )
     .map_err(|e| e.to_string())?;
     let mut mediamtx = spawn_mediamtx(
-        Command::new("mediamtx"),
+        Command::new(pinned_mediamtx()?),
         &env.mediamtx_config,
         mediamtx_log,
         env.mtx_api,

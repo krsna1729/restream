@@ -34,6 +34,27 @@ fn mediamtx_child_env_removes_harness_port_overrides() {
 }
 
 #[test]
+fn mediamtx_never_asks_for_more_udp_buffer_than_the_kernel_grants() {
+    // MediaMTX exits when the kernel grants less than udpReadBufferSize.
+    let wanted = restream_srt::DESIRED_UDP_BUF;
+    assert_eq!(
+        udp_read_buffer_line(Some(212_992)),
+        "udpReadBufferSize: 212992\n"
+    );
+    assert_eq!(
+        udp_read_buffer_line(Some(wanted - 1)),
+        format!("udpReadBufferSize: {}\n", wanted - 1)
+    );
+    for roomy in [wanted, 26_214_400] {
+        assert_eq!(
+            udp_read_buffer_line(Some(roomy)),
+            format!("udpReadBufferSize: {wanted}\n")
+        );
+    }
+    assert_eq!(udp_read_buffer_line(None), "");
+}
+
+#[test]
 fn the_harness_refuses_any_mediamtx_but_the_pinned_one() {
     let pinned = pinned_mediamtx_version();
     assert!(check_mediamtx_version(&format!("{pinned}\n")).is_ok());

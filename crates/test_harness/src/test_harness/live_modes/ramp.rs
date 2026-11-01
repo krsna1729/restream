@@ -198,7 +198,7 @@ async fn start_ramp_mediamtx(env: &RampEnv) -> Result<Child, String> {
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
     spawn_mediamtx(
-        Command::new("mediamtx"),
+        Command::new(pinned_mediamtx()?),
         &env.mediamtx_config,
         log,
         env.mtx_api,

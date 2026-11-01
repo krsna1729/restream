@@ -127,13 +127,14 @@ async fn spawn_bare_mediamtx_srt(
     std::fs::write(
         &config_path,
         format!(
-            "logLevel: warn\nreadTimeout: 60s\nwriteTimeout: 60s\nrtmp: no\nrtsp: no\nsrt: yes\nsrtAddress: :{srt_port}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api_port}\nmetrics: no\npaths:\n  all:\n"
+            "logLevel: warn\nreadTimeout: 60s\nwriteTimeout: 60s\n{udp}rtmp: no\nrtsp: no\nsrt: yes\nsrtAddress: :{srt_port}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api_port}\nmetrics: no\npaths:\n  all:\n",
+            udp = mediamtx_udp_read_buffer_line(),
         ),
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command = Command::new("mediamtx");
+    let mut command = Command::new(pinned_mediamtx()?);
     let mediamtx = remove_mediamtx_config_env(&mut command)
         .arg(&config_path)
         .stdout(Stdio::from(log))

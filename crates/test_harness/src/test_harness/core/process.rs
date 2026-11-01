@@ -233,10 +233,32 @@ pub(crate) fn check_mediamtx_version(reported: &str) -> Result<(), String> {
     }
 }
 
+/// `udpReadBufferSize` line for every harness MediaMTX config with SRT: the
+/// receive buffer Restream's own SRT sockets ask for, so MediaMTX's one SRT
+/// socket (shared by every Restream SRT output) does not overflow first.
+/// Capped at `net.core.rmem_max`: MediaMTX refuses to start when the kernel
+/// grants less than it asked for, and a container cannot raise the limit.
+pub(crate) fn mediamtx_udp_read_buffer_line() -> String {
+    let rmem_max = std::fs::read_to_string("/proc/sys/net/core/rmem_max")
+        .ok()
+        .and_then(|value| value.trim().parse().ok());
+    udp_read_buffer_line(rmem_max)
+}
+
+pub(crate) fn udp_read_buffer_line(rmem_max: Option<usize>) -> String {
+    rmem_max.map_or_else(String::new, |max| {
+        format!(
+            "udpReadBufferSize: {}\n",
+            restream_srt::DESIRED_UDP_BUF.min(max)
+        )
+    })
+}
+
 /// MediaMTX config with RTMP and SRT ingest and the API, nothing else.
 pub(crate) fn plain_mediamtx_config(rtmp_port: u16, srt_port: u16, api_port: u16) -> String {
+    let udp_buffer = mediamtx_udp_read_buffer_line();
     format!(
-        "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{rtmp_port}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{srt_port}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api_port}\nmetrics: no\npaths:\n  all:\n"
+        "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\n{udp_buffer}rtmp: yes\nrtmpAddress: :{rtmp_port}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{srt_port}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api_port}\nmetrics: no\npaths:\n  all:\n"
     )
 }
 

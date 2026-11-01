@@ -25,19 +25,21 @@ pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\n{udp}rtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp,
             env.mtx_rtmps,
             cert.display(),
             key.display(),
             env.mtx_srt,
             env.mtx_hls,
-            env.mtx_api
+            env.mtx_api,
+            udp = mediamtx_udp_read_buffer_line(),
         ),
     )
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-    let command = command_with_optional_cgroup("mediamtx", &format!("mediamtx-{}", env.mtx_api));
+    let command =
+        command_with_optional_cgroup(pinned_mediamtx()?, &format!("mediamtx-{}", env.mtx_api));
     let mut child = spawn_mediamtx(
         command,
         &env.mediamtx_config,
