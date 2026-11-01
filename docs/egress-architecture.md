@@ -97,7 +97,7 @@ The fabric reads a bounded, sequence-addressed, immutable feed through the
 | Method | Contract |
 |---|---|
 | `head_sequence`, `oldest_sequence` | Retained window; a cursor below `oldest_sequence` is overrun |
-| `read_from` / `read_from_into` | Non-blocking; bounded by `ReadBudget` (default 64 units, 512 KiB); one contiguous run ending at the returned cursor. A slot the producer already lapped is an overrun |
+| `read_from` / `read_from_into` | Non-blocking; bounded by `ReadBudget` (default 64 units, 512 KiB); one contiguous run ending at the returned cursor. A slot the producer already lapped is an overrun, checked once per run (`RingBuffer::run_intact`) |
 | `latest_sync_point`, `sync_point_at_or_after` | Positions a protocol can start from, such as a keyframe |
 | `epoch` | Bumped by `FeedEpoch::advance` on a discontinuity |
 

@@ -1,19 +1,24 @@
 //! Loom model-check for the lock-free reads of a ring slot by sequence:
-//! `RingBuffer::frame_unit` (the per-slot frame-unit side table) and
-//! `RingBuffer::read_sequence` (the packet itself). Reduced to the slot
-//! atomics and the write index: the producer stores each slot's unit word
-//! (Release), tagged with its sequence, then the slot's packet (the
-//! `ArcSwap` store, a SeqCst swap, modelled as a Release store of the
+//! `RingBuffer::frame_unit` (the per-slot frame-unit side table),
+//! `RingBuffer::read_sequence` (the packet itself) and a run of
+//! `RingBuffer::read_unverified` packets accepted by `RingBuffer::run_intact`.
+//! Reduced to the slot atomics, the write index and `write_begin`: before
+//! each slot the producer stores `write_begin` (Relaxed), then the slot's
+//! unit word (Release), tagged with its sequence, then the slot's packet
+//! (the `ArcSwap` store, a SeqCst swap, modelled as a Release store of the
 //! sequence), and stores the write index (Release) only after the whole
 //! publication; for a batch that is after several slots. A reader loads the
 //! write index, keeps only the retained window, loads what it needs (all
 //! Acquire) and accepts it only when the unit's tag names the sequence
-//! asked.
+//! asked. A run's packet loads are modelled Relaxed (Restream does not rely
+//! on `ArcSwap`'s load ordering there); the run is accepted when
+//! `write_begin`, read after an Acquire fence, shows no lap had begun over
+//! it, or else by every slot's tag.
 
 #[cfg(loom)]
 mod loom_tests {
     use loom::sync::Arc;
-    use loom::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use loom::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
     use loom::thread;
 
     const CAPACITY: usize = 2;
@@ -22,6 +27,7 @@ mod loom_tests {
 
     struct FakeRing {
         write_idx: AtomicUsize,
+        write_begin: AtomicUsize,
         units: [AtomicU64; CAPACITY],
         /// The sequence whose packet the slot holds (`usize::MAX`: none).
         data: [AtomicUsize; CAPACITY],
@@ -40,20 +46,55 @@ mod loom_tests {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 write_idx: AtomicUsize::new(0),
+                write_begin: AtomicUsize::new(0),
                 units: std::array::from_fn(|_| AtomicU64::new(0)),
                 data: std::array::from_fn(|_| AtomicUsize::new(usize::MAX)),
             })
         }
 
-        /// `push_batch`: every slot first (unit word, then packet), then one
-        /// write-index store.
+        /// `push_batch`: every slot first (`write_begin`, the unit word,
+        /// then the packet), then one write-index store.
         fn push_batch(&self, count: usize) {
             let start = self.write_idx.load(Ordering::Relaxed);
             for sequence in start..start + count {
+                self.write_begin.store(sequence + 1, Ordering::Relaxed);
                 self.units[sequence % CAPACITY].store(pack(sequence), Ordering::Release);
                 self.data[sequence % CAPACITY].store(sequence, Ordering::Release);
             }
             self.write_idx.store(start + count, Ordering::Release);
+        }
+
+        /// `read_ring`'s common run: up to `count` packets from `start`
+        /// loaded without tags, then `run_intact`: one `write_begin` check,
+        /// or each slot's tag when a lap over `start` had begun. `None` is
+        /// an overrun.
+        fn read_run(&self, start: usize, count: usize) -> Option<Vec<usize>> {
+            let head = self.write_idx.load(Ordering::Acquire);
+            if start + CAPACITY < head {
+                return None;
+            }
+            let end = head.min(start + count);
+            let mut packets = Vec::new();
+            for sequence in start..end {
+                let packet = self.data[sequence % CAPACITY].load(Ordering::Relaxed);
+                if packet == usize::MAX {
+                    return None;
+                }
+                packets.push(packet);
+            }
+            fence(Ordering::Acquire);
+            if self.write_begin.load(Ordering::Relaxed) <= start + CAPACITY {
+                return Some(packets);
+            }
+            (start..end)
+                .all(|sequence| {
+                    unpack(
+                        self.units[sequence % CAPACITY].load(Ordering::Acquire),
+                        sequence,
+                    )
+                    .is_some()
+                })
+                .then_some(packets)
         }
 
         fn frame_unit(&self, sequence: usize) -> Option<u32> {
@@ -162,6 +203,39 @@ mod loom_tests {
             let last = 2 * CAPACITY - 1;
             assert_eq!(ring.read_sequence(last), Some(last));
             assert_eq!(ring.read_sequence(0), None, "lapped");
+        });
+    }
+
+    /// A run read untagged while a batch laps it is either rejected or holds
+    /// exactly its own sequences: any packet loaded from the lap comes with a
+    /// `write_begin` the run check sees.
+    #[test]
+    fn loom_run_check_never_accepts_a_lapped_packet() {
+        loom::model(|| {
+            let ring = FakeRing::new();
+            ring.push_batch(CAPACITY);
+            let reader_ring = ring.clone();
+
+            let reader = thread::spawn(move || {
+                if let Some(packets) = reader_ring.read_run(0, CAPACITY) {
+                    let expected: Vec<usize> = (0..packets.len()).collect();
+                    assert_eq!(packets, expected);
+                }
+            });
+
+            ring.push_batch(CAPACITY);
+
+            reader.join().unwrap();
+        });
+    }
+
+    /// With no publication racing it, a retained run passes the single check.
+    #[test]
+    fn loom_run_check_accepts_a_quiet_run_without_tags() {
+        loom::model(|| {
+            let ring = FakeRing::new();
+            ring.push_batch(CAPACITY);
+            assert_eq!(ring.read_run(0, CAPACITY), Some(vec![0, 1]));
         });
     }
 }

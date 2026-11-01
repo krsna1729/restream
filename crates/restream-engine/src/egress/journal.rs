@@ -77,10 +77,11 @@ fn refresh_oldest(ring: &RingBuffer, cached: &AtomicU64) -> u64 {
 ///
 /// A slot that no longer holds its sequence's packet is an overrun, even
 /// while the write index still calls it retained (a batch writes its slots
-/// before it moves the write index). A cursor awaiting a keyframe first
-/// skips the video interframes at its position, without charging them to
-/// the budget, and the run stops before the next one; the first video
-/// keyframe ends the wait.
+/// before it moves the write index): the common run checks that once, with
+/// [`RingBuffer::run_intact`]. A cursor awaiting a keyframe first skips the
+/// video interframes at its position, without charging them to the budget,
+/// and the run stops before the next one; the first video keyframe ends the
+/// wait.
 fn read_ring<U>(
     ring: &RingBuffer,
     epoch: u64,
@@ -131,13 +132,16 @@ fn read_ring<U>(
         next.next_sequence += 1;
     }
     // The common run, past (or never in) a keyframe wait. A wait the loop
-    // above stopped on an interframe ends this read there.
+    // above stopped on an interframe ends this read there. Its slots are
+    // loaded unchecked and the whole run checked once.
+    let run_start = next.next_sequence;
     while !next.awaiting_keyframe
         && next.next_sequence < head
         && units.len() < budget.max_units
         && total_bytes < budget.max_bytes
     {
-        let Some(packet) = ring.read_at(next.next_sequence as usize) else {
+        let Some(packet) = ring.read_unverified(next.next_sequence as usize) else {
+            units.clear();
             return FeedRead::Overrun {
                 oldest_sequence: refresh_oldest(ring, cached_oldest),
             };
@@ -145,6 +149,14 @@ fn read_ring<U>(
         total_bytes += packet.payload.len();
         units.push(unit(packet));
         next.next_sequence += 1;
+    }
+    if next.next_sequence > run_start
+        && !ring.run_intact(run_start as usize, next.next_sequence as usize)
+    {
+        units.clear();
+        return FeedRead::Overrun {
+            oldest_sequence: refresh_oldest(ring, cached_oldest),
+        };
     }
     if next.next_sequence == cursor.next_sequence {
         return FeedRead::Empty;

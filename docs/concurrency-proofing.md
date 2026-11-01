@@ -61,7 +61,7 @@ gates.
 | `egress_feed_wake_loom` | queued wakes coalesce, heads are independent, the full-channel retry bit is never lost (`AcqRel` swaps; the consumer clears it before reading the head) |
 | `input_selection_loom` | multi-input gate selection |
 | `moq_origin_loom` | the MoQ origin viewer cap never admits past its maximum and every release frees a slot; the ring-to-pump wake over a one-slot channel loses no publication |
-| `ring_frame_unit_loom` | a frame-unit read never returns the unit of a sequence that lapped it |
+| `ring_frame_unit_loom` | a frame-unit or packet read never returns the unit or packet of a sequence that lapped it; a run read without tags and accepted by the once-per-run `write_begin` check never holds a lapped packet |
 | `ring_migration_loom` | seal and migrate of a ring with live readers |
 | `ts_chunk_ring_loom` | TS chunk ring wait and cancel |
 | `ts_muxer_stage_loom` | TS muxer stage create, reuse and replacement races |
