@@ -170,6 +170,9 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getStageTelemetry("pipe /1:video:720p");
   await api.getResourceMap("pipe /1", { view: "detail", topN: 40 });
   await api.getYoutubeMonitoringStatus("https://youtu.be/a?si=b&t=1");
+  await api.approveAction("op /1", 1, "retired destination");
+  await api.advanceOperation("op /1", "apply");
+  await api.explainIncident("pipeline:p 1:no_publisher", "2026-10-17T12:00:00Z");
   await api.logout();
 
   assert.deepEqual(
@@ -213,6 +216,12 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
         "GET",
         "/api/v1/monitoring/youtube-status?url=https%3A%2F%2Fyoutu.be%2Fa%3Fsi%3Db%26t%3D1",
       ],
+      ["POST", "/api/v1/agent/operations/op%20%2F1/actions/1/approve"],
+      ["POST", "/api/v1/agent/operations/op%20%2F1/apply"],
+      [
+        "GET",
+        "/api/v1/agent/incidents/explanation?alertId=pipeline%3Ap+1%3Ano_publisher&firstSeen=2026-10-17T12%3A00%3A00Z",
+      ],
       ["POST", "/api/v1/auth/logout"],
     ],
   );
@@ -249,6 +258,8 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       targetGopSeconds: 2,
     },
   });
+  const approval = requests.find((request) => request.url.endsWith("/actions/1/approve"));
+  assert.deepEqual(approval?.body, { reason: "retired destination" });
 });
 
 test("media upload uses the canonical multipart endpoint", async () => {

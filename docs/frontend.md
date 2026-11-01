@@ -498,6 +498,11 @@ pipeline, for a screen in the control room.
   starts after that minute.
 - "Export evidence" downloads alert, packet, timeline and samples as one
   JSON file built in the browser.
+- "Explain this incident" asks `/agent/incidents/explanation` for the
+  alert's episode: the broken layer, its evidence, the layers ruled out with
+  why, what to do, and the proposed fix judged by the planner. "Create
+  operation" creates it with the alert as `incidentId`; the operation card
+  (shared with Changes) approves each change, applies and verifies.
 
 ### Capacity
 
@@ -654,8 +659,11 @@ more destination changes (add, change, start, stop, remove) and a reason.
 2. A valid preview shows impact: the topology diff (outputs by stage and
    protocol, before and after) and, for additions, `/capacity/scenario`
    before and after (removals are counted, not credited).
-3. A valid preview creates an operation. The operator approves it (as this
-   session, with an audited reason), applies and verifies.
+3. A valid preview creates an operation. Each change is approved on its own
+   (`…/actions/{index}/approve`, with an audited reason) by a session whose
+   role reaches it: removing a destination needs an admin, other changes an
+   operator. A change the role cannot approve shows why and stays disabled;
+   the server refuses it anyway. The operation then applies and verifies.
 4. "Verified" is the engine's four gates: desired state; started outputs
    running; no new critical alert on the changed pipelines since apply; host
    still under safe utilization. Per-change checks, alert delta and active

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { getCapacityScenario } from "../core/api.js";
-import type { CapacityScenario, ChangeOperation, TopologyDiff } from "../core/api-types.js";
+import type { ChangeOperation, TopologyDiff } from "../core/agent-types.js";
+import type { CapacityScenario } from "../core/api-types.js";
 import { Kpi, KpiRow } from "../ui/kpi.js";
 import { Panel } from "../ui/panel.js";
 import { StatusBadge } from "../ui/tone.js";

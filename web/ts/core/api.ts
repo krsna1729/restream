@@ -33,9 +33,6 @@ import type {
   TranscodeProfiles,
   RateLimitState,
   YoutubeMonitoringStatus,
-  ChangeRequest,
-  ChangePlan,
-  ChangeOperation,
   PipelineWrite,
   PipelineInputPatch,
   PipelineInputWrite,
@@ -45,6 +42,12 @@ import type {
   LogFilters,
   LogPage,
 } from "./api-types.js";
+import type {
+  ChangeOperation,
+  ChangePlan,
+  ChangeRequest,
+  IncidentExplanationResponse,
+} from "./agent-types.js";
 import type { FleetHistoryWindow } from "./generated/runtime-state.js";
 
 let activeMutationRequestCount = 0;
@@ -780,19 +783,41 @@ async function getOperation(operationId: string): Promise<ChangeOperation | null
   );
 }
 
-/** Approve (the dashboard session approves; `reason` is audited), apply, or
- * verify an operation. */
-async function advanceOperation(
+/** Approve one change as this session's member at its effective role; a
+ * role below the change's `requiredRole` is refused (403) and audited.
+ * `reason` is audited. */
+async function approveAction(
   operationId: string,
-  step: "approve" | "apply" | "verify",
+  index: number,
   reason?: string,
 ): Promise<ChangeOperation | null> {
   return apiRequest<ChangeOperation>(
+    `/api/v1/agent/operations/${encodeURIComponent(operationId)}/actions/${index}/approve`,
+    { method: "POST", body: { reason: reason || null } },
+  );
+}
+
+/** Apply an approved operation, or verify an applied one. */
+async function advanceOperation(
+  operationId: string,
+  step: "apply" | "verify",
+): Promise<ChangeOperation | null> {
+  return apiRequest<ChangeOperation>(
     `/api/v1/agent/operations/${encodeURIComponent(operationId)}/${step}`,
-    {
-      method: "POST",
-      body: step === "approve" ? { approvedBy: "control-room", reason: reason || null } : {},
-    },
+    { method: "POST", body: {} },
+  );
+}
+
+/** Why an alert's incident happened and the plan for its fix; read-only.
+ * `firstSeen` picks one episode of a recurring alert. */
+async function explainIncident(
+  alertId: string,
+  firstSeen: string | null,
+): Promise<IncidentExplanationResponse | null> {
+  const query = new URLSearchParams({ alertId });
+  if (firstSeen) query.set("firstSeen", firstSeen);
+  return apiRequest<IncidentExplanationResponse>(
+    `/api/v1/agent/incidents/explanation?${query.toString()}`,
   );
 }
 
@@ -855,7 +880,9 @@ export {
   planChange,
   createOperation,
   getOperation,
+  approveAction,
   advanceOperation,
+  explainIncident,
 };
 
 // Team, audit, notifications, schedules and share links.

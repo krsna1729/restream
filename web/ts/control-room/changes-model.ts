@@ -6,13 +6,16 @@ import type {
   ChangeOperation,
   ChangePlan,
   ChangeRequest,
+  OperationAction,
   OperationStatus,
   ProposedChange,
   StateTransition,
   TopologyDiff,
   VerifyGate,
-} from "../core/api-types.js";
+} from "../core/agent-types.js";
+import type { Role } from "../core/api-types.js";
 import type { Convergence, EgressProtocol, OutputState } from "../core/generated/runtime-state.js";
+import { atLeast } from "./team-model.js";
 
 export const CHANGE_KINDS: ReadonlyArray<[ProposedChange["kind"], string]> = [
   ["addOutput", "Add a destination"],
@@ -127,6 +130,30 @@ export function nextStep(status: OperationStatus): "approve" | "apply" | "verify
     default:
       return null;
   }
+}
+
+/** What one change shows while its operation awaits approval: who approved
+ * it, or whether this session's role may. The server decides; this only
+ * keeps the dashboard from offering what it would refuse. */
+export function actionApproval(
+  action: OperationAction,
+  role: Role,
+): { label: string; canApprove: boolean; refusal: string | null } {
+  if (action.approval) {
+    return {
+      label: `approved by ${action.approval.approvedBy} (${action.approval.role})`,
+      canApprove: false,
+      refusal: null,
+    };
+  }
+  const allowed = atLeast(role, action.requiredRole);
+  return {
+    label: `needs ${action.requiredRole}`,
+    canApprove: allowed,
+    refusal: allowed
+      ? null
+      : `Needs the ${action.requiredRole} role; this session acts as ${role}.`,
+  };
 }
 
 export interface Gate {

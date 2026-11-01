@@ -1,24 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  advanceOperation,
   createOperation,
   getConfig,
   getOperation,
   planChange,
 } from "../core/api.js";
-import type { ChangeOperation, ChangePlan } from "../core/api-types.js";
+import type { ChangeOperation, ChangePlan } from "../core/agent-types.js";
 import {
   CHANGE_KINDS,
   NEW_DRAFT,
   STAGES,
   changeRequest,
-  nextStep,
   progress,
-  verification,
 } from "./changes-model.js";
-import type { ChangeDraft, Gate, StageState } from "./changes-model.js";
-import { Convergence, Impact } from "./changes-impact.js";
+import type { ChangeDraft, StageState } from "./changes-model.js";
+import { Impact } from "./changes-impact.js";
+import { Judgement, Operation } from "./change-operation.js";
+import type { Run } from "./change-operation.js";
 import type { LiveSnapshot } from "./store.js";
 import { PageHeader } from "../ui/page-header.js";
 import { Panel } from "../ui/panel.js";
@@ -111,8 +110,6 @@ export function Changes({ live }: { live: LiveSnapshot }) {
     </div>
   );
 }
-
-type Run = (action: () => Promise<void>) => Promise<void>;
 
 function DefineChange(props: {
   live: LiveSnapshot;
@@ -316,200 +313,6 @@ function DefineChange(props: {
           Create operation
         </button>
       )}
-    </>
-  );
-}
-
-function Operation(props: {
-  live: LiveSnapshot;
-  operation: ChangeOperation;
-  busy: boolean;
-  run: Run;
-  onChange: (operation: ChangeOperation) => void;
-  onDone: () => void;
-}) {
-  const { operation, busy, run } = props;
-  const [reason, setReason] = useState("");
-  const step = nextStep(operation.status);
-  const label =
-    step === "approve"
-      ? "Approve"
-      : step === "apply"
-        ? "Apply"
-        : operation.status === "verificationFailed"
-          ? "Verify again"
-          : "Verify";
-  return (
-    <Panel
-      id="changes-operation"
-      title="Operation"
-      subtitle={<span className="font-mono">{operation.operationId}</span>}
-      actions={
-        <span data-status={operation.status}>
-          <StatusBadge tone={/failed/i.test(operation.status) ? "bad" : operation.status === "verified" ? "ok" : "neutral"} dot>
-            {operation.status}
-          </StatusBadge>
-        </span>
-      }
-    >
-      <div className="flex flex-col gap-3">
-        <p className="text-sm">{operation.intentSummary}</p>
-        <ul className="text-sm" aria-label="Requested changes">
-          {operation.request.proposedChanges.map((change, index) => (
-            <li key={index}>
-              {change.kind} <span className="font-mono">{change.outputId ?? change.name ?? ""}</span>
-              {change.desiredState ? ` (then ${change.desiredState})` : ""}
-            </li>
-          ))}
-        </ul>
-        <p className="text-xs text-base-content/70">
-          Approval confirms the change from this dashboard session; it is not a
-          second person's sign-off. The engine keeps operations in memory only, so
-          a restart forgets them.
-        </p>
-        {step === "approve" && (
-          <Field label="Approval reason (audited)">
-            <input
-              className="input input-sm"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-          </Field>
-        )}
-        {operation.status === "verificationFailed" && (
-          <p className="text-sm">
-            Verification checks the engine at one moment; a destination that
-            was just started can need a few seconds to connect.
-          </p>
-        )}
-        <div className="flex gap-2">
-          {step && (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy}
-              onClick={() =>
-                run(async () => {
-                  // A refused step (a failed apply answers 400 with the
-                  // failed record) still changed the record: read it back.
-                  const next =
-                    (await advanceOperation(operation.operationId, step, reason)) ??
-                    (await getOperation(operation.operationId));
-                  // Both null (alerted): a network failure and a forgotten
-                  // operation look alike, so the card stays and the
-                  // operator chooses to start over.
-                  if (next) props.onChange(next);
-                })
-              }
-            >
-              {label}
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            disabled={busy}
-            onClick={props.onDone}
-          >
-            Start a new change
-          </button>
-        </div>
-        <OperationResult operation={operation} />
-        <Convergence operation={operation} live={props.live} />
-      </div>
-    </Panel>
-  );
-}
-
-function Judgement({ plan }: { plan: ChangePlan }) {
-  const { validation, impact } = plan;
-  const notes = [...plan.graphPreview.notes, ...impact.engineeringNotes];
-  return (
-    <Panel
-      id="changes-judgement"
-      title="Engine judgement"
-      actions={
-        <StatusBadge tone={validation.valid ? "ok" : "bad"} dot>
-          {validation.valid ? "valid" : "invalid"}
-        </StatusBadge>
-      }
-    >
-      <div className="flex flex-col gap-2">
-        {[...validation.errors, ...validation.warnings].map((issue, index) => (
-          <p
-            key={index}
-            className={`text-sm ${issue.severity === "error" ? "text-error" : "text-warning"}`}
-          >
-            {issue.message}
-            {issue.field ? <span className="text-base-content/60"> ({issue.field})</span> : null}
-          </p>
-        ))}
-        <p className="text-sm">{impact.operatorSummary}</p>
-        {impact.sharedStageCandidates.length > 0 && (
-          <p className="text-sm">
-            Stages it might share with other outputs: {impact.sharedStageCandidates.join(", ")}
-          </p>
-        )}
-        {notes.length > 0 && (
-          <ul className="list-disc pl-5 text-xs text-base-content/70">
-            {notes.map((note, index) => (
-              <li key={index}>{note}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </Panel>
-  );
-}
-
-function GateTable(props: { label: string; rows: readonly Gate[] }) {
-  return (
-    <table className="table table-sm" aria-label={props.label}>
-      <tbody>
-        {props.rows.map((row, index) => (
-          <tr key={index}>
-            <td>{row.label}</td>
-            <td className={row.passed ? "text-success" : "text-error"}>
-              {row.passed ? "passed" : "failed"}
-            </td>
-            <td className="text-base-content/70">{row.detail}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function OperationResult({ operation }: { operation: ChangeOperation }) {
-  const { gates, checks, observations } = verification(operation);
-  const execution = operation.executionResult;
-  return (
-    <>
-      {execution?.success === false && (
-        <p className="text-sm text-error" role="alert">
-          Apply failed: {execution.error}. Changes before the failing one may already
-          be applied; check the destinations before trying again.
-        </p>
-      )}
-      {execution?.success && (
-        <ul className="text-sm" aria-label="Applied changes">
-          {execution.changeResults.map((change, index) => (
-            <li key={index}>
-              {change.kind} <span className="font-mono">{change.outputId ?? ""}</span>: {change.status}
-            </li>
-          ))}
-        </ul>
-      )}
-      {gates.length > 0 && <GateTable label="Verification gates" rows={gates} />}
-      {checks.length > 0 && <GateTable label="Per-change checks" rows={checks} />}
-      {operation.verificationResult?.explanation && (
-        <p className="text-sm">{operation.verificationResult.explanation}</p>
-      )}
-      {observations.map((line, index) => (
-        <p key={index} className="text-xs text-base-content/70">
-          {line}
-        </p>
-      ))}
     </>
   );
 }
