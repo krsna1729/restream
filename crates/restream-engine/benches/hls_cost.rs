@@ -147,7 +147,7 @@ fn audio_tracks() -> [AudioMeta; 1] {
     }]
 }
 
-fn build_segment_bytes(profile: &StreamProfile, seconds: u32) -> Vec<u8> {
+fn build_segment_bytes(profile: &StreamProfile, seconds: u32) -> Bytes {
     let packets = build_one_second(profile);
     let video = video_meta(profile);
     let audio = audio_tracks();
@@ -168,7 +168,7 @@ fn build_segment_bytes(profile: &StreamProfile, seconds: u32) -> Vec<u8> {
         }
     }
 
-    segment.freeze().to_vec()
+    segment.freeze()
 }
 
 fn bench_hls_cost(c: &mut Criterion) {
@@ -187,13 +187,11 @@ fn bench_hls_cost(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("mux_one_second", profile.name),
             profile,
-            |b, profile| {
+            |b, _| {
                 b.iter(|| {
                     let mut muxer = TsMuxer::new(Some(&video), &audio);
                     let mut ts_bytes = 0usize;
-                    for (media_type, track_index, pts_ms, is_keyframe, payload) in
-                        &build_one_second(profile)
-                    {
+                    for (media_type, track_index, pts_ms, is_keyframe, payload) in &packets {
                         ts_bytes += muxer
                             .mux_packet(
                                 *media_type,
@@ -223,7 +221,7 @@ fn bench_hls_cost(c: &mut Criterion) {
                         })
                     },
                     |store| {
-                        store.push_segment(SEGMENT_SECONDS as f64, Bytes::from(segment.clone()));
+                        store.push_segment(SEGMENT_SECONDS as f64, segment.clone());
                         let stored = store.get_segment(0).expect("stored segment");
                         black_box(stored.len())
                     },
@@ -243,13 +241,12 @@ fn bench_hls_cost(c: &mut Criterion) {
                             ..HlsConfig::default()
                         });
                         for _ in 0..(WINDOW_SEGMENTS - 1) {
-                            store
-                                .push_segment(SEGMENT_SECONDS as f64, Bytes::from(segment.clone()));
+                            store.push_segment(SEGMENT_SECONDS as f64, segment.clone());
                         }
                         store
                     },
                     |store| {
-                        store.push_segment(SEGMENT_SECONDS as f64, Bytes::from(segment.clone()));
+                        store.push_segment(SEGMENT_SECONDS as f64, segment.clone());
                         let snapshot = store.snapshot().expect("snapshot");
                         let total_bytes: usize =
                             snapshot.segments.iter().map(|seg| seg.data.len()).sum();
