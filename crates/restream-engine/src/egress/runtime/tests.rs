@@ -140,6 +140,7 @@ fn runtime_dispatches_commands_to_owned_shard_group() {
     let mut runtime = EgressFabricRuntime::new(
         manager_config(1).unwrap(),
         group(1, std::slice::from_ref(&probe)),
+        u32::MAX,
     )
     .unwrap();
 
@@ -169,6 +170,7 @@ fn command_admission_tracks_the_real_queue_not_lifetime_dispatches() {
     let mut runtime = EgressFabricRuntime::new(
         manager_config(1).unwrap(),
         group(1, std::slice::from_ref(&probe)),
+        u32::MAX,
     )
     .unwrap();
 
@@ -190,7 +192,7 @@ fn command_admission_tracks_the_real_queue_not_lifetime_dispatches() {
 #[test]
 fn runtime_rejects_group_with_wrong_shard_count() {
     let probes = vec![Probe::default(), Probe::default()];
-    let result = EgressFabricRuntime::new(manager_config(1).unwrap(), group(2, &probes));
+    let result = EgressFabricRuntime::new(manager_config(1).unwrap(), group(2, &probes), u32::MAX);
 
     assert!(matches!(
         result,
@@ -211,6 +213,7 @@ fn rescale_is_a_noop_when_the_target_is_unchanged() {
     let mut runtime = EgressFabricRuntime::new(
         manager_config(1).unwrap(),
         group(1, std::slice::from_ref(&probe)),
+        u32::MAX,
     )
     .unwrap();
 
@@ -264,6 +267,7 @@ fn panicking_runtime(probes: &[Probe; 2]) -> EgressFabricRuntime {
     EgressFabricRuntime::new(
         manager_config(2).unwrap(),
         EgressShardGroup::spawn(NonZeroU32::new(2).unwrap(), shard_config(), backends).unwrap(),
+        u32::MAX,
     )
     .unwrap()
 }
@@ -460,9 +464,9 @@ fn all_panicked_shards_are_isolated_before_any_replacement_can_fail() {
     let mut runtime = EgressFabricRuntime::new(
         manager_config(3).unwrap(),
         EgressShardGroup::spawn(count, shard_config(), backends).unwrap(),
+        3,
     )
-    .unwrap()
-    .adaptive(3);
+    .unwrap();
     let (lost_zero, zero_ended) = output_on_pool(0, count, "lost-zero");
     let (lost_one, one_ended) = output_on_pool(1, count, "lost-one");
     let (kept, kept_ended) = output_on_pool(2, count, "kept");
@@ -580,9 +584,9 @@ fn pending_add_is_sized_before_placement_without_counting_replacements_twice() {
             }],
         )
         .unwrap(),
+        2,
     )
-    .unwrap()
-    .adaptive(2);
+    .unwrap();
     for i in 0..64 {
         runtime
             .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
@@ -636,6 +640,7 @@ pub(super) fn roomy_runtime(probes: &[Probe]) -> (EgressFabricRuntime, EgressSha
     let runtime = EgressFabricRuntime::new(
         EgressManagerConfig::new(count.get(), 1024).unwrap(),
         EgressShardGroup::spawn(count, config, backends).unwrap(),
+        u32::MAX,
     )
     .unwrap();
     (runtime, config)
@@ -660,12 +665,14 @@ fn growing_the_pool_never_reconnects_a_live_output() {
     }
     old_probe.wait_for_commands(200);
 
+    // The pending Add makes 201 outputs: at the 128-output prior the sizer
+    // asks for two shards (the 2-CPU host's maximum).
     let new_probe = Probe::default();
     let touched = runtime
         .rescale(
             crate::config::EgressShardProfile::OutputCount,
             crate::host_capacity::HostCapacity { cpus: 2 },
-            ResizeReason::Remove,
+            ResizeReason::Add,
             config,
             |_| {
                 let probe = new_probe.clone();
@@ -736,6 +743,10 @@ fn shrinking_waits_for_the_tail_to_empty_and_never_reconnects_live_outputs() {
             )
             .unwrap()
     };
+    // The sizer's shrink decision (`ShardSizer::shrink_target`, tested with
+    // the sizer) only stops placement on the tail; the shard itself must
+    // stay until its last output leaves.
+    runtime.manager.set_placement(NonZeroU32::MIN);
     assert!(
         shrink(&mut runtime).is_empty(),
         "live outputs keep the tail running"

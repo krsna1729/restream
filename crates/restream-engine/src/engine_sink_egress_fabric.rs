@@ -62,9 +62,8 @@ impl MediaEngine {
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
-            let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(SinkFabricEnsureError::Runtime)?
-                .adaptive(config.shards);
+            let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
+                .map_err(SinkFabricEnsureError::Runtime)?;
 
             // Sink leaves have no poller at all (see `sink_shard.rs`'s
             // module doc), so this subscription's `FeedWake` delivery is their

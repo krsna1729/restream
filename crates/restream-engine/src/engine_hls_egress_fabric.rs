@@ -101,9 +101,8 @@ impl MediaEngine {
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
-            let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(HlsPutFabricEnsureError::Runtime)?
-                .adaptive(config.shards);
+            let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
+                .map_err(HlsPutFabricEnsureError::Runtime)?;
             // The store wakes the shards from the segmenter on every publish.
             let wakes = subscribe_fabric_wakes(
                 "hls-put",

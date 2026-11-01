@@ -85,9 +85,8 @@ impl MediaEngine {
             )
             .expect("egress fabric manager config is clamped nonzero")
             .with_placement_policy(PlacementPolicy::LeastLoaded);
-            let mut runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(SrtFabricEnsureError::Runtime)?
-                .adaptive(config.shards);
+            let mut runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
+                .map_err(SrtFabricEnsureError::Runtime)?;
             runtime.forecast_feed(source);
 
             let wakes = subscribe_fabric_wakes(

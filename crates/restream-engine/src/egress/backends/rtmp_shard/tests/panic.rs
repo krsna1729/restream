@@ -93,6 +93,7 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
     let mut runtime = crate::egress::runtime::EgressFabricRuntime::new(
         crate::egress::manager::EgressManagerConfig::new(1, 16).unwrap(),
         group,
+        u32::MAX,
     )
     .unwrap();
     let wakes = crate::egress::runtime::subscribe_fabric_wakes(

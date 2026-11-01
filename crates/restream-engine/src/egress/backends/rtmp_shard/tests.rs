@@ -835,7 +835,7 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     .unwrap();
     let manager_config = crate::egress::manager::EgressManagerConfig::new(1, 16).unwrap();
     let mut runtime =
-        crate::egress::runtime::EgressFabricRuntime::new(manager_config, group).unwrap();
+        crate::egress::runtime::EgressFabricRuntime::new(manager_config, group, u32::MAX).unwrap();
     let wakes = crate::egress::runtime::subscribe_fabric_wakes(
         "rtmp",
         crate::egress::command::FeedId::new("feed"),

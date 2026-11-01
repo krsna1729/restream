@@ -84,7 +84,7 @@ fn runtime(probe: Probe) -> EgressFabricRuntime {
         }],
     )
     .unwrap();
-    EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group).unwrap()
+    EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group, u32::MAX).unwrap()
 }
 
 #[tokio::test]
@@ -566,8 +566,7 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     // huge shard pool, then shrink-join it on the first `Add`, so the
     // publish wait expired before the leaf ever visited. Same class of
     // flake as the earlier SRT multi-feed shard-pool regression.
-    // `shards: 1` also matches `target_egress_fabric_shards(OutputCount, 0, _)`,
-    // so the first Add does not shrink the pool.
+    // `shards: 1` is also the pool's ceiling, and an Add never shrinks it.
     let engine = MediaEngine::new_with_config(Arc::new(crate::config::EngineConfig {
         egress_fabric: crate::config::EgressFabricConfig {
             shards: 1,
