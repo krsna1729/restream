@@ -537,7 +537,12 @@ jobs:
           pactl load-module module-null-sink sink_name=moq_null
           pactl set-default-sink moq_null
       - if: ${{ steps.scope.outputs.run == 'true' }}
-        name: Fetch the pinned moq.dev tools (moq-cli 0.14.7, moq-relay 0.17.7, SHA256-verified, into .local/bin)
+        # moqsink, the IETF ingest's LOC publisher, runs in gst-launch-1.0 and
+        # demuxes the fixture's MPEG-TS with these stock elements.
+        name: Install GStreamer for the moqsink publisher
+        run: sudo apt-get install -y -qq gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Fetch the pinned moq.dev tools (moq-cli 0.14.7, moq-relay 0.17.7, moq-gst 0.4.16, SHA256-verified, into .local)
         run: .local/bin/xtask fetch moq-dev
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Run moq-dev-interop with the browser specs

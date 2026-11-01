@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
@@ -24,16 +23,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
-- Goal: an IETF MOQT publisher (MSF catalog, LOC objects) feeds a pipeline
-  input through the existing MoQ listener. The stream key comes from the
-  connection path, else the track namespace; the input registers as
-  protocol `"moq"`.
-- Publishers: GStreamer `moqsink` with `container=loc`, and the `moq` CLI
-  through moq-relay.
-- Gates: one harness mode ingesting from each publisher, with frame counts
-  and monotonic timestamps checked on read-back.
 
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple

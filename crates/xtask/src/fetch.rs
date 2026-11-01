@@ -14,7 +14,9 @@ struct Release {
     tag: &'static str,
     archive: &'static str,
     sha: &'static str,
-    binary: &'static str,
+    /// The installed file inside the archive's top directory.
+    member: &'static str,
+    /// Where it is installed, relative to `.local/`.
     target: &'static str,
 }
 /// The pinned linux/amd64 MediaMTX release.
@@ -29,28 +31,37 @@ fn mediamtx_release() -> Result<Release, Error> {
                     tag,
                     archive,
                     sha,
-                    binary: "mediamtx",
-                    target: "mediamtx",
+                    member: "mediamtx",
+                    target: "bin/mediamtx",
                 }),
                 _ => None,
             }
         })
         .ok_or_else(|| "scripts/data/mediamtx.tsv has no x86_64 row".into())
 }
-const MOQ: [Release; 2] = [
+/// The moq.dev releases of [`MOQ_DEV_COMMIT`]: the CLI, the relay and the
+/// GStreamer plugin (`moqsink`), released the same morning as that commit.
+const MOQ: [Release; 3] = [
     Release {
         tag: "moq-cli-v0.14.7",
         archive: "moq-cli-v0.14.7-x86_64-unknown-linux-gnu.tar.gz",
         sha: "19b174b98274f6f2e20403469a4472c9d91b91be0a1ae041ceecd5beeb0444ec",
-        binary: "moq",
-        target: "moq-0.14.7",
+        member: "bin/moq",
+        target: "bin/moq-0.14.7",
     },
     Release {
         tag: "moq-relay-v0.17.7",
         archive: "moq-relay-v0.17.7-x86_64-unknown-linux-gnu.tar.gz",
         sha: "2a644213cc9dec7805658f91725e3cfc3624577bc761f8a4171cc47ddd59062d",
-        binary: "moq-relay",
-        target: "moq-relay-0.17.7",
+        member: "bin/moq-relay",
+        target: "bin/moq-relay-0.17.7",
+    },
+    Release {
+        tag: "moq-gst-v0.4.16",
+        archive: "moq-gst-v0.4.16-x86_64-unknown-linux-gnu.tar.gz",
+        sha: "2f9b04c337c4e99ed23caa7b0f072fbe7fb4a8fd05e3c8758336c577456c4590",
+        member: "lib/gstreamer-1.0/libgstmoq.so",
+        target: "lib/moq-gst-0.4.16/libgstmoq.so",
     },
 ];
 
@@ -157,12 +168,14 @@ fn extract(
             .arg(member),
     )?;
     let source = temp.join(member);
-    if !crate::workflow::executable(&source) {
-        return Err(format!(
-            "{} did not contain an executable {}",
-            release.archive, release.binary
-        )
-        .into());
+    // A plugin is loaded, not run; everything else must be executable.
+    let usable = if release.member.ends_with(".so") {
+        source.is_file()
+    } else {
+        crate::workflow::executable(&source)
+    };
+    if !usable {
+        return Err(format!("{} did not contain {}", release.archive, release.member).into());
     }
     fs::create_dir_all(target.parent().ok_or("fetch target has no parent")?)?;
     crate::setup::install_atomic(&source, target)
@@ -188,13 +201,13 @@ fn mediamtx(args: &[&str]) -> WorkflowResult {
     let version = release.tag;
     let Some(print_path) = mediamtx_flags(args)? else {
         println!(
-            "Usage: xtask fetch mediamtx [--print-path]\nFetch linux/amd64 MediaMTX {version} (scripts/data/mediamtx.tsv), verify its pinned SHA256, and install .local/bin/{}.",
+            "Usage: xtask fetch mediamtx [--print-path]\nFetch linux/amd64 MediaMTX {version} (scripts/data/mediamtx.tsv), verify its pinned SHA256, and install .local/{}.",
             release.target
         );
         return Ok(());
     };
     pinned_host("fetch-mediamtx")?;
-    let target = crate::repo_root().join(".local/bin").join(release.target);
+    let target = crate::repo_root().join(".local").join(release.target);
     let current = crate::workflow::executable(&target)
         && installed_version(&target)?.as_deref() == Some(version);
     if !current {
@@ -204,7 +217,7 @@ fn mediamtx(args: &[&str]) -> WorkflowResult {
             release.tag, release.archive
         );
         eprintln!("fetch-mediamtx: downloading {url}");
-        extract(&release, &url, "mediamtx", temp.path(), &target)?;
+        extract(&release, &url, release.member, temp.path(), &target)?;
         let reported = installed_version(&target)?.unwrap_or_default();
         if reported != version {
             return Err(format!(
@@ -234,7 +247,7 @@ fn moq(args: &[&str]) -> WorkflowResult {
         None | Some("") => {}
         Some("-h" | "--help") => {
             println!(
-                "Usage: xtask fetch moq-dev\nFetch moq-cli-v0.14.7 and moq-relay-v0.17.7 ({MOQ_DEV_COMMIT}), verify pinned archive hashes, and install .local/bin/moq-0.14.7 and .local/bin/moq-relay-0.17.7."
+                "Usage: xtask fetch moq-dev\nFetch moq-cli-v0.14.7, moq-relay-v0.17.7 and moq-gst-v0.4.16 ({MOQ_DEV_COMMIT}), verify pinned archive hashes, and install .local/bin/moq-0.14.7, .local/bin/moq-relay-0.17.7 and the GStreamer plugin .local/lib/moq-gst-0.4.16/libgstmoq.so."
             );
             return Ok(());
         }
@@ -246,12 +259,11 @@ fn moq(args: &[&str]) -> WorkflowResult {
     }
     pinned_host("fetch-moq-dev")?;
     let temp = crate::workflow::TempDir::new("restream-xtask")?;
-    let bin = crate::repo_root().join(".local/bin");
-    fs::create_dir_all(&bin)?;
+    let local = crate::repo_root().join(".local");
     for release in MOQ {
-        let target = bin.join(release.target);
-        let stamp = bin.join(format!("{}.sha256", release.target));
-        if crate::workflow::executable(&target)
+        let target = local.join(release.target);
+        let stamp = local.join(format!("{}.sha256", release.target));
+        if target.is_file()
             && fs::read_to_string(&stamp)
                 .is_ok_and(|text| text.trim_end_matches('\n') == release.sha)
         {
@@ -271,9 +283,9 @@ fn moq(args: &[&str]) -> WorkflowResult {
             release.tag, release.archive
         );
         let member = format!(
-            "{}/bin/{}",
+            "{}/{}",
             release.archive.trim_end_matches(".tar.gz"),
-            release.binary
+            release.member
         );
         extract(&release, &url, &member, temp.path(), &target)?;
         fs::write(stamp, format!("{}\n", release.sha))?;
@@ -291,7 +303,7 @@ mod tests {
     #[test]
     fn checksums_reject_wrong_identity() {
         let mediamtx = mediamtx_release().expect("the pin file has an x86_64 row");
-        for release in [&mediamtx, &MOQ[0], &MOQ[1]] {
+        for release in std::iter::once(&mediamtx).chain(&MOQ) {
             assert!(verify(release.sha, release).is_ok());
             assert!(verify(&"0".repeat(64), release).is_err());
             assert_eq!(release.sha.len(), 64);

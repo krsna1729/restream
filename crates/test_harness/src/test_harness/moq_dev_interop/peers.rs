@@ -187,7 +187,13 @@ impl DevRelay {
         &self.log
     }
 
-    /// The relay itself publishes into Restream, with no CLI media bridge.
+    /// How many times the relay has started: its current life in the log.
+    pub(crate) fn life(&self) -> u32 {
+        self.starts
+    }
+
+    /// The relay itself publishes into Restream: every broadcast published to
+    /// it is forwarded by its cluster dial to `url`, offering only `version`.
     pub(crate) fn forward_to(&mut self, url: String, ca: &Path, version: &'static str) {
         self.forward = Some((url, ca.to_path_buf(), version));
     }
@@ -280,7 +286,7 @@ impl DevRelay {
         &self,
         broadcast: &str,
         timeout: Duration,
-        ietf: bool,
+        profile: CatalogProfile,
     ) -> Result<Value, String> {
         let (prefix, name) = broadcast.rsplit_once('/').unwrap_or(("", broadcast));
         let deadline = Instant::now() + timeout;
@@ -295,7 +301,7 @@ impl DevRelay {
             let listed = announced.lines().any(|line| line.trim() == name);
             last["announced"] = Value::String(announced);
             if listed {
-                let track = if ietf { "catalog" } else { CATALOG_TRACK };
+                let track = profile.track();
                 let catalog = self
                     .get_text(&format!("fetch/{broadcast}/{track}"))
                     .await
@@ -303,7 +309,7 @@ impl DevRelay {
                     .flatten()
                     .and_then(|body| serde_json::from_str::<Value>(&body).ok());
                 if let Some(catalog) = catalog {
-                    if profile_catalog_failures(&catalog, ietf).is_empty() {
+                    if profile_catalog_failures(&catalog, profile).is_empty() {
                         return Ok(catalog);
                     }
                     last["catalog"] = catalog;
@@ -311,7 +317,7 @@ impl DevRelay {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "moq-relay did not serve {broadcast} with an H.264 + AAC catalog (ietf={ietf}) within {}s; last={last}",
+                    "moq-relay did not serve {broadcast} with an H.264 + AAC catalog ({profile:?}) within {}s; last={last}",
                     timeout.as_secs()
                 ));
             }
@@ -396,13 +402,13 @@ pub(crate) fn ts_publisher_args(fixture: &Path) -> Vec<String> {
     .collect()
 }
 
-/// Spawn `ffmpeg … - | moq … import ts`; both children are returned so the
-/// caller tears both down.
-pub(crate) fn spawn_ts_import(
+/// Spawn `ffmpeg … -` (the recipe above) into `consumer`'s stdin; both
+/// children are returned so the caller tears both down.
+fn spawn_ts_feed(
     ffmpeg: &Path,
-    moq: &Path,
     fixture: &Path,
-    target: &CliTarget<'_>,
+    consumer: &mut tokio::process::Command,
+    consumer_bin: &str,
     log_dir: &Path,
     label: &str,
 ) -> Result<[Child; 2], String> {
@@ -422,17 +428,91 @@ pub(crate) fn spawn_ts_import(
         .ok_or("ffmpeg stdout was not captured")?;
     let pipe = TryInto::<Stdio>::try_into(stdout)
         .map_err(|error| format!("ffmpeg stdout pipe: {error}"))?;
-    let moq_log = log_file(&log_dir.join(format!("{label}-moq.log")))?;
-    let moq_stderr = moq_log.try_clone().map_err(|error| error.to_string())?;
-    let import = command_with_optional_cgroup(moq, &format!("moq-{label}-import"))
-        .args(target.args(IMPORT_TS))
+    let log = log_file(&log_dir.join(format!("{label}-{consumer_bin}.log")))?;
+    let stderr = log.try_clone().map_err(|error| error.to_string())?;
+    let consumer = consumer
         .stdin(pipe)
-        .stdout(Stdio::from(moq_log))
-        .stderr(Stdio::from(moq_stderr))
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr))
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| format!("spawn {}: {error}", moq.display()))?;
-    Ok([source, import])
+        .map_err(|error| format!("spawn {consumer_bin}: {error}"))?;
+    Ok([source, consumer])
+}
+
+/// Spawn `ffmpeg … - | moq … import ts`.
+pub(crate) fn spawn_ts_import(
+    ffmpeg: &Path,
+    moq: &Path,
+    fixture: &Path,
+    target: &CliTarget<'_>,
+    log_dir: &Path,
+    label: &str,
+) -> Result<[Child; 2], String> {
+    let mut import = command_with_optional_cgroup(moq, &format!("moq-{label}-import"));
+    import.args(target.args(IMPORT_TS));
+    spawn_ts_feed(ffmpeg, fixture, &mut import, "moq", log_dir, label)
+}
+
+/// The moq-gst plugin release of the pinned moq commit (`moqsink`),
+/// installed by `cargo xtask fetch moq-dev`.
+pub(crate) const MOQ_GST_PLUGIN: &str = ".local/lib/moq-gst-0.4.16/libgstmoq.so";
+const GST_LAUNCH: &str = "gst-launch-1.0";
+
+/// Spawn `ffmpeg … - | gst-launch-1.0 … moqsink`: GStreamer demuxes the
+/// same real-time MPEG-TS and publishes H.264 and AAC as LOC (`container=loc`
+/// on both pads) to `url`. moqsink takes no CA and offers every version it
+/// knows, so it trusts the loopback relay unverified and the relay picks the
+/// session version.
+pub(crate) fn spawn_gst_publish(
+    ffmpeg: &Path,
+    fixture: &Path,
+    url: &str,
+    broadcast: &str,
+    log_dir: &Path,
+    label: &str,
+) -> Result<[Child; 2], String> {
+    let plugin = absolute_path(Path::new(MOQ_GST_PLUGIN))?;
+    let plugin_dir = plugin
+        .parent()
+        .ok_or("the moq-gst plugin has no directory")?;
+    if !plugin.is_file() {
+        return Err(format!(
+            "pinned moq-gst plugin not found at {}; run cargo xtask fetch moq-dev",
+            plugin.display()
+        ));
+    }
+    let mut launch =
+        command_with_optional_cgroup(Path::new(GST_LAUNCH), &format!("moq-{label}-gst"));
+    launch
+        // Only the pinned plugin beside the system ones, and a registry of
+        // this run's own, so a user's GStreamer setup cannot change the peer.
+        .env("GST_PLUGIN_PATH_1_0", plugin_dir)
+        .env(
+            "GST_REGISTRY_1_0",
+            log_dir.join(format!("{label}-gst-registry.bin")),
+        )
+        .args(["-e", "fdsrc", "fd=0", "!", "tsdemux", "name=demux"])
+        .args(["demux.", "!", "queue", "!", "h264parse", "!"])
+        .args([
+            "video/x-h264,stream-format=byte-stream,alignment=au",
+            "!",
+            "publish.sink_0",
+        ])
+        .args([
+            "demux.",
+            "!",
+            "queue",
+            "!",
+            "aacparse",
+            "!",
+            "publish.sink_1",
+        ])
+        .args(["moqsink", "name=publish", "tls-disable-verify=true"])
+        .arg(format!("url={url}"))
+        .arg(format!("broadcast={broadcast}"))
+        .args(["sink_0::container=loc", "sink_1::container=loc"]);
+    spawn_ts_feed(ffmpeg, fixture, &mut launch, "gst", log_dir, label)
 }
 
 /// Subscribe with `moq export ts` for `secs`, writing the MPEG-TS it

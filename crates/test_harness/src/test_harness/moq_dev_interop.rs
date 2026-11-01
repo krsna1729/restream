@@ -6,7 +6,8 @@
 //! `moq-net` 0.3.15, which Restream's MoQ code is pinned to: `moq` (moq-cli
 //! 0.14.7) and `moq-relay` 0.17.7, installed by
 //! `cargo xtask fetch moq-dev` under `.local/bin/` with their release
-//! SHA256s checked. Each run generates its own CA and ECDSA P-256 leaf
+//! SHA256s checked, and the GStreamer plugin `moq-gst` 0.4.16 (`moqsink`)
+//! under `.local/lib/`. Each run generates its own CA and ECDSA P-256 leaf
 //! (13 days, SANs `localhost` and `127.0.0.1`); the relay and Restream's MoQ
 //! listener both serve the leaf, the CLI trusts the CA, browsers pin the
 //! leaf's SHA-256 through `serverCertificateHashes`. CLI sessions offer only
@@ -37,9 +38,12 @@
 //!    pipeline must report a `moq` session with video and audio, and its
 //!    RTMP output, received by an FFmpeg RTMP listener, passes the FFprobe
 //!    checks.
-//!    With `--ietf`, a separate source pipeline publishes MSF/LOC to a
-//!    dedicated moq-relay, whose cluster dial forwards the broadcast into
-//!    Restream on the same draft. No export/re-import bridge bypasses the relay.
+//!    With `--ietf`, two publishers each feed their own pipeline through a
+//!    dedicated moq-relay whose cluster dial forwards into Restream offering
+//!    only the draft: `moq import ts` on the draft (an MSF catalog over
+//!    hang's legacy container; moq-cli 0.14.7 has no LOC import), then
+//!    GStreamer `moqsink` with `container=loc` (MSF/LOC). No
+//!    export/re-import bridge bypasses the relay.
 //!
 //! ```text
 //! cargo xtask fetch moq-dev
@@ -57,6 +61,7 @@ mod run;
 #[path = "moq_dev_interop/tests.rs"]
 mod tests;
 
+pub(crate) use checks::CatalogProfile;
 use checks::*;
 pub(crate) use peers::*;
 use run::*;
@@ -110,6 +115,15 @@ impl DevOptions {
     /// The native ALPN, as a Restream `moqt://` output's `version=` names it.
     pub(crate) fn alpn(self) -> &'static str {
         self.ietf.map_or(LITE_VERSION, IetfDraft::alpn)
+    }
+
+    /// The catalog Restream's egress must announce: MSF/LOC under IETF.
+    pub(crate) fn egress_catalog(self) -> CatalogProfile {
+        if self.ietf.is_some() {
+            CatalogProfile::MsfLoc
+        } else {
+            CatalogProfile::Hang
+        }
     }
 }
 

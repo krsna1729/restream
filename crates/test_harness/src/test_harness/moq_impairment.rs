@@ -31,7 +31,9 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::moq_dev_interop::{DevPorts, DevRelay, LITE_VERSION, MOQ_RELAY, pinned_bin};
+use crate::moq_dev_interop::{
+    CatalogProfile, DevPorts, DevRelay, LITE_VERSION, MOQ_RELAY, pinned_bin,
+};
 use crate::moq_relay_interop::{InteropTls, round3};
 
 use super::*;
@@ -336,7 +338,7 @@ impl Session {
         wait_for_api_input_media_ready(&api, &pipeline, PUBLISH_TIMEOUT).await?;
         let relay = self.relay.as_ref().ok_or("relay was not started")?;
         let catalog = relay
-            .wait_broadcast(BROADCAST, PUBLISH_TIMEOUT, false)
+            .wait_broadcast(BROADCAST, PUBLISH_TIMEOUT, CatalogProfile::Hang)
             .await?;
         let publish_ready_unix_ms = epoch_millis(SystemTime::now());
         self.record(
