@@ -17,23 +17,29 @@ const REFERENCE_FEED_BPS: f64 = 4.8e6;
 /// No shard is given an output that would put it above this.
 pub(crate) const ADMIT_CEILING: f64 = 0.60;
 
-/// A refused Add: the least-loaded of the pool's `shards` (after any growth
-/// the Add earned) would run `busy_pct` (rounded up) with it.
+/// A refused Add, judged on the least-loaded of the pool's `shards` after any
+/// growth the Add earned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Saturated {
-    pub busy_pct: u32,
-    pub shards: u32,
+pub enum Saturated {
+    /// That shard would run `busy_pct` (rounded up) with the output.
+    Busy { busy_pct: u32, shards: u32 },
+    /// That shard's leaf table already holds `leaves` outputs.
+    Full { leaves: usize, shards: u32 },
 }
 
 impl std::fmt::Display for Saturated {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "refused: the least-loaded of this feed's {} egress shard(s) would run {}% busy with it, over the {}% admission ceiling",
-            self.shards,
-            self.busy_pct,
-            (ADMIT_CEILING * 100.0) as u32
-        )
+        match self {
+            Self::Busy { busy_pct, shards } => write!(
+                f,
+                "refused: the least-loaded of this feed's {shards} egress shard(s) would run {busy_pct}% busy with it, over the {}% admission ceiling",
+                (ADMIT_CEILING * 100.0) as u32
+            ),
+            Self::Full { leaves, shards } => write!(
+                f,
+                "refused: each of this feed's {shards} egress shard(s) already holds its limit of {leaves} outputs"
+            ),
+        }
     }
 }
 

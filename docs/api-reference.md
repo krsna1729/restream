@@ -1135,8 +1135,8 @@ Outputs:
   - `feed`: `stageNotProducing` (`stage`, `phase`);
   - `shard`: `shardPanicked`, `shardStalled`, `shardStopped` (`shard`), and
     `capacityRefused` (`error`): admission refused the output because the
-    least-loaded shard of the feed's pool would pass its load ceiling
-    (failure phase `egress_capacity`);
+    least-loaded shard of the feed's pool would pass its load ceiling or
+    has no free leaf (failure phase `egress_capacity`);
   - `destination`: `retriesExhausted`, `retryBudgetNearlySpent` (`attempts`,
     `max`; at 80% of the budget), `rejected` (`phase`, `error`),
     `backpressured` (`stalled`), `noProgress`.

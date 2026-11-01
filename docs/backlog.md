@@ -32,13 +32,13 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep
   delivering and the excess is refused with an operator-visible reason.
-- Context: RTMP, SRT and MoQ refuse an Add that would push its shard above
-  60% busy (`ShardSizer::admit`, `capacityRefused`; live gate
-  `srt.admission`). Still open: HLS PUT, sink and pipeline fabrics have no
-  admission, and the cold prior overprices a host until a healthy window
-  measures it (Q-025).
-- Gates: the same admission contract and a live saturation case for each
-  remaining fabric.
+- Context: RTMP, SRT, MoQ and sink refuse an Add whose shard would pass
+  60% busy or has no free leaf (`EgressFabricRuntime::admit_add`,
+  `capacityRefused`; live gates `srt.admission`, `sink.admission`). Each
+  fabric has its own measured cold prior. Still open: HLS PUT and pipeline.
+- Gates: per fabric, a delivery sweep the sizer learns from, a cold prior
+  measured live, and an admission gate (`<fabric>.admission`) that refuses
+  at whichever limit binds first.
 
 ### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
 - Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC

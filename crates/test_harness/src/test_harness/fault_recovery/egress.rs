@@ -378,7 +378,10 @@ pub(crate) async fn wait_for_outputs_live_and_progressing(
             let output = health["pipelines"][pipeline_id]["outputs"][output_id].clone();
             let status = ApiOutputStatus::from_value(output_id, &output)?;
             let healthy = status.status == "running"
-                && matches!(status.phase.as_str(), "sending" | "uploading")
+                && matches!(
+                    status.phase.as_str(),
+                    "sending" | "uploading" | "discarding"
+                )
                 && status.raw_status == "running"
                 && status.bytes_out > 0
                 && status.total_size > 0

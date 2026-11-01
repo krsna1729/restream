@@ -2,6 +2,11 @@ use super::super::tests::{Probe, group, output_spec};
 use super::super::*;
 use crate::egress::metrics::ShardService;
 
+/// Default leaf tables (4,096 per shard): these tests refuse on busy time.
+fn shard_config() -> EgressShardConfig {
+    EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(5)).unwrap()
+}
+
 fn runtime(shards: u32) -> EgressFabricRuntime {
     let probes: Vec<_> = (0..shards).map(|_| Probe::default()).collect();
     let mut runtime = EgressFabricRuntime::new(
@@ -150,7 +155,7 @@ fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
     runtime.forecast_feed(&ring);
     let id = output_spec("burst").id;
     assert!(
-        runtime.admit_add(profile, &id).is_ok(),
+        runtime.admit_add(profile, shard_config(), &id).is_ok(),
         "the first output is far below any ceiling"
     );
     for i in 0..64 {
@@ -160,7 +165,7 @@ fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
     }
     // 64 outputs at the reference rate fit (0.5 busy); at 32 Mbit/s they do
     // not.
-    assert!(runtime.admit_add(profile, &id).is_err());
+    assert!(runtime.admit_add(profile, shard_config(), &id).is_err());
     runtime.shutdown();
 }
 
@@ -180,7 +185,11 @@ fn admission_holds_every_shard_under_the_ceiling() {
     runtime.sizer.forecast_feed(4.8e6 * 8.0);
     for i in 0..18 {
         let spec = output_spec(&format!("out-{i}"));
-        assert_eq!(runtime.admit_add(profile, &spec.id), Ok(()), "output {i}");
+        assert_eq!(
+            runtime.admit_add(profile, shard_config(), &spec.id),
+            Ok(()),
+            "output {i}"
+        );
         runtime.dispatch(EgressCommand::Add(spec)).unwrap();
     }
     for shard in 0..2 {
@@ -190,10 +199,12 @@ fn admission_holds_every_shard_under_the_ceiling() {
         );
     }
     let refused = runtime
-        .admit_add(profile, &output_spec("out-18").id)
+        .admit_add(profile, shard_config(), &output_spec("out-18").id)
         .unwrap_err();
-    assert_eq!(refused.shards, 2);
-    assert!(refused.busy_pct > 60, "{refused:?}");
+    assert!(
+        matches!(refused, Saturated::Busy { busy_pct, shards: 2 } if busy_pct > 60),
+        "{refused:?}"
+    );
     runtime.shutdown();
 }
 
@@ -217,12 +228,12 @@ fn the_admission_bypass_is_benchmark_only() {
     }
     let next = output_spec("out-9").id;
     assert!(
-        runtime.admit_add(profile, &next).is_err(),
+        runtime.admit_add(profile, shard_config(), &next).is_err(),
         "past the ceiling"
     );
     crate::config::env::with_env_vars(&[("RESTREAM_BENCH_SRT_ADMISSION", "0")], || {
         assert_eq!(
-            runtime.admit_add(profile, &next).is_ok(),
+            runtime.admit_add(profile, shard_config(), &next).is_ok(),
             cfg!(feature = "srt-shard-bench")
         );
     });

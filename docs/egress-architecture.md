@@ -350,29 +350,37 @@ through `UploadStatus`; this does not add another output-reconnect policy.
 Each feed has its own `EgressFabricRuntime` and shard group. A feed's pool
 starts with one shard.
 
-- **Placement.** RTMP, SRT, HLS PUT and MoQ use
+- **Placement.** RTMP, SRT, HLS PUT, MoQ and sink use
   `PlacementPolicy::LeastLoaded`: the placement shard with the fewest live
-  outputs, ties broken by rendezvous score. Sink and pipeline use
-  `Rendezvous` (`assign_output_to_shard`). A live output never moves.
+  outputs, ties broken by rendezvous score. Pipeline uses `Rendezvous`
+  (`assign_output_to_shard`). A live output never moves.
 - **Growth.** Before an `Add`, `rescale` asks `ShardSizer` (`sizing.rs`) for
   the shard count that keeps projected busy time at 50%. Demand is measured
   CPU time per delivered bit times the feed's bitrate. Before the first
-  healthy measurement it uses a cold prior: 128 outputs per shard
-  (`EgressShardProfile::OutputCount`) or 64 for SRT
-  (`SrtOutputCount`) at 4.8 Mbit/s. New shards serve only new outputs.
-- **Admission.** `admit_add` refuses an `Add` if the chosen shard would run
-  above 60% busy (`ADMIT_CEILING`). The output reports
+  healthy measurement it uses a cold prior at 4.8 Mbit/s: 128 outputs per
+  shard (`EgressShardProfile::OutputCount`), 64 for SRT
+  (`SrtOutputCount`), 10,240 for sink (`SinkOutputCount`: one shard ran
+  3,458 sink outputs at 7% busy). An Add also grows the pool until its leaf
+  tables (`RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD`, 4,096) hold every output.
+  New shards serve only new outputs.
+- **Admission.** For RTMP, SRT, MoQ and sink, `admit_add` refuses an `Add`
+  if the chosen shard has no free leaf (`Saturated::Full`) or would run
+  above 60% busy (`ADMIT_CEILING`, `Saturated::Busy`). The output reports
   `capacityRefused` and retries on its backoff. Admitted outputs are never
-  shed.
+  shed. A sink shard fills its leaf table long before its CPU.
+- **Delivery.** Each shard rates its outputs once a second over a 5 s window
+  (`DeliveryTracker`): RTMP by TCP-acknowledged bytes, SRT by
+  SRT-acknowledged bytes, sink by the payload bytes each leaf consumed, each
+  against what the feed published. Only windows with every output at 95% or
+  more teach `ShardSizer` a demand.
 - **Shrink.** On each reconciler tick, `resize_*_fabrics` (`Observe`) runs
-  for RTMP, SRT and MoQ; a runtime observes at most every 5 s. After 60
+  for RTMP, SRT, MoQ and sink; a runtime observes at most every 5 s. After 60
   healthy low-load windows, a 5-minute dwell, and projected load under 40%
   on one shard fewer, new outputs stop going to the tail shard. Its thread
   stops once its last output leaves.
 - **Ceiling.** The pool never exceeds `clamp(effective CPUs, 2, 8)` or
   `RESTREAM_EGRESS_SHARDS`, whichever is lower.
-- Sink and pipeline pools are not adaptive: one shard per 128 outputs, same
-  ceiling.
+- Pipeline pools are not adaptive: one shard per 128 outputs, same ceiling.
 
 The SRT prior and the 60% ceiling come from a delivery-checked single-shard
 test (see [SRT shard capacity](runtime-crossings.md#srt-shard-capacity)).

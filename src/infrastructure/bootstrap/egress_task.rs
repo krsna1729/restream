@@ -732,12 +732,16 @@ impl EgressTask {
                     .engine
                     .release_sink_fabric_runtime(&fabric.feed_id)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("sink_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "sink_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;

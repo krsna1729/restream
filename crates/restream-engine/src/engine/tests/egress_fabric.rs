@@ -364,10 +364,59 @@ async fn sink_fabric_registry_dispatches_add_and_the_shard_discards_published_un
     engine.release_sink_fabric_runtime(&feed_id).await;
 }
 
-/// Sink pools rescale only around commands; the reconciler's
-/// `recover_sink_fabrics` must still replace a panicked shard on a quiet
-/// feed, end the outputs it held for their application tasks, and run the
-/// retried output on the replacement.
+/// A sink pool at its shard ceiling whose leaf tables are full refuses the
+/// next Add with an operator-visible reason, before anything is dispatched,
+/// instead of the shard dropping the leaf as an unexpected termination.
+#[tokio::test]
+async fn a_sink_add_past_a_full_leaf_table_is_refused() {
+    use crate::egress::journal::RingFeed;
+    use crate::egress::sizing::Saturated;
+
+    let engine = MediaEngine::new_with_config(Arc::new(crate::config::EngineConfig {
+        egress_fabric: crate::config::EgressFabricConfig {
+            shards: 1,
+            max_leaves_per_shard: 4,
+            ..crate::config::EgressFabricConfig::default()
+        },
+        ..crate::config::EngineConfig::default()
+    }));
+    let feed_id = FeedId::new("feed-engine-sink-admission");
+    let ring = Arc::new(restream_sync::RingBuffer::new(8));
+    let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
+    engine
+        .retain_sink_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+    for i in 0..4 {
+        let spec = output_spec(&format!("out-sink-{i}"), &feed_id);
+        if let Err(error) = engine
+            .dispatch_sink_fabric_command(&feed_id, EgressCommand::Add(spec))
+            .await
+        {
+            panic!("output {i} refused with a free leaf: {error:?}");
+        }
+    }
+    let refused = engine
+        .dispatch_sink_fabric_command(
+            &feed_id,
+            EgressCommand::Add(output_spec("out-sink-4", &feed_id)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.refused(),
+        Some(&Saturated::Full {
+            leaves: 4,
+            shards: 1
+        })
+    );
+
+    engine.release_sink_fabric_runtime(&feed_id).await;
+}
+
+/// On a quiet feed the reconciler's `resize_sink_fabrics` must still replace
+/// a panicked sink shard, end the outputs it held for their application
+/// tasks, and run the retried output on the replacement.
 #[tokio::test]
 async fn reconciler_recovery_replaces_a_panicked_sink_shard() {
     use crate::egress::backends::sink_shard::INJECTED_SHARD_PANIC_OUTPUT;
@@ -418,7 +467,7 @@ async fn reconciler_recovery_replaces_a_panicked_sink_shard() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    engine.recover_sink_fabrics().await;
+    engine.resize_sink_fabrics().await;
     assert!(
         ended.load(Ordering::Acquire),
         "the output's task must see it end, or it never retries"

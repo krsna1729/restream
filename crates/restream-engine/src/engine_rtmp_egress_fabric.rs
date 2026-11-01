@@ -170,8 +170,11 @@ impl MediaEngine {
             let source = inputs.0.clone();
             self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
             if matches!(reason, crate::egress::runtime::ResizeReason::Add)
-                && let Err(saturated) =
-                    runtime.admit_add(crate::config::EgressShardProfile::OutputCount, &spec.id)
+                && let Err(saturated) = runtime.admit_add(
+                    crate::config::EgressShardProfile::OutputCount,
+                    self.config.egress_fabric.shard_config(),
+                    &spec.id,
+                )
             {
                 source.remove(&spec.id);
                 return Err(RtmpFabricDispatchError::Saturated(saturated));

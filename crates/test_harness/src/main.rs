@@ -87,14 +87,14 @@ mod output_progress;
 #[path = "test_harness/thread_cpu.rs"]
 mod thread_cpu;
 
+#[path = "test_harness/admission.rs"]
+mod admission;
 #[path = "test_harness/peer_state.rs"]
 mod peer_state;
 #[path = "test_harness/resource_sweep.rs"]
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
-#[path = "test_harness/srt_admission.rs"]
-mod srt_admission;
 #[path = "test_harness/srt_backup_failover.rs"]
 mod srt_backup_failover;
 #[path = "test_harness/srt_raw_sink.rs"]
@@ -115,6 +115,7 @@ mod suite;
 #[path = "test_harness/udp_drain.rs"]
 mod udp_drain;
 
+use admission::*;
 use api_client::*;
 use catalog_cli::*;
 use core::*;
@@ -136,7 +137,6 @@ pub(crate) use mode_specs::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
-use srt_admission::*;
 use srt_backup_failover::*;
 use srt_raw_sink::*;
 use srt_slow_peer::*;
@@ -267,7 +267,8 @@ async fn run() -> Result<(), String> {
             "fault.srt-output-stall" => fault_srt_output_stall().await,
             "srt.slow-peer" => srt_slow_peer().await,
             "srt.backup-failover" => srt_backup_failover().await,
-            "srt.admission" => srt_admission().await,
+            "srt.admission" => admission(AdmissionFabric::Srt).await,
+            "sink.admission" => admission(AdmissionFabric::Sink).await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,

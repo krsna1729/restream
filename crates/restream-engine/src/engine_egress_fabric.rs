@@ -137,7 +137,11 @@ impl MediaEngine {
             self.rescale_srt_fabric(feed_id, runtime, inputs, reason);
             if matches!(reason, crate::egress::runtime::ResizeReason::Add) {
                 runtime
-                    .admit_add(crate::config::EgressShardProfile::SrtOutputCount, &spec.id)
+                    .admit_add(
+                        crate::config::EgressShardProfile::SrtOutputCount,
+                        self.config.egress_fabric.shard_config(),
+                        &spec.id,
+                    )
                     .map_err(SrtFabricDispatchError::Saturated)?;
             }
         }
