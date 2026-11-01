@@ -2342,7 +2342,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "web-async",
- "web-transport-trait",
+ "web-transport-trait 0.4.0",
 ]
 
 [[package]]
@@ -3318,7 +3318,7 @@ dependencies = [
  "ts-rs",
  "url",
  "web-transport-proto",
- "web-transport-trait",
+ "web-transport-trait 0.5.2",
  "webpki-roots",
 ]
 
@@ -5064,6 +5064,15 @@ name = "web-transport-trait"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a916df726e858e8e6cc21e852129f59e6277d3a01bb2254c0506dcf829fdd5d"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
+name = "web-transport-trait"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60221f03172c9e8e8d19d1c038c87ef2804d05f8a71264817f60a28bbd03edab"
 dependencies = [
  "bytes",
 ]
