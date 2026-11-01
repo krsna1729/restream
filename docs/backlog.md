@@ -12,7 +12,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-091 SRT Backup replays the lost prefix](#q-091-protocol-opus-srt-backup-failover-replays-the-lost-prefix)
 - [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
@@ -81,17 +80,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
-- Goal: when the active sender in an SRT Backup group disappears, the promoted
-  standby replays the group's recent send history before new payload, so the
-  receiver does not lose the interval the active issued but never delivered.
-- Change (srt-rs, then bump the pinned rev in `Cargo.toml`): a bounded
-  recent-send window per group, standby stability qualified by
-  `max(T_min, 2*SRTT + 4*RTTVar)` (as in srtgo), replay on promotion, and
-  refused promotion when the window cannot cover the gap.
-- Gates: differential cases against srtgo's state model; a harness mode that
-  kills the active SRT output mid-stream and checks receiver continuity.
 
 ### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
 - Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced

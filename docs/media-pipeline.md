@@ -549,6 +549,13 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080&type=b
 - `type=backup` (default) or `type=broadcast`.
 - All legs must reach the same remote receiving group. A leg that answers from
   another group fails the whole output. An unreachable leg is only degradation.
+- **Backup failover.** srt-rs keeps the active leg's unacknowledged sends.
+  When the active leg breaks, or goes silent for
+  `max(60 ms, 2·SRTT + 4·RTTVar)`, the standby takes over and replays that
+  flight at the same sequences before new data, so the receiver loses
+  nothing. A takeover the standby's window cannot hold, or a flight longer
+  than the history bound, is refused; the output then redials.
+  `srt.backup-failover` proves this live.
 - All legs must use one address family; a mixed bond fails the output.
 
 ### SRT egress

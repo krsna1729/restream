@@ -191,6 +191,14 @@
           },
           "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded"
         },
+        "srt.backup-failover": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "an SRT Backup bond whose active path goes silent mid-stream: the standby replays the undelivered flight, so the receiver's MPEG-TS continuity holds and the output never redials"
+        },
         "srt.admission": {
           "suiteDefault": false,
           "requires": {

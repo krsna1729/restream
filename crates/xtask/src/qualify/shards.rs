@@ -94,7 +94,7 @@ pub(crate) fn plan(shard: &str) -> Result<Vec<Step>, Error> {
         "smoke" => ["api-smoke", "file.live-edge", "srt.policy"]
             .map(|mode| row("mode", mode))
             .into(),
-        "direct-play" => ["srt.policy", "timestamp.bframe"]
+        "direct-play" => ["srt.policy", "timestamp.bframe", "srt.backup-failover"]
             .map(|mode| row("mode", mode))
             .into(),
         "bitrate-sweep.h264-rtmp" => vec![row("bitrate", "h264-rtmp")],

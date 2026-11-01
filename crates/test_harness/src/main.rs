@@ -95,6 +95,8 @@ mod resource_sweep;
 mod sinks;
 #[path = "test_harness/srt_admission.rs"]
 mod srt_admission;
+#[path = "test_harness/srt_backup_failover.rs"]
+mod srt_backup_failover;
 #[path = "test_harness/srt_raw_sink.rs"]
 mod srt_raw_sink;
 #[path = "test_harness/srt_sink.rs"]
@@ -103,6 +105,8 @@ mod srt_sink;
 mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
+#[path = "test_harness/ts_continuity.rs"]
+mod ts_continuity;
 
 #[path = "test_harness/suite.rs"]
 mod suite;
@@ -133,6 +137,7 @@ use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
 use srt_admission::*;
+use srt_backup_failover::*;
 use srt_raw_sink::*;
 use srt_slow_peer::*;
 use srt_urls::*;
@@ -261,6 +266,7 @@ async fn run() -> Result<(), String> {
             "fault.output-stall" => fault_output_stall().await,
             "fault.srt-output-stall" => fault_srt_output_stall().await,
             "srt.slow-peer" => srt_slow_peer().await,
+            "srt.backup-failover" => srt_backup_failover().await,
             "srt.admission" => srt_admission().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
