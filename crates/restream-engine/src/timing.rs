@@ -63,18 +63,27 @@ pub(crate) fn thread_usage() -> ThreadUsage {
 mod tests {
     use super::*;
 
+    /// Spins until this thread's CPU clock passes 5 ms. Bounding the spin by
+    /// wall time instead made the test flaky: a runner that schedules the
+    /// thread for under a quarter of 20 ms read correct but low CPU. The wall
+    /// bound below only stops a clock that never advances.
     #[test]
     fn thread_cpu_advances_with_work_on_this_thread() {
+        const WORK_NS: u64 = 5_000_000;
         let before = thread_cpu_ns();
         let start = std::time::Instant::now();
         let mut x = 0u64;
-        while start.elapsed() < std::time::Duration::from_millis(20) {
-            x = std::hint::black_box(x.wrapping_add(1));
+        let mut spent = 0;
+        while spent < WORK_NS && start.elapsed() < std::time::Duration::from_secs(10) {
+            for _ in 0..10_000 {
+                x = std::hint::black_box(x.wrapping_add(1));
+            }
+            spent = thread_cpu_ns().saturating_sub(before);
         }
-        let spent = thread_cpu_ns().saturating_sub(before);
         assert!(
-            spent >= 5_000_000,
-            "20 ms of spinning read as {spent} ns of CPU"
+            spent >= WORK_NS,
+            "{:?} of spinning read as {spent} ns of CPU",
+            start.elapsed()
         );
     }
 
