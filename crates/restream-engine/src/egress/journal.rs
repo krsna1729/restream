@@ -105,7 +105,11 @@ fn read_ring<U>(
 
     let mut next = cursor;
     let mut total_bytes = 0usize;
-    while next.next_sequence < head
+    // Rare: the run starts while waiting for a video keyframe. Interframes at
+    // the cursor are skipped uncharged, and the run stops before the next one
+    // after anything was taken; the first video keyframe ends the wait.
+    while next.awaiting_keyframe
+        && next.next_sequence < head
         && units.len() < budget.max_units
         && total_bytes < budget.max_bytes
     {
@@ -114,16 +118,30 @@ fn read_ring<U>(
                 oldest_sequence: refresh_oldest(ring, cached_oldest),
             };
         };
-        if next.awaiting_keyframe {
-            if packet.is_video_interframe() {
-                if !units.is_empty() {
-                    break;
-                }
-                next.next_sequence += 1;
-                continue;
+        if packet.is_video_interframe() {
+            if !units.is_empty() {
+                break;
             }
-            next.awaiting_keyframe = !packet.is_video_keyframe();
+            next.next_sequence += 1;
+            continue;
         }
+        next.awaiting_keyframe = !packet.is_video_keyframe();
+        total_bytes += packet.payload.len();
+        units.push(unit(packet));
+        next.next_sequence += 1;
+    }
+    // The common run, past (or never in) a keyframe wait. A wait the loop
+    // above stopped on an interframe ends this read there.
+    while !next.awaiting_keyframe
+        && next.next_sequence < head
+        && units.len() < budget.max_units
+        && total_bytes < budget.max_bytes
+    {
+        let Some(packet) = ring.read_at(next.next_sequence as usize) else {
+            return FeedRead::Overrun {
+                oldest_sequence: refresh_oldest(ring, cached_oldest),
+            };
+        };
         total_bytes += packet.payload.len();
         units.push(unit(packet));
         next.next_sequence += 1;
