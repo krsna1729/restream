@@ -384,7 +384,10 @@ async fn start_harness_sink_peers(
     }
 
     let srt_pool = if needs.srt {
-        let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
+        let udp_buffer = env_usize(
+            "HARNESS_SRT_SINK_UDP_BUFFER",
+            crate::harness_srt_sink::DEFAULT_UDP_BUFFER,
+        );
         match HarnessSrtSinkPool::start(&srt_ports, udp_buffer) {
             Ok(pool) => Some(pool),
             Err(err) => {

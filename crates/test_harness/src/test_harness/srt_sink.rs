@@ -176,7 +176,10 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         harness_port_defaults().mtx_api as usize,
     );
     let state_port = u16::try_from(state_port).map_err(|_| "SRT_SINK_STATE_PORT out of range")?;
-    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
+    let udp_buffer = env_usize(
+        "HARNESS_SRT_SINK_UDP_BUFFER",
+        crate::harness_srt_sink::DEFAULT_UDP_BUFFER,
+    );
     let interval_secs = env_secs("SRT_SINK_REPORT_SECS", 5).max(1);
     if let Ok(mask) = std::env::var("SRT_SINK_CPUSET")
         && !mask.trim().is_empty()

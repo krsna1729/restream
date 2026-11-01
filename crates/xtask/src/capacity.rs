@@ -193,7 +193,9 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
     ensure_nofile()?;
     for (key, want) in [
         ("net/core/somaxconn", 4096),
-        ("net/core/rmem_max", 8_388_608),
+        // The SRT sink's sockets take what the kernel grants; below this,
+        // SRT×100 rungs drop at the sink (Q-027).
+        ("net/core/rmem_max", 26_214_400),
         ("net/core/wmem_max", 8_388_608),
     ] {
         let have = sysctl_first(key).unwrap_or(0);
