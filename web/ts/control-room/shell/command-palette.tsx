@@ -1,5 +1,6 @@
 // ⌘K / Ctrl+K (or `/`): jump to any workspace, pipeline, destination or
-// incident, or change a viewing preference, from the keyboard.
+// incident, draft a destination command in Changes (nothing runs until it
+// is approved there), or change a viewing preference, from the keyboard.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -20,6 +21,7 @@ const KIND_ICON: Record<PaletteKind, IconName> = {
   pipeline: "pipelines",
   destination: "channels",
   incident: "incidents",
+  command: "changes",
   action: "settings",
 };
 
@@ -112,7 +114,7 @@ export function CommandPalette(props: {
                 choose(results[active]);
               }
             }}
-            placeholder="Search pipelines, destinations, incidents, settings…"
+            placeholder="Search, or ask: stop youtube, start the backup…"
             aria-label="Search"
             aria-controls="palette-results"
             aria-activedescendant={results[active] ? `palette-${results[active].id}` : undefined}

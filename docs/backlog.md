@@ -9,7 +9,7 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
+
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Q-111 receiver TLPKTDROP floor](#q-111-protocol-opus-an-unrecovered-loss-stalls-srt-rs-delivery-at-least-one-second)
 - [Not planned](#not-planned)
@@ -42,14 +42,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-102 [frontend] [sonnet] Fuzzy command palette
-- Goal: the ⌘K palette matches loosely worded requests to the existing
-  commands (fuzzy matching, no language model) and shows the resulting plan
-  before anything runs.
-- Files: `web/ts/control-room/shell/command-palette.tsx`, `palette-model.ts`.
-- Gates: misspelt and reordered requests reach the same command the buttons
-  would; nothing applies without the approval step.
 
 ### Q-110 [platform] [sonnet] Move from chrono to jiff after jiff 1.0
 - Goal: no crate depends on chrono. Its maintainer has soft-deprecated it

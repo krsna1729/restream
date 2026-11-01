@@ -64,6 +64,25 @@ export interface Place {
   /** Stability Lab only: the replay window (`from`, `to` in epoch ms; no
    * `to` follows now); dropped on any move. */
   readonly replay?: { readonly fromMs: number; readonly toMs: number | null } | null;
+  /** Changes only: a destination change to draft and preview (`c`,
+   * `kind:outputId`); dropped on any move. */
+  readonly change?: ChangeIntent | null;
+}
+
+export const CHANGE_INTENT_KINDS = ["startOutput", "stopOutput", "removeOutput"] as const;
+
+/** One destination change, as the command palette drafts it. */
+export interface ChangeIntent {
+  readonly kind: (typeof CHANGE_INTENT_KINDS)[number];
+  readonly outputId: string;
+}
+
+function parseChange(value: unknown): ChangeIntent | null {
+  if (typeof value !== "string") return null;
+  const at = value.indexOf(":");
+  const kind = CHANGE_INTENT_KINDS.find((candidate) => candidate === value.slice(0, at));
+  const outputId = value.slice(at + 1);
+  return at > 0 && kind && outputId !== "" ? { kind, outputId } : null;
 }
 
 /**
@@ -76,6 +95,7 @@ export type PlaceSearch = {
   readonly o?: string;
   readonly from?: string;
   readonly to?: string;
+  readonly c?: string;
 } & Record<string, unknown>;
 
 function isWorkspace(value: unknown): value is Workspace {
@@ -94,17 +114,19 @@ export function placeFromSearch(search: Record<string, unknown>): Place {
     search.from !== undefined && Number.isFinite(fromMs) && (toMs === null || Number.isFinite(toMs))
       ? { fromMs, toMs }
       : null;
+  const change = parseChange(search.c);
   return {
     workspace: isWorkspace(search.w) ? search.w : "fleet",
     pipelineId:
       typeof pipelineId === "string" && pipelineId !== "" ? pipelineId : null,
     ...(typeof outputId === "string" && outputId !== "" ? { outputId } : {}),
     ...(replay ? { replay } : {}),
+    ...(change ? { change } : {}),
   };
 }
 
 /** The query keys a place owns; every other parameter is kept as it was. */
-const PLACE_KEYS: ReadonlySet<string> = new Set(["w", "p", "o", "from", "to"]);
+const PLACE_KEYS: ReadonlySet<string> = new Set(["w", "p", "o", "from", "to", "c"]);
 
 /** The search a place names; `p` is absent without a pipeline. */
 export function placeSearch(
@@ -121,6 +143,7 @@ export function placeSearch(
     ...(place.outputId ? { o: place.outputId } : {}),
     ...(place.replay ? { from: String(Math.round(place.replay.fromMs)) } : {}),
     ...(place.replay && place.replay.toMs !== null ? { to: String(Math.round(place.replay.toMs)) } : {}),
+    ...(place.change ? { c: `${place.change.kind}:${place.change.outputId}` } : {}),
     ...rest,
   };
 }

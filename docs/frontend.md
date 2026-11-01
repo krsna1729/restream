@@ -216,13 +216,23 @@ is `app.tsx` plus `control-room/shell/`.
 - The command palette (`⌘K`, `Ctrl+K` or `/`) finds workspaces,
   pipelines, destinations and open incidents from what the page holds, and
   changes preferences (`shell/palette-model.ts`, ranked by prefix, word and
-  substring; every term must match).
+  substring; every term must match, in any order). A query with a verb
+  (start, stop, remove, or a synonym such as halt, resume or delete) also
+  offers that command for each destination it applies to. A term that no
+  entry contains is read as a typo: one edit away from a name or verb for
+  four to seven letters, two from eight; shorter terms must match exactly.
+  Words such as "the" and "please" are ignored. A command never runs from
+  the palette: it opens Changes with the change drafted
+  (`?w=changes&c=<kind>:<outputId>`, dropped on any move) and previewed, so
+  the planner's judgement shows first; creating the operation and approving
+  each change by role stay with the operator.
 - Operate, Monitor, Inspect and Logs share a pipeline header with tabs
   (`pipeline-scope.tsx`); with no pipeline chosen it shows a searchable,
   windowed picker.
 - The place is in the query: `?w=<workspace>` and, for a pipeline view,
-  `&p=<pipeline id>`; Logs also takes `&o=<output id>`, which any other move
-  drops (`LogsLink` opens a problem's log this way).
+  `&p=<pipeline id>`; Logs also takes `&o=<output id>` and Changes
+  `&c=<kind>:<output id>`, which any other move drops (`LogsLink` opens a
+  problem's log this way; the palette drafts a command this way).
 - Words for people: times show relative and clock time with the viewer's
   zone, full instant and UTC on hover (`when.ts`, `<When>`); troubles read
   as a summary and a fix, the engine's text in the tooltip
@@ -837,8 +847,9 @@ Node tests in `test/frontend/` (tsx, against the `web/ts` sources):
 `control-room-system`, `control-room-settings`, `control-room-changes`,
 `control-room-manage`, `control-room-diagnose` (each `.test.mjs`), and
 `frontend-runtime-state-stream.test.mjs` (stream liveness).
-`control-room-shell` covers the command palette's ranking, the navigation
-badges and theme resolution. `test/frontend/control-room.spec.ts` runs
+`control-room-shell` covers the command palette's ranking, typo tolerance
+and commands, the navigation badges and theme resolution.
+`test/frontend/control-room.spec.ts` runs
 Playwright against a running engine.
 
 ```sh

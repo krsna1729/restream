@@ -334,6 +334,15 @@ test("a replay window rides in the URL and a following one has no end", () => {
   assert.deepEqual(placeSearch({ w: "stability", from: "1", to: "2" }, { workspace: "fleet", pipelineId: null }), { w: "fleet" });
 });
 
+test("a drafted change rides in the URL, only as a known kind, and is dropped on a move", () => {
+  const change = { kind: "stopOutput", outputId: "out:1" };
+  assert.deepEqual(placeFromSearch({ w: "changes", p: "p1", c: "stopOutput:out:1" }).change, change);
+  assert.equal(placeFromSearch({ w: "changes", c: "wipeAll:out1" }).change, undefined);
+  assert.equal(placeFromSearch({ w: "changes", c: "stopOutput:" }).change, undefined);
+  assert.deepEqual(placeSearch({}, { workspace: "changes", pipelineId: "p1", change }), { w: "changes", p: "p1", c: "stopOutput:out:1" });
+  assert.deepEqual(placeSearch({ w: "changes", c: "stopOutput:out:1" }, { workspace: "changes", pipelineId: "p1" }), { w: "changes", p: "p1" });
+});
+
 test("headroom reads as about how many more destinations fit", () => {
   const { roomFor } = fleetModel;
   assert.equal(roomFor(0.4, 100), 100, "half the safe load used: as many again");

@@ -14,6 +14,7 @@ import type {
   VerifyGate,
 } from "../core/agent-types.js";
 import type { Role } from "../core/api-types.js";
+import type { ChangeIntent } from "./route.js";
 import type { Convergence, EgressProtocol, OutputState } from "../core/generated/runtime-state.js";
 import { atLeast } from "./team-model.js";
 
@@ -44,6 +45,12 @@ export const NEW_DRAFT: ChangeDraft = {
   profile: "",
   desiredState: "stopped",
 };
+
+/** The draft a palette command opens Changes with: the same draft the form
+ * makes when that change and destination are picked. */
+export function draftFor(change: ChangeIntent): ChangeDraft {
+  return { ...NEW_DRAFT, kind: change.kind, outputId: change.outputId };
+}
 
 function proposedChange(draft: ChangeDraft): ProposedChange {
   const name = draft.name.trim();
