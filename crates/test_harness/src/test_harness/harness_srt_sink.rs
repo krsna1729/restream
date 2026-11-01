@@ -5,8 +5,9 @@
 //! harness spreads outputs over (`HARNESS_SRT_SINK_PORTS_PER_PEER`), never from
 //! kernel `SO_REUSEPORT` hashing: Restream sends every SRT output of an egress
 //! shard from one UDP socket, so a hash sees one flow per shard. The sink
-//! performs no media parsing and records only byte, connection and drop
-//! counters, so MediaMTX is not in the scaling critical path.
+//! records only byte, connection and drop counters, so MediaMTX is not in the
+//! scaling critical path; `start_checking_ts` adds an MPEG-TS continuity check
+//! for single-output ports.
 //!
 //! Drops are counted at both layers that can lose a datagram before SRT sees
 //! it: each kernel socket (`/proc/net/udp{,6}` `drops`, per local port and
@@ -35,6 +36,7 @@ use srt_transport::{
 };
 
 use crate::core::PEER_PORT_STRIDE;
+use crate::ts_continuity::TsContinuity;
 
 /// The sink only replies with protocol control (handshake, ACK/NAK).
 const SINK_TX_CAPACITY: usize = 64;
@@ -110,12 +112,16 @@ impl SrtSinkCountersHandle {
     }
 }
 
-/// One reading of a sink pool's cumulative counters.
+/// One reading of a sink pool's cumulative counters. The `ts_*` counters
+/// stay zero unless the pool checks TS continuity.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SrtSinkCounters {
     pub accepted: u64,
     pub discarded_bytes: u64,
     pub closed: u64,
+    pub ts_packets: u64,
+    pub ts_continuity_errors: u64,
+    pub ts_misaligned: u64,
 }
 
 /// Datagrams the Owner's managed-RX ring lost before SRT saw them.
@@ -217,6 +223,9 @@ struct SinkCounters {
     /// Managed-RX drops per port (one Owner each).
     owner_rx: Mutex<HashMap<u16, OwnerRxDrops>>,
     owner_faults: AtomicU64,
+    ts_packets: AtomicU64,
+    ts_continuity_errors: AtomicU64,
+    ts_misaligned: AtomicU64,
     /// Pool-wide connection sequence, so indexes never collide across ports.
     next_connection: AtomicU64,
 }
@@ -227,6 +236,9 @@ impl SinkCounters {
             accepted: self.accepted.load(Ordering::Relaxed),
             discarded_bytes: self.discarded_bytes.load(Ordering::Relaxed),
             closed: self.closed.load(Ordering::Relaxed),
+            ts_packets: self.ts_packets.load(Ordering::Relaxed),
+            ts_continuity_errors: self.ts_continuity_errors.load(Ordering::Relaxed),
+            ts_misaligned: self.ts_misaligned.load(Ordering::Relaxed),
         }
     }
 }
@@ -247,6 +259,17 @@ impl HarnessSrtSinkPool {
     /// socket. The sockets do not set `SO_REUSEPORT`, so a port that already
     /// has a UDP socket (a leftover sink) fails to bind instead of sharing it.
     pub(crate) fn start(ports: &[u16], udp_buffer: usize) -> Result<Self, String> {
+        Self::start_with(ports, udp_buffer, false)
+    }
+
+    /// [`Self::start`], also checking MPEG-TS continuity of everything each
+    /// port delivers (see [`TsContinuity`]): each port must carry exactly one
+    /// output, whose redials then stay one continuous stream.
+    pub(crate) fn start_checking_ts(ports: &[u16], udp_buffer: usize) -> Result<Self, String> {
+        Self::start_with(ports, udp_buffer, true)
+    }
+
+    fn start_with(ports: &[u16], udp_buffer: usize, check_ts: bool) -> Result<Self, String> {
         if ports.is_empty() {
             return Err("harness SRT sink pool needs at least one port".to_string());
         }
@@ -273,7 +296,7 @@ impl HarnessSrtSinkPool {
             let ready_tx = ready_tx.clone();
             match std::thread::Builder::new()
                 .name(format!("srt-s-{port}"))
-                .spawn(move || sink_thread(port, plan, stop, counters, ready_tx))
+                .spawn(move || sink_thread(port, plan, check_ts, stop, counters, ready_tx))
             {
                 Ok(thread) => pool.threads.push(thread),
                 Err(error) => {
@@ -370,6 +393,7 @@ fn build_listener_plan(port: u16, udp_buffer: usize) -> Result<OwnerListenerPlan
 fn sink_thread(
     port: u16,
     plan: OwnerListenerPlan,
+    check_ts: bool,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
     ready_tx: SyncSender<Result<(), String>>,
@@ -391,6 +415,7 @@ fn sink_thread(
     let mut events: Vec<AdmissionEvent> = Vec::with_capacity(64);
     // Connection index and bytes per logical peer (its raw id is private).
     let mut per_peer: HashMap<LogicalPeerId, (u64, u64)> = HashMap::new();
+    let mut continuity = check_ts.then(TsContinuity::new);
     let mut published_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
         // One non-blocking driver poll per visit reaps TX completions and RX.
@@ -429,6 +454,20 @@ fn sink_thread(
                             (counters.next_connection.fetch_add(1, Ordering::Relaxed), 0)
                         })
                         .1 += len;
+                    if let Some(continuity) = continuity.as_mut() {
+                        for chunk in payload.chunks() {
+                            let tally = continuity.feed(chunk);
+                            counters
+                                .ts_packets
+                                .fetch_add(tally.packets, Ordering::Relaxed);
+                            counters
+                                .ts_continuity_errors
+                                .fetch_add(tally.errors, Ordering::Relaxed);
+                            counters
+                                .ts_misaligned
+                                .fetch_add(tally.misaligned, Ordering::Relaxed);
+                        }
+                    }
                 }
                 // A closed connection is no longer a destination: keep
                 // reused sink stacks from reporting it as a stalled one.

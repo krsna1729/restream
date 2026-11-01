@@ -267,6 +267,7 @@ mod tests {
             accepted: 100,
             discarded_bytes: 5_000,
             closed: 2,
+            ..SrtSinkCounters::default()
         };
         let state = state_json(
             "run-1",
