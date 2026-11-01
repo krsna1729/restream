@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@moq/watch": "^0.6.3",
-    "@tanstack/react-query": "^5.104.5",
+    "@tanstack/react-query": "^5.105.0",
     "@tanstack/react-router": "^1.170.46",
     "hls.js": "^1.7.3",
     "react": "^19.3.0",
