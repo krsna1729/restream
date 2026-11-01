@@ -352,12 +352,25 @@ fn outputs_evidence(incident: &[&FlightSample]) -> Vec<String> {
         .filter(|sample| sample.outputs.offered_bps > 0.0)
         .map(|sample| (sample.outputs.delivered_bps, sample.outputs.offered_bps))
         .min_by(|a, b| (a.0 / a.1).total_cmp(&(b.0 / b.1)));
-    let mut evidence = vec![format!(
-        "the pipeline's outputs: up to {} stalled, {} retrying ({} restart attempts)",
-        max(|sample| sample.outputs.stalled),
-        max(|sample| sample.outputs.retrying),
-        max(|sample| sample.outputs.retry_attempts),
-    )];
+    let stalled = max(|sample| sample.outputs.stalled);
+    let retrying = max(|sample| sample.outputs.retrying);
+    let mut counts = Vec::new();
+    if stalled > 0 {
+        counts.push(format!("{stalled} stalled"));
+    }
+    if retrying > 0 {
+        counts.push(format!(
+            "{retrying} retrying ({} restart attempts)",
+            max(|sample| sample.outputs.retry_attempts)
+        ));
+    }
+    let mut evidence = Vec::new();
+    if !counts.is_empty() {
+        evidence.push(format!(
+            "the pipeline's outputs at worst: {}",
+            counts.join(", ")
+        ));
+    }
     if let Some((delivered, offered)) = worst_delivery {
         evidence.push(format!(
             "at worst {:.1} of {:.1} Mb/s offered was delivered",
