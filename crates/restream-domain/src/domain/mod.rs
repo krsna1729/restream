@@ -7,6 +7,7 @@ pub mod ingest_security;
 pub mod output_spec;
 pub mod pipeline_input;
 pub mod recording;
+pub mod role;
 pub mod srt_ingest;
 pub mod stage;
 pub mod state;

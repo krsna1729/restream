@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use crate::application::ports::{SessionBinding, StoredUser, TeamStore};
-use crate::application::team::{AuditEntry, Principal, Role, UserRecord, valid_username};
+use crate::application::team::{AuditEntry, Principal, UserRecord, valid_username};
+use restream_domain::domain::role::Role;
 
 use super::error::{ServiceError, ServiceResult};
 

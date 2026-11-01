@@ -1,14 +1,16 @@
 //! Authenticated HTTP edge for agent planning and execution (default
 //! features); without them the routes answer 404 with `compiledIn: false`.
 
+mod approvals;
 #[cfg(feature = "agent-plane")]
 mod context;
 mod operations;
 mod queries;
 
+pub use approvals::{agent_action_approve_handler, agent_operation_approve_handler};
 pub use operations::{
-    agent_operation_apply_handler, agent_operation_approve_handler, agent_operation_create_handler,
-    agent_operation_get_handler, agent_operation_verify_handler, agent_verify_handler,
+    agent_operation_apply_handler, agent_operation_create_handler, agent_operation_get_handler,
+    agent_operation_verify_handler, agent_verify_handler,
 };
 pub use queries::{
     agent_capabilities_handler, agent_context_handler, agent_graph_diff_preview_handler,

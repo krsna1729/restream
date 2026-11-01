@@ -94,35 +94,6 @@ pub async fn agent_operation_get_handler(
 }
 
 #[cfg(feature = "agent-execution")]
-pub async fn agent_operation_approve_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(operation_id): Path<String>,
-    Json(request): Json<restream_agent_contract::ApprovalRequest>,
-) -> impl IntoResponse {
-    if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
-    }
-    match state.agent_execution.approve(&operation_id, request) {
-        Ok(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
-        Err(err) => operation_store_error(err),
-    }
-}
-
-#[cfg(not(feature = "agent-execution"))]
-pub async fn agent_operation_approve_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(_operation_id): Path<String>,
-    Json(_request): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
-    }
-    agent_execution_unavailable()
-}
-
-#[cfg(feature = "agent-execution")]
 pub async fn agent_operation_apply_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -785,7 +756,7 @@ async fn apply_baseline(
 }
 
 #[cfg(feature = "agent-execution")]
-fn operation_store_error(
+pub(super) fn operation_store_error(
     err: restream_agent::execution::OperationStoreError,
 ) -> axum::response::Response {
     use restream_agent::execution::OperationStoreError;
@@ -825,6 +796,17 @@ fn operation_store_error(
             StatusCode::CONFLICT,
             "notApplied",
             "Operation must be applied before verify",
+        ),
+        OperationStoreError::NoSuchAction => (
+            StatusCode::NOT_FOUND,
+            "actionNotFound",
+            "The operation has no change at that index",
+        ),
+        // The approve handlers answer this with the acting role first.
+        OperationStoreError::RoleTooLow { .. } => (
+            StatusCode::FORBIDDEN,
+            "roleTooLow",
+            "This change needs a higher role",
         ),
     };
     (
@@ -937,6 +919,10 @@ mod tests {
             .agent_execution
             .approve(
                 id,
+                &restream_agent::execution::Approver {
+                    username: "test".into(),
+                    role: restream_domain::domain::role::Role::Operator,
+                },
                 restream_agent_contract::ApprovalRequest {
                     approved_by: "test".into(),
                     reason: None,

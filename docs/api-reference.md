@@ -818,7 +818,8 @@ approval rules and verification gates are in
 | `POST` | `/api/v1/agent/graph-diff-preview` | Graph and impact preview of a draft plan |
 | `POST` | `/api/v1/agent/operations` | Create an operation (256 KiB body limit) |
 | `GET` | `/api/v1/agent/operations/:operationId` | Status, audit log, progress, results |
-| `POST` | `/api/v1/agent/operations/:operationId/approve` | Record approval |
+| `POST` | `/api/v1/agent/operations/:operationId/approve` | Approve every change (needs the most demanding change's role) |
+| `POST` | `/api/v1/agent/operations/:operationId/actions/:index/approve` | Approve one change from its minimum role up |
 | `POST` | `/api/v1/agent/operations/:operationId/apply` | Apply an approved operation |
 | `POST` | `/api/v1/agent/operations/:operationId/verify` | Verify an applied operation |
 | `POST` | `/api/v1/agent/verify` | Verify by body `{ "operationId": "op_…" }` |
@@ -888,15 +889,18 @@ Operation create request:
 }
 ```
 
-Operation records include `operationId`, `status`, `approval`, `request`,
-`plan`, `proposedPlanHash`, `incidentId`, `incidentLinks`,
+Operation records include `operationId`, `status`, `approval`, `actions`,
+`request`, `plan`, `proposedPlanHash`, `incidentId`, `incidentLinks`,
 `affectedObjects`, `stateTransitions`, `progressSnapshots`, `auditLog`,
 `executionResult` and `verificationResult`. Responses are redacted.
 
-- Apply before approval is refused. Approval is a confirmation step, not
-  separation of duties: one dashboard principal can create, approve and
-  apply. `approval.approvedBy` is the authenticated session;
-  `approval.claimedBy` is the request's unverified `approvedBy`.
+- Apply before approval is refused. Each change in `actions` names its
+  `requiredRole` (`removeOutput`: `admin`; other kinds: `operator`) and its
+  `approval` once given. A session approves at its effective role; below the
+  minimum it gets `403` (`requiredRole`, `effectiveRole`), recorded in the
+  audit log. `approval.approvedBy` is the member that completed the
+  approval; `approval.claimedBy` is the request's unverified `approvedBy`.
+  See [approval invariants](agent-plane-integration.md#invariants).
 - Operations live in memory: at most 1024, lost on restart. An unknown id
   answers every operation route with `404`
   `{"code": "operationNotFound", "error": "Operation not found"}`.

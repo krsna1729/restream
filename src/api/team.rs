@@ -19,10 +19,11 @@ use super::state::{
     AppState, MAX_PASSWORD_LEN, MIN_DASHBOARD_PASSWORD_LEN, check_field_len,
     get_session_token_from_headers, hash_session_token, to_hex,
 };
-use crate::application::team::{AuditEntry, Principal, Role, UserRecord, required_role};
+use crate::application::team::{AuditEntry, Principal, UserRecord, required_role};
+use restream_domain::domain::role::Role;
 
 /// The session's principal, resolved from its cookie.
-async fn session_principal(
+pub(in crate::api) async fn session_principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(String, Principal), Response> {
@@ -39,7 +40,7 @@ async fn session_principal(
     }
 }
 
-fn forbidden(needed: Role, acting: Role) -> Response {
+pub(in crate::api) fn forbidden(needed: Role, acting: Role) -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({
