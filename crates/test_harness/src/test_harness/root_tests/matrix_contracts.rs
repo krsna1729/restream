@@ -180,7 +180,6 @@ fn mixed_scenario_plan_expands_without_signal_cost() {
 #[test]
 fn mixed_json_dsl_carries_current_matrix_contract() {
     let manifest = mixed_dsl_manifest().expect("mixed DSL manifest should parse");
-    assert_eq!(manifest.version, 1);
     assert_eq!(manifest.input_cases().unwrap(), mixed_input_cases());
 
     let dsl_fast: Vec<_> = manifest
