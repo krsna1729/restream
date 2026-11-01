@@ -602,6 +602,9 @@ pub(super) struct Session {
     /// empty, and at most `MAX_RENDITIONS`.
     tracks: Vec<Track>,
     other_variants: HashMap<String, HashSet<String>>,
+    /// Whether a master has said which variant this session follows. Before
+    /// one, a second media playlist may be the variant it will select.
+    master_seen: bool,
 }
 
 impl Session {
@@ -616,6 +619,7 @@ impl Session {
             },
             tracks: vec![Track::new(None)],
             other_variants: HashMap::new(),
+            master_seen: false,
         }
     }
 
@@ -847,6 +851,7 @@ impl Session {
     /// audio is a separate rendition, that rendition too (`DEFAULT`, else
     /// `AUTOSELECT`, else the first of its group).
     fn on_master(&mut self, master: &MasterPlaylist) {
+        self.master_seen = true;
         let Some(chosen) = master.highest_bandwidth() else {
             return;
         };
@@ -913,8 +918,14 @@ impl Session {
             .iter()
             .map(|segment| segment.path.clone())
             .collect();
-        for path in &paths {
-            self.pool.remove_held(path);
+        // FFmpeg writes its master after every variant's first segment and
+        // playlist: before a master, a playlist's first listing may be the
+        // variant the master is about to select, so its held segments stay
+        // until the master decides or the playlist lists again.
+        if self.master_seen || self.other_variants.contains_key(playlist_path) {
+            for path in &paths {
+                self.pool.remove_held(path);
+            }
         }
         if self.other_variants.contains_key(playlist_path)
             || self.other_variants.len() < MAX_OTHER_VARIANTS

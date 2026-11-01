@@ -237,6 +237,82 @@ fn a_rendition_followed_before_its_master_keeps_its_init() {
     );
 }
 
+/// FFmpeg's own order for a separate-rendition push: every rendition's first
+/// segment and playlist, then the master. The variant's playlist arrives
+/// while the audio is followed alone; its first segment must still be held
+/// when the master selects it, and leave at once rather than after a gap.
+#[test]
+fn a_variant_listed_before_its_master_keeps_its_first_segment() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    seg(&mut session, "high/init.mp4", t0);
+    seg(&mut session, "audio/init.mp4", t0);
+    seg(&mut session, "audio/index0.ts", t0);
+    session.on_playlist(
+        "audio/index.m3u8",
+        with_map(media("audio/", 0, 1, false), "audio/init.mp4"),
+        t0,
+    );
+    seg(&mut session, "high/index0.ts", t0);
+    assert_eq!(
+        session.on_playlist(
+            "high/index.m3u8",
+            with_map(media("high/", 0, 1, false), "high/init.mp4"),
+            t0,
+        ),
+        PlaylistOutcome::OtherVariant,
+        "before the master the audio playlist is the one followed"
+    );
+    session.on_playlist("master.m3u8", master(Some("audio/index.m3u8")), t0);
+    seg(&mut session, "high/index1.ts", t0);
+    session.on_playlist(
+        "high/index.m3u8",
+        with_map(media("high/", 0, 2, false), "high/init.mp4"),
+        t0,
+    );
+
+    let video: Vec<_> = released(&mut session, t0)
+        .into_iter()
+        .filter(|(rendition, ..)| *rendition == 0)
+        .collect();
+    assert_eq!(
+        video,
+        vec![
+            (0, 0, "high/index0.ts".into(), true),
+            (0, 1, "high/index1.ts".into(), false),
+        ]
+    );
+}
+
+/// Without a master, a second media playlist is another variant once it
+/// lists again: its held segments are dropped then, not kept for a master
+/// that never comes.
+#[test]
+fn without_a_master_another_playlists_segments_leave_the_hold_on_its_next_listing() {
+    let t0 = Instant::now();
+    let mut session = Session::new(limits());
+    seg(&mut session, "audio/index0.ts", t0);
+    session.on_playlist("audio/index.m3u8", media("audio/", 0, 1, false), t0);
+    seg(&mut session, "high/index0.ts", t0);
+    session.on_playlist("high/index.m3u8", media("high/", 0, 1, false), t0);
+    assert!(
+        session
+            .pool
+            .held
+            .iter()
+            .any(|held| held.path == "high/index0.ts")
+    );
+    session.on_playlist("high/index.m3u8", media("high/", 0, 2, false), t0);
+    assert!(
+        !session
+            .pool
+            .held
+            .iter()
+            .any(|held| held.path.starts_with("high/")),
+        "another variant's segments are not kept"
+    );
+}
+
 /// Mark one segment of a listing with `EXT-X-DISCONTINUITY`, as an SSAI ad
 /// break does in both the variant's and the audio rendition's playlist.
 fn with_discontinuity(mut playlist: Playlist, sequence: u64) -> Playlist {

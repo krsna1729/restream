@@ -649,6 +649,12 @@ Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
   rendition's video waits for its next keyframe; audio passes. A master
   playlist selects the
   highest-`BANDWIDTH` variant; other variants get `200` and are dropped.
+  Without a master the first media playlist is followed and published at
+  once. Encoders such as FFmpeg's `-var_stream_map` write the master after
+  every rendition's first segment and playlist, so before a master a
+  second media playlist keeps its held segments until the master selects
+  it or it lists again; the audio's first segment can therefore reach the
+  ring before the video's.
 - **Separate audio.** When the variant names an `EXT-X-MEDIA` audio rendition
   (`DEFAULT=YES`, else `AUTOSELECT=YES`, else the first with a `URI`), that
   playlist is followed too. Video and audio merge onto the ring in DTS order.
