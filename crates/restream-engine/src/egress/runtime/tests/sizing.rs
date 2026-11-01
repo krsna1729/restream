@@ -12,9 +12,9 @@ fn runtime(shards: u32) -> EgressFabricRuntime {
     let mut runtime = EgressFabricRuntime::new(
         EgressManagerConfig::new(shards, 16).unwrap(),
         group(shards, &probes),
+        8,
     )
-    .unwrap()
-    .adaptive(8);
+    .unwrap();
     for i in 0..4 {
         runtime
             .dispatch(EgressCommand::Add(output_spec(&format!("sample-{i}"))))
@@ -170,6 +170,36 @@ fn a_burst_of_adds_on_a_new_runtime_is_priced_at_the_feed_rate() {
 }
 
 #[test]
+fn an_add_grows_the_pool_for_the_feed_rate_not_the_output_count() {
+    let profile = crate::config::EgressShardProfile::OutputCount;
+    let host = crate::host_capacity::HostCapacity { cpus: 8 };
+    let probes = [Probe::default()];
+    let (mut runtime, config) = super::super::tests::roomy_runtime(&probes);
+    for i in 0..19 {
+        runtime
+            .dispatch(EgressCommand::Add(output_spec(&format!("out-{i}"))))
+            .unwrap();
+    }
+    let grown = Probe::default();
+    let add = |runtime: &mut EgressFabricRuntime| {
+        runtime
+            .rescale(profile, host, ResizeReason::Add, config, |_| {
+                let probe = grown.clone();
+                move || Ok::<_, String>(super::super::tests::ProbeBackend { probe })
+            })
+            .unwrap()
+    };
+    // With the pending Add, 20 outputs at the 4.8 Mbit/s reference rate
+    // project 7.8% busy on one shard, under the 50% target: no growth.
+    assert!(add(&mut runtime).is_empty());
+    // At 8x the rate they project 62.5%: two shards. The output-count law
+    // (20 of 128 per shard) would still say one.
+    runtime.sizer.forecast_feed(4.8e6 * 8.0);
+    assert_eq!(add(&mut runtime), vec![ShardId::new(1)]);
+    runtime.shutdown();
+}
+
+#[test]
 fn admission_holds_every_shard_under_the_ceiling() {
     let profile = crate::config::EgressShardProfile::SrtOutputCount;
     let probes = [Probe::default(), Probe::default()];
@@ -178,6 +208,7 @@ fn admission_holds_every_shard_under_the_ceiling() {
             .unwrap()
             .with_placement_policy(crate::egress::manager::PlacementPolicy::LeastLoaded),
         group(2, &probes),
+        u32::MAX,
     )
     .unwrap();
     // An 8× reference feed: one shard holds 9 outputs under the ceiling, so
@@ -218,6 +249,7 @@ fn the_admission_bypass_is_benchmark_only() {
     let mut runtime = EgressFabricRuntime::new(
         EgressManagerConfig::new(1, 1024).unwrap(),
         group(1, &probes),
+        u32::MAX,
     )
     .unwrap();
     runtime.sizer.forecast_feed(4.8e6 * 8.0);

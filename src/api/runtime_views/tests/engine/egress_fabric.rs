@@ -72,9 +72,8 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
                 EgressShardGroup::spawn(NonZeroU32::MIN, shard_config(), vec![PanicBackend])
                     .unwrap();
             let mut failed =
-                EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group)
-                    .unwrap()
-                    .adaptive(1);
+                EgressFabricRuntime::new(EgressManagerConfig::new(1, 16).unwrap(), group, 1)
+                    .unwrap();
             failed
                 .rescale(
                     restream_engine::config::EgressShardProfile::OutputCount,

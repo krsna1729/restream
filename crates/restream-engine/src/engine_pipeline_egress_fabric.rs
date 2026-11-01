@@ -60,14 +60,13 @@ impl MediaEngine {
                 |_| feed.clone_reader(),
             )
             .map_err(PipelineFabricEnsureError::Spawn)?;
-            // Least-loaded and adaptive, as for the other fabrics (see
+            // Least-loaded, as for the other fabrics (see
             // `retain_sink_fabric_runtime`).
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
-            let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(PipelineFabricEnsureError::Runtime)?
-                .adaptive(config.shards);
+            let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
+                .map_err(PipelineFabricEnsureError::Runtime)?;
 
             // Pipeline leaves have no poller either (see
             // `retain_sink_fabric_runtime`'s identical comment), so this is

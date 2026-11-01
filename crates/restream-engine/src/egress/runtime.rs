@@ -38,7 +38,6 @@ pub struct EgressFabricRuntime {
     /// later gets the fast feed-wake path on feeds subscribed before it.
     wake_handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
     sizer: ShardSizer,
-    adaptive: bool,
     previous_cpu: HashMap<ShardId, (u64, Instant)>,
     previous_service: HashMap<ShardId, Instant>,
     last_observation: Option<Instant>,
@@ -47,9 +46,14 @@ pub struct EgressFabricRuntime {
 }
 
 impl EgressFabricRuntime {
+    /// A runtime sized adaptively from its shards' measured load, growing to
+    /// at most `shard_ceiling` shards (and the host's per-pool maximum). A
+    /// profile's shard override (an `srt-shard-bench` build) replaces the
+    /// adaptive target.
     pub fn new(
         manager_config: EgressManagerConfig,
         group: EgressShardGroup,
+        shard_ceiling: u32,
     ) -> Result<Self, EgressFabricRuntimeError> {
         let expected = manager_config.shard_count().get() as usize;
         let actual = group.shard_count();
@@ -57,25 +61,19 @@ impl EgressFabricRuntime {
             return Err(EgressFabricRuntimeError::ShardCountMismatch { expected, actual });
         }
         let wake_handles = Arc::new(ArcSwap::from_pointee(group.feed_wake_handles()));
+        let mut sizer = ShardSizer::default();
+        sizer.resized(Instant::now());
         Ok(Self {
             manager: EgressManager::new(manager_config),
             group,
             wake_handles,
-            sizer: ShardSizer::default(),
-            adaptive: false,
+            sizer,
             previous_cpu: HashMap::new(),
             previous_service: HashMap::new(),
             last_observation: None,
             feed_mark: None,
-            shard_ceiling: u32::MAX,
+            shard_ceiling: shard_ceiling.max(1),
         })
-    }
-
-    pub fn adaptive(mut self, shard_ceiling: u32) -> Self {
-        self.adaptive = true;
-        self.shard_ceiling = shard_ceiling.max(1);
-        self.sizer.resized(Instant::now());
-        self
     }
 
     pub(crate) fn reason_for(&self, command: &EgressCommand) -> ResizeReason {
@@ -316,7 +314,7 @@ impl EgressFabricRuntime {
         let outputs =
             self.manager.output_count() + usize::from(matches!(reason, ResizeReason::Add));
         let maximum = host.egress_shards_per_pool().min(self.shard_ceiling);
-        let target = if self.adaptive && profile.shard_override().is_none() {
+        let target = if profile.shard_override().is_none() {
             let prior = profile.outputs_per_shard();
             match reason {
                 ResizeReason::Add => placement.max(self.sizer.recommend(outputs, prior, maximum)),

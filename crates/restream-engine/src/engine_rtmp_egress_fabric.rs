@@ -76,9 +76,8 @@ impl MediaEngine {
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
-            let runtime = EgressFabricRuntime::new(manager_config, group)
-                .map_err(RtmpFabricEnsureError::Runtime)?
-                .adaptive(config.shards);
+            let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
+                .map_err(RtmpFabricEnsureError::Runtime)?;
 
             let wakes = subscribe_fabric_wakes(
                 "rtmp",
