@@ -3,14 +3,16 @@
 //! paced to media time, between objects.
 //!
 //! A turn is one unit: it applies at most one object (then yields) or
-//! publishes at most one `PUBLISH_CHUNK_BYTES` chunk (the publisher yields
-//! at the end of one). A poll therefore never joins two units of work, so
-//! the work in one poll does not follow how fast the HTTP handlers feed the
-//! queue or how much of a segment is left. Within a unit, MPEG-TS demuxes
-//! only the chunk. fMP4 walks at most `MAX_BOXES` top-level boxes when an
-//! object is applied; the poll that first reaches a fragment decodes its
-//! whole `moof`, bounded by `MAX_MOOF_BYTES` and `MAX_SEGMENT_SAMPLES` rather
-//! than by the chunk; each publish converts only the samples it released.
+//! publishes at most one `PUBLISH_CHUNK_BYTES` chunk or one demux step (the
+//! publisher yields at the end of one). A poll therefore never joins two
+//! units of work, so the work in one poll does not follow how fast the HTTP
+//! handlers feed the queue or how much of a segment is left. Within a unit,
+//! MPEG-TS demuxes only the chunk. fMP4 walks at most `MAX_BOXES` boxes
+//! (nested ones included) when an object is applied; the poll that first
+//! reaches a fragment decodes its whole `moof`, bounded by `MAX_MOOF_BYTES`
+//! and `MAX_SEGMENT_SAMPLES` rather than by the chunk; each unit converts at
+//! most `MAX_SAMPLES_PER_STEP` released samples, and an object ends only
+//! once its released samples are all converted.
 //!
 //! The first media object fixes the session's container (MPEG-TS or fMP4);
 //! an object of the other container is refused. fMP4 objects are checked
@@ -389,13 +391,19 @@ async fn publish_next_chunk(
         }
         publisher.begin_object(bytes).map_err(failed)?;
     }
-    let end = bytes.len().min(outbox.offset + PUBLISH_CHUNK_BYTES);
-    publisher
-        .publish(target, &bytes[outbox.offset..end])
-        .await
-        .map_err(failed)?;
-    if end < bytes.len() {
+    // Released work the last chunk left goes before more bytes, and the
+    // object ends only once none is left: a poll does one bounded step.
+    if publisher.pending() {
+        publisher.publish(target, &[]).await.map_err(failed)?;
+    } else {
+        let end = bytes.len().min(outbox.offset + PUBLISH_CHUNK_BYTES);
+        publisher
+            .publish(target, &bytes[outbox.offset..end])
+            .await
+            .map_err(failed)?;
         outbox.offset = end;
+    }
+    if outbox.offset < bytes.len() || publisher.pending() {
         return Ok(());
     }
     publisher.end_object(target).map_err(failed)?;

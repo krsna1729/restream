@@ -684,14 +684,14 @@ Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
 - **Pacing.** Released media reaches the ring at media pace. Media that is
   behind is published at once, up to one target duration. A session takes
   new objects only while less than two target durations of media, and at most
-  128 MiB, wait to publish. A poll applies one object or publishes one
-  64 KiB chunk (`PUBLISH_CHUNK_BYTES`). The TS demuxer reuses its staging
+  128 MiB, wait to publish. A poll applies one object, publishes one
+  64 KiB chunk (`PUBLISH_CHUNK_BYTES`), or converts one step of at most 256
+  released fMP4 samples (`MAX_SAMPLES_PER_STEP`); an object ends only once
+  its released samples are all converted. The TS demuxer reuses its staging
   allocation when joining a partial packet with the next chunk; it still
-  copies that join. This limits session dispatch to one unit, not the CPU
-  time of every operation inside it. In particular, fMP4 still decodes a
-  whole bounded `moof` and plans its samples when first reached; incremental
-  parsing/planning remains open in
-  [Q-074](backlog.md#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause).
+  copies that join. fMP4 decodes and plans a whole bounded `moof` in the
+  poll that first reaches it (about 0.5 ms at 16384 samples on a Zen 1 VM),
+  and its box walk counts nested boxes toward the 4096-step bound.
 - **Bad segment.** A segment that fails to demux is dropped and counted. The
   timeline re-anchors and publishing continues.
 - **Known limit.** An init lost on the wire under the same URI is invisible;

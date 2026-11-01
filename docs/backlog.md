@@ -82,16 +82,21 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
 - Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
   milliseconds of thread CPU.
-- Remaining work: `shiguredo_mp4::handle_media_segment` decodes the whole
-  `moof`, and sample planning runs in the poll that first reaches it. Make
-  fMP4 parsing/planning incremental (`crates/restream-engine/src/hls_ingest/`,
-  `crates/restream-engine/src/ingest_publisher/`), then verify TS and fMP4 poll budgets.
-  Allocator or kernel tuning showed no repeatable tail improvement.
-- Gates: an incremental fMP4 parsing/planning regression test; release
-  `hls-push-duty -- --no-netns --hls-publishers 8 --duration-secs 60
-  --poll-usage --host-probe` on a qualified host over five runs, with
+- Remaining work: run the live gate on a host whose thread CPU clock is
+  trustworthy. The application bounds are in place: a box walk counts
+  nested boxes, a poll converts at most 256 fMP4 samples, and a whole
+  `moof` decode and plan takes about 0.5 ms at the 16384-sample bound on a
+  Zen 1 VM, so a full incremental parser is not needed. On that VM the gate
+  cannot pass or fail the code: TS and fMP4 both showed 19–40 ms maxima,
+  about half of it system time, while the `--host-probe` thread, which does
+  no work, saw thread-CPU gaps up to 97 ms (hypervisor time charged to the
+  thread). Allocator or kernel tuning showed no repeatable tail improvement.
+- Gates: release `hls-push-duty -- --no-netns --hls-publishers 8
+  --duration-secs 60 --poll-usage --host-probe`, with `--segment-type ts`
+  and `--segment-type fmp4`, on bare metal over five runs each, with
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
-  minute per session. A mean or p99 passing does not waive the maximum.
+  minute per session, and a probe whose own thread-CPU gaps stay below
+  1 ms. A mean or p99 passing does not waive the maximum.
 
 ### Q-091 [protocol] [opus] SRT Backup failover replays the lost prefix
 - Goal: when the active sender in an SRT Backup group disappears, the promoted

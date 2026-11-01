@@ -688,3 +688,40 @@ fn a_segment_of_too_many_boxes_is_refused_at_the_walk_bound() {
         "one box over the bound is refused"
     );
 }
+
+/// A chunk that releases thousands of tiny samples converts them a bounded
+/// step per call, so no MEDIA poll converts the whole fragment: the rest
+/// waits as pending work, and every sample still leaves, in decode order.
+#[test]
+fn a_fragment_of_tiny_samples_converts_a_bounded_step_per_call() {
+    let (avc1, mp4a) = (avc1(LengthSize::FourBytes), mp4a());
+    let mut muxer = Fmp4SegmentMuxer::new().unwrap();
+    let total: usize = 4096;
+    let samples: Vec<In> = std::iter::once(video(&avc1, 3000, true, 0, length_prefixed(&[IDR], 4)))
+        .chain((1..total).map(|_| audio(&mp4a, vec![0x11; 2])))
+        .collect();
+    let media = segment(&mut muxer, &samples);
+    let init = muxer.init_segment_bytes().unwrap();
+    let mut demux = Fmp4Demux::default();
+    demux.apply_init(&init, MAX_INIT).unwrap();
+    demux.begin_object(&Bytes::from(media.clone())).unwrap();
+
+    let mut out = Vec::new();
+    demux.feed(&media).unwrap();
+    let mut steps = 1;
+    assert!(demux.drain_into(&mut out) <= MAX_SAMPLES_PER_STEP);
+    while demux.pending() {
+        demux.feed(&[]).unwrap();
+        assert!(demux.drain_into(&mut out) <= MAX_SAMPLES_PER_STEP);
+        steps += 1;
+        assert!(steps <= total.div_ceil(MAX_SAMPLES_PER_STEP) + 1);
+    }
+    demux.end_object().unwrap();
+    assert_eq!(
+        demux.drain_into(&mut out),
+        0,
+        "nothing was left for the end"
+    );
+    assert_eq!(out.len(), total);
+    assert!(out.windows(2).all(|pair| pair[0].dts <= pair[1].dts));
+}

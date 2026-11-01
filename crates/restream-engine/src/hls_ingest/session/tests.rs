@@ -163,3 +163,77 @@ async fn a_turn_applies_the_parsed_playlist_without_parsing_the_bytes() {
         "the turn applied the parsed playlist"
     );
 }
+
+/// One publish unit (one poll) converts at most one demux step: a segment
+/// whose single chunk releases thousands of fMP4 samples publishes them
+/// over many units, and the object ends only once every sample is out.
+#[tokio::test]
+async fn each_publish_unit_converts_at_most_one_fmp4_step() {
+    use crate::hls_ingest::ordering::{Init, Reanchor, Release};
+    use crate::ingest_publisher::fmp4::MAX_SAMPLES_PER_STEP;
+
+    let frames = 4 * MAX_SAMPLES_PER_STEP;
+    let (init, mut media) = crate::hls_ingest::test_support::fmp4_video_objects(1, frames);
+    let media = media.remove(0);
+    assert!(
+        media.len() <= PUBLISH_CHUNK_BYTES,
+        "one chunk releases every sample"
+    );
+    let context = context().await;
+    let ring = context.ring.clone();
+    let shared_init = context.init.clone();
+    let target = PublishTarget::open(
+        context.engine,
+        context.pipeline_id,
+        context.registration,
+        context.ring,
+    )
+    .await
+    .expect("the test's target opens");
+    let mut state = Publishing {
+        outbox: Outbox::default(),
+        outbox_limit: usize::MAX,
+        max_init_bytes: 1 << 20,
+        init: shared_init,
+        failed_logged: false,
+        container: Some(Container::Fmp4),
+        publisher: Some(SegmentPublisher::new(
+            Container::Fmp4.demux(),
+            IngestTimestamps::default(),
+        )),
+        pacer: Pacer::default(),
+    };
+    state.outbox.push(Release {
+        rendition: 0,
+        sequence: 0,
+        epoch: 0,
+        reanchor: Reanchor::None,
+        after_gap: false,
+        duration: Duration::from_secs(1),
+        init: Some(Init {
+            uri: "init.mp4".to_string(),
+            payload: Payload::new(init.into(), None, None, None),
+        }),
+        payload: Payload::new(media.into(), None, None, None),
+    });
+
+    let mut units = 0;
+    let mut most = 0;
+    while !state.outbox.is_empty() {
+        let before = ring.get_write_idx();
+        if let Err(failure) = publish_next_chunk(&mut state, &target).await {
+            panic!("the segment publishes: {}", failure.rejection);
+        }
+        most = most.max(ring.get_write_idx() - before);
+        units += 1;
+        assert!(
+            units <= frames / MAX_SAMPLES_PER_STEP + 2,
+            "the object ends"
+        );
+    }
+    assert!(
+        most <= MAX_SAMPLES_PER_STEP,
+        "a unit published {most} packets"
+    );
+    assert!(ring.get_write_idx() >= frames, "every sample was published");
+}

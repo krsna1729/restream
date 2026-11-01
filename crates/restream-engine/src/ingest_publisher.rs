@@ -118,6 +118,14 @@ pub trait SegmentDemux: Send {
     /// demux what it completes.
     fn feed(&mut self, chunk: &[u8]) -> Result<(), MediaRejection>;
 
+    /// Released work is still waiting: each [`Self::feed`] does a bounded
+    /// step of it, so the caller feeds empty chunks until this is false
+    /// before the next chunk or [`Self::end_object`]. MPEG-TS demuxes each
+    /// chunk in full and never has any.
+    fn pending(&self) -> bool {
+        false
+    }
+
     /// Move demuxed packets into `out`; returns how many moved.
     fn drain_into(&mut self, out: &mut Vec<MediaPacket>) -> usize;
 
@@ -391,6 +399,13 @@ impl SegmentPublisher {
     /// [`Self::publish`].
     pub fn begin_object(&mut self, object: &Bytes) -> Result<(), MediaRejection> {
         self.demux().begin_object(object)
+    }
+
+    /// The current object's released samples are not all published yet:
+    /// [`Self::publish`] an empty chunk (one bounded step) before the next
+    /// chunk or [`Self::end_object`].
+    pub fn pending(&mut self) -> bool {
+        self.demux().pending()
     }
 
     /// The current object ended: forward what its last bytes completed.
