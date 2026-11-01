@@ -440,8 +440,9 @@ spinning windows. A probe startup, clock or join failure invalidates the run.
 
 ### MoQ interop
 
-`moq-dev-interop` proves moq-lite-06 with hang by default, and explicit
-MOQT draft-19 with MSF/LOC under `--ietf`, using `moq-net` 0.3.15 and the
+`moq-dev-interop` proves moq-lite-06 with hang by default, and MOQT with
+MSF/LOC on one IETF draft under `--ietf 16`, `--ietf 18` or `--ietf 19`
+(CI runs all three), using `moq-net` 0.3.15 and the
 tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7.
 `cargo xtask fetch moq-dev` downloads them, checks the SHA256 and
 installs `.local/bin/moq-0.14.7` and `.local/bin/moq-relay-0.17.7`. The mode
@@ -451,7 +452,7 @@ refuses another `--version`. `MOQ_DEV_INTEROP_MOQ_BIN` and
 ```sh
 cargo xtask fetch moq-dev
 cargo xtask harness moq-dev-interop -- --no-netns
-cargo xtask harness moq-dev-interop -- --no-netns --ietf
+cargo xtask harness moq-dev-interop -- --no-netns --ietf 19
 (cd test/e2e/moq && npm ci && npx playwright install chromium firefox)
 cargo xtask harness moq-dev-interop -- --no-netns --browsers
 ```
@@ -467,8 +468,8 @@ pactl load-module module-null-sink sink_name=moq_null && pactl set-default-sink 
 Each run makes a CA and an ECDSA P-256 leaf with `openssl`. Restream's MoQ
 listener (`RESTREAM_MOQ_INGEST_LISTEN`, `RESTREAM_MOQ_TLS_CERT`,
 `RESTREAM_MOQ_TLS_KEY`) serves ingest and the origin. Restream output URLs
-pin `version=moq-lite-06` or `version=moqt-19`; CLI/log spelling for the latter
-is `moq-transport-19`. Every CLI dial offers only the selected version over
+pin `version=moq-lite-06` or `version=moqt-<draft>`; CLI/log spelling for the
+latter is `moq-transport-<draft>`. Every CLI dial offers only the selected version over
 QUIC; IETF exports select MSF without hang fallback. Both catalogs advertise
 the same LOC media.
 
@@ -479,7 +480,7 @@ the same LOC media.
 | Browsers (`--browsers`) | Playwright Chromium and Firefox play origin and relay with `@moq/watch` | `browser-<chromium\|firefox>-<origin\|relay>`, `browser-<…>-origin-no-token` |
 | Isolation | moq-relay SIGKILLed, restarted 3 s later | `isolationMoqReconnected` (≤ 60 s), `isolationRelayVersion`, `isolationSiblingUninterrupted`, `isolationReadBackAfterReconnect` |
 | Ingest | `ffmpeg … -f mpegts - \| moq … import ts` into Restream → RTMP output to an FFmpeg server | `ingestMoqSession`, `ingestReadBack` |
-| IETF ingest (`--ietf`) | RTMP-fed source pipeline → draft-19 MSF/LOC output → dedicated moq-relay → draft-19-only `--cluster-connect` into Restream ingest → RTMP read-back | `ingestRelayMsfLocCatalog`, `ingestRelayVersion`, `ingestMoqSession`, `ingestReadBack` (≥ 8 s). No CLI export/re-import media bridge; port override `MOQ_DEV_INTEROP_INGEST_RELAY` |
+| IETF ingest (`--ietf <draft>`) | RTMP-fed source pipeline → MSF/LOC output on the draft → dedicated moq-relay → `--cluster-connect` offering only that draft into Restream ingest → RTMP read-back | `ingestRelayMsfLocCatalog`, `ingestRelayVersion`, `ingestMoqSession`, `ingestReadBack` (≥ 8 s). No CLI export/re-import media bridge; port override `MOQ_DEV_INTEROP_INGEST_RELAY` |
 
 The browser specs live in their own package, `test/e2e/moq/` (`@moq/watch`
 0.6.3, `@playwright/test` 1.63.0, Vite 8.3.2, `*.moq.ts`), so the frontend
@@ -567,7 +568,7 @@ failure, so partial counts survive. `.local/artifacts/moq-impairment/` holds
 It is diagnostic-only, not run by CI or suites: the SETUP, namespace and
 LOC/MSF dialect mismatches are source/spec-evidenced in
 [Q-097](backlog.md#q-097-mediamtx-moq-dialect-interoperability).
-Use `moq-dev-interop --ietf` for the supported IETF gate; do not fork a
+Use `moq-dev-interop --ietf <draft>` for the supported IETF gate; do not fork a
 MediaMTX-specific profile.
 
 ### MoQ through moxygen (`moq-moxygen-interop`)

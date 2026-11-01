@@ -24,8 +24,48 @@ pub(crate) const MOQ_RELAY: PinnedBin = PinnedBin {
     version: "moq-relay 0.17.7",
 };
 
-/// CLI/log spelling; the corresponding native ALPN is `moqt-19`.
-pub(crate) const IETF_VERSION: &str = "moq-transport-19";
+/// An IETF MOQT draft both the pinned moq.dev tools and Restream speak.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IetfDraft {
+    D16,
+    D18,
+    D19,
+}
+
+impl IetfDraft {
+    pub(crate) const ALL: [Self; 3] = [Self::D16, Self::D18, Self::D19];
+
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|draft| draft.number() == text)
+    }
+
+    pub(crate) fn number(self) -> &'static str {
+        match self {
+            Self::D16 => "16",
+            Self::D18 => "18",
+            Self::D19 => "19",
+        }
+    }
+
+    /// The native ALPN, as a Restream `moqt://` output's `version=` names it.
+    pub(crate) fn alpn(self) -> &'static str {
+        match self {
+            Self::D16 => "moqt-16",
+            Self::D18 => "moqt-18",
+            Self::D19 => "moqt-19",
+        }
+    }
+
+    /// The CLI and relay-log spelling.
+    pub(crate) fn version(self) -> &'static str {
+        match self {
+            Self::D16 => "moq-transport-16",
+            Self::D18 => "moq-transport-18",
+            Self::D19 => "moq-transport-19",
+        }
+    }
+}
+
 pub(crate) const LITE_VERSION: &str = "moq-lite-06";
 
 /// Resolve and version-check a pinned binary.
@@ -125,7 +165,9 @@ pub(crate) struct DevRelay {
     log: PathBuf,
     child: Option<Child>,
     starts: u32,
-    forward: Option<(String, PathBuf)>,
+    /// Where the relay forwards its broadcasts: Restream's listener URL, the
+    /// CA it trusts there, and the one version its cluster dial offers.
+    forward: Option<(String, PathBuf, &'static str)>,
 }
 
 impl DevRelay {
@@ -146,8 +188,8 @@ impl DevRelay {
     }
 
     /// The relay itself publishes into Restream, with no CLI media bridge.
-    pub(crate) fn forward_to(&mut self, url: String, ca: &Path) {
-        self.forward = Some((url, ca.to_path_buf()));
+    pub(crate) fn forward_to(&mut self, url: String, ca: &Path, version: &'static str) {
+        self.forward = Some((url, ca.to_path_buf(), version));
     }
 
     pub(crate) async fn start(&mut self) -> Result<(), String> {
@@ -162,9 +204,9 @@ impl DevRelay {
         let listen = format!("127.0.0.1:{}", self.port);
         let mut command =
             command_with_optional_cgroup(&self.bin, &format!("moq-relay-{}", self.port));
-        if let Some((url, ca)) = &self.forward {
+        if let Some((url, ca, version)) = &self.forward {
             command
-                .args(["--cluster-connect", url, "--connect-version", IETF_VERSION])
+                .args(["--cluster-connect", url, "--connect-version", version])
                 .arg("--connect-tls-root")
                 .arg(ca)
                 .arg("--connect-websocket-enabled=false");

@@ -1,5 +1,6 @@
 //! `moq-dev-interop`: Restream's MoQ egress, origin and ingest against
-//! moq.dev tools: moq-lite-06 + hang by default, MOQT draft-19 + MSF/LOC with `--ietf`.
+//! moq.dev tools: moq-lite-06 + hang by default, MOQT + MSF/LOC on draft 16,
+//! 18 or 19 with `--ietf <draft>`.
 //!
 //! The peers are the moq.dev release binaries built from the commit of
 //! `moq-net` 0.3.15, which Restream's MoQ code is pinned to: `moq` (moq-cli
@@ -38,12 +39,12 @@
 //!    checks.
 //!    With `--ietf`, a separate source pipeline publishes MSF/LOC to a
 //!    dedicated moq-relay, whose cluster dial forwards the broadcast into
-//!    Restream on moqt-19. No export/re-import bridge bypasses the relay.
+//!    Restream on the same draft. No export/re-import bridge bypasses the relay.
 //!
 //! ```text
 //! cargo xtask fetch moq-dev
 //! npm ci --prefix test/e2e/moq && npx --prefix test/e2e/moq playwright install chromium firefox
-//! cargo xtask harness moq-dev-interop -- --no-netns [--ietf] [--browsers]
+//! cargo xtask harness moq-dev-interop -- --no-netns [--ietf 16|18|19] [--browsers]
 //! ```
 
 #[path = "moq_dev_interop/checks.rs"]
@@ -66,24 +67,31 @@ use crate::moq_relay_interop::{
     planned_harness_ports, round3, sample_sibling,
 };
 
-const USAGE: &str = "usage: moq-dev-interop [--no-netns] [--ietf] [--browsers]";
+const USAGE: &str = "usage: moq-dev-interop [--no-netns] [--ietf 16|18|19] [--browsers]";
 
 /// What the command line asks for beyond the harness's own `--no-netns`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DevOptions {
     /// Run the Playwright browser specs while the endpoints are live.
     pub(crate) browsers: bool,
-    /// Pin native sessions to moqt-19 and exercise MSF/LOC through the relay.
-    pub(crate) ietf: bool,
+    /// Pin native sessions to this IETF MOQT draft and exercise MSF/LOC
+    /// through the relay; moq-lite-06 + hang without it.
+    pub(crate) ietf: Option<IetfDraft>,
 }
 
 impl DevOptions {
     pub(crate) fn parse(args: &[String]) -> Result<Self, String> {
         let mut options = Self::default();
-        for arg in strip_netns_opt(args) {
+        let mut args = strip_netns_opt(args).into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--browsers" => options.browsers = true,
-                "--ietf" => options.ietf = true,
+                "--ietf" => {
+                    let draft = args.next().unwrap_or_default();
+                    options.ietf = Some(IetfDraft::parse(&draft).ok_or_else(|| {
+                        format!("moq-dev-interop: --ietf takes a draft, 16, 18 or 19 (got {draft:?}); {USAGE}")
+                    })?);
+                }
                 other => {
                     return Err(format!(
                         "moq-dev-interop: unknown option {other:?}; {USAGE}"
@@ -94,16 +102,14 @@ impl DevOptions {
         Ok(options)
     }
 
+    /// The CLI and relay-log spelling of the pinned version.
     pub(crate) fn version(self) -> &'static str {
-        if self.ietf {
-            IETF_VERSION
-        } else {
-            LITE_VERSION
-        }
+        self.ietf.map_or(LITE_VERSION, IetfDraft::version)
     }
 
+    /// The native ALPN, as a Restream `moqt://` output's `version=` names it.
     pub(crate) fn alpn(self) -> &'static str {
-        if self.ietf { "moqt-19" } else { LITE_VERSION }
+        self.ietf.map_or(LITE_VERSION, IetfDraft::alpn)
     }
 }
 
