@@ -464,9 +464,9 @@ jobs:
       gh_token: ${{ github.token }}
 
   moq-interop:
-    # Both pinned moq.dev profiles: lite/browser coverage, then explicit
-    # moqt-19 MSF/LOC egress and relay-forwarded ingest. MediaMTX remains
-    # diagnostic-only until its dialect mismatch is resolved.
+    # Both pinned moq.dev profiles: lite/browser coverage, then MSF/LOC
+    # egress and relay-forwarded ingest on each IETF draft (16, 18, 19).
+    # MediaMTX remains diagnostic-only until its dialect mismatch is resolved.
     # Reuse integration-build's binaries and the same downloaded peers.
     name: MoQ interop
     runs-on: ubuntu-24.04
@@ -547,12 +547,26 @@ jobs:
           RESTREAM_BIN: target/bench/restream
         run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --browsers
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Run moqt-16 MSF/LOC in both directions through moq-relay
+        env:
+          BENCH_BUILD: never
+          HARNESS_BIN: target/bench/test_harness
+          RESTREAM_BIN: target/bench/restream
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --ietf 16
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Run moqt-18 MSF/LOC in both directions through moq-relay
+        env:
+          BENCH_BUILD: never
+          HARNESS_BIN: target/bench/test_harness
+          RESTREAM_BIN: target/bench/restream
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --ietf 18
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Run moqt-19 MSF/LOC in both directions through moq-relay
         env:
           BENCH_BUILD: never
           HARNESS_BIN: target/bench/test_harness
           RESTREAM_BIN: target/bench/restream
-        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --ietf
+        run: flock -x /tmp/restream-host.lock timeout --kill-after=30s 15m .local/bin/xtask harness moq-dev-interop -- --no-netns --ietf 19
       - if: ${{ always() && steps.scope.outputs.run == 'true' }}
         name: Upload MoQ interop evidence
         uses: actions/upload-artifact@v7
@@ -563,6 +577,6 @@ jobs:
           # Playwright log, JSON report, traces and failure screenshots.
           path: |
             .local/artifacts/moq-dev-interop/
-            .local/artifacts/moq-dev-interop-ietf/
+            .local/artifacts/moq-dev-interop-ietf-d*/
           if-no-files-found: warn
           retention-days: 7

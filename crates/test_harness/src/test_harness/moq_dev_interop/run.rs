@@ -74,12 +74,12 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let started = Instant::now();
     let work_dir = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(if options.ietf {
-                ".local/artifacts/moq-dev-interop-ietf"
-            } else {
-                ".local/artifacts/moq-dev-interop"
-            })
+        .unwrap_or_else(|| match options.ietf {
+            Some(draft) => PathBuf::from(format!(
+                ".local/artifacts/moq-dev-interop-ietf-d{}",
+                draft.number()
+            )),
+            None => PathBuf::from(".local/artifacts/moq-dev-interop"),
         });
     std::fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
     let work_dir = absolute_path(&work_dir)?;
@@ -203,7 +203,10 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let report = json!({
         "passed": passed,
         "mode": MODE,
-        "wireProfile": if options.ietf { "moqt-19 + MSF/LOC" } else { "moq-lite-06 + hang" },
+        "wireProfile": match options.ietf {
+            Some(draft) => format!("{} + MSF/LOC", draft.alpn()),
+            None => format!("{LITE_VERSION} + hang"),
+        },
         "environment": {
             "moq": moq.display().to_string(),
             "moqVersion": MOQ_CLI.version,
@@ -293,7 +296,11 @@ impl Session {
 
         let catalog = self
             .relay
-            .wait_broadcast(EGRESS_BROADCAST, RELAY_PUBLISH_TIMEOUT, self.options.ietf)
+            .wait_broadcast(
+                EGRESS_BROADCAST,
+                RELAY_PUBLISH_TIMEOUT,
+                self.options.ietf.is_some(),
+            )
             .await;
         let served = catalog.is_ok();
         self.checks.record(
@@ -367,7 +374,7 @@ impl Session {
             broadcast,
             version: self.options.version(),
         };
-        let timeout = if self.options.ietf {
+        let timeout = if self.options.ietf.is_some() {
             IETF_REFUSAL_WATCH_SECS
         } else {
             REFUSAL_WATCH_SECS
@@ -495,7 +502,11 @@ impl Session {
         let republished = match restart {
             Ok(()) => {
                 self.relay
-                    .wait_broadcast(EGRESS_BROADCAST, RECONNECT_BUDGET, self.options.ietf)
+                    .wait_broadcast(
+                        EGRESS_BROADCAST,
+                        RECONNECT_BUDGET,
+                        self.options.ietf.is_some(),
+                    )
                     .await
             }
             Err(error) => Err(error),
@@ -585,13 +596,13 @@ impl Session {
         self.add_output(&pipeline, "rtmp-readback", &return_url)
             .await?;
 
-        let broadcast = if self.options.ietf {
+        let broadcast = if self.options.ietf.is_some() {
             format!("live/{INGEST_STREAM_KEY}.msf")
         } else {
             format!("live/{INGEST_STREAM_KEY}.hang")
         };
-        if self.options.ietf {
-            self.start_ietf_ingest_source(&broadcast).await?;
+        if let Some(draft) = self.options.ietf {
+            self.start_ietf_ingest_source(&broadcast, draft).await?;
         } else {
             let url = self.listener_url();
             let target = CliTarget {
@@ -642,13 +653,13 @@ impl Session {
         if live.is_err() {
             return Err("the MoQ ingest never went live".to_string());
         }
-        if self.options.ietf {
+        if let Some(draft) = self.options.ietf {
             let log = std::fs::read_to_string(self.ingest_relay.log_path()).unwrap_or_default();
-            let (ok, sessions) = sessions_on_version(&relay_sessions(&log), 1, IETF_VERSION);
+            let (ok, sessions) = sessions_on_version(&relay_sessions(&log), 1, draft.version());
             self.checks.record(
                 "ingestRelayVersion",
                 ok,
-                json!({"expectedAlpn": "moqt-19", "sessions": sessions}),
+                json!({"expectedAlpn": draft.alpn(), "sessions": sessions}),
             );
             // The relay offers exactly one version on its outbound cluster
             // dial; media admitted by Restream proves that dial completed.
@@ -656,7 +667,7 @@ impl Session {
                 "ingestRelayForward".to_string(),
                 json!({
                     "url": format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
-                    "version": IETF_VERSION,
+                    "version": draft.version(),
                     "broadcast": broadcast,
                     "log": self.ingest_relay.log_path(),
                 }),
@@ -683,17 +694,23 @@ impl Session {
         Ok(())
     }
 
-    async fn start_ietf_ingest_source(&mut self, broadcast: &str) -> Result<(), String> {
+    async fn start_ietf_ingest_source(
+        &mut self,
+        broadcast: &str,
+        draft: IetfDraft,
+    ) -> Result<(), String> {
         self.ingest_relay.forward_to(
             format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
             &self.tls.ca_pem,
+            draft.version(),
         );
         self.ingest_relay.start().await?;
         let key = "sk-moq-ietf-source";
         let source = create_resource_pipeline(&self.api, "moq-ietf-source", key).await?;
         let output = format!(
-            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version=moqt-19&ca=ca.pem",
+            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version={}&ca=ca.pem",
             self.ports.ingest_relay,
+            draft.alpn(),
         );
         self.add_output(&source, "ietf-ingest-source", &output)
             .await?;

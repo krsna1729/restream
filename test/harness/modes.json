@@ -278,7 +278,7 @@
             "portNamespace": true,
             "benchProfile": false
           },
-          "purpose": "MoQ against pinned moq-cli 0.14.7 and moq-relay 0.17.7 (cargo xtask fetch moq-dev): default moq-lite-06 + hang, or --ietf for explicit moqt-19 + MSF/LOC. RTMP-fed Restream egress to relay, catalog and negotiated-version assertions, CLI TS readback >=20 s with H.264/AAC, monotonic PTS and frame rate; authenticated origin readback and token refusal; relay crash/restart with uninterrupted RTMP sibling. Default ingest uses moq import ts directly; --ietf ingest uses a separate Restream source -> dedicated real relay -> Restream listener via a draft-19-only cluster dial, then RTMP readback >=8 s. --browsers retains Chromium/Firefox lite WebTransport playback of origin and relay with @moq/watch, including token-less origin refusal"
+          "purpose": "MoQ against pinned moq-cli 0.14.7 and moq-relay 0.17.7 (cargo xtask fetch moq-dev): default moq-lite-06 + hang, or --ietf 16|18|19 for that MOQT draft + MSF/LOC. RTMP-fed Restream egress to relay, catalog and negotiated-version assertions, CLI TS readback >=20 s with H.264/AAC, monotonic PTS and frame rate; authenticated origin readback and token refusal; relay crash/restart with uninterrupted RTMP sibling. Default ingest uses moq import ts directly; --ietf ingest uses a separate Restream source -> dedicated real relay -> Restream listener via a cluster dial offering only that draft, then RTMP readback >=8 s. --browsers retains Chromium/Firefox lite WebTransport playback of origin and relay with @moq/watch, including token-less origin refusal"
         },
         "moq-impairment": {
           "suiteDefault": false,
@@ -302,7 +302,7 @@
             "portNamespace": true,
             "benchProfile": false
           },
-          "purpose": "Diagnostic-only MoQ egress and ingest against pinned MediaMTX v1.21.2; not a passing IETF gate because of MediaMTX's SETUP, namespace discovery and LOC dialect mismatches. Exercises RTMP-fed MoQ egress plus RTMP sibling isolation, RTSP readback, and RTSP source forwarded over MoQ into Restream with RTMP readback. Use moq-dev-interop --ietf for the supported moqt-19 MSF/LOC gate; do not fork the MediaMTX dialect into production"
+          "purpose": "Diagnostic-only MoQ egress and ingest against pinned MediaMTX v1.21.2; not a passing IETF gate because of MediaMTX's SETUP, namespace discovery and LOC dialect mismatches. Exercises RTMP-fed MoQ egress plus RTMP sibling isolation, RTSP readback, and RTSP source forwarded over MoQ into Restream with RTMP readback. Use moq-dev-interop --ietf <draft> for the supported MOQT MSF/LOC gate; do not fork the MediaMTX dialect into production"
         }
       }
     }

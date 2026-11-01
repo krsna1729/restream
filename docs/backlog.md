@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
@@ -27,16 +26,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-047 [protocol] [opus] MoQ egress: IETF MOQT profiles
-- Goal: MoQ egress and origin also speak IETF MOQT (MSF catalog, LOC
-  objects) beside moq-lite + hang: drafts 16, 18 and 19 against moq-relay
-  and the `moq` CLI (`--connect-version moq-transport-16/18/19`), drafts 16
-  and 18 against moxygen.
-- Done so far: wire-codec fuzzing (`moq_wire`, `moq_ingest`) and moxygen
-  interop (`moq-moxygen-interop`, draft-16 and draft-18).
-- Gates: a harness interop mode per draft against moq-relay with the `moq`
-  CLI as subscriber; moxygen stays the independent wire check.
 
 ### Q-070 [protocol] [opus] MoQ ingest: IETF MOQT profiles
 - Goal: an IETF MOQT publisher (MSF catalog, LOC objects) feeds a pipeline

@@ -163,9 +163,15 @@ fn ietf_catalog_requires_loc_and_both_decoder_configurations() {
 #[test]
 fn ietf_sessions_reject_lite_fallback_and_accept_the_cli_draft_name() {
     let log = format!("{RELAY_START_MARKER}1\n{LIFE_ONE}");
-    assert!(!sessions_on_version(&relay_sessions(&log), 1, IETF_VERSION).0);
-    let ietf = log.replace(LITE_VERSION, IETF_VERSION);
-    assert!(sessions_on_version(&relay_sessions(&ietf), 1, IETF_VERSION).0);
+    for draft in IetfDraft::ALL {
+        assert!(!sessions_on_version(&relay_sessions(&log), 1, draft.version()).0);
+        let ietf = log.replace(LITE_VERSION, draft.version());
+        assert!(sessions_on_version(&relay_sessions(&ietf), 1, draft.version()).0);
+        // A session on another draft is not this one.
+        for other in IetfDraft::ALL.into_iter().filter(|other| *other != draft) {
+            assert!(!sessions_on_version(&relay_sessions(&ietf), 1, other.version()).0);
+        }
+    }
 }
 
 /// A Playwright JSON report in the shape `--reporter=json` writes: a file
@@ -370,48 +376,65 @@ fn the_cli_offers_only_lite_06_over_quic_and_puts_the_stage_last() {
 }
 
 #[test]
-fn ietf_cli_pins_draft_nineteen_and_reads_msf_without_hang_fallback() {
+fn ietf_cli_pins_the_draft_and_reads_msf_without_hang_fallback() {
     let ca = PathBuf::from("/tmp/run/tls/ca.pem");
-    let target = CliTarget {
-        url: "https://127.0.0.1:4443/",
-        ca: &ca,
-        broadcast: "live/egress.hang",
-        version: IETF_VERSION,
-    };
-    let args = target.args(EXPORT_TS);
-    assert!(
-        args.windows(2)
-            .any(|pair| pair == ["--connect-version", IETF_VERSION])
-    );
-    assert!(
-        args.windows(2)
-            .any(|pair| pair == ["--catalog-format", "msf"])
-    );
-    assert!(!args.iter().any(|arg| arg == LITE_VERSION || arg == "hang"));
+    for draft in IetfDraft::ALL {
+        let target = CliTarget {
+            url: "https://127.0.0.1:4443/",
+            ca: &ca,
+            broadcast: "live/egress.hang",
+            version: draft.version(),
+        };
+        let args = target.args(EXPORT_TS);
+        let offered: Vec<_> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--connect-version")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        assert_eq!(offered, [draft.version()]);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--catalog-format", "msf"])
+        );
+        assert!(!args.iter().any(|arg| arg == LITE_VERSION || arg == "hang"));
+    }
 }
 
 #[test]
-fn options_accept_browsers_and_the_netns_opt_out_only() {
+fn options_accept_browsers_a_draft_and_the_netns_opt_out_only() {
     let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     assert_eq!(
         DevOptions::parse(&[]),
         Ok(DevOptions {
             browsers: false,
-            ietf: false
+            ietf: None
         })
     );
     assert_eq!(
         DevOptions::parse(&args(&["--no-netns", "--browsers"])),
         Ok(DevOptions {
             browsers: true,
-            ietf: false
+            ietf: None
         })
     );
-    let ietf = DevOptions::parse(&args(&["--ietf", "--browsers"])).unwrap();
-    assert!(ietf.ietf && ietf.browsers);
-    assert_eq!(ietf.alpn(), "moqt-19");
-    assert_eq!(ietf.version(), IETF_VERSION);
-    assert!(DevOptions::parse(&args(&["--browser"])).is_err());
+    for (number, alpn, version) in [
+        ("16", "moqt-16", "moq-transport-16"),
+        ("18", "moqt-18", "moq-transport-18"),
+        ("19", "moqt-19", "moq-transport-19"),
+    ] {
+        let ietf = DevOptions::parse(&args(&["--ietf", number, "--browsers"])).unwrap();
+        assert!(ietf.browsers);
+        assert_eq!((ietf.alpn(), ietf.version()), (alpn, version));
+    }
+    // A draft neither side speaks, or none at all, is refused.
+    for bad in [
+        &["--ietf", "17"][..],
+        &["--ietf"],
+        &["--ietf", "--browsers"],
+        &["--browser"],
+    ] {
+        assert!(DevOptions::parse(&args(bad)).is_err(), "{bad:?}");
+    }
 }
 
 #[test]
