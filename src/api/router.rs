@@ -16,10 +16,10 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::agent::{
     agent_action_approve_handler, agent_capabilities_handler, agent_context_handler,
-    agent_graph_diff_preview_handler, agent_investigation_handler, agent_operation_apply_handler,
-    agent_operation_approve_handler, agent_operation_create_handler, agent_operation_get_handler,
-    agent_operation_verify_handler, agent_plan_handler, agent_plan_validate_handler,
-    agent_verify_handler,
+    agent_graph_diff_preview_handler, agent_incident_explanation_handler,
+    agent_investigation_handler, agent_operation_apply_handler, agent_operation_approve_handler,
+    agent_operation_create_handler, agent_operation_get_handler, agent_operation_verify_handler,
+    agent_plan_handler, agent_plan_validate_handler, agent_verify_handler,
 };
 use super::alerts::aggregate_alerts_handler;
 use super::auth::{
@@ -188,6 +188,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/agent/capabilities",
     "/api/v1/agent/context",
     "/api/v1/agent/investigations",
+    "/api/v1/agent/incidents/explanation",
     "/api/v1/agent/plans",
     "/api/v1/agent/plans/validate",
     "/api/v1/agent/graph-diff-preview",
@@ -511,6 +512,10 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/agent/investigations",
             post(agent_investigation_handler),
+        )
+        .route(
+            "/api/v1/agent/incidents/explanation",
+            get(agent_incident_explanation_handler),
         )
         .route("/api/v1/agent/plans", post(agent_plan_handler))
         .route(

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod output;
 mod tracker;
@@ -14,7 +14,7 @@ pub use tracker::{AlertTracker, Evaluation, ResolvedAlert, ResolvedWindow};
 
 // ─── Severity ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Severity {
     Critical,
@@ -41,7 +41,7 @@ const SILENT_ALERT_MS: u64 = 10_000;
 
 // ─── Scope ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Scope {
     Engine,
@@ -53,7 +53,7 @@ pub enum Scope {
 // ─── Evidence ────────────────────────────────────────────────────────────────
 
 /// How the engine knows an evidence signal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Confidence {
     /// Read from one runtime counter, gauge or reported state (or a ratio
@@ -65,7 +65,7 @@ pub enum Confidence {
 }
 
 /// One evidence signal and how the engine knows it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Evidence {
     pub signal: String,
@@ -92,7 +92,7 @@ impl Evidence {
 
 /// A single derived health alert. The `id` field is a stable key for dedup
 /// (same condition on the same entity always produces the same id).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Alert {
     pub id: String,
