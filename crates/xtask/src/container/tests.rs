@@ -20,6 +20,7 @@ impl Engine {
         fs::write(
             &executable,
             r#"#!/bin/sh
+[ "$1" = probe ] && exit 0
 root=$(dirname "$0")
 line=
 for arg do line="$line$arg$(printf '\037')"; done
@@ -38,6 +39,23 @@ fi
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        // A test that forks while `fs::write` above holds the script open
+        // for writing leaves a copy of that descriptor in its child until the
+        // child's exec, and an exec of the script meanwhile fails with
+        // ETXTBSY. Once one exec succeeds no copy is left, and none can
+        // appear (the descriptor is closed), so the test's own runs start.
+        loop {
+            match std::process::Command::new(&executable)
+                .arg("probe")
+                .status()
+            {
+                Ok(_) => break,
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("cannot run the test engine: {error}"),
+            }
+        }
         Self {
             directory,
             executable,
