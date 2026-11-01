@@ -255,15 +255,17 @@ impl SinkPeer {
                                     payload, ..
                                 } = &event.event
                                 {
-                                    thread_stats.payloads.fetch_add(1, Ordering::Relaxed);
-                                    thread_stats
-                                        .payload_bytes
-                                        .fetch_add(payload.len() as u64, Ordering::Relaxed);
                                     if let Some(&tag) =
                                         payload.chunks().find_map(|chunk| chunk.first())
                                     {
                                         let _ = thread_stats.first_payload_tag.set(tag);
                                     }
+                                    thread_stats
+                                        .payload_bytes
+                                        .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                    // Release after the tag: a reader that
+                                    // sees this count also sees the tag.
+                                    thread_stats.payloads.fetch_add(1, Ordering::Release);
                                 }
                                 thread_stats
                                     .sources
@@ -302,7 +304,7 @@ impl SinkPeer {
     }
 
     pub(super) fn payloads(&self) -> u64 {
-        self.stats.payloads.load(Ordering::Relaxed)
+        self.stats.payloads.load(Ordering::Acquire)
     }
 }
 
