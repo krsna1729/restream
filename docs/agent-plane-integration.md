@@ -294,6 +294,34 @@ flowchart LR
 The sidecar supports streamable HTTP and stdio. The default HTTP bind is
 `127.0.0.1:4040`.
 
+### Mid-call approval and progress
+
+A tool call can talk to its client while it runs
+(`crates/restream-mcp/src/transport/`):
+
+- **Elicited approval.** When the client declares `capabilities.elicitation`
+  at `initialize`, `apply_agent_operation` on an operation still awaiting
+  approval first sends `elicitation/create`. The prompt names the intent,
+  the pipelines and outputs it touches and its warnings, and asks for
+  `approve` (boolean) and an optional `reason`. Only `accept` with
+  `approve: true` approves (as `mcp-elicitation`, with the reason) and then
+  applies. A decline, cancel, `approve: false`, client error or disconnect
+  approves and applies nothing; the result carries `applied: false` and the
+  `approval` outcome. A client without elicitation keeps the explicit
+  `approve_agent_operation` step.
+- **Progress.** A call made with `_meta.progressToken` gets
+  `notifications/progress` every 5 s during `apply_agent_operation` and
+  `verify_agent_operation`, so clients that reset their timeout on progress
+  do not abandon a long apply.
+
+Over stdio these messages share the stream. Over streamable HTTP,
+`initialize` returns an `Mcp-Session-Id`; a `tools/call` that accepts
+`text/event-stream` is answered as an SSE stream carrying progress, prompts
+and finally the result, and the client POSTs its answer under the same
+session (`202 Accepted`). `DELETE /mcp` ends a session; an unknown session
+gets `404`. The sidecar keeps at most 256 sessions, evicting the oldest. A
+request without a session or SSE is answered statelessly as JSON.
+
 ### Tool contract
 
 The catalog in `crates/restream-mcp/src/tools.rs` has eleven tools:

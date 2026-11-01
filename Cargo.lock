@@ -3341,9 +3341,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "futures-util",
+ "rand 0.10.2",
  "reqwest",
  "restream",
  "restream-agent-contract",
+ "restream-sync",
  "serde",
  "serde_json",
  "tokio",
