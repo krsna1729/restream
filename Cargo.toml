@@ -94,7 +94,7 @@ libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1.12"
-sysinfo = "0.39"
+sysinfo = "0.40"
 libc = "0.2"
 # Safe system-call wrappers (owned/borrowed fds, typed flags). The few calls it
 # does not model (TCP_INFO, kTLS crypto setup, getrusage, mallopt) stay on libc.
