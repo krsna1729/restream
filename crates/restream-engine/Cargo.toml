@@ -71,7 +71,7 @@ moq-msf = "=0.5.1"
 # WebTransport framing for browser sessions; all pinned to moq-net's versions.
 web-transport-trait = "=0.4.0"
 kio = "=0.6.2"
-web-transport-proto = "=0.6.2"
+web-transport-proto = "=0.6.3"
 shiguredo_mp4 = "2026.5.0"
 # srt-rs: pinned by commit (its history is in that repository). SRT ingress
 # and egress both run on `srt_transport::compio::Owner`; ingress attaches each
