@@ -12,8 +12,6 @@ use super::*;
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "'de: 'a"))]
 pub(crate) struct MixedDslManifest<'a> {
-    #[allow(dead_code)]
-    pub(crate) version: u32,
     pub(crate) mixed: MixedDslMatrix<'a>,
 }
 
