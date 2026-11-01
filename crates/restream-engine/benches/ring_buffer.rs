@@ -4,7 +4,7 @@ use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_sync::{Reader, RingBuffer};
 use std::hint::black_box;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 fn make_packet(payload_bytes: usize) -> MediaPacket {
@@ -20,16 +20,20 @@ fn make_packet(payload_bytes: usize) -> MediaPacket {
 }
 
 /// Push with 500 live readers — measures contention cost of `notify_waiters`.
+/// The readers also stop when the bench is done: a run that filters this
+/// bench out pushes nothing, and they would otherwise spin forever.
 fn benchmark_ring_buffer_concurrency(c: &mut Criterion) {
     let buffer = Arc::new(RingBuffer::new(4096));
+    let done = Arc::new(AtomicBool::new(false));
 
     let mut consumers = Vec::new();
     for _ in 0..500 {
         let buf_clone = buffer.clone();
+        let done = done.clone();
         let handle = thread::spawn(move || {
             let mut reader = Reader::new("bench_ring_buffer".to_string(), buf_clone);
             let mut count = 0;
-            while count < 100 {
+            while count < 100 && !done.load(Ordering::Relaxed) {
                 if let Ok(Some(_pkt)) = reader.pull() {
                     count += 1;
                 } else {
@@ -46,6 +50,7 @@ fn benchmark_ring_buffer_concurrency(c: &mut Criterion) {
         })
     });
 
+    done.store(true, Ordering::Relaxed);
     for handle in consumers {
         let _ = handle.join();
     }
