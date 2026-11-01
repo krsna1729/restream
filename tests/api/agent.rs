@@ -688,7 +688,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     assert_eq!(approved.status(), StatusCode::OK);
     let approved_body = body_json(approved).await;
     assert_eq!(approved_body["status"], "approved");
-    assert_eq!(approved_body["approval"]["approvedBy"], "dashboard-session");
+    assert_eq!(approved_body["approval"]["approvedBy"], "admin");
     verify_before_apply(app.clone()).await;
 
     let applied = app

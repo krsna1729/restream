@@ -2,7 +2,8 @@
 //! that orchestration code depends on.
 
 use crate::application::notify::{Delivery, NotifyChannel, PushSubscription};
-use crate::application::team::{AuditEntry, Role, UserRecord};
+use crate::application::team::{AuditEntry, UserRecord};
+use restream_domain::domain::role::Role;
 use restream_domain::models::{Ingest, Job, Pipeline};
 use std::fmt;
 use std::future::Future;

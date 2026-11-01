@@ -172,15 +172,28 @@ record.
   stay applied and the operation is `failed`.
 - Supported change kinds at apply: `addOutput`, `updateOutput`,
   `removeOutput`, `startOutput`, `stopOutput`.
-- Approval is a confirmation by the one dashboard session, not separation of
-  duties. `approval.approvedBy` is always `dashboard-session`; the request's
-  `approvedBy` is stored as `claimedBy`, an unverified audit label.
+- Each change has a minimum approver role (`actions[i].requiredRole`):
+  `removeOutput` needs `admin`, because a removed destination's URL and
+  stream key are gone; every other kind needs `operator`. `POST
+  /api/v1/agent/operations/{id}/actions/{index}/approve` (`{"reason"?}`)
+  approves one change as the session's member at its effective role (a
+  session viewing as a lower role approves as that role). The operation
+  becomes `approved` with its last change. `POST …/approve` approves every
+  change at once and needs the most demanding change's role.
+- A role below a change's minimum answers `403` with `requiredRole` and
+  `effectiveRole`, changes nothing, and is recorded in the team audit log
+  like any refused change. Each change keeps its own approval
+  (`actions[i].approval`: `approvedBy`, `role`, `reason`, `approvedAt`).
+- `approval.approvedBy` is the member that completed the approval; the
+  request's `approvedBy` is stored as `claimedBy`, an unverified audit
+  label.
 - `actor` and `agentId` are `dashboard-admin`; `toolIdentity` is
   `agent-execution-api`.
 - Every operation view, execution result, and verification result passes
   through `redact_secrets`.
-- Each step appends an `auditLog` event: `created`, `invalid`, `approved`,
-  `applyStarted`, `applyCompleted`, `applyFailed`, `verified`.
+- Each step appends an `auditLog` event: `created`, `invalid`,
+  `actionApproved`, `approved`, `applyStarted`, `applyCompleted`,
+  `applyFailed`, `verified`.
 
 ### Idempotency
 

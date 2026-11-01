@@ -15,10 +15,11 @@ use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::agent::{
-    agent_capabilities_handler, agent_context_handler, agent_graph_diff_preview_handler,
-    agent_investigation_handler, agent_operation_apply_handler, agent_operation_approve_handler,
-    agent_operation_create_handler, agent_operation_get_handler, agent_operation_verify_handler,
-    agent_plan_handler, agent_plan_validate_handler, agent_verify_handler,
+    agent_action_approve_handler, agent_capabilities_handler, agent_context_handler,
+    agent_graph_diff_preview_handler, agent_investigation_handler, agent_operation_apply_handler,
+    agent_operation_approve_handler, agent_operation_create_handler, agent_operation_get_handler,
+    agent_operation_verify_handler, agent_plan_handler, agent_plan_validate_handler,
+    agent_verify_handler,
 };
 use super::alerts::aggregate_alerts_handler;
 use super::auth::{
@@ -193,6 +194,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/agent/operations",
     "/api/v1/agent/operations/{operation_id}",
     "/api/v1/agent/operations/{operation_id}/approve",
+    "/api/v1/agent/operations/{operation_id}/actions/{index}/approve",
     "/api/v1/agent/operations/{operation_id}/apply",
     "/api/v1/agent/operations/{operation_id}/verify",
     "/api/v1/agent/verify",
@@ -531,6 +533,10 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/agent/operations/{operation_id}/approve",
             post(agent_operation_approve_handler),
+        )
+        .route(
+            "/api/v1/agent/operations/{operation_id}/actions/{index}/approve",
+            post(agent_action_approve_handler),
         )
         .route(
             "/api/v1/agent/operations/{operation_id}/apply",

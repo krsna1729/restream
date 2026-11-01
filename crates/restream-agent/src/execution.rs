@@ -6,6 +6,8 @@
 //! and redacted public views; API handlers still perform the actual runtime
 //! mutations through core APIs.
 
+mod approvals;
+
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -13,11 +15,12 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::plane::PlanResponse;
+pub use approvals::{ActionApproval, Approver, change_role};
 use restream_agent_contract::{ApprovalRequest, OperationCreateRequest, PlanRequest};
+use restream_domain::domain::role::Role;
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
 const AUTHENTICATED_DASHBOARD_ACTOR: &str = "dashboard-admin";
-const AUTHENTICATED_DASHBOARD_APPROVER: &str = "dashboard-session";
 const AGENT_EXECUTION_TOOL_IDENTITY: &str = "agent-execution-api";
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +40,8 @@ pub struct OperationRecord {
     pub plan_hash: String,
     pub idempotency_hash: Option<String>,
     pub approval: Option<ApprovalState>,
+    /// One slot per proposed change, in order: its approval once given.
+    pub action_approvals: Vec<Option<ActionApproval>>,
     pub approval_required: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -83,7 +88,8 @@ pub enum OperationStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalState {
-    /// The authenticated principal that approved (the dashboard session).
+    /// The member that completed the approval (the last change's approver,
+    /// or whoever approved the whole operation at once).
     pub approved_by: String,
     /// Who the request says approved. Unverified: one session can create,
     /// approve and apply, so this is a label for the audit log only.
@@ -101,6 +107,13 @@ pub enum OperationStoreError {
     AlreadyApplying,
     AlreadyTerminal,
     NotApplied,
+    /// The approver's role is below what the change (or, approving the
+    /// whole operation, its most demanding change) needs.
+    RoleTooLow {
+        needed: Role,
+    },
+    /// The operation has no change at that index.
+    NoSuchAction,
 }
 
 impl OperationStatus {
@@ -200,6 +213,7 @@ impl AgentExecutionStore {
             plan_hash,
             idempotency_hash,
             approval: None,
+            action_approvals: vec![None; request.proposed_changes.len()],
             approval_required: true,
             created_at: created_at.clone(),
             updated_at: created_at,
@@ -236,9 +250,12 @@ impl AgentExecutionStore {
             .cloned()
     }
 
+    /// Approve every change at once, as `approver`: refused when the
+    /// approver's role is below the most demanding change's.
     pub fn approve(
         &self,
         operation_id: &str,
+        approver: &Approver,
         approval: ApprovalRequest,
     ) -> Result<OperationRecord, OperationStoreError> {
         let mut state = lock_or_recover(&self.state);
@@ -246,32 +263,90 @@ impl AgentExecutionStore {
             .records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
-        match record.status {
-            OperationStatus::Invalid => return Err(OperationStoreError::Invalid),
-            OperationStatus::AwaitingApproval => {}
-            OperationStatus::Applying => return Err(OperationStoreError::AlreadyApplying),
-            OperationStatus::Applied
-            | OperationStatus::Verified
-            | OperationStatus::VerificationFailed
-            | OperationStatus::Failed => return Err(OperationStoreError::AlreadyTerminal),
-            OperationStatus::Approved => {}
+        require_approvable(record.status)?;
+        let needed = record
+            .request
+            .proposed_changes
+            .iter()
+            .map(|change| change_role(&change.kind))
+            .max()
+            .unwrap_or(Role::Operator);
+        if approver.role < needed {
+            return Err(OperationStoreError::RoleTooLow { needed });
         }
 
         let approved_at = now();
-        record.status = OperationStatus::Approved;
-        record.approval = Some(ApprovalState {
-            approved_by: AUTHENTICATED_DASHBOARD_APPROVER.to_string(),
-            claimed_by: approval.approved_by,
-            reason: approval.reason,
+        for slot in record
+            .action_approvals
+            .iter_mut()
+            .filter(|slot| slot.is_none())
+        {
+            *slot = Some(ActionApproval {
+                approved_by: approver.username.clone(),
+                role: approver.role,
+                reason: approval.reason.clone(),
+                approved_at: approved_at.clone(),
+            });
+        }
+        complete_approval(
+            record,
+            approver,
+            approval.approved_by,
+            approval.reason,
+            approved_at,
+        );
+        Ok(record.clone())
+    }
+
+    /// Approve the change at `index`, as `approver`: refused when the
+    /// approver's role is below the change's ([`change_role`]). The
+    /// operation is approved when its last unapproved change is.
+    pub fn approve_action(
+        &self,
+        operation_id: &str,
+        index: usize,
+        approver: &Approver,
+        reason: Option<String>,
+    ) -> Result<OperationRecord, OperationStoreError> {
+        let mut state = lock_or_recover(&self.state);
+        let record = state
+            .records
+            .get_mut(operation_id)
+            .ok_or(OperationStoreError::NotFound)?;
+        require_approvable(record.status)?;
+        let kind = record
+            .request
+            .proposed_changes
+            .get(index)
+            .ok_or(OperationStoreError::NoSuchAction)?
+            .kind
+            .clone();
+        let needed = change_role(&kind);
+        if approver.role < needed {
+            return Err(OperationStoreError::RoleTooLow { needed });
+        }
+
+        let approved_at = now();
+        let approval = ActionApproval {
+            approved_by: approver.username.clone(),
+            role: approver.role,
+            reason: reason.clone(),
             approved_at: approved_at.clone(),
-        });
-        record.updated_at = approved_at.clone();
+        };
         record.audit_log.push(audit_event(
-            "approved",
+            "actionApproved",
             &approved_at,
-            "operation approved for application",
-            serde_json::json!({"approval": record.approval}),
+            "change approved",
+            serde_json::json!({"index": index, "kind": kind, "approval": approval}),
         ));
+        record.action_approvals[index] = Some(approval);
+        record.updated_at = approved_at.clone();
+        if record.status == OperationStatus::AwaitingApproval
+            && record.action_approvals.iter().all(Option::is_some)
+        {
+            let claimed_by = approver.username.clone();
+            complete_approval(record, approver, claimed_by, reason, approved_at);
+        }
         Ok(record.clone())
     }
 
@@ -437,6 +512,43 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     restream_sync::lock::lock(mutex)
 }
 
+/// An operation can be approved (again) until it starts applying.
+fn require_approvable(status: OperationStatus) -> Result<(), OperationStoreError> {
+    match status {
+        OperationStatus::AwaitingApproval | OperationStatus::Approved => Ok(()),
+        OperationStatus::Invalid => Err(OperationStoreError::Invalid),
+        OperationStatus::Applying => Err(OperationStoreError::AlreadyApplying),
+        OperationStatus::Applied
+        | OperationStatus::Verified
+        | OperationStatus::VerificationFailed
+        | OperationStatus::Failed => Err(OperationStoreError::AlreadyTerminal),
+    }
+}
+
+/// Every change is approved: the operation may be applied.
+fn complete_approval(
+    record: &mut OperationRecord,
+    approver: &Approver,
+    claimed_by: String,
+    reason: Option<String>,
+    approved_at: String,
+) {
+    record.status = OperationStatus::Approved;
+    record.approval = Some(ApprovalState {
+        approved_by: approver.username.clone(),
+        claimed_by,
+        reason,
+        approved_at: approved_at.clone(),
+    });
+    record.updated_at = approved_at.clone();
+    record.audit_log.push(audit_event(
+        "approved",
+        &approved_at,
+        "operation approved for application",
+        serde_json::json!({"approval": record.approval}),
+    ));
+}
+
 pub fn public_record(record: &OperationRecord) -> Value {
     crate::plane::redact_secrets(serde_json::json!({
         "operationId": record.operation_id,
@@ -444,6 +556,19 @@ pub fn public_record(record: &OperationRecord) -> Value {
         "status": record.status,
         "approvalRequired": record.approval_required,
         "approval": record.approval,
+        "actions": record
+            .request
+            .proposed_changes
+            .iter()
+            .zip(&record.action_approvals)
+            .enumerate()
+            .map(|(index, (change, approval))| serde_json::json!({
+                "index": index,
+                "kind": change.kind,
+                "requiredRole": change_role(&change.kind),
+                "approval": approval,
+            }))
+            .collect::<Vec<_>>(),
         "createdAt": record.created_at,
         "updatedAt": record.updated_at,
         "actor": record.actor,
@@ -543,7 +668,7 @@ mod tests {
     use crate::plane::{GraphPreview, ImpactPreview, ValidationResult};
     use restream_agent_contract::ProposedChange;
 
-    fn test_request(idempotency_key: Option<String>) -> OperationCreateRequest {
+    pub(super) fn test_request(idempotency_key: Option<String>) -> OperationCreateRequest {
         OperationCreateRequest {
             intent: "add output".to_string(),
             pipeline_id: Some("pipe".to_string()),
@@ -566,7 +691,7 @@ mod tests {
         }
     }
 
-    fn test_plan() -> PlanResponse {
+    pub(super) fn test_plan() -> PlanResponse {
         PlanResponse {
             generated_at: "2026-01-01T00:00:00Z".to_string(),
             plan_id: "plan-test".to_string(),
@@ -617,6 +742,7 @@ mod tests {
             request,
             plan: test_plan(),
             approval: None,
+            action_approvals: vec![None],
             approval_required: true,
             created_at: created_at.to_string(),
             updated_at: created_at.to_string(),
@@ -798,9 +924,14 @@ mod tests {
         assert_eq!(record.agent_id, AUTHENTICATED_DASHBOARD_ACTOR);
         assert_eq!(record.tool_identity, AGENT_EXECUTION_TOOL_IDENTITY);
 
+        let approver = Approver {
+            username: "ops-alice".to_string(),
+            role: Role::Operator,
+        };
         let approved = store
             .approve(
                 operation_id,
+                &approver,
                 ApprovalRequest {
                     approved_by: "spoofed-approver".to_string(),
                     reason: Some("approved from test".to_string()),
@@ -809,7 +940,7 @@ mod tests {
             .expect("approval succeeds");
 
         let approval = approved.approval.unwrap();
-        assert_eq!(approval.approved_by, AUTHENTICATED_DASHBOARD_APPROVER);
+        assert_eq!(approval.approved_by, "ops-alice");
         assert_eq!(approval.claimed_by, "spoofed-approver");
     }
 

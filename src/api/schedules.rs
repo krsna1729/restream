@@ -17,7 +17,8 @@ use tracing::{info, warn};
 use super::error::ApiError;
 use super::state::{AppState, require_authenticated, to_hex};
 use crate::application::schedules::{self, Due, Schedule, ScheduleAction, ScheduleDraft};
-use crate::application::team::{AuditEntry, Role};
+use crate::application::team::AuditEntry;
+use restream_domain::domain::role::Role;
 
 /// How often the scheduler looks for due events: well inside the grace.
 pub const SCHEDULER_TICK: std::time::Duration = std::time::Duration::from_secs(5);

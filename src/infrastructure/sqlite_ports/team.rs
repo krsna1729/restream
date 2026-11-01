@@ -20,7 +20,7 @@ fn team_error(err: sqlx::Error) -> TeamStoreError {
 
 fn stored_user(row: crate::db::team_repo::UserRow) -> Result<StoredUser, TeamStoreError> {
     let (id, username, role, created_at_ms, disabled, password_hash) = row;
-    let role = crate::application::team::Role::parse(&role)
+    let role = restream_domain::domain::role::Role::parse(&role)
         .ok_or_else(|| TeamStoreError::new(format!("member {id} has unknown role {role:?}")))?;
     Ok(StoredUser {
         user: crate::application::team::UserRecord {
@@ -103,7 +103,7 @@ impl TeamStore for SqliteTeamStore {
     fn update_user<'a>(
         &'a self,
         id: &'a str,
-        role: Option<crate::application::team::Role>,
+        role: Option<restream_domain::domain::role::Role>,
         disabled: Option<bool>,
         password_hash: Option<&'a str>,
     ) -> TeamFuture<'a, bool> {
@@ -167,7 +167,7 @@ impl TeamStore for SqliteTeamStore {
                 // An unknown stored view narrows to nothing rather than failing the session.
                 view_as: view_as
                     .as_deref()
-                    .and_then(crate::application::team::Role::parse),
+                    .and_then(restream_domain::domain::role::Role::parse),
             }))
         })
     }
@@ -207,8 +207,8 @@ impl TeamStore for SqliteTeamStore {
                         id,
                         at_ms,
                         username,
-                        role: crate::application::team::Role::parse(&role)
-                            .unwrap_or(crate::application::team::Role::Viewer),
+                        role: restream_domain::domain::role::Role::parse(&role)
+                            .unwrap_or(restream_domain::domain::role::Role::Viewer),
                         method,
                         path,
                         status: u16::try_from(status).unwrap_or(0),

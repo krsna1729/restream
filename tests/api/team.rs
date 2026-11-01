@@ -241,3 +241,140 @@ async fn every_change_is_audited_with_who_and_how_it_ended() {
         "reads are not audited; refusals are"
     );
 }
+
+/// Each change of an agent operation is approved by a member whose role
+/// reaches the change's; a lower role is refused and audited, and the
+/// operation is approved with its last change.
+#[cfg(feature = "agent-execution")]
+#[tokio::test]
+async fn an_operation_change_is_approved_only_from_its_role_up() {
+    let (app, admin) = authenticated_app().await;
+    let (_, pipe) = call(
+        &app,
+        "POST",
+        "/api/v1/pipelines",
+        &admin,
+        Some(r#"{"name":"p"}"#),
+    )
+    .await;
+    let pid = pipe["pipeline"]["id"].as_str().unwrap().to_string();
+    let mut outputs = Vec::new();
+    for name in ["keep", "drop"] {
+        let body = serde_json::json!({
+            "name": name,
+            "url": format!("rtmp://127.0.0.1:9/live/{name}"),
+            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}}
+        });
+        let path = format!("/api/v1/pipelines/{pid}/outputs");
+        let (status, output) = call(&app, "POST", &path, &admin, Some(&body.to_string())).await;
+        assert_eq!(status, StatusCode::CREATED, "{output}");
+        outputs.push(output["output"]["id"].as_str().unwrap().to_string());
+    }
+    add_member(&app, &admin, "ops", "operator").await;
+    let operator = member_login(&app, "ops", "correct-horse-1").await.unwrap();
+
+    let request = serde_json::json!({
+        "intent": "stop one destination, remove another",
+        "pipelineId": pid,
+        "proposedChanges": [
+            {"kind": "stopOutput", "pipelineId": pid, "outputId": outputs[0]},
+            {"kind": "removeOutput", "pipelineId": pid, "outputId": outputs[1]}
+        ]
+    });
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/v1/agent/operations",
+        &operator,
+        Some(&request.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["status"], "awaitingApproval", "{created}");
+    assert_eq!(created["actions"][0]["requiredRole"], "operator");
+    assert_eq!(created["actions"][1]["requiredRole"], "admin");
+    let id = created["operationId"].as_str().unwrap();
+    let action = |index: usize| format!("/api/v1/agent/operations/{id}/actions/{index}/approve");
+    let whole = format!("/api/v1/agent/operations/{id}/approve");
+
+    let (status, refused) = call(&app, "POST", &action(1), &operator, Some("{}")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(
+        (
+            refused["requiredRole"].as_str(),
+            refused["effectiveRole"].as_str()
+        ),
+        (Some("admin"), Some("operator"))
+    );
+    let claimed = r#"{"approvedBy":"ops"}"#;
+    assert_eq!(
+        call(&app, "POST", &whole, &operator, Some(claimed)).await.0,
+        StatusCode::FORBIDDEN,
+        "approving everything at once needs the most demanding change's role"
+    );
+
+    let (status, first) = call(&app, "POST", &action(0), &operator, Some("{}")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["status"], "awaitingApproval");
+    assert_eq!(first["actions"][0]["approval"]["approvedBy"], "ops");
+
+    // Viewing as an operator approves as one, even for an admin.
+    let view = |role: &'static str| format!(r#"{{"role":{role}}}"#);
+    call(
+        &app,
+        "POST",
+        "/api/v1/auth/view-as",
+        &admin,
+        Some(&view(r#""operator""#)),
+    )
+    .await;
+    assert_eq!(
+        call(&app, "POST", &action(1), &admin, Some("{}")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    call(
+        &app,
+        "POST",
+        "/api/v1/auth/view-as",
+        &admin,
+        Some(&view("null")),
+    )
+    .await;
+
+    let (status, last) = call(
+        &app,
+        "POST",
+        &action(1),
+        &admin,
+        Some(r#"{"reason":"retired"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{last}");
+    assert_eq!(last["status"], "approved");
+    assert_eq!(last["approval"]["approvedBy"], "admin");
+    assert_eq!(last["actions"][1]["approval"]["role"], "admin");
+
+    let (_, audit) = call(&app, "GET", "/api/v1/audit?limit=20", &admin, None).await;
+    let refusals: Vec<_> = audit["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["status"] == 403)
+        .map(|e| {
+            format!(
+                "{} {}",
+                e["username"].as_str().unwrap(),
+                e["path"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        refusals,
+        [
+            format!("admin {}", action(1)),
+            format!("ops {whole}"),
+            format!("ops {}", action(1))
+        ],
+        "each refused approval is audited, newest first"
+    );
+}
