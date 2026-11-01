@@ -11,7 +11,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-100 agent protocol: live panels](#q-100-agent-opus-agent-protocol-live-panels)
+
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
@@ -66,13 +66,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-100 [agent] [opus] Agent protocol: live panels
-- Goal: the MCP server (`crates/restream-mcp/`) returns small live panels
-  (pipeline health, a plan diff with an Approve button) beside its tool
-  results. Elicited approval and progress are done.
-- Gates: panel payloads are contract-tested; the Approve button reaches the
-  same approval path as `approve_agent_operation`.
 
 ### Q-101 [agent] [opus] Explain an incident and approve its fix in one place
 - Goal: "Explain this incident" reads the incident's flight-recorder window,

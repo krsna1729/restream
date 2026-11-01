@@ -11,8 +11,10 @@ mod stdio;
 mod streamable_http;
 
 use crate::handlers::AgentToolHandler;
+use crate::panels;
 use crate::tools::available_tool_catalog;
-use restream_agent_contract::{AgentBackend, AgentError};
+use restream_agent_contract::panels::UI_EXTENSION;
+use restream_agent_contract::{AgentBackend, AgentError, tool_panel};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -116,14 +118,34 @@ fn classify(message: Value, session: Option<&Session>, handshake: Handshake) -> 
     };
     match method {
         "ping" => Inbound::Reply(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
-        "tools/list" | "tools/call" => {
+        "tools/list" | "tools/call" | "resources/list" | "resources/read" => {
             if handshake == Handshake::Required
                 && let Some(refusal) = handshake_refusal(&id, session)
             {
                 return Inbound::Reply(refusal);
             }
-            if method == "tools/list" {
-                return Inbound::Reply(tools_list_response(id));
+            match method {
+                "tools/list" => {
+                    let panels = session.is_some_and(Session::renders_panels);
+                    return Inbound::Reply(tools_list_response(id, panels));
+                }
+                "resources/list" => return Inbound::Reply(result_response(id, panels::list())),
+                "resources/read" => {
+                    let uri = params
+                        .get("uri")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return Inbound::Reply(match panels::read(uri) {
+                        Some(contents) => result_response(id, contents),
+                        None => error_response(
+                            id,
+                            -32002,
+                            "Resource not found".into(),
+                            Some(json!({ "uri": uri })),
+                        ),
+                    });
+                }
+                _ => {}
             }
             let Some(name) = params.get("name").and_then(Value::as_str) else {
                 return Inbound::Reply(error_response(
@@ -185,6 +207,10 @@ fn initialize_response(id: Value) -> Value {
             "capabilities": {
                 "tools": {
                     "listChanged": false
+                },
+                "resources": {},
+                "extensions": {
+                    UI_EXTENSION: {}
                 }
             },
             "serverInfo": {
@@ -194,6 +220,10 @@ fn initialize_response(id: Value) -> Value {
             "instructions": "Use plan/approve/apply/verify workflows for mutations. Execution tools are only available when compiled in."
         }
     })
+}
+
+fn result_response(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
 fn error_response(id: Value, code: i64, message: String, data: Option<Value>) -> Value {
@@ -233,21 +263,24 @@ fn tool_result(result: Value, is_error: bool) -> Value {
     })
 }
 
-fn tools_list_response(id: Value) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": {
-            "tools": available_tool_catalog()
-                .into_iter()
-                .map(|tool| json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.input_schema,
-                }))
-                .collect::<Vec<_>>()
-        }
-    })
+/// The tool list; for a client that renders panels, each tool with one names
+/// it in `_meta.ui.resourceUri`.
+fn tools_list_response(id: Value, panels: bool) -> Value {
+    let tools = available_tool_catalog()
+        .into_iter()
+        .map(|tool| {
+            let mut listed = json!({
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.input_schema,
+            });
+            if panels && let Some(panel) = tool_panel(tool.name) {
+                listed["_meta"] = json!({ "ui": { "resourceUri": panel.uri } });
+            }
+            listed
+        })
+        .collect::<Vec<_>>();
+    result_response(id, json!({ "tools": tools }))
 }
 
 fn tool_call_response(id: Value, result: Result<Value, AgentError>) -> Value {

@@ -335,6 +335,27 @@ session (`202 Accepted`). `DELETE /mcp` ends a session; an unknown session
 gets `404`. The sidecar keeps at most 256 sessions, evicting the oldest. A
 request without a session or SSE is answered statelessly as JSON.
 
+### Live panels
+
+For a host that advertises the MCP Apps extension
+(`capabilities.extensions["io.modelcontextprotocol/ui"].mimeTypes` with
+`text/html;profile=mcp-app`), tools with a panel name it in
+`_meta.ui.resourceUri`, and `resources/list` and `resources/read` serve the
+panels as self-contained HTML:
+
+| Panel | Tools | Shows |
+|---|---|---|
+| `ui://restream/operation-plan` | `create_agent_operation`, `get_agent_operation` | Intent, status, proposed changes, impact, validation, warnings; Approve while awaiting approval |
+| `ui://restream/pipeline-health` | `get_agent_context` | Output convergence counts, per-pipeline input and recording state, open alerts; refreshes every 10 s |
+
+Approve calls `approve_agent_operation` through the host (`tools/call`), the
+same approval path as the tool; the host may ask the user first. Refresh
+calls `get_agent_context`. Each panel's fields are declared once in
+`crates/restream-agent-contract/src/panels.rs`: the renderer
+(`crates/restream-mcp/src/panels/`) shows exactly those, and
+`tests/api/agent_panels.rs` checks the product's real results carry every
+one. Hosts without the extension see no panel metadata.
+
 ### Tool contract
 
 The catalog in `crates/restream-mcp/src/tools.rs` has eleven tools:

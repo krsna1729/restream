@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>restream panel</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: var(--color-text-primary, CanvasText);
+    --muted: var(--color-text-secondary, GrayText);
+    --line: var(--color-border-primary, color-mix(in srgb, CanvasText 18%, transparent));
+    --accent: var(--color-background-info, #2563eb);
+    font: 13px/1.45 var(--font-sans, system-ui, sans-serif);
+    color: var(--fg);
+  }
+  body { margin: 0; padding: 12px; background: transparent; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0 0 10px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  h2 { font-size: 12px; color: var(--muted); margin: 10px 0 4px; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .none { color: var(--muted); }
+  .bar { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); color: white; border-color: transparent; }
+  button:disabled { opacity: .5; cursor: default; }
+  .error { color: var(--color-text-danger, #dc2626); }
+</style>
+</head>
+<body>
+<main id="panel"><p class="none">Waiting for the tool result…</p></main>
+<script>
+"use strict";
+const PANEL = /*PANEL_SPEC*/null;
+const REFRESH_EVERY_MS = 10000;
+let nextId = 1;
+const pending = new Map();
+let refreshTimer = null;
+
+function send(message) {
+  window.parent.postMessage(message, "*");
+}
+
+function request(method, params) {
+  const id = nextId++;
+  send({ jsonrpc: "2.0", id, method, params });
+  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  if (!message || message.jsonrpc !== "2.0") return;
+  if (message.method === undefined && pending.has(message.id)) {
+    const waiter = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) waiter.reject(new Error(message.error.message || "request failed"));
+    else waiter.resolve(message.result);
+    return;
+  }
+  if (message.method === "ui/notifications/tool-result") {
+    render(message.params);
+  } else if ((message.method === "ping" || message.method === "ui/resource-teardown") && message.id !== undefined) {
+    if (message.method === "ui/resource-teardown" && refreshTimer) clearInterval(refreshTimer);
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
+  }
+});
+
+/** The value at an RFC 6901 JSON pointer, or undefined. */
+function at(value, pointer) {
+  if (pointer === "") return value;
+  for (const raw of pointer.slice(1).split("/")) {
+    const key = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (value === null || typeof value !== "object" || !(key in value)) return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+function element(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function scalar(value) {
+  if (value === null || value === undefined || value === "") return element("span", "—", "none");
+  return document.createTextNode(String(value));
+}
+
+function rows(field, items) {
+  if (!Array.isArray(items) || items.length === 0) return element("p", "None", "none");
+  const table = element("table");
+  const head = table.createTHead().insertRow();
+  for (const column of field.kind.columns) head.appendChild(element("th", column.label));
+  const body = table.createTBody();
+  for (const item of items) {
+    const row = body.insertRow();
+    for (const column of field.kind.columns) row.insertCell().appendChild(scalar(at(item, column.pointer)));
+  }
+  return table;
+}
+
+function render(result) {
+  const root = document.getElementById("panel");
+  root.replaceChildren(element("h1", PANEL.title));
+  const data = result && result.structuredContent;
+  if (!data || result.isError) {
+    const text = (result && result.content || []).map((block) => block.text || "").join("\n");
+    root.appendChild(element("p", text || "The tool returned no result.", "error"));
+    return report();
+  }
+  const facts = element("dl");
+  const sections = [];
+  for (const field of PANEL.fields) {
+    const value = at(data, field.pointer);
+    if (field.kind.type === "rows") {
+      const section = document.createDocumentFragment();
+      section.appendChild(element("h2", field.label));
+      section.appendChild(rows(field, value));
+      sections.push(section);
+    } else if (field.kind.type === "textList") {
+      facts.appendChild(element("dt", field.label));
+      const list = Array.isArray(value) && value.length ? value.join(", ") : "";
+      facts.appendChild(element("dd")).appendChild(scalar(list));
+    } else {
+      facts.appendChild(element("dt", field.label));
+      facts.appendChild(element("dd")).appendChild(scalar(value));
+    }
+  }
+  root.appendChild(facts);
+  for (const section of sections) root.appendChild(section);
+
+  const bar = element("div", undefined, "bar");
+  const status = element("span", "", "none");
+  const action = PANEL.action;
+  if (action && at(data, action.whenPointer) === action.whenEquals) {
+    const button = element("button", action.label, "primary");
+    button.addEventListener("click", () => {
+      const args = Object.fromEntries(action.fixed);
+      args[action.idArgument] = at(data, action.idPointer);
+      call(action.tool, args, button, status);
+    });
+    bar.appendChild(button);
+  }
+  if (PANEL.refresh) {
+    const button = element("button", "Refresh");
+    button.addEventListener("click", () => call(PANEL.refresh, {}, button, status));
+    bar.appendChild(button);
+    if (!refreshTimer) {
+      refreshTimer = setInterval(() => call(PANEL.refresh, {}, null, null), REFRESH_EVERY_MS);
+    }
+  }
+  bar.appendChild(status);
+  if (bar.childElementCount > 1) root.appendChild(bar);
+  report();
+}
+
+/** Call a tool through the host and render its result in place. */
+function call(name, args, button, status) {
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Working…";
+  request("tools/call", { name, arguments: args })
+    .then(render)
+    .catch((error) => {
+      if (button) button.disabled = false;
+      if (status) {
+        status.textContent = error.message;
+        status.className = "error";
+      }
+    });
+}
+
+function report() {
+  const box = document.documentElement.getBoundingClientRect();
+  send({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { width: Math.ceil(box.width), height: Math.ceil(box.height) } });
+}
+
+request("ui/initialize", {
+  protocolVersion: "2026-01-26",
+  appInfo: { name: "restream-" + PANEL.name, version: "1" },
+  appCapabilities: {},
+}).then(() => send({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }));
+</script>
+</body>
+</html>

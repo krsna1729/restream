@@ -10,6 +10,7 @@ pub mod handlers;
 #[cfg(feature = "mcp-http-backend")]
 pub mod http;
 pub(crate) mod inputs;
+pub(crate) mod panels;
 pub mod tools;
 pub mod transport;
 
