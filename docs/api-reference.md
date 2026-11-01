@@ -813,6 +813,7 @@ approval rules and verification gates are in
 | `GET` | `/api/v1/agent/capabilities` | Compiled-in tools and route catalog |
 | `GET` | `/api/v1/agent/context` | One redacted read-only state bundle |
 | `POST` | `/api/v1/agent/investigations` | Health, graph, telemetry, alerts and events for an investigation |
+| `GET` | `/api/v1/agent/incidents/explanation?alertId=…[&firstSeen=…]` | Why an incident happened and the plan for its fix |
 | `POST` | `/api/v1/agent/plans` | Draft plan from intent plus proposed changes |
 | `POST` | `/api/v1/agent/plans/validate` | Only the validation result of a draft plan |
 | `POST` | `/api/v1/agent/graph-diff-preview` | Graph and impact preview of a draft plan |
@@ -828,6 +829,17 @@ The read and planning routes mutate nothing. The capability catalog lists only
 agent routes; agents should read state through `context` and investigations,
 which redact it. Raw stream keys and output URLs never appear there: they
 become SHA-256 fingerprints plus scheme/host summaries.
+
+The incident explanation reads one alert (the open one with that id, else
+the latest resolved; `firstSeen` picks an episode) and the pipeline's flight
+record from 60 s before it was first seen to its end
+(`application::incident_explain`). It answers `{alert, explanation, plan}`:
+`explanation` names the broken `layer` (`ingest`, `feed`, `shard`,
+`destination`), a `summary`, measured `evidence`, the upstream layers
+`ruledOut` with why, a `recommendation`, and a `proposal` (a plan request)
+when a plant change fixes the cause; `plan` is that proposal judged like
+`POST /api/v1/agent/plans`. Nothing is created. An unknown alert is `404`
+`incidentNotFound`.
 
 Context includes:
 

@@ -12,10 +12,10 @@
 //! the output alerts and the agent/MCP context all read this one
 //! classification.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Where an output's media path is broken, upstream first.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum Layer {
@@ -25,7 +25,7 @@ pub enum Layer {
     Destination,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(
     tag = "code",
@@ -65,7 +65,7 @@ pub enum Cause {
     NoProgress,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnosis {

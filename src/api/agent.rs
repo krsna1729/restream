@@ -4,10 +4,12 @@
 mod approvals;
 #[cfg(feature = "agent-plane")]
 mod context;
+mod incidents;
 mod operations;
 mod queries;
 
 pub use approvals::{agent_action_approve_handler, agent_operation_approve_handler};
+pub use incidents::agent_incident_explanation_handler;
 pub use operations::{
     agent_operation_apply_handler, agent_operation_create_handler, agent_operation_get_handler,
     agent_operation_verify_handler, agent_verify_handler,

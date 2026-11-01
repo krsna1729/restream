@@ -1,0 +1,786 @@
+{
+  "alert": {
+    "cause": "The pipeline is configured but not receiving a stream.",
+    "evidence": [
+      {
+        "confidence": "measured",
+        "signal": "input.status = off"
+      }
+    ],
+    "firstSeen": "2026-11-01T09:03:01.322167884+00:00",
+    "generatedAt": "2026-11-01T09:03:21.323404225+00:00",
+    "id": "pipeline:pipeline_bd4b0cd579e41289:no_publisher",
+    "lastSeen": "2026-11-01T09:03:21.323542079+00:00",
+    "pipelineId": "pipeline_bd4b0cd579e41289",
+    "recommendedAction": "Start the publisher or check the stream key and connection.",
+    "scope": "pipeline",
+    "severity": "critical",
+    "title": "incident: No active publisher"
+  },
+  "incidentFromMs": 1793523781322,
+  "toMs": 1793523801783,
+  "samples": [
+    {
+      "atMs": 1793523750322,
+      "ingest": null,
+      "ring": null,
+      "outputs": {
+        "wanted": 0,
+        "delivering": 0,
+        "degraded": 0,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523752322,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": null,
+        "packetsPerSec": 114.34286066951766,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": null,
+        "maxGopSec": null,
+        "rttMs": null,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 168,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 0,
+        "delivering": 0,
+        "degraded": 0,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523754325,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 672435.3469795308,
+        "packetsPerSec": 112.90695261390853,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 392,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 0,
+        "delivering": 0,
+        "degraded": 0,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523756325,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 609076.0,
+        "packetsPerSec": 112.57583610662397,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 616,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 0,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523758322,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 734838.2573860792,
+        "packetsPerSec": 112.58756329389333,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 841,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 1,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523760322,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 691824.0,
+        "packetsPerSec": 112.46830996270789,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 1,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523762323,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 626994.5027486257,
+        "packetsPerSec": 111.94276681307012,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 1,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523764323,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 715336.0,
+        "packetsPerSec": 111.21126933969227,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 1,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523766323,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 618572.0,
+        "packetsPerSec": 110.66128767123654,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523768600,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 604518.225735617,
+        "packetsPerSec": 110.2110474745098,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523770323,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 706354.0336622171,
+        "packetsPerSec": 109.86008854349645,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523772327,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 658730.5389221557,
+        "packetsPerSec": 109.62009192689219,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523774324,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 588707.0605908863,
+        "packetsPerSec": 109.369027738637,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523776326,
+      "ingest": {
+        "inputId": "input_primary_pipeline_bd4b0cd579e41289",
+        "protocol": "rtmp",
+        "bitrateBps": 712027.972027972,
+        "packetsPerSec": 109.21149285981548,
+        "videoCodec": "h265",
+        "width": 3840,
+        "height": 2160,
+        "fps": null,
+        "gopSec": 2.0,
+        "maxGopSec": 2.0,
+        "rttMs": 4.065,
+        "lossPerSec": null,
+        "retransPerSec": null,
+        "receiveBuffer": null
+      },
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523778322,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 2,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523780335,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 3,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523782326,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 1,
+        "stalled": 0,
+        "retryAttempts": 3,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523784552,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523786355,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523788357,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523790357,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523792357,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523794357,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523796355,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523798399,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    },
+    {
+      "atMs": 1793523800387,
+      "ingest": null,
+      "ring": {
+        "fill": 1024,
+        "capacity": 1024,
+        "worstLagSlots": 0,
+        "overflows": 0
+      },
+      "outputs": {
+        "wanted": 1,
+        "delivering": 0,
+        "degraded": 1,
+        "retrying": 0,
+        "stalled": 0,
+        "retryAttempts": 0,
+        "offeredBps": 0.0,
+        "deliveredBps": 0.0,
+        "resyncs": 0,
+        "worstFeedLag": 0
+      }
+    }
+  ]
+}

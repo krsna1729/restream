@@ -280,6 +280,34 @@ left out. Fields:
 - `addedStages`: stages beyond the source that the change would start.
 - `retiredStages`: stages no wanted output would read after the change.
 
+### Incident explanation
+
+`GET /api/v1/agent/incidents/explanation?alertId=…` explains one alert from
+the pipeline's flight record, 60 s before it was first seen to its end
+(`src/application/incident_explain.rs`). It is deterministic and walks the
+layers upstream first, like `restream_health::diagnosis`, over the
+incident's samples:
+
+1. Ingest: the publisher absent or silent, or losing at least 2% of
+   packets, in at least half of the incident's samples.
+2. Feed: a stage more than 2 s behind the source or its input blocked at
+   least half the interval in at least half of the samples, or source-ring
+   readers falling off during the incident.
+3. Otherwise the alert's own engine diagnosis (shard or destination),
+   with what the pipeline's outputs did in the window as evidence.
+
+Healthy upstream layers are reported in `ruledOut` with the measured
+reason. The proposal is an ordinary plan request; the operator turns it
+into an operation and approves each change by role:
+
+|Cause|Proposal|
+|---|---|
+|Shard panicked, stalled or stopped|Restart the output (`stopOutput`, `startOutput`)|
+|Retries exhausted or nearly spent|Restart the output|
+|Backpressured, no progress|Restart the output|
+|Destination rejected|`stopOutput`, then fix its URL or key|
+|Ingest or feed fault, capacity refused|None: a recommendation only|
+
 ## Shared Rust implementation
 
 The `restream-mcp` sidecar uses the shared `AgentBackend` trait
