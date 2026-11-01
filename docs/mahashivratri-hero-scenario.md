@@ -170,7 +170,7 @@ buffers.
 | `MSR_PEER` | `mediamtx` | `mediamtx` or `sink` |
 | `PEER_COUNT` | `1` | Peer instances; output `ordinal % PEER_COUNT` picks one. Each instance offsets its ports by `index * 4` |
 | `PEER_SKIP_START` | unset | `mediamtx` only: peers are already running; the harness checks them |
-| `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` | `sink` only: `SO_RCVBUF`/`SO_SNDBUF` per SRT socket; `0` keeps host defaults |
+| `HARNESS_SRT_SINK_UDP_BUFFER` | `67108864` | `sink` only: `SO_RCVBUF`/`SO_SNDBUF` per SRT socket, granted up to 2 × `net.core.rmem_max`; `0` keeps host defaults |
 | `HARNESS_SRT_SINK_PORTS_PER_PEER` | `2` (clamped to 1–4) | `sink` only: SRT ports per peer instance, one production SRT Owner each; SRT outputs of an instance take its ports in turn by ordinal |
 | `MSR_SINK_SAMPLE_SECS` | `3` | MediaMTX path-health window before the resource window |
 | `MSR_SINK_POST_SAMPLE_SECS` | `2` | MediaMTX path-health window after it |

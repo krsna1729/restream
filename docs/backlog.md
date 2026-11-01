@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-027 SRT×100 harness sink drops](#q-027-performance-opus-the-harness-srt-sink-drops-datagrams-at-srt100)
 - [Q-034 overload policy](#q-034-resilience-opus-define-one-overload-policy-for-shared-service-centers)
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
@@ -32,21 +31,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-027 [performance] [opus] The harness SRT sink drops datagrams at SRT×100
-- Goal: SRT capacity rungs measure Restream, not the receiver.
-- Evidence: with one sink Owner per port and outputs spread by name (#459),
-  outputs land evenly and no sink Owner faults, but an idle-host
-  `CAPACITY_PROTOCOLS=srt CAPACITY_SRT_OUTPUTS=100 CAPACITY_REPEATS=7
-  CAPACITY_PEER_COUNT=2` run (Restream on CPUs 0-3, harness on 4-5) passed
-  6 of 7. In the failing repeat the sink's kernel sockets dropped 221,320
-  datagrams over its 4 ports and one destination fell to 0.908; Restream
-  delivered. Host jitter on Restream's CPUs was 6.24% (worst 172 ms) with
-  nothing else scheduled.
-- Next: raise the sink's receive capacity on 2 CPUs (receive buffer,
-  batched receive, ports per peer) until it reports no kernel drops at
-  SRT×100.
-- Gates: the run above passes 7 of 7 with zero sink kernel drops.
 
 ### Q-034 [resilience] [opus] Define one overload policy for shared service centers
 - Goal: when a shared Owner or shard saturates, viable destinations keep

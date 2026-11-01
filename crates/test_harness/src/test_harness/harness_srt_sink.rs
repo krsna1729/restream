@@ -47,6 +47,12 @@ const SHUTDOWN_DRAIN: Duration = Duration::from_secs(2);
 const DEFAULT_SINK_PORTS_PER_PEER: usize = 2;
 /// A peer instance's sink ports stay inside its `PEER_PORT_STRIDE` band.
 const MAX_SINK_PORTS_PER_PEER: usize = PEER_PORT_STRIDE as usize;
+/// `HARNESS_SRT_SINK_UDP_BUFFER` default, bytes per socket. Each sink
+/// socket aggregates a quarter of an SRT×100 rung (about 39k datagrams/s),
+/// and the outputs share one source, so their bursts coincide. 8 MiB (16 MiB
+/// granted, about 7,300 datagrams of 2,304 B truesize) dropped in 2 of 3
+/// clean repeats; this request takes the kernel cap, 2 × `rmem_max`.
+pub(crate) const DEFAULT_UDP_BUFFER: usize = 64 * 1024 * 1024;
 
 /// SRT sink ports (one Owner each) per peer instance,
 /// `HARNESS_SRT_SINK_PORTS_PER_PEER`.
