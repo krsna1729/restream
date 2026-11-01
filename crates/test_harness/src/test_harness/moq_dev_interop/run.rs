@@ -13,6 +13,52 @@ const INGEST_STREAM_KEY: &str = "sk-moq-dev-ingest";
 /// The broadcast Restream's egress announces on the relay.
 const EGRESS_BROADCAST: &str = "live/egress.hang";
 
+/// Who publishes into Restream's MoQ ingest.
+#[derive(Clone, Copy, Debug)]
+enum IngestPublisher {
+    /// `moq import ts` straight into Restream's listener: moq-lite-06 + hang.
+    LiteCli,
+    /// `moq import ts` on the draft to the ingest relay: an MSF catalog over
+    /// hang's legacy container (moq-cli 0.14.7 has no LOC import).
+    IetfCli(IetfDraft),
+    /// GStreamer `moqsink` (`container=loc`) to the ingest relay: MSF/LOC.
+    Gstreamer(IetfDraft),
+}
+
+impl IngestPublisher {
+    /// The prefix of this publisher's check ids and artifacts.
+    fn id(self) -> &'static str {
+        match self {
+            Self::LiteCli => "ingest",
+            Self::IetfCli(_) => "ingestCli",
+            Self::Gstreamer(_) => "ingestGst",
+        }
+    }
+
+    fn stream_key(self) -> &'static str {
+        match self {
+            Self::LiteCli => INGEST_STREAM_KEY,
+            Self::IetfCli(_) => "sk-moq-dev-ingest-cli",
+            Self::Gstreamer(_) => "sk-moq-dev-ingest-gst",
+        }
+    }
+
+    fn broadcast(self) -> String {
+        match self {
+            Self::LiteCli => format!("live/{INGEST_STREAM_KEY}.hang"),
+            Self::IetfCli(_) | Self::Gstreamer(_) => format!("live/{}.msf", self.stream_key()),
+        }
+    }
+
+    fn catalog(self) -> CatalogProfile {
+        match self {
+            Self::LiteCli => CatalogProfile::Hang,
+            Self::IetfCli(_) => CatalogProfile::MsfLegacy,
+            Self::Gstreamer(_) => CatalogProfile::MsfLoc,
+        }
+    }
+}
+
 /// Media the egress read must span (the contract's ≥ 20 s window); the
 /// export runs longer because it starts at the next group.
 const EGRESS_MIN_SPAN_SECS: f64 = 20.0;
@@ -244,7 +290,16 @@ impl Session {
             }
             Err(error) => Err(error),
         };
-        let ingest = self.ingest_phase().await;
+        // Each IETF publisher runs even if the other fails, so both leave
+        // their evidence.
+        let ingest = match self.options.ietf {
+            None => self.ingest_phase(IngestPublisher::LiteCli).await,
+            Some(draft) => {
+                let cli = self.ingest_phase(IngestPublisher::IetfCli(draft)).await;
+                let gst = self.ingest_phase(IngestPublisher::Gstreamer(draft)).await;
+                cli.and(gst)
+            }
+        };
         egress.and(ingest)
     }
 
@@ -299,7 +354,7 @@ impl Session {
             .wait_broadcast(
                 EGRESS_BROADCAST,
                 RELAY_PUBLISH_TIMEOUT,
-                self.options.ietf.is_some(),
+                self.options.egress_catalog(),
             )
             .await;
         let served = catalog.is_ok();
@@ -505,7 +560,7 @@ impl Session {
                     .wait_broadcast(
                         EGRESS_BROADCAST,
                         RECONNECT_BUDGET,
-                        self.options.ietf.is_some(),
+                        self.options.egress_catalog(),
                     )
                     .await
             }
@@ -574,12 +629,37 @@ impl Session {
         Ok(())
     }
 
-    /// Publisher → Restream ingest → RTMP read-back. IETF uses a dedicated
-    /// real relay forwarding LOC from a separate source pipeline.
-    async fn ingest_phase(&mut self) -> Result<(), String> {
+    /// Publisher → Restream ingest → RTMP read-back. The IETF publishers go
+    /// through a dedicated real relay whose cluster dial, offering only the
+    /// draft, forwards into Restream. Everything the phase starts is stopped
+    /// when it ends, so the next publisher starts clean: its read-back
+    /// output first (a retrying output would otherwise take the next phase's
+    /// one-connection RTMP listener), then its processes.
+    async fn ingest_phase(&mut self, publisher: IngestPublisher) -> Result<(), String> {
+        let first_child = self.children.len();
+        let first_output = self.outputs.len();
+        let result = self.ingest_from(publisher).await;
+        for (pipeline, output) in &self.outputs[first_output..] {
+            let _ = self
+                .api
+                .post_null(&format!(
+                    "/api/v1/pipelines/{pipeline}/outputs/{output}/stop"
+                ))
+                .await;
+        }
+        for child in self.children.iter_mut().skip(first_child) {
+            // An exited child cannot be killed again; that is not an error here.
+            let _ = child.kill().await;
+        }
+        result
+    }
+
+    async fn ingest_from(&mut self, publisher: IngestPublisher) -> Result<(), String> {
+        let id = publisher.id();
         let pipeline =
-            create_resource_pipeline(&self.api, "moq-dev-ingest", INGEST_STREAM_KEY).await?;
-        let readback = self.work_dir.join("ingest-readback.ts");
+            create_resource_pipeline(&self.api, &format!("moq-dev-{id}"), publisher.stream_key())
+                .await?;
+        let readback = self.work_dir.join(format!("{id}-readback.ts"));
         let listener = spawn_rtmp_readback(
             &self.ffmpeg,
             self.ports.readback_rtmp,
@@ -596,30 +676,30 @@ impl Session {
         self.add_output(&pipeline, "rtmp-readback", &return_url)
             .await?;
 
-        let broadcast = if self.options.ietf.is_some() {
-            format!("live/{INGEST_STREAM_KEY}.msf")
-        } else {
-            format!("live/{INGEST_STREAM_KEY}.hang")
-        };
-        if let Some(draft) = self.options.ietf {
-            self.start_ietf_ingest_source(&broadcast, draft).await?;
-        } else {
-            let url = self.listener_url();
-            let target = CliTarget {
-                url: &url,
-                ca: &self.tls.ca_pem,
-                broadcast: &broadcast,
-                version: LITE_VERSION,
-            };
-            let publisher = spawn_ts_import(
-                &self.ffmpeg,
-                &self.moq,
-                &self.fixture,
-                &target,
-                &self.work_dir,
-                "ingest-publisher",
-            )?;
-            self.children.extend(publisher);
+        let broadcast = publisher.broadcast();
+        match publisher {
+            IngestPublisher::LiteCli => {
+                let url = self.listener_url();
+                let target = CliTarget {
+                    url: &url,
+                    ca: &self.tls.ca_pem,
+                    broadcast: &broadcast,
+                    version: LITE_VERSION,
+                };
+                let feed = spawn_ts_import(
+                    &self.ffmpeg,
+                    &self.moq,
+                    &self.fixture,
+                    &target,
+                    &self.work_dir,
+                    id,
+                )?;
+                self.children.extend(feed);
+            }
+            IngestPublisher::IetfCli(draft) | IngestPublisher::Gstreamer(draft) => {
+                self.start_relayed_publisher(publisher, draft, &broadcast)
+                    .await?;
+            }
         }
 
         let live = async {
@@ -639,7 +719,7 @@ impl Session {
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
         self.checks.record(
-            "ingestMoqSession",
+            &format!("{id}MoqSession"),
             live.is_ok() && protocol == Some("moq") && video == Some("h264") && audio_tracks > 0,
             json!({
                 "error": live.as_ref().err(),
@@ -651,27 +731,10 @@ impl Session {
             }),
         );
         if live.is_err() {
-            return Err("the MoQ ingest never went live".to_string());
+            return Err(format!("the MoQ ingest from {publisher:?} never went live"));
         }
-        if let Some(draft) = self.options.ietf {
-            let log = std::fs::read_to_string(self.ingest_relay.log_path()).unwrap_or_default();
-            let (ok, sessions) = sessions_on_version(&relay_sessions(&log), 1, draft.version());
-            self.checks.record(
-                "ingestRelayVersion",
-                ok,
-                json!({"expectedAlpn": draft.alpn(), "sessions": sessions}),
-            );
-            // The relay offers exactly one version on its outbound cluster
-            // dial; media admitted by Restream proves that dial completed.
-            self.report.insert(
-                "ingestRelayForward".to_string(),
-                json!({
-                    "url": format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
-                    "version": draft.version(),
-                    "broadcast": broadcast,
-                    "log": self.ingest_relay.log_path(),
-                }),
-            );
+        if let IngestPublisher::IetfCli(draft) | IngestPublisher::Gstreamer(draft) = publisher {
+            self.record_relay_versions(publisher, draft);
         }
 
         // The listener exits once it has written SHORT_CAPTURE_SECS of media.
@@ -689,50 +752,108 @@ impl Session {
             Ok(_) => self.probe_capture(&readback, SHORT_CAPTURE_SECS).await,
             Err(error) => Err(error),
         };
-        self.checks
-            .record_sample("ingestReadBack", probe, self.input_fps, SHORT_MIN_SPAN_SECS);
+        self.checks.record_sample(
+            &format!("{id}ReadBack"),
+            probe,
+            self.input_fps,
+            SHORT_MIN_SPAN_SECS,
+        );
         Ok(())
     }
 
-    async fn start_ietf_ingest_source(
+    /// Start the ingest relay forwarding to this publisher's stream key (its
+    /// cluster dial names one key, so each publisher gets a fresh relay
+    /// life), then the publisher, and wait for the relay to serve the
+    /// broadcast with the publisher's catalog.
+    async fn start_relayed_publisher(
         &mut self,
-        broadcast: &str,
+        publisher: IngestPublisher,
         draft: IetfDraft,
+        broadcast: &str,
     ) -> Result<(), String> {
+        let id = publisher.id();
+        self.ingest_relay.kill().await;
         self.ingest_relay.forward_to(
-            format!("{}{INGEST_STREAM_KEY}", self.listener_url()),
+            format!("{}{}", self.listener_url(), publisher.stream_key()),
             &self.tls.ca_pem,
             draft.version(),
         );
         self.ingest_relay.start().await?;
-        let key = "sk-moq-ietf-source";
-        let source = create_resource_pipeline(&self.api, "moq-ietf-source", key).await?;
-        let output = format!(
-            "moqt://127.0.0.1:{}/?broadcast={broadcast}&version={}&ca=ca.pem",
-            self.ports.ingest_relay,
-            draft.alpn(),
-        );
-        self.add_output(&source, "ietf-ingest-source", &output)
-            .await?;
-        let publish_url = format!("rtmp://127.0.0.1:{}/live/{key}", self.restream_rtmp);
-        self.spawn_ffmpeg(
-            "ietf-ingest-source",
-            &crate::hls_push_duty::run::rtmp_publisher_args(&self.fixture, &publish_url),
-        )?;
+        let relay = format!("https://127.0.0.1:{}/", self.ports.ingest_relay);
+        let feed = if let IngestPublisher::Gstreamer(_) = publisher {
+            spawn_gst_publish(
+                &self.ffmpeg,
+                &self.fixture,
+                &relay,
+                broadcast,
+                &self.work_dir,
+                id,
+            )?
+        } else {
+            let target = CliTarget {
+                url: &relay,
+                ca: &self.tls.ca_pem,
+                broadcast,
+                version: draft.version(),
+            };
+            spawn_ts_import(
+                &self.ffmpeg,
+                &self.moq,
+                &self.fixture,
+                &target,
+                &self.work_dir,
+                id,
+            )?
+        };
+        self.children.extend(feed);
         let catalog = self
             .ingest_relay
-            .wait_broadcast(broadcast, RELAY_PUBLISH_TIMEOUT, true)
+            .wait_broadcast(broadcast, RELAY_PUBLISH_TIMEOUT, publisher.catalog())
             .await;
         let served = catalog.is_ok();
         self.checks.record(
-            "ingestRelayMsfLocCatalog",
+            &format!("{id}RelayCatalog"),
             served,
             catalog.unwrap_or_else(|error| json!({"error": error})),
         );
         if !served {
-            return Err("the ingest relay never served the MSF/LOC source".to_string());
+            return Err(format!(
+                "the ingest relay never served {broadcast} from {publisher:?}"
+            ));
         }
         Ok(())
+    }
+
+    /// The relay's dial into Restream must connect on the draft; so must the
+    /// CLI's own session to the relay. moqsink cannot pin a version (the
+    /// relay picks), so its session is reported, not checked.
+    fn record_relay_versions(&mut self, publisher: IngestPublisher, draft: IetfDraft) {
+        let id = publisher.id();
+        let log = std::fs::read_to_string(self.ingest_relay.log_path()).unwrap_or_default();
+        let life = self.ingest_relay.life();
+        let dials = outbound_dial_versions(&log, life);
+        self.checks.record(
+            &format!("{id}ForwardVersion"),
+            !dials.is_empty() && dials.iter().all(|version| version == draft.version()),
+            json!({
+                "expected": draft.version(),
+                "dials": dials,
+                "url": format!("{}{}", self.listener_url(), publisher.stream_key()),
+                "log": self.ingest_relay.log_path(),
+            }),
+        );
+        let (on_draft, sessions) =
+            sessions_on_version(&relay_sessions(&log), life, draft.version());
+        if let IngestPublisher::Gstreamer(_) = publisher {
+            self.report
+                .insert(format!("{id}PublisherSessions"), json!(sessions));
+        } else {
+            self.checks.record(
+                &format!("{id}PublisherVersion"),
+                on_draft,
+                json!({"expected": draft.version(), "sessions": sessions}),
+            );
+        }
     }
 
     /// `moq export ts` from `url`/`broadcast` for `secs`, then the FFprobe

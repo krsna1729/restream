@@ -443,9 +443,13 @@ spinning windows. A probe startup, clock or join failure invalidates the run.
 `moq-dev-interop` proves moq-lite-06 with hang by default, and MOQT with
 MSF/LOC on one IETF draft under `--ietf 16`, `--ietf 18` or `--ietf 19`
 (CI runs all three), using `moq-net` 0.3.15 and the
-tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7.
+tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7 and
+the GStreamer plugin `moq-gst` 0.4.16 (`moqsink`, released the same morning).
 `cargo xtask fetch moq-dev` downloads them, checks the SHA256 and
-installs `.local/bin/moq-0.14.7` and `.local/bin/moq-relay-0.17.7`. The mode
+installs `.local/bin/moq-0.14.7`, `.local/bin/moq-relay-0.17.7` and
+`.local/lib/moq-gst-0.4.16/libgstmoq.so`. `--ietf` also needs GStreamer
+itself (`gstreamer1.0-tools`, `gstreamer1.0-plugins-base`, `-good`, `-bad`
+for `fdsrc`, `tsdemux`, `h264parse` and `aacparse`). The mode
 refuses another `--version`. `MOQ_DEV_INTEROP_MOQ_BIN` and
 `MOQ_DEV_INTEROP_RELAY_BIN` override the paths, not the versions.
 
@@ -480,7 +484,8 @@ the same LOC media.
 | Browsers (`--browsers`) | Playwright Chromium and Firefox play origin and relay with `@moq/watch` | `browser-<chromium\|firefox>-<origin\|relay>`, `browser-<…>-origin-no-token` |
 | Isolation | moq-relay SIGKILLed, restarted 3 s later | `isolationMoqReconnected` (≤ 60 s), `isolationRelayVersion`, `isolationSiblingUninterrupted`, `isolationReadBackAfterReconnect` |
 | Ingest | `ffmpeg … -f mpegts - \| moq … import ts` into Restream → RTMP output to an FFmpeg server | `ingestMoqSession`, `ingestReadBack` |
-| IETF ingest (`--ietf <draft>`) | RTMP-fed source pipeline → MSF/LOC output on the draft → dedicated moq-relay → `--cluster-connect` offering only that draft into Restream ingest → RTMP read-back | `ingestRelayMsfLocCatalog`, `ingestRelayVersion`, `ingestMoqSession`, `ingestReadBack` (≥ 8 s). No CLI export/re-import media bridge; port override `MOQ_DEV_INTEROP_INGEST_RELAY` |
+| IETF ingest, CLI (`--ietf <draft>`) | `ffmpeg … \| moq … import ts` offering only the draft → dedicated moq-relay → `--cluster-connect` offering only that draft into Restream ingest → RTMP read-back. moq-cli 0.14.7 publishes an MSF catalog over hang's legacy container: it has no LOC import | `ingestCliRelayCatalog` (MSF, legacy packaging), `ingestCliPublisherVersion`, `ingestCliForwardVersion` (the relay's dial), `ingestCliMoqSession`, `ingestCliReadBack` (≥ 8 s) |
+| IETF ingest, GStreamer (`--ietf <draft>`) | the same `ffmpeg` TS → `gst-launch-1.0 fdsrc ! tsdemux … moqsink` with `container=loc` on both pads → the relay, restarted forwarding to this pipeline's key → Restream → RTMP read-back. moqsink takes no CA and cannot pin a version, so it trusts the loopback relay unverified and its session (the relay's choice, moq-lite-06) is reported as `ingestGstPublisherSessions` | `ingestGstRelayCatalog` (MSF/LOC), `ingestGstForwardVersion`, `ingestGstMoqSession`, `ingestGstReadBack` (≥ 8 s). Port override `MOQ_DEV_INTEROP_INGEST_RELAY` |
 
 The browser specs live in their own package, `test/e2e/moq/` (`@moq/watch`
 0.6.3, `@playwright/test` 1.63.0, Vite 8.3.2, `*.moq.ts`), so the frontend

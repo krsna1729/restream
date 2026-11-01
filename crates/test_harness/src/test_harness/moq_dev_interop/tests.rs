@@ -140,7 +140,7 @@ fn ietf_catalog_requires_loc_and_both_decoder_configurations() {
              "channelConfig": "2", "initData": "EZA="}
         ]
     });
-    assert!(profile_catalog_failures(&catalog, true).is_empty());
+    assert!(profile_catalog_failures(&catalog, CatalogProfile::MsfLoc).is_empty());
     for (field, value) in [
         ("packaging", json!("legacy")),
         ("initData", json!("not base64")),
@@ -150,14 +150,54 @@ fn ietf_catalog_requires_loc_and_both_decoder_configurations() {
         let mut invalid = catalog.clone();
         invalid["tracks"][1][field] = value;
         assert!(
-            !profile_catalog_failures(&invalid, true).is_empty(),
+            !profile_catalog_failures(&invalid, CatalogProfile::MsfLoc).is_empty(),
             "{field}"
         );
     }
     let mut no_video = catalog.clone();
     no_video["tracks"][0]["role"] = json!("audio");
-    assert!(!profile_catalog_failures(&no_video, true).is_empty());
-    assert!(!profile_catalog_failures(&moq_cli_catalog(), true).is_empty());
+    assert!(!profile_catalog_failures(&no_video, CatalogProfile::MsfLoc).is_empty());
+    assert!(!profile_catalog_failures(&moq_cli_catalog(), CatalogProfile::MsfLoc).is_empty());
+}
+
+#[test]
+fn the_cli_msf_catalog_is_legacy_packaged_and_only_that_profile_accepts_it() {
+    // What `moq import ts` (0.14.7) served on moqt-19: MSF draft-01, hang's
+    // legacy container, AAC init data through `initRef`.
+    let catalog = json!({
+        "version": "draft-01",
+        "tracks": [
+            {"name": "0.avc3", "packaging": "legacy", "isLive": true, "role": "video",
+             "codec": "avc3.640028", "width": 1920, "height": 1080},
+            {"name": "1.aac", "packaging": "legacy", "isLive": true, "role": "audio",
+             "codec": "mp4a.40.2", "samplerate": 48000, "channelConfig": "2",
+             "initRef": "init0"}
+        ],
+        "initDataList": [{"id": "init0", "type": "inline", "data": "EZA="}]
+    });
+    assert!(profile_catalog_failures(&catalog, CatalogProfile::MsfLegacy).is_empty());
+    assert!(!profile_catalog_failures(&catalog, CatalogProfile::MsfLoc).is_empty());
+    let mut loc = catalog.clone();
+    for track in loc["tracks"].as_array_mut().unwrap() {
+        track["packaging"] = json!("loc");
+    }
+    assert!(profile_catalog_failures(&loc, CatalogProfile::MsfLoc).is_empty());
+    assert!(!profile_catalog_failures(&loc, CatalogProfile::MsfLegacy).is_empty());
+}
+
+#[test]
+fn outbound_dials_are_read_per_relay_life_and_accepted_sessions_are_not_dials() {
+    let log = format!(
+        "{RELAY_START_MARKER}1\n\
+         INFO remote{{remote=https://127.0.0.1:31702/sk-cli}}:conn{{id=0}}: moq_relay::cluster: dialing cluster peer url=https://127.0.0.1:31702/sk-cli\n\
+         INFO moq_tokio::client: connected version=moq-transport-16\n\
+         INFO conn{{id=1 remote=127.0.0.1:58203}}: moq_relay::connection: negotiated version=moq-lite-06 transport=quic\n\
+         {RELAY_START_MARKER}2\n\
+         INFO moq_tokio::client: connected version=moq-transport-18\n"
+    );
+    assert_eq!(outbound_dial_versions(&log, 1), ["moq-transport-16"]);
+    assert_eq!(outbound_dial_versions(&log, 2), ["moq-transport-18"]);
+    assert!(outbound_dial_versions(&log, 3).is_empty());
 }
 
 #[test]

@@ -152,14 +152,38 @@ pub(crate) fn catalog_failures(catalog: &Value) -> Vec<String> {
     failures
 }
 
+/// The catalog a broadcast must carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CatalogProfile {
+    /// A hang catalog (`catalog.json`).
+    Hang,
+    /// An MSF catalog whose media tracks are LOC.
+    MsfLoc,
+    /// An MSF catalog whose media tracks are hang's legacy container, as the
+    /// pinned `moq import` publishes it (it has no LOC import).
+    MsfLegacy,
+}
+
+impl CatalogProfile {
+    /// The relay track that carries it.
+    pub(crate) fn track(self) -> &'static str {
+        match self {
+            Self::Hang => CATALOG_TRACK,
+            Self::MsfLoc | Self::MsfLegacy => "catalog",
+        }
+    }
+}
+
 /// Parse the real relay response with upstream MSF types. Media tracks must
-/// advertise LOC and usable H.264/AAC decoder configuration.
-pub(crate) fn profile_catalog_failures(catalog: &Value, ietf: bool) -> Vec<String> {
+/// advertise the profile's packaging and usable H.264/AAC decoder configuration.
+pub(crate) fn profile_catalog_failures(catalog: &Value, profile: CatalogProfile) -> Vec<String> {
     use base64::Engine as _;
 
-    if !ietf {
-        return catalog_failures(catalog);
-    }
+    let packaging = match profile {
+        CatalogProfile::Hang => return catalog_failures(catalog),
+        CatalogProfile::MsfLoc => moq_msf::Packaging::Loc,
+        CatalogProfile::MsfLegacy => moq_msf::Packaging::Legacy,
+    };
     let msf = match serde_json::from_value::<moq_msf::Catalog>(catalog.clone()) {
         Ok(msf) => msf,
         Err(error) => return vec![format!("invalid MSF catalog: {error}")],
@@ -174,8 +198,8 @@ pub(crate) fn profile_catalog_failures(catalog: &Value, ietf: bool) -> Vec<Strin
         if !is_video && !is_audio {
             continue;
         }
-        if track.packaging != moq_msf::Packaging::Loc {
-            failures.push(format!("{}: expected LOC packaging", track.name));
+        if track.packaging != packaging {
+            failures.push(format!("{}: expected {packaging:?} packaging", track.name));
         }
         let init_ok = track.init_data.as_deref().is_some_and(|init| {
             base64::engine::general_purpose::STANDARD
@@ -212,6 +236,31 @@ pub(crate) fn profile_catalog_failures(catalog: &Value, ietf: bool) -> Vec<Strin
         failures.push("no MSF AAC audio track".to_string());
     }
     failures
+}
+
+/// The version each outbound dial of relay life `life` connected on, in log
+/// order. Only the relay's own dials (its cluster connection) log as a
+/// client; sessions it accepts log `negotiated version=`.
+pub(crate) fn outbound_dial_versions(log: &str, life: u32) -> Vec<String> {
+    let mut current = 0;
+    let mut versions = Vec::new();
+    for line in log.lines() {
+        let line = strip_ansi(line);
+        if let Some(start) = line.strip_prefix(RELAY_START_MARKER) {
+            current = start.trim().parse().unwrap_or(current + 1);
+            continue;
+        }
+        if current != life {
+            continue;
+        }
+        if let Some(version) = line
+            .split_once("moq_tokio::client: connected version=")
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+        {
+            versions.push(version.to_string());
+        }
+    }
+    versions
 }
 
 fn is_hex_bytes(value: &str) -> bool {
