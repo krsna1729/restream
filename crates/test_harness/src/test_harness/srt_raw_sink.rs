@@ -195,11 +195,12 @@ async fn run_sink(
                 &socket,
                 &mut recv_batch,
                 restream_engine::srt::srt_knobs::recv_budget(),
-                |addr, data| {
+                now,
+                |addr, data, arrival| {
                     let Some(peer) = addr else {
                         return;
                     };
-                    let _ = peers.admit(peer, data, now, &admission, 0, 1, &telemetry);
+                    let _ = peers.admit(peer, data, arrival, &admission, 0, 1, &telemetry);
                 },
             );
         }
@@ -264,12 +265,14 @@ fn drain_woken_listener(
     socket: &UdpSocket,
     recv_batch: &mut RecvBatch,
     budget: RecvBudget,
-    on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
+    now: Timestamp,
+    on_datagram: impl FnMut(Option<SocketAddr>, &[u8], Timestamp),
 ) -> std::io::Result<srt_transport::advanced::native_io::RecvDrainReport> {
     srt_transport::advanced::native_io::drain_recv_fd(
         socket.as_raw_fd(),
         recv_batch,
         budget,
+        now,
         on_datagram,
     )
 }
@@ -334,11 +337,14 @@ mod tests {
 
             let mut batch = RecvBatch::new();
             let mut got = Vec::new();
-            let report =
-                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
-                    got.push(data.to_vec())
-                })
-                .expect("drain after waiter");
+            let report = drain_woken_listener(
+                &sock,
+                &mut batch,
+                RecvBudget::default(),
+                Timestamp::default(),
+                |_, data, _| got.push(data.to_vec()),
+            )
+            .expect("drain after waiter");
             assert_eq!(report.datagrams, 1);
             assert_eq!(got, [b"ping".to_vec()]);
         });

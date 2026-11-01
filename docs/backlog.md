@@ -13,7 +13,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-047 MoQ egress: IETF MOQT profiles](#q-047-protocol-opus-moq-egress-ietf-moqt-profiles)
 - [Q-070 MoQ ingest: IETF MOQT profiles](#q-070-protocol-opus-moq-ingest-ietf-moqt-profiles)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-- [Q-096 GRO and arrival timestamps](#q-096-performance-sonnet-gro-and-arrival-timestamps-in-the-reference-srt-path)
 - [Q-100 agent protocol: approval mid-task and live panels](#q-100-agent-opus-agent-protocol-approval-mid-task-and-live-panels)
 - [Q-101 incident investigation and approval UX](#q-101-agent-opus-explain-an-incident-and-approve-its-fix-in-one-place)
 - [Q-102 fuzzy command palette](#q-102-frontend-sonnet-fuzzy-command-palette)
@@ -96,14 +95,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-096 [performance] [sonnet] GRO and arrival timestamps in the reference SRT path
-- Goal: the non-Compio reference SRT path (srt-rs) accepts GRO-coalesced
-  datagrams and stamps socket arrival time before queueing, so scheduler
-  backlog does not distort inter-arrival facts.
-- Gates: a unit test that a coalesced receive splits into logical datagrams
-  with identical arrival stamps; a bench of per-datagram cost with and without
-  GRO.
 
 ### Q-100 [agent] [opus] Agent protocol: approval mid-task and live panels
 - Goal: the MCP server (`crates/restream-mcp/`) asks for input or approval during a
