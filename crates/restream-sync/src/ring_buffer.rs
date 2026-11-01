@@ -65,6 +65,9 @@
 //! before the write index moves) reads as not retained. Publication never
 //! parses payloads: each producer records configurations it already has,
 //! right before the packet that carries them.
+//!
+//! Reads by sequence, and the once-per-run lap check of the egress feed,
+//! live in `sequence_reads`.
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;
@@ -137,6 +140,9 @@ pub struct PayloadStats {
 pub struct RingBuffer {
     pub(crate) slots: Vec<RingSlot>,
     write_idx: AlignedAtomicUsize,
+    /// One past the highest sequence a publication has begun to write;
+    /// never below `write_idx`. See "Lapped runs" in the module doc.
+    write_begin: AlignedAtomicUsize,
     last_keyframe_idx: AlignedAtomicUsize,
     /// Cumulative payload bytes published: the offered load for delivery
     /// telemetry. Single producer, so a relaxed load/store suffices.
@@ -194,6 +200,9 @@ impl RingBuffer {
         Self {
             slots,
             write_idx: AlignedAtomicUsize {
+                val: AtomicUsize::new(0),
+            },
+            write_begin: AlignedAtomicUsize {
                 val: AtomicUsize::new(0),
             },
             last_keyframe_idx: AlignedAtomicUsize {
@@ -265,6 +274,9 @@ impl RingBuffer {
     pub fn new_continuing(capacity: usize, start_write_idx: usize) -> Self {
         let ring = Self::new(capacity);
         ring.write_idx.val.store(start_write_idx, Ordering::Relaxed);
+        ring.write_begin
+            .val
+            .store(start_write_idx, Ordering::Relaxed);
         // The last_keyframe sentinel is irrelevant to new readers migrating from
         // the old ring; they will establish a new baseline from the first keyframe.
         ring
@@ -289,7 +301,9 @@ impl RingBuffer {
         let start_idx = old_write_idx.saturating_sub(tail_capacity);
         let mut copied = 0usize;
         let mut last_keyframe_idx = usize::MAX;
-
+        // These writes put each sequence's own packet in its slot (never a
+        // lap), but a reader's check must still see them begun.
+        self.begin_write(old_write_idx);
         for idx in start_idx..old_write_idx {
             let Some(packet) = old_ring.read_at(idx) else {
                 continue;
@@ -569,8 +583,8 @@ impl RingBuffer {
         let slot_idx = idx % self.capacity;
         let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
         let payload_bytes = packet.payload.len() as u64;
-
         let unit = self.next_frame_unit(&packet, idx);
+        self.begin_write(idx + 1);
         self.slots[slot_idx]
             .published_at_us
             .store(self.elapsed_us().max(1), Ordering::Release);
@@ -607,6 +621,7 @@ impl RingBuffer {
             payload_bytes += packet.payload.len() as u64;
 
             let unit = self.next_frame_unit(&packet, idx);
+            self.begin_write(idx + 1);
             self.slots[slot_idx]
                 .published_at_us
                 .store(self.elapsed_us().max(1), Ordering::Release);
@@ -674,23 +689,6 @@ impl RingBuffer {
             total += published;
         }
         total
-    }
-
-    /// The packet published at `sequence`, or `None` when its slot holds no
-    /// packet or another sequence's: one a later publication wrote over it,
-    /// even a batch that has not yet stored its write index. The caller
-    /// bounds `sequence` by the write index.
-    ///
-    /// Publication stores a slot's unit word, tagged with its sequence,
-    /// before the packet; reading the packet first and the word second
-    /// therefore sees a newer packet's word whenever it got the newer packet
-    /// (`tests/ring_frame_unit_loom.rs`).
-    #[inline]
-    pub fn read_at(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
-        let slot = &self.slots[sequence % self.capacity];
-        let packet = slot.data.load_full()?;
-        FrameUnit::unpack(slot.unit.load(Ordering::Acquire), sequence)?;
-        Some(packet)
     }
 
     /// When the packet at `sequence` was published, in microseconds since
@@ -983,6 +981,8 @@ fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
             .div_ceil(span_ms as u64),
     )
 }
+
+mod sequence_reads;
 
 #[cfg(test)]
 // These white-box tests deliberately poison and inspect the raw mutex.
