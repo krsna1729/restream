@@ -731,6 +731,11 @@ More modes qualify SRT egress and fabric admission:
   4224 per shard by default. A sink shard's 4,096-leaf table fills long
   before its CPU (one shard ran 4,096 at 8% busy), so the excess is refused
   for the full table.
+- `pipeline.admission` applies it to `pipeline://` recirculation outputs,
+  each into its own target pipeline's spare input, promoted once its output
+  is admitted. Since each output needs a pipeline, the run caps the leaf
+  table at `ADMISSION_LEAVES` (default 128) and adds 160: the excess is
+  refused for the full table.
 
 ## Why two test tiers
 

@@ -16,16 +16,16 @@
 //! — it just costs one extra tick of latency, the same tradeoff the
 //! poller-driven backends make against their own idle-poll cadence.
 
-use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
-use crate::egress::delivery::DeliveryTracker;
+use crate::egress::delivery::{DeliveryTracker, LeafServiceSweep};
 use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
-use crate::egress::metrics::{ServiceAccumulator, ShardMetrics, ShardService};
+use crate::egress::metrics::ShardMetrics;
 use crate::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -39,9 +39,6 @@ use super::sink::{SinkEngine, SinkTransport};
 /// cost on a shard serving many sink outputs, not to ration a scarce
 /// resource the way SRT/RTMP's connect or send budgets do.
 const MEDIA_TICK_VISIT_BUDGET: usize = 256;
-/// How often the shard rates its leaves' delivery, as the RTMP and SRT stall
-/// sweeps do.
-const SERVICE_SWEEP_EVERY: Duration = Duration::from_secs(1);
 
 struct SinkFabricLeaf {
     common: LeafCommon,
@@ -76,14 +73,9 @@ pub(crate) struct SinkShardBackend {
     leaves: LeafArena<SinkFabricLeaf>,
     output_leaves: HashMap<OutputId, LeafKey>,
     ready: ReadyQueue,
-    sweep: ServiceAccumulator,
-    /// Leaves in sweep order: each sweep rates the next `begin`'s budget of
-    /// them, so one tick's cost is bounded however many leaves there are.
-    sweep_order: VecDeque<LeafKey>,
-    /// The last completed rotation's summary, published in shard metrics:
-    /// what the fabric's sizer prices this shard's outputs from.
-    service: ShardService,
-    next_sweep: Option<Instant>,
+    /// Rates the leaves' delivery; its completed rotation is published in
+    /// shard metrics, what the fabric's sizer prices this shard's outputs from.
+    sweep: LeafServiceSweep,
 }
 
 impl SinkShardBackend {
@@ -94,10 +86,7 @@ impl SinkShardBackend {
             leaves: LeafArena::with_capacity(0),
             output_leaves: HashMap::new(),
             ready: ReadyQueue::new(),
-            sweep: ServiceAccumulator::default(),
-            sweep_order: VecDeque::new(),
-            service: ShardService::default(),
-            next_sweep: None,
+            sweep: LeafServiceSweep::default(),
         }
         .with_leaf_capacity(crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
     }
@@ -140,7 +129,7 @@ impl SinkShardBackend {
             return;
         };
         self.output_leaves.insert(output_id, key);
-        self.sweep_order.push_back(key);
+        self.sweep.track(key);
         self.enqueue(key);
     }
 
@@ -158,11 +147,7 @@ impl SinkShardBackend {
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
         self.ready.remove(key);
-        // As the RTMP and SRT sweeps: the key leaves the rotation, which
-        // restarts so it neither revisits a leaf nor rates a gone one.
-        self.sweep_order.retain(|queued| *queued != key);
-        self.sweep.invalidate();
-        self.service = ShardService::default();
+        self.sweep.forget(key);
         if let Some(mut leaf) = self.leaves.remove(key) {
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
         }
@@ -203,37 +188,19 @@ impl SinkShardBackend {
         }
     }
 
-    /// Once a second, rate the next leaves in sweep order over each one's
-    /// last closed delivery window: the payload bytes it consumed against the
-    /// bytes the feed published. A leaf a saturated shard leaves behind
-    /// resynchronizes past what it missed, so its ratio falls under the
-    /// delivery floor. At most `begin`'s budget of leaves per sweep, as the
-    /// RTMP and SRT stall sweeps; the summary changes when a rotation ends.
+    /// Rate leaves over each one's last closed delivery window: the payload
+    /// bytes it consumed against the bytes the feed published. A leaf a
+    /// saturated shard leaves behind resynchronizes past what it missed, so
+    /// its ratio falls under the delivery floor.
     fn sweep_service(&mut self, now: Instant) {
-        if self.next_sweep.is_some_and(|due| now < due) {
-            return;
-        }
-        self.next_sweep = Some(now + SERVICE_SWEEP_EVERY);
         let offered = self.feed.published_bytes();
-        let visits = self.sweep.begin(self.sweep_order.len());
-        for _ in 0..visits {
-            let Some(key) = self.sweep_order.pop_front() else {
-                break;
-            };
-            // Removal retains keys out of the rotation; a miss is defensive.
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                self.sweep.add(false, None);
-                continue;
-            };
-            let rates = leaf
-                .delivery
-                .sample(leaf.common.progress.total_bytes_sent, offered, now);
-            self.sweep.add(false, rates.ratio.zip(rates.offered_bps));
-            self.sweep_order.push_back(key);
-        }
-        if let Some(service) = self.sweep.finish(now) {
-            self.service = service;
-        }
+        let leaves = &mut self.leaves;
+        self.sweep.run(now, |key| {
+            leaves.get_mut(key).map(|leaf| {
+                leaf.delivery
+                    .sample(leaf.common.progress.total_bytes_sent, offered, now)
+            })
+        });
     }
 }
 
@@ -265,12 +232,12 @@ impl EgressShardBackend for SinkShardBackend {
     }
 
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        metrics.service = self.service;
+        metrics.service = self.sweep.service();
     }
 
     fn on_shutdown(&mut self) {
         self.ready.clear();
-        self.sweep_order.clear();
+        self.sweep.clear();
         for mut leaf in self.leaves.drain() {
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);

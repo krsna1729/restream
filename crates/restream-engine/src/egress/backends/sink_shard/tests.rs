@@ -292,5 +292,5 @@ fn the_sweep_rotation_holds_only_live_leaves_under_churn() {
         backend.on_command(EgressCommand::Remove(OutputId::new("transient")));
     }
     assert_eq!(backend.leaves.len(), 1);
-    assert_eq!(backend.sweep_order.len(), 1);
+    assert_eq!(backend.sweep.rotation_len(), 1);
 }

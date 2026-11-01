@@ -269,6 +269,7 @@ async fn run() -> Result<(), String> {
             "srt.backup-failover" => srt_backup_failover().await,
             "srt.admission" => admission(AdmissionFabric::Srt).await,
             "sink.admission" => admission(AdmissionFabric::Sink).await,
+            "pipeline.admission" => admission(AdmissionFabric::Pipeline).await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,

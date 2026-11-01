@@ -673,3 +673,89 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
 
     engine.release_pipeline_fabric_runtime(&feed_id).await;
 }
+
+/// A pipeline pool whose leaf tables are full refuses the next Add before
+/// dispatching it, and releases the target the application claimed for it:
+/// nothing keeps the target ring (or its input registration) alive.
+#[tokio::test]
+async fn a_pipeline_add_past_a_full_leaf_table_is_refused_and_releases_its_target() {
+    use crate::egress::backends::pipeline::PipelineTarget;
+    use crate::egress::command::ProtocolSpec;
+    use crate::egress::journal::RingFeed;
+    use crate::egress::sizing::Saturated;
+    use crate::engine::IngestRegistration;
+    use crate::input_gate::InputPacketGate;
+    use std::sync::atomic::AtomicI64;
+    use tokio_util::sync::CancellationToken;
+
+    let engine = MediaEngine::new_with_config(Arc::new(crate::config::EngineConfig {
+        egress_fabric: crate::config::EgressFabricConfig {
+            shards: 1,
+            max_leaves_per_shard: 1,
+            ..crate::config::EgressFabricConfig::default()
+        },
+        ..crate::config::EngineConfig::default()
+    }));
+    let feed_id = FeedId::new("feed-engine-pipeline-admission");
+    let ring = Arc::new(restream_sync::RingBuffer::new(8));
+    let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
+    engine
+        .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+    let claim = |id: &str| {
+        let mut spec = output_spec(id, &feed_id);
+        spec.protocol = ProtocolSpec::Pipeline {
+            target_pipeline_id: format!("target-{id}"),
+            target_input_id: "input".to_string(),
+        };
+        let target_ring = Arc::new(restream_sync::RingBuffer::new(8));
+        let target = PipelineTarget {
+            target_ring: target_ring.clone(),
+            input_registration: IngestRegistration {
+                cancel_token: CancellationToken::new(),
+                attempt_id: 1,
+                input_id: "input".to_string(),
+                gate: Arc::new(InputPacketGate::active()),
+                last_forwarded_dts: Arc::new(AtomicI64::new(i64::MIN)),
+                preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+            },
+        };
+        (spec, target, target_ring)
+    };
+    let (first, first_target, _first_ring) = claim("out-pipeline-0");
+    assert!(
+        engine
+            .set_pipeline_target(&feed_id, first.id.clone(), first_target)
+            .await
+    );
+    engine
+        .dispatch_pipeline_fabric_command(&feed_id, EgressCommand::Add(first))
+        .await
+        .unwrap();
+
+    let (second, second_target, second_ring) = claim("out-pipeline-1");
+    assert!(
+        engine
+            .set_pipeline_target(&feed_id, second.id.clone(), second_target)
+            .await
+    );
+    let refused = engine
+        .dispatch_pipeline_fabric_command(&feed_id, EgressCommand::Add(second))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.refused(),
+        Some(&Saturated::Full {
+            leaves: 1,
+            shards: 1
+        })
+    );
+    assert_eq!(
+        Arc::strong_count(&second_ring),
+        1,
+        "the refused output's target is released"
+    );
+
+    engine.release_pipeline_fabric_runtime(&feed_id).await;
+}

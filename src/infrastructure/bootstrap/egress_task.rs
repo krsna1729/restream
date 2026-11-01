@@ -873,12 +873,16 @@ impl EgressTask {
                 self.engine
                     .unregister_ingest_if_current(&fabric.target_pipeline_id, &input_registration)
                     .await;
+                let (phase, message) = match error.refused() {
+                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
+                    None => ("pipeline_fabric_dispatch", format!("{error:?}")),
+                };
                 self.engine
                     .record_egress_error_if_current(
                         &self.output_id,
                         &self.registration,
-                        "pipeline_fabric_dispatch",
-                        format!("{error:?}"),
+                        phase,
+                        message,
                     )
                     .await;
                 return;

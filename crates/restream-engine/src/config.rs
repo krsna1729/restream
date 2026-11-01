@@ -514,6 +514,8 @@ pub enum EgressShardProfile {
     SrtOutputCount,
     /// `sink://` discard outputs.
     SinkOutputCount,
+    /// `pipeline://` recirculation outputs.
+    PipelineOutputCount,
 }
 
 impl EgressShardProfile {
@@ -528,13 +530,17 @@ impl EgressShardProfile {
             // quarter of that, for slower hosts; the 4,096-leaf table still
             // binds first at 8 Mbit/s.
             Self::SinkOutputCount => 10_240,
+            // One shard ran 128 pipeline outputs of an 8 Mbit/s feed, each
+            // into its own active target input, at 2.7% busy (6-vCPU KVM
+            // EPYC): about 3,900 at 50% and 4.8 Mbit/s. A quarter of that.
+            Self::PipelineOutputCount => 1024,
         }
     }
 
     pub(crate) fn shard_override(self) -> Option<u32> {
         match self {
             Self::SrtOutputCount => srt_bench_shard_override(),
-            Self::OutputCount | Self::SinkOutputCount => None,
+            Self::OutputCount | Self::SinkOutputCount | Self::PipelineOutputCount => None,
         }
     }
 
