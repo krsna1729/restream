@@ -27,8 +27,21 @@ pub enum HlsPutFabricEnsureError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HlsPutFabricDispatchError {
-    MissingFeed { feed_id: FeedId },
+    MissingFeed {
+        feed_id: FeedId,
+    },
+    /// Admission refused the new output; nothing was dispatched.
+    Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+}
+
+impl HlsPutFabricDispatchError {
+    pub fn refused(&self) -> Option<&crate::egress::sizing::Saturated> {
+        match self {
+            Self::Saturated(saturated) => Some(saturated),
+            _ => None,
+        }
+    }
 }
 
 /// The fabric feed of a pipeline's HLS PUT outputs.
@@ -123,9 +136,21 @@ impl MediaEngine {
         };
         let is_add = matches!(command, EgressCommand::Add(_));
         // Size the pool before an Add so it lands on its final shard (see
-        // `dispatch_rtmp_fabric_command`).
-        if is_add && let Some(shared) = shared.clone() {
-            self.rescale_hls_put_fabric(feed_id, runtime, shared, ResizeReason::Add);
+        // `dispatch_rtmp_fabric_command`), then admit a new output.
+        if let EgressCommand::Add(spec) = &command
+            && let Some(shared) = shared.clone()
+        {
+            let reason = runtime.reason_for(&command);
+            self.rescale_hls_put_fabric(feed_id, runtime, shared, reason);
+            if matches!(reason, ResizeReason::Add) {
+                runtime
+                    .admit_add(
+                        crate::config::EgressShardProfile::HlsPutOutputCount,
+                        self.config.egress_fabric.shard_config(),
+                        &spec.id,
+                    )
+                    .map_err(HlsPutFabricDispatchError::Saturated)?;
+            }
         }
         let outcome = runtime
             .dispatch(command)
@@ -136,19 +161,20 @@ impl MediaEngine {
         Ok(outcome)
     }
 
-    /// HLS PUT pools rescale only around commands, so the reconciler calls
-    /// this to replace a panicked shard and release its outputs to retry
-    /// (see `EgressFabricRuntime::rescale`) on an otherwise quiet feed.
-    pub async fn recover_hls_put_fabrics(&self) {
+    /// The reconciler's periodic look: learn what this feed's HLS PUT
+    /// outputs cost from fresh segment-delivery windows (the price admission
+    /// refuses by), and replace a panicked shard, releasing its outputs to
+    /// retry (see `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
+    pub async fn resize_hls_put_fabrics(&self) {
         let mut registry = self.fabric.hls_put.lock().await;
         let crate::engine_registries::HlsPutFabricRegistry {
             runtimes, shared, ..
         } = &mut *registry;
         for (id, runtime) in runtimes {
-            if runtime.has_panicked_shard()
+            if (runtime.observation_due() || runtime.has_panicked_shard())
                 && let Some(shared) = shared.get(id)
             {
-                self.rescale_hls_put_fabric(id, runtime, shared.clone(), ResizeReason::Remove);
+                self.rescale_hls_put_fabric(id, runtime, shared.clone(), ResizeReason::Observe);
             }
         }
     }
@@ -165,7 +191,7 @@ impl MediaEngine {
         let max_events = config.tcp_poller_max_events;
         let leaf_capacity = shard_config.leaf_capacity().get();
         let result = runtime.rescale(
-            crate::config::EgressShardProfile::OutputCount,
+            crate::config::EgressShardProfile::HlsPutOutputCount,
             crate::host_capacity::HostCapacity::get(),
             reason,
             shard_config,

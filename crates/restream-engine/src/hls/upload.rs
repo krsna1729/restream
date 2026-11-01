@@ -257,7 +257,7 @@ pub async fn start_hls_put_upload(
                         if changed.is_err() {
                             store_open = false;
                         } else if let Some(snapshot) = published.borrow_and_update().clone() {
-                            policy.on_publish(&snapshot);
+                            policy.on_publish(&snapshot, std::time::Instant::now());
                         }
                     }
                     _ = backoff => {}

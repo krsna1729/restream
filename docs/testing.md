@@ -736,6 +736,10 @@ More modes qualify SRT egress and fabric admission:
   is admitted. Since each output needs a pipeline, the run caps the leaf
   table at `ADMISSION_LEAVES` (default 128) and adds 160: the excess is
   refused for the full table.
+- `hls-put.admission` applies it to HLS PUT outputs, each a `cid` on one
+  counting receiver. A shard's CPU ceiling would need about 7 Gbit/s of
+  loopback uploads, so the run caps the leaf table at `ADMISSION_LEAVES`
+  (default 256) and adds 320: the excess is refused for the full table.
 
 ## Why two test tiers
 

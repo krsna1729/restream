@@ -223,6 +223,14 @@
           },
           "purpose": "the srt.admission gate for pipeline:// recirculation outputs, each into its own target pipeline (default 160 per shard against a 128-leaf table, ADMISSION_LEAVES), so the excess must be refused for the full table"
         },
+        "hls-put.admission": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "the srt.admission gate for HLS PUT outputs to one counting receiver (default 320 per shard against a 256-leaf table, ADMISSION_LEAVES), so the excess must be refused for the full table"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

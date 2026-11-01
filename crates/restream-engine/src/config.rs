@@ -516,6 +516,8 @@ pub enum EgressShardProfile {
     SinkOutputCount,
     /// `pipeline://` recirculation outputs.
     PipelineOutputCount,
+    /// `http(s)://` HLS PUT outputs.
+    HlsPutOutputCount,
 }
 
 impl EgressShardProfile {
@@ -534,13 +536,22 @@ impl EgressShardProfile {
             // into its own active target input, at 2.7% busy (6-vCPU KVM
             // EPYC): about 3,900 at 50% and 4.8 Mbit/s. A quarter of that.
             Self::PipelineOutputCount => 1024,
+            // One shard ran 512 HLS PUT outputs of an 8 Mbit/s feed at 34%
+            // peak busy (6-vCPU KVM EPYC, uploads to a loopback receiver):
+            // about 1,240 at 50% and 4.8 Mbit/s. A quarter of that. The
+            // fabric has no feed-rate forecast, so this prices outputs at the
+            // reference rate until a measurement lands.
+            Self::HlsPutOutputCount => 320,
         }
     }
 
     pub(crate) fn shard_override(self) -> Option<u32> {
         match self {
             Self::SrtOutputCount => srt_bench_shard_override(),
-            Self::OutputCount | Self::SinkOutputCount | Self::PipelineOutputCount => None,
+            Self::OutputCount
+            | Self::SinkOutputCount
+            | Self::PipelineOutputCount
+            | Self::HlsPutOutputCount => None,
         }
     }
 
