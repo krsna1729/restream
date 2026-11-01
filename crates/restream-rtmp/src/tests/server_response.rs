@@ -21,13 +21,22 @@ fn egress_session() -> egress_connection::RtmpSessionCore {
 /// server's bytes per round: round N+1 only exists after the client answered
 /// round N, so a test may split inside a round but never across rounds.
 fn server_response_rounds() -> (Vec<u8>, Vec<Vec<u8>>) {
+    let (_, opening, rounds) = negotiated_session(false);
+    (opening, rounds)
+}
+
+/// The client, its opening bytes and the server's rounds, once the server
+/// accepted connect (enhanced RTMP when `enhanced`) and publish.
+fn negotiated_session(
+    enhanced: bool,
+) -> (egress_connection::RtmpSessionCore, Vec<u8>, Vec<Vec<u8>>) {
     use rml_rtmp::sessions::{
         ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
     };
 
     let mut client = egress_session();
     let mut opening: Vec<u8> = client.take_initial_packets().concat();
-    opening.extend_from_slice(&client.request_connection(false).expect("connect"));
+    opening.extend_from_slice(&client.request_connection(enhanced).expect("connect"));
     let (mut server, initial) = ServerSession::new(ServerSessionConfig::new()).expect("server");
 
     let mut to_server = opening.clone();
@@ -60,11 +69,39 @@ fn server_response_rounds() -> (Vec<u8>, Vec<Vec<u8>>) {
         let (packets, events) = client.handle_server_input(&pending).expect("client input");
         rounds.push(std::mem::take(&mut pending));
         if events.contains(&egress_connection::RtmpSessionEvent::PublishRequestAccepted) {
-            return (opening, rounds);
+            return (client, opening, rounds);
         }
         to_server = packets.concat();
     }
     panic!("publish was never accepted");
+}
+
+/// The first published media message establishes the stream id, after which
+/// the engine sends media as zero-copy wire messages over the shared payload
+/// instead of re-serializing every frame per output through `rml_rtmp`.
+/// The enhanced connect spans several default-size (128-byte) chunks: the
+/// session announces its own chunk size only after connect is accepted.
+/// The frame spans several chunks too (a 1080p keyframe always does).
+#[test]
+fn the_first_media_message_establishes_the_media_stream_id() {
+    for enhanced in [false, true] {
+        let (mut client, _, _) = negotiated_session(enhanced);
+        assert_eq!(client.media_stream_id(), None);
+        let mut frame = vec![0x17, 1, 0, 0, 0];
+        frame.resize(3 * 4096 + 100, 0xab);
+        client
+            .publish_video_data(
+                bytes::Bytes::from(frame),
+                rml_rtmp::time::RtmpTimestamp::new(0),
+                false,
+            )
+            .expect("video packet");
+        assert!(
+            client.media_stream_id().is_some(),
+            "no media stream id after an {} connect",
+            if enhanced { "enhanced" } else { "plain" }
+        );
+    }
 }
 
 proptest! {
