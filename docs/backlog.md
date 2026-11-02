@@ -11,7 +11,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
-- [Q-112 group gap at play time](#q-112-protocol-opus-a-sequence-every-group-member-lost-holds-the-group-past-its-play-time)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -54,24 +53,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: contract tests pin today's serialized timestamps (API JSON and
   SQLite rows) before the switch and pass unchanged after it;
   `cargo tree -i chrono` is empty.
-
-### Q-112 [protocol] [opus] A sequence every group member lost holds the group past its play time
-- Goal: an srt-rs group skips a sequence no member delivered when libsrt's
-  group reader would. The single-connection receiver already gives up a gap
-  once the next packet is due, as libsrt does. The group still waits
-  `max(1.25 × latency, 1 s)` past the pending packet's play time
-  (`ReceiverBuffer::gives_up_at`, srt-rs `crates/srt-protocol/VENDOR.md`
-  "Group receive gap"), while libsrt's `CUDTGroup::recv` delivers the lowest
-  readable packet across members at once (`group.cpp` 2449–2550).
-- Why it is not a one-line change: members hand the group a packet only
-  once it is due, so the libsrt rule leaves no pending packet waiting behind
-  a gap whenever TLPKTDROP is on. The group's pending-table and member-churn
-  tests (`backup_prefix_challenger.rs`, group churn tests) rely on that
-  state at zero latency and need fixtures that keep a head blocked (for
-  example TLPKTDROP off).
-- Gates: a deterministic group test in which a sequence every member lost
-  lets the next one out at its own play time; the pending-bookkeeping
-  properties those tests guard still hold; a bonded libsrt interop run.
 
 ## Not planned
 

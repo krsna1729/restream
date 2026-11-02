@@ -76,8 +76,8 @@ shiguredo_mp4 = "2026.5.0"
 # srt-rs: pinned by commit (its history is in that repository). SRT ingress
 # and egress both run on `srt_transport::compio::Owner`; ingress attaches each
 # `owner_plans` entry with `Owner::listen_planned`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "5407baf68fe75cc47d723c640923802454ff3aa8" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "5407baf68fe75cc47d723c640923802454ff3aa8", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "79b45d2fd4dcd1111d3bd919075b378557d66909" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "79b45d2fd4dcd1111d3bd919075b378557d66909", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.
