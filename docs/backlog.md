@@ -11,6 +11,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
+- [Q-114 harness netns error masks failures](#q-114-harness-sonnet-a-mode-failure-inside-the-network-namespace-is-reported-as-a-namespace-failure)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -53,6 +54,21 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: contract tests pin today's serialized timestamps (API JSON and
   SQLite rows) before the switch and pass unchanged after it;
   `cargo tree -i chrono` is empty.
+
+### Q-114 [harness] [sonnet] A mode failure inside the network namespace is reported as a namespace failure
+- Goal: a local harness run reports why a mode failed. The harness
+  re-runs itself through `unshare --net --user --map-root-user`
+  (`maybe_reexec_in_port_namespace`,
+  `crates/test_harness/src/test_harness/core/profile.rs`). Any non-zero
+  exit of that child, including an ordinary mode failure, makes the parent
+  print "could not enter the default private network namespace; rerun with
+  --no-netns". A failed kTLS preflight showed it on 2026-11-03: the
+  namespace worked and the advice was wrong. CI is unaffected.
+- Gates: a child that entered the namespace and failed exits with its own
+  code and message only; a namespace that could not be entered still gets
+  the `--no-netns` advice; a test that fails before and passes after
+  separates the two cases (for example a marker the child sets on entry,
+  checked through the production function with an injected command).
 
 ## Not planned
 
