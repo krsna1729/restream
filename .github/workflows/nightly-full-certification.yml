@@ -60,6 +60,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       - name: Prepare build tree
         run: cargo xtask release prepare-build-tree
+      - uses: ./.github/actions/kernel-tls
       - name: Smoke production runtime image
         env:
           RESTREAM_CONTAINER_IMAGE: restream:nightly-runtime-smoke

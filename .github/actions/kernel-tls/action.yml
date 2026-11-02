@@ -1,0 +1,20 @@
+name: Ensure kernel TLS
+description: >-
+  Load the host's kernel TLS module before harness or container runs that
+  include RTMPS. restream probes kTLS inside a container, where the kernel
+  autoloads the `tls` ULP module only for a caller with CAP_NET_ADMIN, so
+  without this step the result depends on whether the runner host loaded
+  it already.
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure kernel TLS on the runner
+      shell: bash
+      run: |
+        if ! sudo modprobe tls; then
+          echo "::error title=kTLS unavailable::kernel $(uname -r) cannot load the tls module; RTMPS cases cannot run on this runner (environment, not a test failure)"
+          exit 1
+        fi
+        if [ -d /sys/module/tls ]; then state=loaded; else state=missing; fi
+        echo "kernel $(uname -r): tls module $state"

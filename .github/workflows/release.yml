@@ -140,6 +140,7 @@ jobs:
           # Restore the packaged release payload under dist/ so every later
           # path matches the archive layout produced by `cargo xtask release package-binaries`.
           path: dist
+      - uses: ./.github/actions/kernel-tls
       - name: Verify release evidence and OCI asset
         # Pass the completed bundle so its exact restream executable emits the
         # SBOM; certifying a separate default-feature rebuild would leave the

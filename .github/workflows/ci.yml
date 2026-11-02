@@ -118,6 +118,8 @@ jobs:
         name: Build runtime image from Dockerfile
         run: cargo xtask release prepare-build-tree
       - if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: ./.github/actions/kernel-tls
+      - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Smoke production image (health + SRT and RTMP-to-RTMPS media under shipped seccomp)
         env:
           RESTREAM_CONTAINER_IMAGE: restream:pr-runtime-smoke
