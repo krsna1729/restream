@@ -26,14 +26,15 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 core_count,
                 engine_metrics(sys, core_count),
             )
-        });
+        })
+        .unwrap_or_default();
     let free_mem = total_mem.saturating_sub(used_mem);
     let mem_pct = if total_mem > 0 {
         (used_mem as f64 / total_mem as f64) * 100.0
     } else {
         0.0
     };
-    let load_avg = System::load_average();
+    let load1 = System::load_average().map_or(0.0, |load| load.one);
     let capacity =
         crate::application::capacity::capacity_snapshot(&state.engine, &state.config).await;
     let egress_shards = state
@@ -52,7 +53,9 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         let absolute = configured_media_root(&state.media_dir);
         std::fs::canonicalize(&absolute).unwrap_or(absolute)
     };
-    let disks = Disks::new_with_refreshed_list();
+    // A host that will not list its disks reports none.
+    let disks = Disks::new_with_refreshed_list().ok();
+    let disks: &[sysinfo::Disk] = disks.as_deref().unwrap_or_default();
 
     let system_root = {
         #[cfg(unix)]
@@ -65,7 +68,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         }
     };
     let (total_disk, used_disk, disk_mount) =
-        if let Some((total, used, mount)) = disk_usage_for_path(&disks, &system_root) {
+        if let Some((total, used, mount)) = disk_usage_for_path(disks, &system_root) {
             (total, used, Some(mount))
         } else {
             let (total, used) = disks.iter().fold((0u64, 0u64), |(t, u), disk| {
@@ -82,7 +85,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     } else {
         0.0
     };
-    let media_disk = disk_usage_for_path(&disks, &media_root).map(|(total, used, mount)| {
+    let media_disk = disk_usage_for_path(disks, &media_root).map(|(total, used, mount)| {
         let free = total.saturating_sub(used);
         let used_pct = if total > 0 {
             (used as f64 / total as f64) * 100.0
@@ -101,21 +104,25 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         })
     });
 
-    let nets1 = Networks::new_with_refreshed_list();
+    let nets1 = Networks::new_with_refreshed_list().ok();
     tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-    let nets2 = Networks::new_with_refreshed_list();
+    let nets2 = Networks::new_with_refreshed_list().ok();
     let mut total_rx = 0u64;
     let mut total_tx = 0u64;
     let mut external_interfaces = Vec::new();
     let mut ignored_interfaces = Vec::new();
-    for (iface, n2) in nets2.iter() {
-        if let Some(n1) = nets1.get(iface) {
+    // Rates need both samples; a host that will not list its interfaces
+    // reports none.
+    let samples = nets1.as_ref().zip(nets2.as_ref());
+    for (iface, n2) in samples.into_iter().flat_map(|(_, nets2)| nets2.iter()) {
+        if let Some(n1) = samples.and_then(|(nets1, _)| nets1.get(iface)) {
             let rx = n2.total_received().saturating_sub(n1.total_received());
             let tx = n2
                 .total_transmitted()
                 .saturating_sub(n1.total_transmitted());
             let active = rx > 0 || tx > 0;
-            if is_external_interface(iface) {
+            let iface = iface.to_string_lossy();
+            if is_external_interface(&iface) {
                 total_rx += rx;
                 total_tx += tx;
                 if active {
@@ -171,7 +178,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "cpu": {
                 "usagePercent": cpu_pct,
                 "cores": core_count,
-                "load1": load_avg.one
+                "load1": load1
             },
             "memory": {
                 "totalBytes": total_mem,
@@ -263,7 +270,7 @@ fn uring_capabilities() -> &'static serde_json::Value {
     })
 }
 
-fn disk_usage_for_path(disks: &Disks, path: &Path) -> Option<(u64, u64, String)> {
+fn disk_usage_for_path(disks: &[sysinfo::Disk], path: &Path) -> Option<(u64, u64, String)> {
     disks
         .iter()
         .filter_map(|disk| {
@@ -333,8 +340,8 @@ pub fn system_status(sys: &System) -> serde_json::Value {
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": System::host_name().unwrap_or_default(),
-        "kernelVersion": System::kernel_version(),
-        "uptime": System::uptime(),
+        "kernelVersion": System::kernel_version().ok(),
+        "uptime": System::uptime().unwrap_or(0),
         "totalMem": sys.total_memory(),
         "cpu": cpu_status(sys),
     })
@@ -344,7 +351,7 @@ pub fn cpu_status(sys: &System) -> serde_json::Value {
     let cpuinfo = read_cpuinfo_summary();
     let first_cpu = sys.cpus().first();
     let logical_cpus = sys.cpus().len();
-    let physical_cores = System::physical_core_count();
+    let physical_cores = System::physical_core_count().ok();
     let threads_per_core = physical_cores
         .filter(|cores| *cores > 0)
         .map(|cores| logical_cpus as f64 / cores as f64);

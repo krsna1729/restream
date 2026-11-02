@@ -311,20 +311,29 @@ pub(crate) fn sample_child_process_resources(
 /// cannot report host CPU usage (there is no previous sample to diff), so the
 /// value was wrong. Now CPU usage is a delta between successive calls, and
 /// only Restream and its child processes are refreshed.
-static HOST_SAMPLER: std::sync::LazyLock<std::sync::Mutex<System>> =
+///
+/// `None` when the host will not give a `System` (sysinfo 0.40 reports that as
+/// an error; Linux never does today): callers show host figures as absent.
+static HOST_SAMPLER: std::sync::LazyLock<Option<std::sync::Mutex<System>>> =
     std::sync::LazyLock::new(|| {
-        std::sync::Mutex::new(System::new_with_specifics(
+        match System::new_with_specifics(
             sysinfo::RefreshKind::nothing()
-                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_usage())
                 .with_memory(sysinfo::MemoryRefreshKind::everything()),
-        ))
+        ) {
+            Ok(sys) => Some(std::sync::Mutex::new(sys)),
+            Err(error) => {
+                tracing::warn!(%error, "host sampling unavailable; host figures read as absent");
+                None
+            }
+        }
     });
 
 /// Refresh host CPU usage and memory plus Restream and its children only,
-/// then run `read` on the refreshed view. `read` must not block: the sampler
-/// is shared.
-pub(crate) fn sampled_system<R>(read: impl FnOnce(&System) -> R) -> R {
-    let mut sys = restream_sync::lock::lock(&HOST_SAMPLER);
+/// then run `read` on the refreshed view; `None` without a host sampler.
+/// `read` must not block: the sampler is shared.
+pub(crate) fn sampled_system<R>(read: impl FnOnce(&System) -> R) -> Option<R> {
+    let mut sys = restream_sync::lock::lock(HOST_SAMPLER.as_ref()?);
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     let own = sysinfo::Pid::from_u32(std::process::id());
@@ -349,7 +358,7 @@ pub(crate) fn sampled_system<R>(read: impl FnOnce(&System) -> R) -> R {
             sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, refresh);
         }
     }
-    read(&sys)
+    Some(read(&sys))
 }
 
 /// Direct children of this process, from each thread's procfs `children`
@@ -526,7 +535,8 @@ mod sampler_tests {
                     .is_some(),
                 sys.process(sysinfo::Pid::from_u32(child_pid)).is_some(),
             )
-        });
+        })
+        .expect("Linux always has a host sampler");
         assert!(
             own && child_seen,
             "the sampler refreshes Restream and its children"
@@ -539,7 +549,8 @@ mod sampler_tests {
     fn host_cpu_usage_is_a_percentage_across_successive_samples() {
         let _ = sampled_system(|sys| sys.global_cpu_usage());
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-        let usage = sampled_system(|sys| sys.global_cpu_usage());
+        let usage =
+            sampled_system(|sys| sys.global_cpu_usage()).expect("Linux always has a host sampler");
         assert!((0.0..=100.0).contains(&usage), "{usage}");
     }
 }

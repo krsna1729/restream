@@ -411,15 +411,24 @@ impl EngineConfig {
         let srt_max_peers_per_ip = env_usize("RESTREAM_SRT_MAX_PEERS_PER_IP", 64).clamp(1, 4096);
         // A quarter of the memory this process may use (the container's
         // limit when there is one), split across the ingress Owners (each
-        // checks its own); 0 turns the budget off.
-        let host = sysinfo::System::new_with_specifics(
+        // checks its own); 0 turns the budget off, as does memory the host
+        // will not report.
+        let memory = match sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::nothing()
                 .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-        );
-        let memory = effective_memory_bytes(
-            host.total_memory(),
-            host.cgroup_limits().map(|limits| limits.total_memory),
-        );
+        ) {
+            Ok(host) => effective_memory_bytes(
+                host.total_memory(),
+                host.cgroup_limits().map(|limits| limits.total_memory),
+            ),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "host memory unavailable; the SRT ingress window memory budget is off"
+                );
+                0
+            }
+        };
         let srt_ingress_window_memory_bytes = Some(env_u64(
             "RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES",
             memory / 4 / srt_ingress_owners as u64,

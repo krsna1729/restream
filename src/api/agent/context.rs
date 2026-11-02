@@ -29,7 +29,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let alerts = alerts::derive_alerts(&health);
     let events = state.engine.recent_events(events::MAX_EVENTS, None);
     let engine_telemetry = crate::api::runtime_views::engine_telemetry(&state.engine).await;
-    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let process =
+        crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
     let resource_map = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,
@@ -76,7 +77,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
 
     let bonding_available = state.engine.bonding_available();
     let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = crate::host::system_sampling::sampled_system(system_status);
+    status["os"] = crate::host::system_sampling::sampled_system(system_status).unwrap_or_default();
 
     let settings = catalog.settings;
     let custom_encoding_len = catalog.custom_encoding_len;
@@ -464,7 +465,8 @@ async fn storage_summary(state: &AppState, media: &serde_json::Value) -> serde_j
         .unwrap_or_else(|| state.media_dir.clone());
     let disks = Disks::new_with_refreshed_list();
     let selected_disk = disks
-        .list()
+        .as_deref()
+        .unwrap_or_default()
         .iter()
         .rfind(|disk| Path::new(&media_root).starts_with(disk.mount_point()))
         .map(|disk| {
