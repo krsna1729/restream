@@ -22,6 +22,7 @@ pub(crate) fn seed_corpus() -> WorkflowResult {
     seed_fmp4(&transport, &corpus.join("fmp4_ingest"))?;
     seeds::moq(&corpus.join("moq_ingest"))?;
     // This must remain the real helper: it uses the pinned moq-net wire codecs.
+    use_root_lockfile(&fuzz.join("moq-seeds"))?;
     checked(Command::new("cargo").current_dir(fuzz).args([
         "run",
         "--quiet",
@@ -35,6 +36,7 @@ pub(crate) fn seed_corpus() -> WorkflowResult {
 /// Runs every target `cargo +<pinned nightly> fuzz list` reports for 30 s each.
 pub(crate) fn smoke() -> WorkflowResult {
     let fuzz = crate::repo_root().join("fuzz");
+    use_root_lockfile(&fuzz)?;
     let listed = output(Command::new("cargo").current_dir(&fuzz).args([
         concat!("+", nightly!()),
         "fuzz",
@@ -57,6 +59,20 @@ pub(crate) fn smoke() -> WorkflowResult {
             "-timeout=5",
         ]))?;
     }
+    Ok(())
+}
+
+/// The fuzz workspaces are separate from the root one, so without a lockfile
+/// they would fuzz whatever crates.io resolves to that day, not what restream
+/// ships. Starting from the root lockfile keeps every shared package at its
+/// shipped version; Cargo resolves only the fuzz-only crates. An unpinned
+/// resolution once took a newer `moq-binary` that needs `moq-net` 0.3.18
+/// beside the vendored 0.3.15, and the build failed.
+fn use_root_lockfile(workspace: &Path) -> WorkflowResult {
+    fs::copy(
+        crate::repo_root().join("Cargo.lock"),
+        workspace.join("Cargo.lock"),
+    )?;
     Ok(())
 }
 
