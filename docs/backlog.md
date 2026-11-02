@@ -11,6 +11,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
+- [Q-113 kTLS on CI runners](#q-113-ci-sonnet-master-transport-qualification-fails-on-runners-without-ktls)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -53,6 +54,23 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: contract tests pin today's serialized timestamps (API JSON and
   SQLite rows) before the switch and pass unchanged after it;
   `cargo tree -i chrono` is empty.
+
+### Q-113 [ci] [sonnet] Master transport qualification fails on runners without kTLS
+- Goal: `master-transport-shards / Master transport qualification
+  (fault.resilience)` passes or fails on the code, not on which runner it
+  lands. On master run 41430886665 (`3a38d16d`) it failed before any media:
+  `preflight_rtmps_ktls_capabilities`
+  (`crates/test_harness/src/test_harness/mixed_checks.rs`) found no kernel
+  TLS support for the TLS 1.2 AES-GCM suites, then passed on a rerun.
+  The preflight is correct to fail closed, because production kTLS
+  handoff needs the negotiated suite. No workflow loads the `tls` module,
+  and the harness runs in a container, so whether kTLS works depends on
+  the runner host. That cause is not yet confirmed.
+- Gates: the job logs the runner's `tls` module state and kTLS probe
+  result; it ensures kTLS before the harness (for example `modprobe tls`
+  on the host) or reports "kTLS unavailable" as an environment failure
+  distinct from a test failure; the preflight still fails closed for
+  RTMPS cases.
 
 ## Not planned
 
