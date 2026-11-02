@@ -55,10 +55,13 @@ pub(crate) async fn preflight_rtmps_ktls_capabilities(api: &RampApi) -> Result<(
     let capabilities = &system["rtmps"]["ktlsCapabilities"];
     let unsupported = unsupported_rtmps_ktls_suites(capabilities);
     if unsupported.is_empty() {
+        println!("[rtmps-ktls] kernel TLS available: {capabilities}");
         Ok(())
     } else {
         Err(format!(
-            "RTMPS live output requires kernel TLS support for every AES-GCM TLS suite; unsupported: {unsupported:?}"
+            "kTLS unavailable on this host (environment, not a test result): RTMPS live output \
+             requires kernel TLS support for every AES-GCM TLS suite; unsupported: {unsupported:?}; \
+             probe: {capabilities}. Load the kernel `tls` module on the host"
         ))
     }
 }

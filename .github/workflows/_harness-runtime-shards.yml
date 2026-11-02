@@ -84,6 +84,7 @@ jobs:
           cp "${{ inputs.artifact_path }}/test_harness" "${{ inputs.harness_bin }}"
           install -D -m 0755 "${{ inputs.artifact_path }}/xtask" .local/bin/xtask
           chmod 0755 "${{ inputs.restream_bin }}" "${{ inputs.harness_bin }}"
+      - uses: ./.github/actions/kernel-tls
       - name: Run harness shard
         env:
           BENCH_BUILD: never

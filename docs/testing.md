@@ -611,6 +611,11 @@ Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
 - Pull requests: `integration-shards` (one SRT smoke, one RTMP smoke whose
   matrix has an RTMPS row, `direct-play`) and `concurrency-fast`. Missing
   kTLS fails the capability preflight; it never falls back to userspace TLS.
+  Every job that runs harness shards or the container smoke first loads the
+  host's `tls` module (`.github/actions/kernel-tls`): restream probes kTLS
+  inside a container, where the kernel loads that module on demand only for
+  a caller with `CAP_NET_ADMIN`. A runner that cannot load it fails that
+  step with a "kTLS unavailable" annotation, not a test result.
 - `master` pushes: `master-transport-shards` and `concurrency-contract`
   (`fault.resilience`, `fault.egress-retry`, `fault.output-stall`,
   `fault.srt-output-stall`, `recovery`). `fault.resilience` also proves
