@@ -136,7 +136,8 @@ pub async fn agent_investigation_handler(
     } else {
         crate::api::runtime_views::engine_telemetry(&state.engine).await
     };
-    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let process =
+        crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
     let resource_map = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,

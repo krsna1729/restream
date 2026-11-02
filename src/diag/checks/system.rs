@@ -20,7 +20,10 @@ fn media_root_path(media_dir: &str) -> PathBuf {
     std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
-fn disk_for_path<'a>(disks: &'a Disks, path: &Path) -> Option<(&'a sysinfo::Disk, usize)> {
+fn disk_for_path<'a>(
+    disks: &'a [sysinfo::Disk],
+    path: &Path,
+) -> Option<(&'a sysinfo::Disk, usize)> {
     disks
         .iter()
         .filter_map(|disk| {
@@ -31,9 +34,42 @@ fn disk_for_path<'a>(disks: &'a Disks, path: &Path) -> Option<(&'a sysinfo::Disk
         .max_by_key(|(_, depth)| *depth)
 }
 
+/// A check whose host source did not answer: one issue naming what is
+/// missing, instead of figures that would read as zero.
+fn host_unavailable(
+    idx: u32,
+    name: &str,
+    description: &str,
+    command: &str,
+    error: &sysinfo::Error,
+    start: Instant,
+) -> DiagResult {
+    DiagResult::ok(
+        idx,
+        name,
+        description,
+        command,
+        String::new(),
+        start.elapsed().as_millis() as u64,
+    )
+    .with_issues(vec![format!("The host did not report this: {error}")])
+}
+
 pub(in crate::diag) async fn check_system_resources(idx: u32, media_dir: &str) -> DiagResult {
     let start = Instant::now();
-    let mut sys = System::new_all();
+    let mut sys = match System::new_all() {
+        Ok(sys) => sys,
+        Err(error) => {
+            return host_unavailable(
+                idx,
+                "System Resources",
+                "CPU, RAM, and disk utilization",
+                "sysinfo::System::new_all()",
+                &error,
+                start,
+            );
+        }
+    };
     sys.refresh_all();
 
     let cpu_pct: f32 = sys.global_cpu_usage();
@@ -43,7 +79,8 @@ pub(in crate::diag) async fn check_system_resources(idx: u32, media_dir: &str) -
 
     let media_root = media_root_path(media_dir);
     let disks = Disks::new_with_refreshed_list();
-    let selected_disk = disk_for_path(&disks, &media_root).map(|(disk, _)| disk);
+    let disk_list: &[sysinfo::Disk] = disks.as_deref().unwrap_or_default();
+    let selected_disk = disk_for_path(disk_list, &media_root).map(|(disk, _)| disk);
     let (total_disk, used_disk, disk_scope, mount_point) = if let Some(disk) = selected_disk {
         let total = disk.total_space();
         let used = total.saturating_sub(disk.available_space());
@@ -54,7 +91,7 @@ pub(in crate::diag) async fn check_system_resources(idx: u32, media_dir: &str) -
             disk.mount_point().display().to_string(),
         )
     } else {
-        let (total, used) = disks.iter().fold((0u64, 0u64), |(total, used), disk| {
+        let (total, used) = disk_list.iter().fold((0u64, 0u64), |(total, used), disk| {
             (
                 total + disk.total_space(),
                 used + (disk.total_space() - disk.available_space()),
@@ -65,6 +102,9 @@ pub(in crate::diag) async fn check_system_resources(idx: u32, media_dir: &str) -
     let disk_pct = (used_disk * 100).checked_div(total_disk).unwrap_or(0);
 
     let mut issues = vec![];
+    if let Err(error) = &disks {
+        issues.push(format!("The host did not list its disks: {error}"));
+    }
     let mut lines = vec![];
 
     lines.push(format!("CPU cores: {}", sys.cpus().len()));
@@ -225,9 +265,22 @@ pub(in crate::diag) async fn check_srt_listener_owner(
 
 pub(in crate::diag) async fn check_network_bandwidth(idx: u32) -> DiagResult {
     let start = Instant::now();
-    let net1 = Networks::new_with_refreshed_list();
+    let sample = || Networks::new_with_refreshed_list();
+    let net1 = sample();
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    let net2 = Networks::new_with_refreshed_list();
+    let (net1, net2) = match net1.and_then(|net1| sample().map(|net2| (net1, net2))) {
+        Ok(samples) => samples,
+        Err(error) => {
+            return host_unavailable(
+                idx,
+                "Network Bandwidth",
+                "Per-interface RX/TX throughput (500ms sample)",
+                "sysinfo::Networks::new_with_refreshed_list()",
+                &error,
+                start,
+            );
+        }
+    };
 
     let mut total_rx_bytes = 0u64;
     let mut total_tx_bytes = 0u64;
@@ -247,7 +300,9 @@ pub(in crate::diag) async fn check_network_bandwidth(idx: u32) -> DiagResult {
                 let tx_kbps = (tx * 8 * 2) / 1000;
                 lines.push(format!(
                     "{}: RX {} Kbps TX {} Kbps",
-                    interface, rx_kbps, tx_kbps
+                    interface.display(),
+                    rx_kbps,
+                    tx_kbps
                 ));
                 total_rx_bytes += rx;
                 total_tx_bytes += tx;
@@ -367,8 +422,7 @@ mod tests {
 
     #[test]
     fn disk_for_path_returns_none_when_no_mount_is_a_prefix() {
-        let disks = Disks::new();
         let bogus = Path::new("/definitely-not-a-real-mount-xyz-123");
-        assert!(disk_for_path(&disks, bogus).is_none());
+        assert!(disk_for_path(&[], bogus).is_none());
     }
 }

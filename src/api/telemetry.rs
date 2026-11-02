@@ -265,7 +265,7 @@ pub async fn status_get_handler(
 
     let bonding_available = state.engine.bonding_available();
     let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
-    status["os"] = crate::host::system_sampling::sampled_system(system_status);
+    status["os"] = crate::host::system_sampling::sampled_system(system_status).unwrap_or_default();
 
     Json(status).into_response()
 }
@@ -334,7 +334,8 @@ pub async fn v1_engine_resource_map_handler(
         return response;
     }
 
-    let process = crate::host::system_sampling::sampled_system(process_resource_snapshot);
+    let process =
+        crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
     let snapshot = crate::api::runtime_views::resource_map(
         &state.engine,
         &state.config,
