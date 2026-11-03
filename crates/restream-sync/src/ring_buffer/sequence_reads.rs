@@ -33,7 +33,7 @@ impl RingBuffer {
     #[inline]
     pub fn read_at(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
         let slot = &self.slots[sequence % self.capacity];
-        let packet = slot.data.load_full()?;
+        let packet = slot.packet()?;
         FrameUnit::unpack(slot.unit.load(Ordering::Acquire), sequence)?;
         Some(packet)
     }
@@ -43,7 +43,7 @@ impl RingBuffer {
     /// if [`Self::run_intact`] holds for it.
     #[inline]
     pub fn read_unverified(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
-        self.slots[sequence % self.capacity].data.load_full()
+        self.slots[sequence % self.capacity].packet()
     }
 
     /// Whether every packet [`Self::read_unverified`] returned for

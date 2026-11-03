@@ -92,7 +92,7 @@ fn benchmark_push_batch_vs_push(c: &mut Criterion) {
 }
 
 /// Consumer hot path: `pull_burst` at different burst sizes.
-/// Measures `ArcSwapOption::load_full` + Arc ref-count per packet.
+/// Measures the slot's `Arc` clone under its mutex per packet.
 fn benchmark_pull_burst(c: &mut Criterion) {
     let mut group = c.benchmark_group("ring_buffer/consumer");
 
