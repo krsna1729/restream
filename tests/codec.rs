@@ -12,7 +12,7 @@ use restream_core::codec::build_adts_header;
 use restream_core::codec::build_avcc_sequence_header;
 use restream_core::codec::parse_avcc_config;
 use restream_core::codec::strip_adts;
-use restream_core::codec::video_for_rtmp;
+use restream_core::codec::video_for_rtmp_into;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaType, PayloadFormat};
 use restream_engine::codec::audio_for_ts_into;
@@ -186,15 +186,14 @@ fn raw_audio_without_adts_gets_header() {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: Annex B → RTMP (video_for_rtmp / audio_for_rtmp_into)
+// Unit tests: Annex B → RTMP (video_for_rtmp_into / audio_for_rtmp_into)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn annexb_keyframe_converts_to_flv_avcc() {
     let annexb = make_annexb(&[SPS, PPS, IDR_NALU]);
-    let result = video_for_rtmp(&annexb, true);
-    assert!(result.is_some());
-    let data = result.unwrap();
+    let mut data = Vec::new();
+    assert!(video_for_rtmp_into(&annexb, true, &mut data));
     // FLV keyframe tag
     assert_eq!(data[0], 0x17, "should be keyframe tag");
     assert_eq!(data[1], 0x01, "should be data packet type");
@@ -206,10 +205,13 @@ fn annexb_keyframe_converts_to_flv_avcc() {
 
 #[test]
 fn annexb_with_only_sps_pps_returns_none() {
-    // SPS+PPS only → annexb_to_avcc filters them → empty → None
+    // SPS+PPS only → annexb_to_avcc_into filters them → no VCL NALU
     let annexb = make_annexb(&[SPS, PPS]);
-    let result = video_for_rtmp(&annexb, true);
-    assert!(result.is_none(), "SPS/PPS-only frame should return None");
+    let mut data = Vec::new();
+    assert!(
+        !video_for_rtmp_into(&annexb, true, &mut data),
+        "SPS/PPS-only frame should report no VCL NALU"
+    );
 }
 
 #[test]
@@ -241,7 +243,11 @@ fn srt_demuxed_raw_packets_convert_to_rtmp_flv_packets() {
     assert_eq!(video_seq[0], 0x17, "sequence header should be keyframe AVC");
     assert_eq!(video_seq[1], 0x00, "sequence header packet type");
 
-    let video = video_for_rtmp(&annexb, true).expect("video data packet");
+    let mut video = Vec::new();
+    assert!(
+        video_for_rtmp_into(&annexb, true, &mut video),
+        "video data packet"
+    );
     assert_eq!(video[0], 0x17, "video should be an FLV keyframe packet");
     assert_eq!(video[1], 0x01, "video should be an AVC data packet");
     let nalu_len = u32::from_be_bytes([video[5], video[6], video[7], video[8]]) as usize;
@@ -318,13 +324,14 @@ fn flv_video_through_ts_muxer_produces_valid_ts() {
 }
 
 // ---------------------------------------------------------------------------
-// Round-trip: Annex B → video_for_rtmp → FLV AVCC → avcc_to_annexb → same data
+// Round-trip: Annex B → video_for_rtmp_into → FLV AVCC → avcc_to_annexb → same data
 // ---------------------------------------------------------------------------
 
 #[test]
 fn annexb_rtmp_round_trip() {
     let annexb = make_annexb(&[IDR_NALU]);
-    let flv_wrapped = video_for_rtmp(&annexb, false).unwrap();
+    let mut flv_wrapped = Vec::new();
+    assert!(video_for_rtmp_into(&annexb, false, &mut flv_wrapped));
 
     // Strip the 5-byte FLV header to get raw AVCC
     let avcc_data = &flv_wrapped[5..];

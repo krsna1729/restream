@@ -8,8 +8,9 @@ fn avcc_annexb_round_trip() {
         0, 0, 0, 1, 0x65, 0x88, 0x80, 0x40, // IDR slice
     ];
 
-    // annexb_to_avcc should filter SPS/PPS/AUD and keep only IDR
-    let avcc = annexb_to_avcc(&annexb);
+    // annexb_to_avcc_into filters SPS/PPS/AUD and keeps only IDR
+    let mut avcc = Vec::new();
+    assert!(annexb_to_avcc_into(&annexb, &mut avcc));
     assert!(!avcc.is_empty());
     // First 4 bytes = length of the IDR NALU
     let nalu_len = u32::from_be_bytes([avcc[0], avcc[1], avcc[2], avcc[3]]) as usize;
@@ -138,9 +139,10 @@ fn build_avcc_seq_header_from_annexb() {
 }
 
 #[test]
-fn video_for_rtmp_converts_annexb() {
+fn video_for_rtmp_into_converts_annexb() {
     let annexb = [0, 0, 0, 1, 0x65, 0x88, 0x80, 0x40];
-    let result = video_for_rtmp(&annexb, true).unwrap();
+    let mut result = Vec::new();
+    assert!(video_for_rtmp_into(&annexb, true, &mut result));
     assert_eq!(result[0], 0x17); // keyframe tag
     assert_eq!(result[1], 1); // data packet
     // AVCC data starts at offset 5

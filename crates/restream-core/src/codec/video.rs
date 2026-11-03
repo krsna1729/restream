@@ -139,22 +139,10 @@ pub enum AnnexbCodecKind {
 
 /// Prepare a Raw (Annex B) video payload for RTMP publishing.
 ///
-/// Converts Annex B → AVCC, wraps in 5-byte FLV video tag header.
-/// Returns `None` if the converted payload is empty.
-pub fn video_for_rtmp(payload: &[u8], is_keyframe: bool) -> Option<Vec<u8>> {
-    // Single allocation: write FLV header then AVCC inline — no intermediate Vec.
-    let mut out = Vec::with_capacity(payload.len().saturating_add(5));
-    if !video_for_rtmp_into(payload, is_keyframe, &mut out) {
-        return None; // no VCL NALUs found
-    }
-    Some(out)
-}
-
-/// Zero-allocation variant of [`video_for_rtmp`].
-///
-/// Clears `out` and writes the FLV-framed AVCC payload into it in-place.
-/// Returns `true` if data was written, `false` if no VCL NALUs were found.
-/// The caller must consume `out` before the next call that clears it.
+/// Clears `out` and writes the 5-byte FLV video tag header plus the AVCC
+/// payload into it in place. Returns `true` if data was written, `false` if
+/// no VCL NALUs were found. The caller must consume `out` before the next
+/// call that clears it.
 #[inline]
 pub fn video_for_rtmp_into(payload: &[u8], is_keyframe: bool, out: &mut Vec<u8>) -> bool {
     video_for_rtmp_with_composition_into(payload, is_keyframe, 0, out)
@@ -288,28 +276,13 @@ pub fn avcc_to_annexb_into(data: &[u8], nalu_len_size: usize, out: &mut Vec<u8>)
     }
 }
 
-/// Convert Annex B NALUs to AVCC format (4-byte length prefix).
-/// Filters out SPS (7), PPS (8), and AUD (9) NALUs.
-pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let _ = annexb_to_avcc_into(data, &mut out);
-    out
-}
-
-/// Like `annexb_to_avcc` but appends output into a caller-provided buffer.
-/// Callers can reuse the allocation across packets to avoid per-packet heap churn.
+/// Append Annex B NALUs to `out` as AVCC (4-byte length prefix), filtering
+/// out SPS (7), PPS (8) and AUD (9). Returns whether a VCL NALU was written.
+/// Callers reuse `out` across packets to avoid per-packet heap churn.
 ///
-/// # Implementation choice: callback walker (no allocation)
-///
-/// A `memmem::find_iter().peekable()` single-pass variant measured 25–31%
-/// slower than a two-pass split into two small `Vec`s (1-NALU P-frame at
-/// 8 KiB, ~890 ns vs ~690 ns), in a
-/// single-threaded micro-benchmark where allocation is uncontended. Under
-/// production load those per-packet `Vec`s contend on the allocator (arena
-/// lock waits on the SRT ingress Owner, runtime-crossings C3), so this walks
-/// NALUs with [`for_each_annexb_nalu`]: one pass, no `Peekable`, no
-/// allocation. `benches/codec_conversions.rs` compares it with the scratch
-/// variant below.
+/// Walks NALUs with [`for_each_annexb_nalu`]: one pass, no allocation. The
+/// per-frame `Vec`s of a split-then-write form contended on the allocator
+/// (arena lock waits on the SRT ingress Owner, runtime-crossings C3).
 #[inline]
 pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
     let mut has_vcl = false;
@@ -338,58 +311,10 @@ fn get_start_code_finder() -> &'static memchr::memmem::Finder<'static> {
     &FINDER
 }
 
-/// Like `annexb_to_avcc` but uses caller-provided scratch buffers to avoid the
-/// two intermediate Vec allocations (`Vec<(usize,usize)>` for start-code spans
-/// and the NALU-split `Vec<&[u8]>`) produced by `split_annexb_nalus`.
-///
-/// Provide a `sc_scratch: &mut Vec<(usize,usize)>` pre-allocated per consumer
-/// (typically stored alongside the `video_conv_buf` scratch). It is cleared and
-/// repopulated on every call.
-///
-/// # Reference benchmark results (bench-dev, x86-64 Zen, `annexb_to_avcc` group)
-///
-/// | Input | `two_pass` | `with_scratch` | Winner |
-/// |---|---|---|---|
-/// | P-frame 8 KiB, 1 NALU | 2.73 µs | 1.80 µs | **with_scratch +34%** |
-/// | P-frame 30 KiB, 3 NALU | 9.83 µs | 8.95 µs | **with_scratch +9%** |
-/// | IDR 80 KiB, 1 NALU | 16.98 µs | 24.07 µs | two_pass (scratch slower -42%) |
-///
-/// Mixed result: `with_scratch` wins for small multi-NALU frames but loses for
-/// large single-NALU IDR frames (clearing+repopulating `sc_scratch` dominates).
-/// The production `annexb_to_avcc_into` uses `two_pass`. Switch to `with_scratch`
-/// only if the workload profile shifts to many small NALUs per frame.
-pub fn annexb_to_avcc_with_scratch(
-    data: &[u8],
-    out: &mut Vec<u8>,
-    sc_scratch: &mut Vec<(usize, usize)>,
-) {
-    // Populate start-code spans into the scratch buffer, clearing first.
-    sc_scratch.clear();
-    let finder = get_start_code_finder();
-    for idx in finder.find_iter(data) {
-        sc_scratch.push(start_code_span(data, idx));
-    }
-
-    // Write AVCC directly from indexed spans — no Vec<&[u8]> allocation.
-    let mut spans = sc_scratch.iter().peekable();
-    while let Some(&(_, nalu_start)) = spans.next() {
-        let nalu_end = spans
-            .peek()
-            .map_or(data.len(), |&&(next_code, _)| next_code);
-        let Some(nalu @ [first, ..]) = data.get(nalu_start..nalu_end) else {
-            continue;
-        };
-        if matches!(first & 0x1F, 7..=9) {
-            continue;
-        }
-        out.extend_from_slice(&(nalu.len() as u32).to_be_bytes());
-        out.extend_from_slice(nalu);
-    }
-}
-
 /// Locate all Annex B start codes (`0x00 0x00 0x01` and `0x00 0x00 0x00 0x01`).
 /// Returns a list of `(start_index, end_index)` spans of the start codes themselves.
-pub fn find_annexb_start_codes(data: &[u8]) -> Vec<(usize, usize)> {
+#[cfg(test)]
+pub(crate) fn find_annexb_start_codes(data: &[u8]) -> Vec<(usize, usize)> {
     let finder = get_start_code_finder();
     finder
         .find_iter(data)
@@ -419,10 +344,10 @@ pub fn split_annexb_nalus(data: &[u8]) -> Vec<&[u8]> {
 
 /// Visit each NALU of an Annex B stream (without its start code), in order,
 /// stopping as soon as `visit` breaks. Same boundaries as
-/// [`find_annexb_start_codes`] and [`split_annexb_nalus`], in one pass with no
-/// allocation: the per-frame `Vec`s the split form builds showed up as
-/// allocator-lock waits on the SRT ingress Owner (runtime-crossings C3), so
-/// per-packet paths walk NALUs with this instead.
+/// [`split_annexb_nalus`], in one pass with no allocation: the per-frame
+/// `Vec`s the split form builds showed up as allocator-lock waits on the SRT
+/// ingress Owner (runtime-crossings C3), so per-packet paths walk NALUs with
+/// this instead.
 pub fn for_each_annexb_nalu<'a>(
     data: &'a [u8],
     mut visit: impl FnMut(&'a [u8]) -> ControlFlow<()>,
