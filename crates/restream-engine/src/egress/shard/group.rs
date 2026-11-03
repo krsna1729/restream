@@ -284,8 +284,6 @@ pub struct EgressShardHeartbeat {
     pub feed_wakes_useful: u64,
     pub feed_wakes_empty: u64,
     pub loop_duration_sum_us: u64,
-    pub driver_budget_violations: u64,
-    pub driver_overrun_us: u64,
     pub retry_events: u64,
     /// SRT Compio Owner metrics per address family (index 0 = IPv4), and the
     /// shard runtime's io_uring / managed-RX substrate flags.
@@ -356,8 +354,6 @@ impl EgressShardHeartbeat {
             feed_wakes_useful: snapshot.metrics.feed_wakes_useful,
             feed_wakes_empty: snapshot.metrics.feed_wakes_empty,
             loop_duration_sum_us: snapshot.metrics.loop_duration_sum_us,
-            driver_budget_violations: snapshot.metrics.driver_budget_violations,
-            driver_overrun_us: snapshot.metrics.driver_overrun_us,
             retry_events: snapshot.metrics.retry_events,
             srt_owners: snapshot.metrics.srt_owners,
             srt_runtime_io_uring: snapshot.metrics.srt_runtime_io_uring,

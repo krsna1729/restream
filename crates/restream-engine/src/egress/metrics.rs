@@ -226,12 +226,6 @@ pub struct ShardMetrics {
     // --- Retry ---
     pub retry_events: u64,
 
-    // --- Driver call violations ---
-    /// Number of advance() calls that overran their time budget.
-    pub driver_budget_violations: u64,
-    /// Total wall time spent in overrunning advance() calls.
-    pub driver_overrun_us: u64,
-
     // --- Backend transport counters ---
     pub rx_packets: u64,
     pub rx_bytes: u64,
@@ -310,67 +304,7 @@ impl ShardMetrics {
             .loop_duration_sum_us
             .saturating_add(duration.as_micros() as u64);
     }
-
-    /// Record a driver (advance()) budget violation.
-    pub fn record_driver_violation(&mut self, overrun: Duration) {
-        self.driver_budget_violations += 1;
-        self.driver_overrun_us = self
-            .driver_overrun_us
-            .saturating_add(overrun.as_micros() as u64);
-    }
 }
-
-// ---------------------------------------------------------------------------
-// LeafMetrics
-// ---------------------------------------------------------------------------
-
-/// Per-leaf progress snapshot.
-///
-/// Emitted as a diagnostic snapshot; not exported as time-series directly
-/// to avoid cardinality explosion.
-#[derive(Debug, Clone, Default)]
-pub struct LeafMetrics {
-    /// Age of last byte progress in milliseconds.
-    pub byte_progress_age_ms: Option<u64>,
-    /// Age of last protocol progress in milliseconds.
-    pub protocol_progress_age_ms: Option<u64>,
-
-    /// Current feed lag in units behind the head.
-    pub feed_lag_units: u64,
-    /// Pending application bytes.
-    pub pending_bytes: usize,
-
-    // --- Would-block and partial-write counts ---
-    pub would_block_count: u64,
-    pub partial_write_count: u64,
-
-    // --- Resyncs and overruns ---
-    pub resync_count: u32,
-    pub overrun_count: u32,
-
-    // --- Retry ---
-    pub retry_attempt: u32,
-
-    // --- Total sent ---
-    pub bytes_sent: u64,
-    pub units_sent: u64,
-
-    pub bytes_discarded: u64,
-    pub units_discarded: u64,
-}
-
-impl LeafMetrics {
-    pub fn record_sent(&mut self, bytes: u64, units: u64) {
-        self.bytes_sent = self.bytes_sent.saturating_add(bytes);
-        self.units_sent = self.units_sent.saturating_add(units);
-    }
-
-    pub fn record_discarded(&mut self, bytes: u64, units: u64) {
-        self.bytes_discarded = self.bytes_discarded.saturating_add(bytes);
-        self.units_discarded = self.units_discarded.saturating_add(units);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -399,15 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn driver_violation_accumulates() {
-        let mut m = ShardMetrics::new(ShardId::new(1));
-        m.record_driver_violation(Duration::from_micros(1_000));
-        m.record_driver_violation(Duration::from_micros(2_000));
-        assert_eq!(m.driver_budget_violations, 2);
-        assert_eq!(m.driver_overrun_us, 3_000);
-    }
-
-    #[test]
     fn wake_counts_separate() {
         let mut m = ShardMetrics::new(ShardId::new(0));
         m.record_useful_wake();
@@ -415,20 +340,6 @@ mod tests {
         m.record_empty_wake();
         assert_eq!(m.feed_wakes_useful, 2);
         assert_eq!(m.feed_wakes_empty, 1);
-    }
-
-    #[test]
-    fn leaf_metrics_keep_sent_and_discarded_totals_separate() {
-        let mut m = LeafMetrics::default();
-        m.record_sent(10, 1);
-        m.record_discarded(30, 3);
-        m.record_sent(5, 2);
-        m.record_discarded(7, 4);
-
-        assert_eq!(m.bytes_sent, 15);
-        assert_eq!(m.units_sent, 3);
-        assert_eq!(m.bytes_discarded, 37);
-        assert_eq!(m.units_discarded, 7);
     }
 
     #[test]

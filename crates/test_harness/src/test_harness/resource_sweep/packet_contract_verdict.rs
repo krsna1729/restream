@@ -156,7 +156,6 @@ pub(super) fn sample_validity(
         ("ownerServiceBudgetExhaustedDelta", false),
         ("ownerRxRingDroppedDelta", false),
         ("ownerRxTruncatedDelta", false),
-        ("shardDriverBudgetViolationsDelta", false),
         ("shardQueueOverflowsDelta", false),
     ] {
         match sample[key].as_u64() {

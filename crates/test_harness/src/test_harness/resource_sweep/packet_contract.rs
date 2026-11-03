@@ -69,7 +69,6 @@ pub(super) struct PacketCounters {
     pub(super) owner_rx_ring_dropped: Option<u64>,
     pub(super) owner_rx_truncated: Option<u64>,
     pub(super) shard_feed_resyncs: Option<u64>,
-    pub(super) shard_driver_budget_violations: Option<u64>,
     pub(super) shard_queue_overflows: Option<u64>,
     pub(super) srt_service_visits: Option<u64>,
     pub(super) srt_service_actions: Option<u64>,
@@ -140,7 +139,6 @@ impl PacketCounters {
             owner_rx_ring_dropped: owner_field("rxRingDropped"),
             owner_rx_truncated: owner_field("rxTruncated"),
             shard_feed_resyncs: shard_field("resyncCount"),
-            shard_driver_budget_violations: shard_field("driverBudgetViolations"),
             shard_queue_overflows: shard_field("queueOverflows"),
             srt_service_visits: owner_field("serviceVisits"),
             srt_service_actions: owner_field("serviceActions"),
@@ -662,12 +660,6 @@ pub(super) async fn record_at(
                 delta(counters.shard_feed_resyncs, |c| c.shard_feed_resyncs),
             ),
             (
-                "shardDriverBudgetViolationsDelta",
-                delta(counters.shard_driver_budget_violations, |c| {
-                    c.shard_driver_budget_violations
-                }),
-            ),
-            (
                 "shardQueueOverflowsDelta",
                 delta(counters.shard_queue_overflows, |c| c.shard_queue_overflows),
             ),
@@ -702,10 +694,6 @@ pub(super) async fn record_at(
                 sum_field(&owners, "txCoalescedDatagrams"),
             ),
             ("shardFeedResyncsTotal", sum_field(&shards, "resyncCount")),
-            (
-                "shardDriverBudgetViolationsTotal",
-                sum_field(&shards, "driverBudgetViolations"),
-            ),
             (
                 "shardQueueOverflowsTotal",
                 sum_field(&shards, "queueOverflows"),

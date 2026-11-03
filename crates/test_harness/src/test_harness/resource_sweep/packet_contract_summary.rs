@@ -332,7 +332,6 @@ pub(super) fn rung_summary(
             "ownerRxRingDroppedDelta",
             "ownerRxTruncatedDelta",
             "shardFeedResyncsDelta",
-            "shardDriverBudgetViolationsDelta",
             "shardQueueOverflowsDelta",
         ]),
         "peerDelivery": peer_delivery,

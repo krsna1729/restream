@@ -24,7 +24,6 @@ pub(super) fn system_with_owners(owners: Value) -> Value {
             "readyVisits": 40,
             "retryEvents": 0,
             "resyncCount": 0,
-            "driverBudgetViolations": 0,
             "queueOverflows": 0,
             "budgetExhaustions": 0,
             "srtOwners": owners,
@@ -183,7 +182,6 @@ pub(super) fn clean_sample() -> Value {
         "ownerRxRingDroppedDelta": 0,
         "ownerRxTruncatedDelta": 0,
         "shardFeedResyncsDelta": 0,
-        "shardDriverBudgetViolationsDelta": 0,
         "shardQueueOverflowsDelta": 0,
         "srtDataFirstPps": 76_000.0,
     })
