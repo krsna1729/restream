@@ -30,6 +30,13 @@ updates:
     commit-message:
       prefix: "cargo"
       include: "scope"
+    ignore:
+      # Every published moq-net (vendored as vendor/moq-net, latest 0.3.19)
+      # implements web-transport-trait ^0.4. A 0.5 bump alone leaves two
+      # copies of the trait and fails to compile (E0277, #420). Drop this
+      # when moq-net requires 0.5.
+      - dependency-name: "web-transport-trait"
+        versions: [">= 0.5"]
 
   - package-ecosystem: "npm"
     directory: "/"
