@@ -12,6 +12,7 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
+- [Q-116 MoQ ingest follows catalog updates](#q-116-correctness-opus-moq-ingest-takes-tracks-a-publisher-adds-after-its-first-catalog)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -71,6 +72,18 @@ the [assurance roadmap](assurance-roadmap.md).
   shared builder or a provider installed before any client, covering
   tests); trust roots stay webpki-roots plus the custom PEM roots; aws-lc-rs
   stays out of `Cargo.lock`; the Dependabot ignore is removed.
+
+### Q-116 [correctness] [opus] MoQ ingest takes tracks a publisher adds after its first catalog
+- Goal: a publisher whose first catalog lists only some tracks still gets
+  every track ingested. `read_catalog`
+  (`crates/restream-engine/src/moq/ingest/session.rs`) reads one catalog
+  version and cancels; tracks a later version adds are never subscribed.
+- Why: the moq-gst publisher can publish a first catalog that lists only
+  `0.aac`; the CI `moq-dev-interop --ietf 19` `ingestGstMoqSession` check
+  then fails intermittently with "media probe was incomplete within 60s".
+- Gates: a session test where the publisher's first catalog has audio only
+  and a later version adds video puts both tracks in the ring; a catalog
+  update that removes or retypes a live track keeps today's behavior.
 
 ## Not planned
 
