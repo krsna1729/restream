@@ -60,13 +60,3 @@ pub fn enhanced_rtmp_connect_packet(
         .map(|packet| packet.bytes)
         .map_err(|error| format!("failed to serialize enhanced RTMP connect: {error:?}"))
 }
-
-pub fn raw_packet_starts_with_hevc_parameter_set(payload: &[u8]) -> bool {
-    let Some(first_nalu) = restream_core::split_annexb_nalus(payload).first().copied() else {
-        return false;
-    };
-    first_nalu
-        .first()
-        .is_some_and(|byte| matches!((byte >> 1) & 0x3F, 32..=34))
-        && crate::enhanced_rtmp_hevc::build_hevc_enhanced_rtmp_sequence_header(payload).is_some()
-}

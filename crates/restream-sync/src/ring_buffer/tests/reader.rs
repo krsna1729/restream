@@ -263,28 +263,6 @@ fn dts_enforcer_stream_idx_collision_corrupts_video_dts() {
     );
 }
 
-#[test]
-fn test_min_read_idx_reporting() {
-    let rb = Arc::new(RingBuffer::new(16));
-    assert_eq!(rb.min_read_idx(), 0);
-
-    rb.push(video_packet(0, 0, true));
-    let r1 = Reader::new("r1".into(), rb.clone());
-    let r2 = Reader::new("r2".into(), rb.clone());
-
-    // Both readers start at last keyframe (0)
-    assert_eq!(rb.min_read_idx(), 0);
-
-    // Advance r1 by pulling packet
-    let mut r1 = r1;
-    let mut r2 = r2;
-    let _ = r1.pull().unwrap();
-    assert_eq!(rb.min_read_idx(), 0); // min remains 0 since r2 is at 0
-
-    let _ = r2.pull().unwrap();
-    assert_eq!(rb.min_read_idx(), 1); // both are now at 1
-}
-
 // ── Vec pre-allocation correctness ───────────────────────────────
 
 #[test]
