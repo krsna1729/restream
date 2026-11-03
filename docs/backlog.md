@@ -11,6 +11,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
+- [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -53,6 +54,23 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: contract tests pin today's serialized timestamps (API JSON and
   SQLite rows) before the switch and pass unchanged after it;
   `cargo tree -i chrono` is empty.
+
+### Q-115 [platform] [sonnet] Move to reqwest 0.13 without a crypto-provider panic or a trust-root change
+- Goal: every crate builds against reqwest 0.13; `.github/dependabot.yml`
+  holds it at 0.12 until then. 0.13 renamed `rustls-tls`; its `rustls`
+  feature brings aws-lc-rs, a second provider beside ring. With
+  `rustls-no-provider`, a `Client` built without preconfigured TLS panics
+  unless a process-default provider is installed; its roots come from the
+  platform store (`rustls-platform-verifier`), not `webpki-roots` as now.
+  `use_preconfigured_tls` is deprecated, and `RequestBuilder::query`
+  needs the `query` feature.
+- Scope: 6 crates and 16 `Client` construction sites, including tests.
+  `ffmpeg_binary.rs` adds PEM roots with `add_root_certificate`, which
+  preconfigured TLS ignores.
+- Gates: no client construction can panic for want of a provider (one
+  shared builder or a provider installed before any client, covering
+  tests); trust roots stay webpki-roots plus the custom PEM roots; aws-lc-rs
+  stays out of `Cargo.lock`; the Dependabot ignore is removed.
 
 ## Not planned
 
