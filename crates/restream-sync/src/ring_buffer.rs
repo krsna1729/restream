@@ -731,7 +731,7 @@ impl RingBuffer {
 
         for slot in &self.slots {
             let Some((len, media_type)) =
-                slot.inspect(|packet| (packet.payload.len(), packet.media_type))
+                slot.map(|packet| (packet.payload.len(), packet.media_type))
             else {
                 continue;
             };
@@ -761,8 +761,7 @@ impl RingBuffer {
     fn payload_by_dts(&self) -> Vec<(i64, u64)> {
         let mut samples = Vec::with_capacity(self.capacity);
         for slot in &self.slots {
-            let Some(sample) = slot.inspect(|packet| (packet.dts, packet.payload.len() as u64))
-            else {
+            let Some(sample) = slot.map(|packet| (packet.dts, packet.payload.len() as u64)) else {
                 continue;
             };
             samples.push(sample);
@@ -850,7 +849,7 @@ impl RingBuffer {
                 None
             } else {
                 let slot = &self.slots[read_idx % self.capacity];
-                if slot.inspect(|_| ()).is_some() {
+                if slot.map(|_| ()).is_some() {
                     let published_at_us = slot.published_at_us.load(Ordering::Acquire);
                     (published_at_us > 0).then(|| now_us.saturating_sub(published_at_us) / 1000)
                 } else {

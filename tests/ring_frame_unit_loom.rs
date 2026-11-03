@@ -1,7 +1,7 @@
 //! Loom model-check for the lock-free reads of a ring slot by sequence:
 //! `RingBuffer::frame_unit` (the per-slot frame-unit side table),
 //! `RingBuffer::read_sequence` (the packet itself) and a run of
-//! `RingBuffer::read_unverified` packets accepted by `RingBuffer::run_intact`.
+//! `RingBuffer::read_unverified_with` packets accepted by `RingBuffer::run_intact`.
 //! Reduced to the slot atomics, the write index and `write_begin`: before
 //! each slot the producer stores `write_begin` (Relaxed), then the slot's
 //! unit word (Release), tagged with its sequence, then the slot's packet

@@ -87,7 +87,7 @@ fn read_ring<U>(
     cursor: FeedCursor,
     budget: ReadBudget,
     units: &mut Vec<U>,
-    unit: impl Fn(Arc<MediaPacket>) -> U,
+    unit: impl Fn(&Arc<MediaPacket>) -> U,
 ) -> FeedRead<()> {
     if cursor.epoch != epoch {
         return FeedRead::EpochMismatch {
@@ -126,7 +126,7 @@ fn read_ring<U>(
         }
         next.awaiting_keyframe = !packet.is_video_keyframe();
         total_bytes += packet.payload.len();
-        units.push(unit(packet));
+        units.push(unit(&packet));
         next.next_sequence += 1;
     }
     // The common run, past (or never in) a keyframe wait. A wait the loop
@@ -138,14 +138,18 @@ fn read_ring<U>(
         && units.len() < budget.max_units
         && total_bytes < budget.max_bytes
     {
-        let Some(packet) = ring.read_unverified(next.next_sequence as usize) else {
+        let Some((payload_len, made)) = ring
+            .read_unverified_with(next.next_sequence as usize, |packet| {
+                (packet.payload.len(), unit(packet))
+            })
+        else {
             units.clear();
             return FeedRead::Overrun {
                 oldest_sequence: refresh_oldest(ring, cached_oldest),
             };
         };
-        total_bytes += packet.payload.len();
-        units.push(unit(packet));
+        total_bytes += payload_len;
+        units.push(made);
         next.next_sequence += 1;
     }
     if next.next_sequence > run_start
@@ -396,7 +400,7 @@ impl EgressFeed for RingFeed {
             cursor,
             budget,
             units,
-            std::convert::identity,
+            Arc::clone,
         )
     }
 
@@ -524,7 +528,8 @@ impl EgressFeed for TsFeed {
         units: &mut Vec<Self::Unit>,
     ) -> FeedRead<()> {
         units.clear();
-        // `Bytes` clones are O(1): reference-counted.
+        // `Bytes` clones are O(1): reference-counted. The payload is cloned
+        // under the slot's lock, without a reference to its packet.
         read_ring(
             &self.ring,
             self.epoch.current(),
