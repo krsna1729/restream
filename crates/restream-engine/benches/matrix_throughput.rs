@@ -2,7 +2,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType};
 use restream_domain::domain::stage::StageKind;
-use restream_engine::codec::{audio_for_ts, video_for_ts};
+use restream_engine::codec::{audio_for_ts_into, video_for_ts_into};
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls::HlsSegmenterStart;
 use restream_engine::stage_lease::StageLease;
@@ -348,16 +348,19 @@ async fn run_matrix_iteration(
         let mut dts_enforcer = DtsEnforcer::new(num_streams);
         let mut nalu_len_size: usize = 4;
         let mut sps_pps_cache: Vec<u8> = Vec::new();
+        let mut video_buf: Vec<u8> = Vec::new();
+        let mut audio_buf: Vec<u8> = Vec::new();
 
         let start = Instant::now();
         while pulled < expected_packets && start.elapsed() < Duration::from_millis(2000) {
             if let Ok(Some(pkt)) = reader.pull() {
                 let payload = match pkt.media_type {
-                    MediaType::Video => video_for_ts(
+                    MediaType::Video => video_for_ts_into(
                         &pkt.payload,
                         pkt.format,
                         &mut nalu_len_size,
                         &mut sps_pps_cache,
+                        &mut video_buf,
                     ),
                     MediaType::Audio => {
                         let track = audio_tracks
@@ -367,7 +370,7 @@ async fn run_matrix_iteration(
                         let (sr, ch) = track
                             .map(|a| (a.sample_rate, a.channels))
                             .unwrap_or((48000, 1));
-                        audio_for_ts(&pkt.payload, pkt.format, sr, ch)
+                        audio_for_ts_into(&pkt.payload, pkt.format, sr, ch, &mut audio_buf)
                     }
                 };
                 if let Some(raw) = payload {
@@ -386,7 +389,7 @@ async fn run_matrix_iteration(
                         pts,
                         dts,
                         pkt.is_keyframe,
-                        &raw,
+                        raw,
                     );
                     black_box(ts_bytes);
                 }

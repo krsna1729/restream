@@ -3,11 +3,11 @@
 //! Every function that runs per-packet on the media data path is measured here:
 //!   avcc_to_annexb  — FLV ingest → TS muxer (per video frame, O(NALUs))
 //!   annexb_to_avcc  — Ring buffer → RTMP egress (per video frame, O(NALUs))
-//!   video_for_ts    — FLV and Raw variants (HLS/transcoder/recording consumers)
+//!   video_for_ts_into — FLV and Raw variants (HLS/transcoder/recording consumers)
 //!   video_for_rtmp  — Ring buffer → RTMP egress (alloc + AVCC wrap)
 //!   hevc_for_enhanced_rtmp — H.265 ring → enhanced RTMP / fMP4 (length prefix)
-//!   audio_for_ts    — Raw AAC: ADTS passthrough + ADTS synthesis
-//!   audio_for_rtmp  — ADTS strip + FLV 2-byte header
+//!   audio_for_ts_into — Raw AAC: ADTS passthrough + ADTS synthesis
+//!   audio_for_rtmp_into — ADTS strip + FLV 2-byte header
 //!
 //! Sizes are chosen to match real-world 1080p H.264 streams:
 //!   IDR frame  ≈ 80–200 KiB (single NALU after split_annexb)
@@ -23,9 +23,8 @@ use restream_core::codec::audio_for_rtmp_into;
 use restream_core::codec::avcc_to_annexb;
 use restream_core::codec::video_for_rtmp;
 use restream_core::codec::video_for_rtmp_with_composition_into;
-use restream_engine::codec::audio_for_rtmp;
-use restream_engine::codec::audio_for_ts;
-use restream_engine::codec::video_for_ts;
+use restream_engine::codec::audio_for_ts_into;
+use restream_engine::codec::video_for_ts_into;
 use restream_rtmp::enhanced_rtmp_hevc::hevc_video_for_enhanced_rtmp_with_composition_into;
 use std::hint::black_box;
 
@@ -173,26 +172,28 @@ fn bench_annexb_to_avcc(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// video_for_ts  — FLV (RTMP ingest consumers: HLS, transcoder, recording)
+// video_for_ts_into  — FLV (RTMP ingest consumers: HLS, transcoder, recording)
 // ---------------------------------------------------------------------------
 
 fn bench_video_for_ts(c: &mut Criterion) {
-    let mut group = c.benchmark_group("codec/video_for_ts");
+    let mut group = c.benchmark_group("codec/video_for_ts_into");
 
     // FLV P-frame: stripped + AVCC→Annex B
     let flv_p = make_flv_video(1, 8 * 1024, false);
     group.throughput(Throughput::Bytes(flv_p.len() as u64));
     group.bench_function("flv_pframe_8k", |b| {
+        let mut buf = Vec::new();
         b.iter_batched(
             // 4-byte NALU lengths, as every production caller starts with.
             || (4usize, Vec::new()),
             |(mut nls, mut cache)| {
-                black_box(video_for_ts(
+                black_box(video_for_ts_into(
                     &flv_p,
                     PayloadFormat::Flv,
                     &mut nls,
                     &mut cache,
-                ))
+                    &mut buf,
+                ));
             },
             BatchSize::SmallInput,
         )
@@ -208,15 +209,17 @@ fn bench_video_for_ts(c: &mut Criterion) {
             0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1F, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
             0x38, 0x80,
         ];
+        let mut buf = Vec::new();
         b.iter_batched(
             || (4usize, sps_pps.clone()),
             |(mut nls, mut cache)| {
-                black_box(video_for_ts(
+                black_box(video_for_ts_into(
                     &flv_idr,
                     PayloadFormat::Flv,
                     &mut nls,
                     &mut cache,
-                ))
+                    &mut buf,
+                ));
             },
             BatchSize::SmallInput,
         )
@@ -226,15 +229,17 @@ fn bench_video_for_ts(c: &mut Criterion) {
     let raw_p = make_annexb(1, 8 * 1024);
     group.throughput(Throughput::Bytes(raw_p.len() as u64));
     group.bench_function("raw_pframe_8k_borrowed", |b| {
+        let mut buf = Vec::new();
         b.iter_batched(
             || (0usize, Vec::new()),
             |(mut nls, mut cache)| {
-                black_box(video_for_ts(
+                black_box(video_for_ts_into(
                     &raw_p,
                     PayloadFormat::Raw,
                     &mut nls,
                     &mut cache,
-                ))
+                    &mut buf,
+                ));
             },
             BatchSize::SmallInput,
         )
@@ -289,40 +294,62 @@ fn bench_hevc_for_enhanced_rtmp(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// audio_for_ts  — Raw ADTS passthrough and ADTS synthesis
+// audio_for_ts_into  — Raw ADTS passthrough and ADTS synthesis
 // ---------------------------------------------------------------------------
 
 fn bench_audio_for_ts(c: &mut Criterion) {
-    let mut group = c.benchmark_group("codec/audio_for_ts");
+    let mut group = c.benchmark_group("codec/audio_for_ts_into");
 
     // ADTS passthrough (SRT ingest): borrowed, no alloc
     let adts = make_adts_audio(200);
     group.throughput(Throughput::Bytes(adts.len() as u64));
     group.bench_function("raw_adts_passthrough_207b", |b| {
-        b.iter(|| black_box(audio_for_ts(&adts, PayloadFormat::Raw, 48000, 2)))
+        let mut buf = Vec::new();
+        b.iter(|| {
+            black_box(audio_for_ts_into(
+                &adts,
+                PayloadFormat::Raw,
+                48000,
+                2,
+                &mut buf,
+            ));
+        })
     });
 
     // FLV AAC: strip 2-byte header + prepend 7-byte ADTS
     let flv_audio = make_flv_audio(200);
     group.throughput(Throughput::Bytes(flv_audio.len() as u64));
     group.bench_function("flv_aac_strip_adts_wrap_200b", |b| {
-        b.iter(|| black_box(audio_for_ts(&flv_audio, PayloadFormat::Flv, 48000, 2)))
+        let mut buf = Vec::new();
+        b.iter(|| {
+            black_box(audio_for_ts_into(
+                &flv_audio,
+                PayloadFormat::Flv,
+                48000,
+                2,
+                &mut buf,
+            ));
+        })
     });
 
     group.finish();
 }
 
 // ---------------------------------------------------------------------------
-// audio_for_rtmp  (ring buffer → RTMP egress: ADTS strip + FLV header)
+// audio_for_rtmp_into  (ring buffer → RTMP egress: ADTS strip + FLV header)
 // ---------------------------------------------------------------------------
 
 fn bench_audio_for_rtmp(c: &mut Criterion) {
-    let mut group = c.benchmark_group("codec/audio_for_rtmp");
+    let mut group = c.benchmark_group("codec/audio_for_rtmp_into");
 
     let adts = make_adts_audio(200);
     group.throughput(Throughput::Bytes(adts.len() as u64));
     group.bench_function("adts_to_flv_207b", |b| {
-        b.iter(|| black_box(audio_for_rtmp(&adts)))
+        let mut out = Vec::new();
+        b.iter(|| {
+            audio_for_rtmp_into(&adts, &mut out);
+            black_box(&out);
+        })
     });
 
     group.finish();
@@ -404,7 +431,11 @@ fn bench_rtmp_payload_ownership(c: &mut Criterion) {
         })
     });
     group.bench_function("audio_fresh_vec_then_bytes_from_vec", |b| {
-        b.iter(|| black_box(Bytes::from(audio_for_rtmp(&adts))))
+        b.iter(|| {
+            let mut out = Vec::new();
+            audio_for_rtmp_into(&adts, &mut out);
+            black_box(Bytes::from(out))
+        })
     });
 
     group.finish();

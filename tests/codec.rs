@@ -5,6 +5,7 @@
 //! called in SRT/HLS egress and the transcoder feeder), not a hand-rolled copy.
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 
+use restream_core::codec::audio_for_rtmp_into;
 use restream_core::codec::avcc_to_annexb;
 use restream_core::codec::build_aac_sequence_header;
 use restream_core::codec::build_adts_header;
@@ -14,9 +15,8 @@ use restream_core::codec::strip_adts;
 use restream_core::codec::video_for_rtmp;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaType, PayloadFormat};
-use restream_engine::codec::audio_for_rtmp;
-use restream_engine::codec::audio_for_ts;
-use restream_engine::codec::video_for_ts;
+use restream_engine::codec::audio_for_ts_into;
+use restream_engine::codec::video_for_ts_into;
 use restream_mpegts::TsMuxer;
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ fn make_flv_audio_data(raw_aac: &[u8]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: FLV → Annex B (video_for_ts)
+// Unit tests: FLV → Annex B (video_for_ts_into)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -100,7 +100,8 @@ fn flv_seq_header_caches_sps_pps_and_returns_none() {
     let seq = make_flv_video_seq_header(SPS, PPS);
     let mut nls = 4usize;
     let mut cache = Vec::new();
-    let result = video_for_ts(&seq, PayloadFormat::Flv, &mut nls, &mut cache);
+    let mut buf = Vec::new();
+    let result = video_for_ts_into(&seq, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf);
     // Seq header is cached internally, not emitted as standalone packet
     assert!(result.is_none(), "seq header should be cached, not emitted");
     // nalu_len_size should be updated from the AVCC config (0xFF → 4 bytes)
@@ -121,9 +122,9 @@ fn flv_data_packet_converts_avcc_to_annexb() {
     let flv_pkt = make_flv_video_data(nalu_data, true, 4);
     let mut nls = 4usize;
     let mut cache = Vec::new();
-    let result = video_for_ts(&flv_pkt, PayloadFormat::Flv, &mut nls, &mut cache);
-    assert!(result.is_some());
-    let data = result.unwrap();
+    let mut buf = Vec::new();
+    let result = video_for_ts_into(&flv_pkt, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf);
+    let data = result.expect("an AVCC frame converts");
     assert_eq!(&data[..4], &[0, 0, 0, 1], "should have Annex B start code");
     assert_eq!(&data[4..], nalu_data, "NALU data should be preserved");
 }
@@ -133,19 +134,20 @@ fn raw_video_is_passthrough() {
     let annexb = make_annexb(&[IDR_NALU]);
     let mut nls = 4usize;
     let mut cache = Vec::new();
-    let result = video_for_ts(&annexb, PayloadFormat::Raw, &mut nls, &mut cache);
-    assert!(result.is_some());
-    assert_eq!(&*result.unwrap(), &annexb[..]);
+    let mut buf = Vec::new();
+    let result = video_for_ts_into(&annexb, PayloadFormat::Raw, &mut nls, &mut cache, &mut buf);
+    assert_eq!(result.expect("raw passes through"), &annexb[..]);
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: FLV → ADTS (audio_for_ts)
+// Unit tests: FLV → ADTS (audio_for_ts_into)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn flv_audio_seq_is_skipped() {
     let seq = make_flv_audio_seq(48000, 2);
-    let result = audio_for_ts(&seq, PayloadFormat::Flv, 48000, 2);
+    let mut buf = Vec::new();
+    let result = audio_for_ts_into(&seq, PayloadFormat::Flv, 48000, 2, &mut buf);
     assert!(result.is_none(), "FLV audio seq header should be skipped");
 }
 
@@ -153,9 +155,9 @@ fn flv_audio_seq_is_skipped() {
 fn flv_audio_data_gets_adts_header() {
     let raw_aac = &[0x21, 0x10, 0x04, 0x60, 0x8c, 0x1c];
     let flv = make_flv_audio_data(raw_aac);
-    let result = audio_for_ts(&flv, PayloadFormat::Flv, 48000, 2);
-    assert!(result.is_some());
-    let data = result.unwrap();
+    let mut buf = Vec::new();
+    let data = audio_for_ts_into(&flv, PayloadFormat::Flv, 48000, 2, &mut buf)
+        .expect("an AAC frame gets an ADTS header");
     // ADTS sync word
     assert_eq!(data[0], 0xFF);
     assert_eq!(data[1] & 0xF0, 0xF0);
@@ -168,23 +170,23 @@ fn raw_audio_with_adts_is_passthrough() {
     let adts = build_adts_header(4, 48000, 2).unwrap();
     let mut payload = adts.to_vec();
     payload.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-    let result = audio_for_ts(&payload, PayloadFormat::Raw, 48000, 2);
-    assert!(result.is_some());
-    assert_eq!(&*result.unwrap(), &payload[..]);
+    let mut buf = Vec::new();
+    let result = audio_for_ts_into(&payload, PayloadFormat::Raw, 48000, 2, &mut buf);
+    assert_eq!(result.expect("ADTS passes through"), &payload[..]);
 }
 
 #[test]
 fn raw_audio_without_adts_gets_header() {
     let raw = &[0x21, 0x10, 0x04, 0x60];
-    let result = audio_for_ts(raw, PayloadFormat::Raw, 48000, 2);
-    assert!(result.is_some());
-    let data = result.unwrap();
+    let mut buf = Vec::new();
+    let data = audio_for_ts_into(raw, PayloadFormat::Raw, 48000, 2, &mut buf)
+        .expect("raw AAC gets an ADTS header");
     assert_eq!(data[0], 0xFF); // ADTS sync
     assert_eq!(&data[7..], raw);
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: Annex B → RTMP (video_for_rtmp / audio_for_rtmp)
+// Unit tests: Annex B → RTMP (video_for_rtmp / audio_for_rtmp_into)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -211,29 +213,6 @@ fn annexb_with_only_sps_pps_returns_none() {
 }
 
 #[test]
-fn audio_for_rtmp_strips_adts_adds_flv_header() {
-    let raw_aac = &[0xDE, 0xAD, 0xBE, 0xEF];
-    let adts = build_adts_header(raw_aac.len(), 48000, 2).unwrap();
-    let mut with_adts = adts.to_vec();
-    with_adts.extend_from_slice(raw_aac);
-
-    let result = audio_for_rtmp(&with_adts);
-    assert_eq!(result[0], 0xAF);
-    assert_eq!(result[1], 0x01);
-    assert_eq!(&result[2..], raw_aac);
-}
-
-#[test]
-fn audio_for_rtmp_raw_aac_no_adts() {
-    // Raw AAC without ADTS should still get the 2-byte FLV header, data unchanged
-    let raw_aac = &[0x21, 0x10, 0x04];
-    let result = audio_for_rtmp(raw_aac);
-    assert_eq!(result[0], 0xAF);
-    assert_eq!(result[1], 0x01);
-    assert_eq!(&result[2..], raw_aac);
-}
-
-#[test]
 fn youtube_safe_aac_rtmp_shapes_use_seq_header_then_non_adts_raw_data() {
     let sequence_header = build_aac_sequence_header(48_000, 2);
     assert_eq!(&sequence_header[..2], &[0xAF, 0x00]);
@@ -244,7 +223,8 @@ fn youtube_safe_aac_rtmp_shapes_use_seq_header_then_non_adts_raw_data() {
         .unwrap()
         .to_vec();
     adts_aac.extend_from_slice(raw_aac);
-    let data_packet = audio_for_rtmp(&adts_aac);
+    let mut data_packet = Vec::new();
+    audio_for_rtmp_into(&adts_aac, &mut data_packet);
 
     assert_eq!(&data_packet[..2], &[0xAF, 0x01]);
     assert_eq!(&data_packet[2..], raw_aac);
@@ -271,14 +251,15 @@ fn srt_demuxed_raw_packets_convert_to_rtmp_flv_packets() {
     let raw_aac = &[0xDE, 0xAD, 0xBE, 0xEF];
     let mut adts_aac = build_adts_header(raw_aac.len(), 48000, 2).unwrap().to_vec();
     adts_aac.extend_from_slice(raw_aac);
-    let audio = audio_for_rtmp(&adts_aac);
+    let mut audio = Vec::new();
+    audio_for_rtmp_into(&adts_aac, &mut audio);
     assert_eq!(audio[0], 0xAF, "audio should be AAC FLV");
     assert_eq!(audio[1], 0x01, "audio should be an AAC data packet");
     assert_eq!(&audio[2..], raw_aac);
 }
 
 // ---------------------------------------------------------------------------
-// Integration: FLV packets → video_for_ts → TsMuxer → valid MPEG-TS output
+// Integration: FLV packets → video_for_ts_into → TsMuxer → valid MPEG-TS output
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -303,10 +284,11 @@ fn flv_video_through_ts_muxer_produces_valid_ts() {
     let mut muxer = TsMuxer::new(Some(&video_meta), &[audio_meta]);
     let mut nls = 4usize;
     let mut cache = Vec::new();
+    let mut buf = Vec::new();
 
     // Feed sequence header — should cache SPS/PPS and return None
     let seq = make_flv_video_seq_header(SPS, PPS);
-    let seq_result = video_for_ts(&seq, PayloadFormat::Flv, &mut nls, &mut cache);
+    let seq_result = video_for_ts_into(&seq, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf);
     assert!(
         seq_result.is_none(),
         "seq header should be cached, not emitted"
@@ -315,7 +297,8 @@ fn flv_video_through_ts_muxer_produces_valid_ts() {
 
     // Feed an IDR frame — should include SPS/PPS inline + IDR Annex B
     let flv_idr = make_flv_video_data(IDR_NALU, true, nls);
-    let idr_annexb = video_for_ts(&flv_idr, PayloadFormat::Flv, &mut nls, &mut cache).unwrap();
+    let idr_annexb =
+        video_for_ts_into(&flv_idr, PayloadFormat::Flv, &mut nls, &mut cache, &mut buf).unwrap();
     // Should start with SPS start code (from cached SPS/PPS prepended before IDR)
     assert_eq!(
         &idr_annexb[..4],
@@ -327,7 +310,7 @@ fn flv_video_through_ts_muxer_produces_valid_ts() {
         7,
         "first NALU should be SPS (from cache)"
     );
-    let ts = muxer.mux_packet(MediaType::Video, 0, 0, 0, true, &idr_annexb);
+    let ts = muxer.mux_packet(MediaType::Video, 0, 0, 0, true, idr_annexb);
     // Check MPEG-TS sync byte
     if !ts.is_empty() {
         assert_eq!(ts[0], 0x47, "MPEG-TS sync byte");

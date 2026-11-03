@@ -187,6 +187,17 @@ fn audio_for_rtmp_into_reuses_buffer() {
     assert_eq!(&buf[2..], &raw);
 }
 
+#[test]
+fn audio_for_rtmp_into_strips_adts() {
+    let raw = [0xDE, 0xAD, 0xBE, 0xEF];
+    let mut with_adts = Vec::from(build_adts_header(raw.len(), 48000, 2).unwrap());
+    with_adts.extend_from_slice(&raw);
+    let mut buf = Vec::new();
+    audio_for_rtmp_into(&with_adts, &mut buf);
+    assert_eq!(buf[..2], [0xAF, 0x01]);
+    assert_eq!(&buf[2..], &raw);
+}
+
 /// The ADTS length field is 13 bits and includes the header. The largest
 /// frame it can describe reads back as exactly one frame; one byte more is
 /// refused: written with a truncated length, it would make a TS demuxer lose

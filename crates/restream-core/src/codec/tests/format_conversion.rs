@@ -50,7 +50,8 @@ fn parse_avcc_config_extracts_sps_pps() {
 #[test]
 fn adts_round_trip() {
     let raw_aac = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02];
-    let with_adts = prepend_adts(&raw_aac, 48000, 2).unwrap();
+    let mut with_adts = Vec::new();
+    prepend_adts_into(&raw_aac, 48000, 2, &mut with_adts).unwrap();
     assert_eq!(with_adts.len(), 7 + raw_aac.len());
     assert!(has_adts_sync(&with_adts));
     let stripped = strip_adts(&with_adts);
