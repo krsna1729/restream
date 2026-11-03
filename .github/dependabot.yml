@@ -37,6 +37,12 @@ updates:
       # when moq-net requires 0.5.
       - dependency-name: "web-transport-trait"
         versions: [">= 0.5"]
+      # reqwest 0.13 renamed `rustls-tls` and changed TLS setup; the bump
+      # needs the code migration in docs/backlog.md (Q-115), not a version
+      # edit, and its failed resolve turns the weekly cargo job red. Drop
+      # this in the change that does Q-115.
+      - dependency-name: "reqwest"
+        versions: [">= 0.13"]
 
   - package-ecosystem: "npm"
     directory: "/"
