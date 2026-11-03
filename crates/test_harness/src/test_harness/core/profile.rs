@@ -77,8 +77,13 @@ pub(crate) fn netns_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Names the marker file a namespace child writes once it is inside, so the
+/// parent can tell a failed mode from a namespace it never entered.
+const NETNS_ENTERED_ENV: &str = "RESTREAM_HARNESS_NETNS_ENTERED";
+
 pub(crate) fn maybe_reexec_in_port_namespace() -> Result<(), String> {
     if std::env::var_os("RESTREAM_HARNESS_IN_NETNS").is_some() {
+        note_netns_entered(std::env::var_os(NETNS_ENTERED_ENV).as_deref());
         return Ok(());
     }
 
@@ -99,24 +104,53 @@ pub(crate) fn maybe_reexec_in_port_namespace() -> Result<(), String> {
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let status = std::process::Command::new("unshare")
+    let mut child = std::process::Command::new("unshare");
+    child
         .args(["--net", "--user", "--map-root-user"])
         .arg(&exe)
         .args(strip_netns_opt(&raw))
-        .env("RESTREAM_HARNESS_IN_NETNS", "1")
-        .status()
-        .map_err(|e| format!("failed to re-exec {command} inside a network namespace: {e}"))?;
-
-    if !status.success() {
-        return Err(format!(
-            "{command} could not enter the default private network namespace; rerun with --no-netns to use the host-network fallback"
-        ));
-    }
-
-    let code = status.code().unwrap_or(1);
+        .env("RESTREAM_HARNESS_IN_NETNS", "1");
+    let marker = std::env::temp_dir().join(format!(
+        "restream-harness-netns-entered-{}",
+        std::process::id()
+    ));
+    let code = run_in_port_namespace(command, child, &marker)?;
     // SAFETY: _exit(2) only ends the process; skipping destructors and atexit is the point
     // here.
     unsafe { libc::_exit(code) };
+}
+
+/// Inside the namespace: leave the marker the parent passed, if any.
+fn note_netns_entered(marker: Option<&std::ffi::OsStr>) {
+    if let Some(marker) = marker {
+        // Best effort: without the marker the parent only adds the
+        // `--no-netns` advice to this run's own error.
+        let _ = std::fs::write(marker, b"");
+    }
+}
+
+/// Run `child`, the harness re-executed through `unshare`, and return its
+/// exit code. A child that entered the namespace and then failed has already
+/// reported why, so only a child that never got there gets the `--no-netns`
+/// advice.
+fn run_in_port_namespace(
+    command: &str,
+    mut child: std::process::Command,
+    marker: &Path,
+) -> Result<i32, String> {
+    let _ = std::fs::remove_file(marker);
+    let status = child
+        .env(NETNS_ENTERED_ENV, marker)
+        .status()
+        .map_err(|e| format!("failed to re-exec {command} inside a network namespace: {e}"))?;
+    let entered = marker.exists();
+    let _ = std::fs::remove_file(marker);
+    if status.success() || entered {
+        return Ok(status.code().unwrap_or(1));
+    }
+    Err(format!(
+        "{command} could not enter the default private network namespace; rerun with --no-netns to use the host-network fallback"
+    ))
 }
 
 pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Result<(), String> {
@@ -266,5 +300,60 @@ mod tests {
         assert_eq!(msr_nofile_target(30), 4_096);
         assert_eq!(msr_nofile_target(1_200), 4_096);
         assert_eq!(msr_nofile_target(2_000), 5_024);
+    }
+
+    /// A marker path private to one test in this process.
+    fn marker(test: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "restream-harness-netns-test-{test}-{}",
+            std::process::id()
+        ))
+    }
+
+    /// A stand-in for the `unshare` child running `script` under `sh`.
+    fn child(script: &str) -> std::process::Command {
+        let mut child = std::process::Command::new("sh");
+        child.args(["-c", script]);
+        child
+    }
+
+    #[test]
+    fn a_mode_that_fails_inside_the_namespace_keeps_its_own_exit_code() {
+        let marker = marker("entered");
+        let script = format!(": > \"${}\"; exit 3", super::NETNS_ENTERED_ENV);
+        assert_eq!(
+            super::run_in_port_namespace("mode", child(&script), &marker),
+            Ok(3)
+        );
+        assert!(!marker.exists(), "the parent removes the marker");
+    }
+
+    #[test]
+    fn a_namespace_that_was_never_entered_gets_the_no_netns_advice() {
+        let error = super::run_in_port_namespace("mode", child("exit 1"), &marker("refused"))
+            .expect_err("a child that never entered is a namespace failure");
+        assert!(
+            error.contains("could not enter") && error.contains("--no-netns"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_mode_that_passes_inside_the_namespace_exits_zero() {
+        let script = format!(": > \"${}\"", super::NETNS_ENTERED_ENV);
+        assert_eq!(
+            super::run_in_port_namespace("mode", child(&script), &marker("passed")),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn the_namespace_child_leaves_the_marker_the_parent_reads() {
+        let marker = marker("child");
+        let _ = std::fs::remove_file(&marker);
+        super::note_netns_entered(Some(marker.as_os_str()));
+        assert!(marker.exists());
+        std::fs::remove_file(&marker).unwrap();
+        super::note_netns_entered(None);
     }
 }
