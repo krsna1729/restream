@@ -12,46 +12,6 @@ use crate::egress::policy::LeafLimits;
 use crate::egress::scheduler::ScheduleState;
 
 // ---------------------------------------------------------------------------
-// LeafDeadlines
-// ---------------------------------------------------------------------------
-
-/// Absolute deadlines tracked per-leaf.
-#[derive(Debug, Clone)]
-pub struct LeafDeadlines {
-    /// If `Some`, the leaf must complete its resolve phase by this instant.
-    pub resolve_by: Option<Instant>,
-    /// If `Some`, the leaf must complete the connect phase by this instant.
-    pub connect_by: Option<Instant>,
-    /// If `Some`, the leaf must complete the handshake by this instant.
-    pub handshake_by: Option<Instant>,
-    /// If `Some`, the leaf must make byte progress by this instant or be closed.
-    pub progress_by: Option<Instant>,
-    /// If `Some`, the leaf must not remain backpressured beyond this instant.
-    pub backpressure_by: Option<Instant>,
-}
-
-impl LeafDeadlines {
-    pub fn none() -> Self {
-        Self {
-            resolve_by: None,
-            connect_by: None,
-            handshake_by: None,
-            progress_by: None,
-            backpressure_by: None,
-        }
-    }
-
-    /// Returns `true` if any deadline has passed.
-    pub fn any_expired(&self, now: Instant) -> bool {
-        self.resolve_by.is_some_and(|d| now >= d)
-            || self.connect_by.is_some_and(|d| now >= d)
-            || self.handshake_by.is_some_and(|d| now >= d)
-            || self.progress_by.is_some_and(|d| now >= d)
-            || self.backpressure_by.is_some_and(|d| now >= d)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ProgressState
 // ---------------------------------------------------------------------------
 
@@ -154,8 +114,6 @@ pub struct LeafCommon {
     pub cursor_primed: bool,
     /// Scheduler visibility and deficit accounting.
     pub schedule: ScheduleState,
-    /// Absolute deadlines (resolve, connect, handshake, progress).
-    pub deadlines: LeafDeadlines,
     /// Byte-progress tracking.
     pub progress: ProgressState,
     /// Strict per-leaf resource ceilings.
@@ -362,7 +320,6 @@ impl LeafCommon {
             cursor: FeedCursor::new(0, 0),
             cursor_primed: false,
             schedule: ScheduleState::new(),
-            deadlines: LeafDeadlines::none(),
             progress: ProgressState::new(),
             limits,
             pending_application_bytes: 0,
@@ -392,7 +349,6 @@ mod tests {
     use super::*;
     use crate::egress::command::{FeedId, OutputId};
     use crate::egress::policy::LeafLimits;
-    use std::time::Duration;
 
     fn make_common(id: &str, generation_val: u64) -> LeafCommon {
         LeafCommon::new(
@@ -447,21 +403,6 @@ mod tests {
         assert_eq!(p.total_units_sent, 0);
         assert_eq!(p.total_bytes_discarded, 0);
         assert_eq!(p.total_units_discarded, 0);
-    }
-
-    #[test]
-    fn deadlines_none_not_expired() {
-        let d = LeafDeadlines::none();
-        // Even far in the past the none-deadline should not expire.
-        let past = Instant::now() - Duration::from_secs(100);
-        assert!(!d.any_expired(past));
-    }
-
-    #[test]
-    fn deadlines_expire() {
-        let mut d = LeafDeadlines::none();
-        d.connect_by = Some(Instant::now() - Duration::from_millis(1));
-        assert!(d.any_expired(Instant::now()));
     }
 
     /// The gap this closes: before `metrics` existed on `EgressProgressSink`,

@@ -32,19 +32,16 @@ fn output_encoding_spec_reports_custom_video_selector() {
 }
 
 #[test]
-fn video_selector_stage_preset_and_as_encoding_str_and_is_custom() {
+fn video_selector_as_encoding_str_and_is_custom() {
     let source = VideoSelector::Source;
-    assert_eq!(source.stage_preset(), None);
     assert_eq!(source.as_encoding_str(), "source");
     assert!(!source.is_custom());
 
     let custom = VideoSelector::Custom;
-    assert_eq!(custom.stage_preset(), None);
     assert_eq!(custom.as_encoding_str(), "custom");
     assert!(custom.is_custom());
 
     let preset = VideoSelector::Preset("720p".to_string());
-    assert_eq!(preset.stage_preset(), Some("720p"));
     assert_eq!(preset.as_encoding_str(), "720p");
     assert!(!preset.is_custom());
 }

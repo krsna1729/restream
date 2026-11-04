@@ -231,7 +231,8 @@ async fn snapshot_reflects_lifecycle_and_metrics() {
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
 
     let (handle, _lease106, _) = manager.ensure_stage(key.clone(), source, None).await;
-    handle.metrics.record_in_batch(2, 1024);
+    handle.metrics.record_in(1000);
+    handle.metrics.record_in(24);
     handle.metrics.record_out(512);
     handle.lifecycle.transition(StagePhase::WaitingForCapacity {
         backend: StageBackendKind::ExternalFfmpeg,

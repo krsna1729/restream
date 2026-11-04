@@ -41,13 +41,6 @@ pub enum VideoSelector {
 }
 
 impl VideoSelector {
-    pub fn stage_preset(&self) -> Option<&str> {
-        match self {
-            Self::Preset(name) => Some(name.as_str()),
-            Self::Source | Self::Custom => None,
-        }
-    }
-
     pub fn as_encoding_str(&self) -> &str {
         match self {
             Self::Source => "source",

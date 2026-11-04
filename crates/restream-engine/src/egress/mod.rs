@@ -15,7 +15,7 @@
 //!   policy.rs       — LeafPolicy, WorkBudget, LeafLimits
 //!   backend.rs      — ProtocolEngine trait, EngineProgress, Readiness
 //!   backends/       — concrete fabric protocol engines
-//!   leaf.rs         — LeafCommon, LeafDeadlines, ProgressState
+//!   leaf.rs         — LeafCommon, ProgressState
 //!   timer.rs        — TimerWheel<K>
 //!   metrics.rs      — ShardMetrics
 //!   manager.rs      — desired output assignment and command admission
