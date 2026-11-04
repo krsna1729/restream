@@ -31,10 +31,6 @@ impl Readiness {
         readable: true,
         writable: true,
     };
-
-    pub fn satisfies(self, interest: Interest) -> bool {
-        (!interest.readable || self.readable) && (!interest.writable || self.writable)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -255,23 +251,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn readiness_satisfies_interest() {
-        assert!(Readiness::WRITABLE.satisfies(Interest::WRITE));
-        assert!(!Readiness::WRITABLE.satisfies(Interest::READ));
-        assert!(Readiness::BOTH.satisfies(Interest::READ_WRITE));
-        assert!(Readiness::BOTH.satisfies(Interest::WRITE));
-    }
-
-    #[test]
     fn interest_empty() {
         assert!(Interest::NONE.is_empty());
         assert!(!Interest::READ.is_empty());
         assert!(!Interest::WRITE.is_empty());
-    }
-
-    #[test]
-    fn readiness_default_satisfies_none() {
-        assert!(Readiness::default().satisfies(Interest::NONE));
-        assert!(!Readiness::default().satisfies(Interest::READ));
     }
 }

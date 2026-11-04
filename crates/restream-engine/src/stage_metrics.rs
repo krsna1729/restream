@@ -58,12 +58,6 @@ impl StageMetrics {
     }
 
     #[inline]
-    pub fn record_in_batch(&self, packets: u64, bytes: u64) {
-        self.packets_in.fetch_add(packets, Ordering::Relaxed);
-        self.bytes_in.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    #[inline]
     pub fn record_out(&self, bytes: u64) {
         self.packets_out.fetch_add(1, Ordering::Relaxed);
         self.bytes_out.fetch_add(bytes, Ordering::Relaxed);
@@ -158,33 +152,6 @@ mod tests {
         let snap = metrics.snapshot();
         assert_eq!(snap.packets_out, 4);
         assert_eq!(snap.bytes_out, 950);
-    }
-
-    #[test]
-    fn record_in_batch_adds_packet_and_byte_counts_in_one_call() {
-        let metrics = StageMetrics::new();
-        metrics.record_in_batch(7, 700);
-        metrics.record_in(1);
-
-        let snap = metrics.snapshot();
-        assert_eq!(snap.packets_in, 8);
-        assert_eq!(snap.bytes_in, 701);
-    }
-
-    #[test]
-    fn record_in_batch_with_zero_packets_but_nonzero_bytes_is_not_rejected() {
-        // The API has no invariant tying packet count to byte count; a
-        // zero-packet batch with bytes must still land in bytes_in without
-        // incrementing packets_in.
-        let metrics = StageMetrics::new();
-        metrics.record_in_batch(0, 500);
-
-        let snap = metrics.snapshot();
-        assert_eq!(snap.packets_in, 0);
-        assert_eq!(snap.bytes_in, 500);
-        // avg_us_per_packet must still guard on packets_in == 0, not on
-        // bytes_in == 0.
-        assert_eq!(snap.avg_us_per_packet, 0.0);
     }
 
     #[test]

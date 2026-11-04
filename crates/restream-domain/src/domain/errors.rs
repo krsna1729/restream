@@ -19,8 +19,6 @@ pub struct StageError {
     pub message: String,
     /// Whether this error is expected to resolve if the stage is retried.
     pub retryable: bool,
-    /// Last few lines of the backend's stderr output, if available.
-    pub stderr_tail: Option<String>,
 }
 
 impl StageError {
@@ -29,13 +27,7 @@ impl StageError {
             code: code.into(),
             message: message.into(),
             retryable,
-            stderr_tail: None,
         }
-    }
-
-    pub fn with_stderr(mut self, tail: impl Into<String>) -> Self {
-        self.stderr_tail = Some(tail.into());
-        self
     }
 
     pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
@@ -49,11 +41,7 @@ impl StageError {
 
 impl fmt::Display for StageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)?;
-        if let Some(tail) = &self.stderr_tail {
-            write!(f, " (stderr: {})", tail.trim())?;
-        }
-        Ok(())
+        write!(f, "[{}] {}", self.code, self.message)
     }
 }
 
@@ -138,15 +126,6 @@ mod tests {
             "[metadata_timeout] Timed out waiting for ingest metadata"
         );
         assert!(err.retryable);
-        assert!(err.stderr_tail.is_none());
-    }
-
-    #[test]
-    fn domain_stage_error_with_stderr() {
-        let err = StageError::permanent("connect_refused", "Remote refused connection")
-            .with_stderr("Connection refused\nNo route to host");
-        assert!(err.to_string().contains("stderr:"));
-        assert!(!err.retryable);
     }
 
     #[test]

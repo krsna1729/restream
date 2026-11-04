@@ -77,11 +77,6 @@ pub fn try_get_cached(name: &str) -> TranscodeProfile {
         .unwrap_or_else(|_| resolve_from_profiles(&built_in_defaults(), name))
 }
 
-pub fn get_blocking(name: &str) -> TranscodeProfile {
-    let cache = cache().blocking_read();
-    resolve_from_profiles(&cache, name)
-}
-
 /// Built-in realtime defaults. Used when no DB config is present.
 /// All settings are optimized for live streaming: lowest latency, no reordering.
 pub fn built_in_defaults() -> TranscodeProfiles {
@@ -260,7 +255,7 @@ mod tests {
 
     // resolve_from_profiles is the pure three-tier fallback (exact name ->
     // baseline key -> type default) that every cache read (get,
-    // try_get_cached, get_blocking) ultimately delegates to. It is tested
+    // try_get_cached) ultimately delegates to. It is tested
     // directly here, against a local TranscodeProfiles map, rather than via
     // the process-global cache functions: the cache is a single OnceLock
     // shared by every test in the binary, and `cargo test` runs tests in

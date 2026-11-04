@@ -48,11 +48,6 @@ impl FeedCursor {
             ..Self::new(epoch, next_sequence)
         }
     }
-
-    /// Returns `true` if this cursor has an older epoch than `other`.
-    pub fn epoch_mismatch(self, other: FeedCursor) -> bool {
-        self.epoch != other.epoch
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,14 +196,6 @@ pub trait EgressFeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cursor_epoch_mismatch() {
-        let a = FeedCursor::new(1, 100);
-        let b = FeedCursor::new(2, 100);
-        assert!(a.epoch_mismatch(b));
-        assert!(!a.epoch_mismatch(a));
-    }
 
     #[test]
     fn read_budget_defaults() {

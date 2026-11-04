@@ -169,22 +169,9 @@ impl StageKind {
         matches!(self, Self::VideoPreset { .. })
     }
 
-    pub fn is_video_processing(&self) -> bool {
-        matches!(self, Self::VideoPreset { .. } | Self::Preview { .. })
-    }
-
     pub fn audio_operation(&self) -> Option<&str> {
         match self {
             Self::AudioRoute { operation, .. } => Some(operation.as_str()),
-            _ => None,
-        }
-    }
-
-    /// The video preset name for video stages, used by downstream audio and
-    /// codec-edge stages to refer to their upstream in Display output.
-    pub fn preset_name(&self) -> Option<&str> {
-        match self {
-            Self::VideoPreset { preset, .. } => Some(preset.as_str()),
             _ => None,
         }
     }
@@ -326,35 +313,29 @@ mod tests {
     }
 
     #[test]
-    fn is_preview_and_is_video_preset_and_is_video_processing_are_mutually_precise() {
+    fn is_preview_and_is_video_preset_are_mutually_precise() {
         let preview = StageKind::preview("720p", StageKind::source());
         assert!(preview.is_preview());
         assert!(!preview.is_video_preset());
-        assert!(preview.is_video_processing());
 
         let video_preset = StageKind::video_preset("720p");
         assert!(!video_preset.is_preview());
         assert!(video_preset.is_video_preset());
-        assert!(video_preset.is_video_processing());
 
         let source = StageKind::source();
         assert!(!source.is_preview());
         assert!(!source.is_video_preset());
-        assert!(!source.is_video_processing());
     }
 
     #[test]
-    fn preset_name_and_video_output_codec_are_none_off_video_preset() {
+    fn video_output_codec_is_none_off_video_preset() {
         let non_video = StageKind::audio_route("atrack:0", StageKind::source());
-        assert_eq!(non_video.preset_name(), None);
         assert_eq!(non_video.video_output_codec(), None);
 
         let bare_preset = StageKind::video_preset("720p");
-        assert_eq!(bare_preset.preset_name(), Some("720p"));
         assert_eq!(bare_preset.video_output_codec(), None);
 
         let with_codec = StageKind::video_preset_with_codec("720p", "h264");
-        assert_eq!(with_codec.preset_name(), Some("720p"));
         assert_eq!(with_codec.video_output_codec(), Some("h264"));
     }
 }
