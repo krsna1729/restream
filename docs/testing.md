@@ -75,12 +75,18 @@ its own, for example `cargo xtask clippy-lib` or `cargo xtask docs-audit`.
 | `integration-shards` | `mixed.live.srt.h264.a1.bf0`, `mixed.live.rtmp.h264.a1.bf0`, `direct-play` | not on `master` pushes |
 | `master-transport-shards` | the H.264/H.265 SRT shapes, two RTMP shapes, `srt-crypto-matrix`, `fault.resilience`, `direct-play` | `master` pushes |
 | `moq-interop` (MoQ interop) | `moq-dev-interop --browsers` | `master`, manual runs, and pull requests touching MoQ/egress (root or engine), `crates/restream-{core,sync,moq}/`, moved MoQ harness sources, MoQ peer/browser tools or `ci.yml` |
-| `docker-runtime-smoke` | `cargo xtask container smoke` on a source-built image | Dockerfile, `crates/xtask` release/container/qualify workflows, `distribution/`, seccomp tests, production `crates/restream-*/` (the engine's RTMP/SRT/egress included) or harness changes |
+| `docker-runtime-smoke` | `cargo xtask container smoke` on a source-built image | Dockerfile and its source/build inputs: root manifests and Rust sources, frontend, bootstrap scripts, vendor/workspace crates, `distribution/`, container tests and workflow setup |
 
 `nightly-full-certification.yml` adds `cargo test --workspace --all-features`,
 a nightly container smoke and the full harness shard matrix. Nightly and
 release both read that matrix from `crates/xtask/src/qualify/shards.rs`; the PR and
 `master` shard lists above live in `ci.yml`.
+
+The Docker, parser-fuzz and MoQ path filters must fail if Git cannot read the
+diff; an unavailable diff is not an unchanged path. Each captures the complete
+path list before matching, so an early match cannot terminate Git with SIGPIPE.
+`crates/xtask/src/ci_scope.rs` executes the workflow's real scope scripts for
+relevant/unrelated inputs, large diffs and diff errors.
 
 ## Rust test suite
 
