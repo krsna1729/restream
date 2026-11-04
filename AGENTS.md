@@ -178,6 +178,9 @@ its evidence in the commit message.
 - Rebase-and-merge when the commits are curated and are the design of the
   change, such as a multi-step architecture or media-pipeline change.
 - A merge commit only when the branch topology itself matters.
+- `master` requires the PR CI checks but not an up-to-date branch. Merge a
+  green PR without refreshing it; update only on a conflict or an overlapping
+  change merged since its run. The `master` push CI is the post-merge check.
 
 ## Operational Guidance
 
