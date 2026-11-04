@@ -257,7 +257,7 @@ fn audit_file_sizes() -> Result<bool, String> {
             "WARN: {warnings} Rust file(s) are in the {RUST_LINE_WARNING}-{RUST_LINE_LIMIT} pressure band."
         );
         println!(
-            "      Near-cap clustering is architectural pressure, not success; split by ownership before adding more code."
+            "      Review touched owners before growth; see the layering-audit skill's file-growth policy."
         );
     }
     Ok(failed)

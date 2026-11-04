@@ -27,6 +27,7 @@ skills; load the skill for the area you touch.
 - Anywhere in `src/` or `crates/restream-*/src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points `catch_unwind`; codecs run only in FFmpeg child processes; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
 - Update docs when changing commands, configuration, architecture, protocols, or user-visible behavior.
 - Prefer targeted fixes over rewrites. Add abstractions only when they remove real complexity.
+- Treat file size as a review trigger, not a target. Before growing a Rust file in the 800–999-line band, apply the [file-growth policy](docs/agent-guidance/skills/layering-audit/SKILL.md#file-growth); do not reorganize unrelated files merely to clear warnings.
 
 ## Skills
 
