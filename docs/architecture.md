@@ -614,8 +614,10 @@ egress tasks, and `src/logging/mod.rs` still call `crate::db` with a pool.
   transcoder stages.
 - Only approved owners read environment variables (mainly `src/config/mod.rs` and
   `crates/restream-engine/src/config/env.rs`).
-- Split files by ownership, not by size. A file near the 999-line limit is a
-  sign to find the owner, not to cut it in half.
+- Split files by ownership, not by size. At 800 Rust lines, review the touched
+  owner's growth; 999 remains the hard maximum, not a target. Apply the
+  [file-growth policy](agent-guidance/skills/layering-audit/SKILL.md#file-growth)
+  rather than mechanically splitting every warning-band file.
 - Measure rebuild, reuse or isolation value before proposing a new crate.
 
 `cargo xtask source-audit` (`crates/xtask/src/source_audit.rs`) enforces the

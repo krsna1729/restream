@@ -33,11 +33,35 @@ Stop when another split adds wrappers or navigation without clarifying ownership
 Avoid endpoint-local CRUD wrappers, compatibility facades that recreate coupling,
 and hot-path dispatch/channel hops introduced solely for layering.
 
-For size-driven work, `cargo xtask source-audit` is authoritative: Rust
-warns at 800 lines and fails above 999; frontend TypeScript also caps at 999.
-Do not aim for the cap. Split by behavior/ownership, including tests, and keep
-new extractions below the warning band. Reduce existing oversize pressure
-without growing other oversized files or weakening the gate.
+## File growth
+
+`cargo xtask source-audit` is authoritative for raw line counts: Rust warns
+at 800 and fails above 999; frontend TypeScript also caps at 999. The warning
+is an ownership review trigger, not proof that a file needs splitting.
+
+For each Rust file at or above 800 lines before or after a proposed change:
+
+1. Review the touched responsibility, not all warning-band files. State the
+   base/head line counts and the owner being changed in the PR or commit.
+2. Put a new independent responsibility in its existing owner, or extract a
+   cohesive owner before adding it. Substantive feature work should normally
+   leave the original pressure-band file no larger. New extractions stay below
+   the warning band; do not merely move the near-cap problem to another file.
+3. A narrow correctness fix may grow a coherent owner without an extraction
+   when a move would increase risk. Explain that tradeoff in the PR or commit;
+   the hard maximum still applies. Do not delay a fix for an unrelated reorg.
+4. Keep tests with their behavior. Move inline tests or independent scenarios
+   to named test modules when useful; share setup rather than copy it.
+5. Reject line-count gaming: removing useful comments, compressed formatting,
+   arbitrary `part2` files, wider visibility, or forwarding wrappers solely to
+   lower a count. Preserve ownership, private state and dependency direction.
+
+A one-off reorganization needs evidence of mixed responsibilities, repeated
+cross-file edits, or a concrete navigation/verification problem. A line-count
+histogram alone is insufficient. Scope the move to that owner, separate it
+from behavior changes, and identify the entry points and focused proof for
+each extracted responsibility. Do not add crates or runtime hops just to split
+a file.
 
 ## Verification
 
