@@ -216,7 +216,6 @@ or OS path errors. Without `ca=`, the bundled public roots remain in use;
 | `RESTREAM_EGRESS_VISIT_MAX_UNITS` | `32` | `1..=4096` | Units per leaf visit |
 | `RESTREAM_EGRESS_VISIT_MAX_BYTES` | `262144` | `188..=16 MiB` | Bytes per leaf visit |
 | `RESTREAM_EGRESS_VISIT_MAX_US` | `2000` | `1..=1000000` | Microseconds per leaf visit |
-| `RESTREAM_EGRESS_MAX_PENDING_BYTES` | `262144` | `1..=16 MiB` | Startup warning and config summary only; per-output limits come from `LeafPolicy::default()` |
 | `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` | `3000` | `1..=60000` | On shutdown, how long a shard lets leaves flush queued bytes |
 
 Shard growth, admission and shrink are described in
@@ -225,7 +224,6 @@ Shard growth, admission and shrink are described in
 `EgressFabricConfig::validate` runs at startup and logs a
 `restream.config.warning` (non-fatal) when:
 
-- `RESTREAM_EGRESS_MAX_PENDING_BYTES` < `RESTREAM_EGRESS_VISIT_MAX_BYTES`;
 - `RESTREAM_EGRESS_SHARDS` > 4 × effective CPUs;
 - `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` < 50;
 - `RESTREAM_EGRESS_COMMAND_BATCH` > `RESTREAM_EGRESS_COMMAND_CAPACITY`.

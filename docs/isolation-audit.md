@@ -57,7 +57,7 @@ destination.
 | SRT probe hold | publishers awaiting their probe | `probe_hold_peer_bytes` 4 MiB, 2 s timeout | `probe_hold_total_bytes` 64 MiB | `concurrent_stalled_probes_stay_inside_their_byte_budgets`, `discarding_a_panicked_peer_returns_only_its_held_bytes`, `a_replay_that_unwinds_leaves_no_bytes_charged` |
 | SRT Owner → Tokio events | all SRT peers | — | 256-slot bridge plus 1024 pending events; media never waits | [runtime crossings](runtime-crossings.md) |
 | Egress shard thread | outputs on the shard | panic boundary per visit; `WorkBudget` per visit | — | `panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others`, `blocked_leaf_does_not_starve_ready_leaf_on_same_shard_thread` |
-| Egress send memory | outputs on the shard | `LeafLimits::max_pending_bytes`, lag, backpressure time | shard leaf capacity | `crates/restream-engine/src/egress/shard/tests/leaf_isolation.rs` |
+| Egress send memory | outputs on the shard | RTMP encodes the next unit only after the previous one is written; SRT's bounded send buffer; lag and backpressure-time stall limits | shard leaf capacity | `crates/restream-engine/src/egress/shard/tests/leaf_isolation.rs` |
 | Std locks shared by entities | entities and the status API | poison-tolerant `restream_sync::lock::{lock, read, write}`; raw calls disallowed by `clippy.toml` | — | `a_poisoned_lock_still_serves_later_callers`; clippy `-D warnings` |
 | Feed rings | one pipeline's outputs | readers never block the producer; an overrun resyncs the reader | ring capacity | `fault_injection_rapid_overflow_recovery`, `first_visit_primes_the_cursor_to_the_latest_sync_point` |
 | Listener tasks | the whole protocol | — | restart with backoff | `listener_supervisor` tests |

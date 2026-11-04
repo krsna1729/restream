@@ -11,20 +11,10 @@ use std::time::{Duration, Instant};
 // ---------------------------------------------------------------------------
 
 /// Operational policy for one egress leaf.
-///
-/// Exposed as configuration through `RESTREAM_EGRESS_*` environment variables.
-/// Invalid zero, overflow, or contradictory values fail validation at startup.
 #[derive(Debug, Clone)]
 pub struct LeafPolicy {
-    /// Maximum application bytes queued for this leaf before backpressure is
-    /// enforced (includes protocol headers and pending wire units).
-    pub max_pending_bytes: usize,
-
-    /// Maximum feed lag (in units) before the leaf is resynchronized.
+    /// Maximum feed lag (in units) before the leaf is stalled.
     pub max_feed_lag_units: u64,
-
-    /// Maximum feed lag duration before resynchronization.
-    pub max_feed_lag: Duration,
 
     /// If the leaf makes no byte progress for this long, it is closed.
     pub no_progress_timeout: Duration,
@@ -42,9 +32,7 @@ pub struct LeafPolicy {
 impl Default for LeafPolicy {
     fn default() -> Self {
         Self {
-            max_pending_bytes: 256 * 1024,
             max_feed_lag_units: 300,
-            max_feed_lag: Duration::from_secs(10),
             no_progress_timeout: Duration::from_secs(15),
             resolve_timeout: Duration::from_secs(5),
             connect_timeout: Duration::from_secs(30),
@@ -57,30 +45,25 @@ impl Default for LeafPolicy {
 // LeafLimits — strict per-leaf accounting ceilings
 // ---------------------------------------------------------------------------
 
-/// Strict ceilings applied to one leaf during operation.
+/// Ceilings `classify_stall` applies to one leaf during operation.
 ///
-/// The first exceeded limit triggers recovery. These are enforced, not
-/// advisory. A write larger than the remaining budget is split, rejected, or
-/// retained as one explicitly accounted pending unit.
+/// Pending send bytes have no ceiling here; each backend bounds its own send
+/// queue. The RTMP publisher encodes the next feed unit only after the
+/// previous one reached the transport, so it holds at most one unit's wire
+/// bytes; an SRT leaf's backlog is the SRT socket's bounded send buffer.
 #[derive(Debug, Clone)]
 pub struct LeafLimits {
-    /// Maximum application bytes pending on the leaf at any instant.
-    pub max_pending_bytes: usize,
     /// Maximum number of feed units the leaf may lag behind the head.
     pub max_lag_units: u64,
     /// Maximum time the leaf may be continuously backpressured before recovery.
     pub max_backpressure_duration: Duration,
-    /// Maximum byte count of protocol handshake or control output.
-    pub max_handshake_bytes: usize,
 }
 
 impl Default for LeafLimits {
     fn default() -> Self {
         Self {
-            max_pending_bytes: 256 * 1024,
             max_lag_units: 300,
             max_backpressure_duration: Duration::from_secs(30),
-            max_handshake_bytes: 64 * 1024,
         }
     }
 }
@@ -89,10 +72,8 @@ impl LeafLimits {
     /// Derive strict limits from a `LeafPolicy`.
     pub fn from_policy(policy: &LeafPolicy) -> Self {
         Self {
-            max_pending_bytes: policy.max_pending_bytes,
             max_lag_units: policy.max_feed_lag_units,
             max_backpressure_duration: policy.no_progress_timeout,
-            max_handshake_bytes: 64 * 1024,
         }
     }
 }
@@ -344,13 +325,13 @@ mod tests {
     #[test]
     fn leaf_limits_from_policy() {
         let policy = LeafPolicy {
-            max_pending_bytes: 512 * 1024,
             max_feed_lag_units: 500,
+            no_progress_timeout: Duration::from_secs(7),
             ..LeafPolicy::default()
         };
         let limits = LeafLimits::from_policy(&policy);
-        assert_eq!(limits.max_pending_bytes, 512 * 1024);
         assert_eq!(limits.max_lag_units, 500);
+        assert_eq!(limits.max_backpressure_duration, Duration::from_secs(7));
     }
 
     #[test]
@@ -381,7 +362,6 @@ mod tests {
         let limits = LeafLimits {
             max_lag_units: 300,
             max_backpressure_duration: Duration::from_secs(15),
-            ..LeafLimits::default()
         };
         assert_eq!(
             classify_stall(1, Duration::from_secs(1), 301, &limits),
