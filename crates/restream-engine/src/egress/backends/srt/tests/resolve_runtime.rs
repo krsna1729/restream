@@ -108,7 +108,7 @@ impl EgressShardBackend for ForwardingProbe {
     }
 
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        metrics.cq_overflows = 13;
+        metrics.stale_completions = 13;
     }
 
     fn wait_idle(
@@ -133,7 +133,7 @@ fn resolving_srt_backend_forwards_metrics_and_the_idle_wait() {
     assert_eq!(backend.resync_count(), 7);
     assert_eq!(backend.budget_exhaustion_count(), 11);
     backend.observe_metrics(&mut metrics);
-    assert_eq!(metrics.cq_overflows, 13);
+    assert_eq!(metrics.stale_completions, 13);
 
     let (_tx, rx) = flume::bounded(1);
     assert!(matches!(

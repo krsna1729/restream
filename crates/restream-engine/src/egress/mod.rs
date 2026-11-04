@@ -17,7 +17,7 @@
 //!   backends/       — concrete fabric protocol engines
 //!   leaf.rs         — LeafCommon, LeafDeadlines, ProgressState
 //!   timer.rs        — TimerWheel<K>
-//!   metrics.rs      — ShardMetrics, LeafMetrics
+//!   metrics.rs      — ShardMetrics
 //!   manager.rs      — desired output assignment and command admission
 //!   shard.rs        — fixed shard threads, supervision snapshots, wake budgets
 //!   runtime.rs      — one feed's manager and shards: sizing, panic recovery
