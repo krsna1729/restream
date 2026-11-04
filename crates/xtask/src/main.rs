@@ -40,6 +40,8 @@ mod harness;
 mod qualify;
 mod release;
 mod scan;
+#[cfg(test)]
+mod security_workflow;
 mod setup;
 mod skills;
 mod source_audit;

@@ -47,14 +47,32 @@ jobs:
         run: |
           grype sbom:restream.cdx.json \
             --output sarif=grype-results.sarif \
-            --output json=grype-results.json || true
+            --output json=grype-results.json
 
       - name: Scan SBOM with trivy
         run: |
           trivy sbom restream.cdx.json \
             --format sarif \
             --output trivy-results.sarif \
-            --severity HIGH,CRITICAL || true
+            --severity HIGH,CRITICAL
+
+      - name: Validate scanner reports
+        run: |
+          jq -e '.matches | type == "array"' grype-results.json >/dev/null
+          for report in grype-results.sarif trivy-results.sarif; do
+            jq -e '.version == "2.1.0" and (.runs | type == "array") and (.runs | length > 0)' "$report" >/dev/null
+          done
+
+      - name: Preserve scanner reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sbom-security-reports
+          path: |
+            grype-results.json
+            grype-results.sarif
+            trivy-results.sarif
+          retention-days: 7
 
       - name: Upload grype SARIF report
         uses: github/codeql-action/upload-sarif@v4
@@ -74,13 +92,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ ! -f grype-results.json ]; then
-            echo "No grype results JSON; skipping issue creation."
-            exit 0
-          fi
-
           FINDINGS=$(jq -r '
-            [(.matches // [])[]
+            [.matches[]
               | select((.vulnerability.severity // "" | ascii_upcase) as $s
                        | $s == "HIGH" or $s == "CRITICAL")]
             | if length == 0 then "NONE"
@@ -93,6 +106,9 @@ jobs:
             exit 0
           fi
 
+          gh label create security-sbom --color B60205 \
+            --description "Scheduled SBOM vulnerability findings" --force
+
           DATE=$(date +%Y-%m-%d)
           EXISTING=$(gh issue list --label security-sbom --state open --json number --jq '.[0].number // empty')
 
@@ -102,7 +118,7 @@ jobs:
 
           $FINDINGS
 
-          **Scan artifacts:** grype-results.json, trivy-results.sarif (uploaded to GitHub Security tab)
+          **Scan artifacts:** grype-results.json, grype-results.sarif and trivy-results.sarif in the sbom-security-reports artifact for ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. SARIF is also uploaded to GitHub Security.
           "
 
           if [ -z "$EXISTING" ]; then
