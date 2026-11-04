@@ -44,14 +44,11 @@ impl RingSlot {
         drop(replaced);
     }
 
-    /// The packet in this slot, whatever sequence it belongs to.
+    /// What `map` makes of the packet in this slot, whatever sequence it
+    /// belongs to, under the slot's lock: a caller that needs only part of
+    /// the packet takes no reference to it.
     #[inline]
-    pub(super) fn packet(&self) -> Option<Arc<MediaPacket>> {
-        lock(&self.data).clone()
-    }
-
-    /// Apply `inspect` to the packet in this slot without taking a reference.
-    pub(super) fn inspect<R>(&self, inspect: impl FnOnce(&MediaPacket) -> R) -> Option<R> {
-        lock(&self.data).as_deref().map(inspect)
+    pub(super) fn map<R>(&self, map: impl FnOnce(&Arc<MediaPacket>) -> R) -> Option<R> {
+        lock(&self.data).as_ref().map(map)
     }
 }

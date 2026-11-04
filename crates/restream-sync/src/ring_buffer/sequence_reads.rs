@@ -33,20 +33,26 @@ impl RingBuffer {
     #[inline]
     pub fn read_at(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
         let slot = &self.slots[sequence % self.capacity];
-        let packet = slot.packet()?;
+        let packet = slot.map(Arc::clone)?;
         FrameUnit::unpack(slot.unit.load(Ordering::Acquire), sequence)?;
         Some(packet)
     }
 
-    /// The packet in `sequence`'s slot, unchecked: it may be a later lap's.
-    /// The caller bounds the run by the write index and then accepts it only
-    /// if [`Self::run_intact`] holds for it.
+    /// What `map` makes of the packet in `sequence`'s slot, unchecked: it
+    /// may be a later lap's. `map` runs under the slot's lock, so a caller
+    /// that needs only part of the packet takes no reference to it. The
+    /// caller bounds the run by the write index and then accepts it only if
+    /// [`Self::run_intact`] holds for it.
     #[inline]
-    pub fn read_unverified(&self, sequence: usize) -> Option<Arc<MediaPacket>> {
-        self.slots[sequence % self.capacity].packet()
+    pub fn read_unverified_with<U>(
+        &self,
+        sequence: usize,
+        map: impl FnOnce(&Arc<MediaPacket>) -> U,
+    ) -> Option<U> {
+        self.slots[sequence % self.capacity].map(map)
     }
 
-    /// Whether every packet [`Self::read_unverified`] returned for
+    /// Whether every packet [`Self::read_unverified_with`] read for
     /// `start..end` (each below a write index loaded before the reads) is
     /// its own sequence's. One check while no publication has begun a lap
     /// over `start`; otherwise each slot's unit tag, as [`Self::read_at`]
