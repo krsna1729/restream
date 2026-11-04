@@ -249,6 +249,43 @@ fn write_u24(destination: &mut [u8], value: u32) {
     destination[..3].copy_from_slice(&[(value >> 16) as u8, (value >> 8) as u8, value as u8]);
 }
 
+/// One media message through the production framing, as
+/// `MediaPublisher::advance` sends it: build the message, then fill and
+/// consume zero-copy vectored writes of at most `max_write` bytes against a
+/// socket that accepts every byte. Returns the wire length. Measured by
+/// `benches/rtmp_serializer.rs`.
+#[doc(hidden)]
+pub fn bench_frame_media(
+    type_id: u8,
+    timestamp: u32,
+    payload: Bytes,
+    chunk_size: usize,
+    max_write: usize,
+) -> usize {
+    let Ok(mut message) = RtmpWireMessage::new(
+        type_id,
+        RtmpTimestamp::new(timestamp),
+        1,
+        payload,
+        chunk_size,
+    ) else {
+        return 0;
+    };
+    let mut total = 0;
+    while !message.is_complete() {
+        let written = {
+            let mut parts: [TxPart<'_>; MAX_CHUNKS_PER_IOV * 2] =
+                std::array::from_fn(|_| TxPart::Copy(&[]));
+            let (_, bytes) = message.fill_parts(max_write, &mut parts);
+            std::hint::black_box(&parts);
+            bytes
+        };
+        message.consume(written);
+        total += written;
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

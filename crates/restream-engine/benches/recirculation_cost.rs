@@ -10,12 +10,10 @@
 //! must serialize every packet into RTMP chunks to send it, then
 //! deserialize those chunks back out on the receiving side, *in addition
 //! to* whatever ring-publish work both paths share. This benchmark
-//! isolates and measures that mandatory extra encoding cost using the
-//! same `rml_rtmp` chunk serializer restream's own RTMP egress path uses
-//! internally (that internal call site is `pub(crate)`, not reachable
-//! from a bench target, so this uses the public `rml_rtmp` API directly
-//! — the same representative-reimplementation approach
-//! `benches/rtmp_serializer.rs` already takes for the same reason).
+//! isolates and measures that mandatory extra encoding cost with
+//! `rml_rtmp`'s chunk serializer. Egress media itself is framed by the
+//! shard's vectored `RtmpWireMessage`, which `benches/rtmp_serializer.rs`
+//! measures (`production_vectored`) against this serializer.
 //!
 //! Real socket I/O (the send/recv syscalls a loopback path also pays) is
 //! not measured here: that cost is real but a fabric-layer
