@@ -100,6 +100,15 @@ jobs:
         name: Runtime path changed; continue Docker smoke
         run: echo "Docker runtime source-build path changed; continuing."
       - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Reclaim hosted-runner disk for the host and image release builds
+        # The host bench build and the image's in-BuildKit release build share
+        # one runner disk and can exhaust it. Drop preinstalled SDKs this job
+        # never uses; it needs only the Node tool cache.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: ./.github/actions/ci-bootstrap
         with:
           node_version: '22'
