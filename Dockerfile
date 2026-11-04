@@ -100,7 +100,6 @@ COPY crates/restream-agent/Cargo.toml crates/restream-agent/Cargo.toml
 COPY crates/restream-agent-contract/Cargo.toml crates/restream-agent-contract/Cargo.toml
 COPY crates/restream-core/Cargo.toml crates/restream-core/Cargo.toml
 COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
-COPY crates/restream-domain/Cargo.toml crates/restream-domain/Cargo.toml
 COPY crates/restream-engine/Cargo.toml crates/restream-engine/Cargo.toml
 COPY crates/restream-mcp/Cargo.toml crates/restream-mcp/Cargo.toml
 COPY crates/restream-health/Cargo.toml crates/restream-health/Cargo.toml
@@ -145,7 +144,6 @@ COPY crates/xtask/ crates/xtask/
 COPY crates/restream-agent/ crates/restream-agent/
 COPY crates/restream-agent-contract/ crates/restream-agent-contract/
 COPY crates/restream-core/ crates/restream-core/
-COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-domain/ crates/restream-domain/
 COPY crates/restream-engine/ crates/restream-engine/
 COPY crates/restream-health/ crates/restream-health/
