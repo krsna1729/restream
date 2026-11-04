@@ -381,11 +381,6 @@ impl LeafCommon {
     pub fn is_current_generation(&self, generation_val: u64) -> bool {
         generation_val == self.generation
     }
-
-    /// Returns `true` if the leaf has exceeded any strict resource ceiling.
-    pub fn is_limit_exceeded(&self) -> bool {
-        self.pending_application_bytes > self.limits.max_pending_bytes
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,25 +404,11 @@ mod tests {
     }
 
     #[test]
-    fn new_leaf_starts_within_its_limits() {
-        let c = make_common("out-1", 1);
-        assert!(!c.is_limit_exceeded());
-    }
-
-    #[test]
     fn generation_check() {
         let c = make_common("out-1", 5);
         assert!(c.is_current_generation(5));
         assert!(!c.is_current_generation(4));
         assert!(!c.is_current_generation(6));
-    }
-
-    #[test]
-    fn pending_bytes_limit() {
-        let mut c = make_common("out-1", 1);
-        assert!(!c.is_limit_exceeded());
-        c.pending_application_bytes = c.limits.max_pending_bytes + 1;
-        assert!(c.is_limit_exceeded());
     }
 
     #[test]

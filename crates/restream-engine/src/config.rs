@@ -31,7 +31,6 @@ pub struct EgressFabricConfig {
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
     pub visit_max_us: u64,
-    pub max_pending_bytes: usize,
     pub drain_timeout_ms: u64,
     /// Upload HTTP/HTTPS HLS outputs from egress-fabric shards (the
     /// default) or, with `RESTREAM_HLS_PUT_FABRIC=0`, from the Reqwest
@@ -54,7 +53,6 @@ impl Default for EgressFabricConfig {
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
-            max_pending_bytes: 256 * 1024,
             drain_timeout_ms: crate::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
                 .as_millis() as u64,
             hls_put_fabric: true,
@@ -136,11 +134,6 @@ impl EgressFabricConfig {
                 .clamp(188, 16 * 1024 * 1024),
             visit_max_us: env_u64("RESTREAM_EGRESS_VISIT_MAX_US", defaults.visit_max_us)
                 .clamp(1, 1_000_000),
-            max_pending_bytes: env_usize(
-                "RESTREAM_EGRESS_MAX_PENDING_BYTES",
-                defaults.max_pending_bytes,
-            )
-            .clamp(1, 16 * 1024 * 1024),
             drain_timeout_ms: env_u64(
                 "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS",
                 defaults.drain_timeout_ms,
@@ -165,15 +158,6 @@ impl EgressFabricConfig {
     /// refuse to start over a value it could simply warn about.
     pub fn validate(&self, effective_cpus: usize) -> Vec<String> {
         let mut warnings = Vec::new();
-
-        if self.max_pending_bytes < self.visit_max_bytes {
-            warnings.push(format!(
-                "RESTREAM_EGRESS_MAX_PENDING_BYTES ({}) is smaller than RESTREAM_EGRESS_VISIT_MAX_BYTES ({}) \
-                 — a single visit can hand a leaf more pending bytes than the limit allows, so backpressure/\
-                 stall detection may trigger even under normal operation",
-                self.max_pending_bytes, self.visit_max_bytes
-            ));
-        }
 
         let effective_cpus = u32::try_from(effective_cpus.max(1)).unwrap_or(u32::MAX);
         if self.shards > effective_cpus.saturating_mul(4) {

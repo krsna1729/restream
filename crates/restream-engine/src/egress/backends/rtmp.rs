@@ -238,9 +238,10 @@ impl MediaPublisher {
     /// transport: the remainder of any in-flight `pending_write` plus every
     /// still-queued `current_batch` packet. Used to keep
     /// `LeafCommon::pending_application_bytes` (`crates/restream-engine/src/egress/leaf.rs`)
-    /// accurate for this leaf, which the common pending-byte limit and the
-    /// stall sweep read. This covers queued wire bytes; rustls-internal
-    /// buffering for RTMPS is not counted.
+    /// accurate for this leaf, which the stall sweep reads. This covers
+    /// queued wire bytes; rustls-internal buffering for RTMPS is not counted.
+    /// Encoding waits until this reaches zero, so it never exceeds one feed
+    /// unit's wire bytes plus any deferred sequence header.
     fn pending_bytes(&self) -> usize {
         let pending_write_remaining = self
             .pending_write

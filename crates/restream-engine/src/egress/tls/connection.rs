@@ -315,9 +315,8 @@ impl TlsTcpConnection {
     /// (`wants_write()` — i.e. it is holding data this leaf hasn't
     /// finished flushing), `0` otherwise. This is a worst-case upper bound
     /// on the hidden buffer, not an exact occupancy count — the point is
-    /// keeping `LeafLimits::max_pending_bytes` enforcement from
-    /// under-counting a backpressured TLS leaf by an unbounded amount,
-    /// not precise accounting.
+    /// keeping stall classification from treating a backpressured TLS
+    /// leaf as idle, not precise accounting.
     pub(crate) fn rustls_pending_bytes_estimate(&self) -> usize {
         const RUSTLS_DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
         match &self.state {

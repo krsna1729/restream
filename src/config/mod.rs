@@ -384,7 +384,6 @@ impl AppConfig {
                 "visitMaxUnits": self.engine.egress_fabric.visit_max_units,
                 "visitMaxBytes": self.engine.egress_fabric.visit_max_bytes,
                 "visitMaxUs": self.engine.egress_fabric.visit_max_us,
-                "maxPendingBytes": self.engine.egress_fabric.max_pending_bytes,
                 "drainTimeoutMs": self.engine.egress_fabric.drain_timeout_ms,
                 "hlsPutFabric": self.engine.egress_fabric.hls_put_fabric,
             },
