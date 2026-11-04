@@ -40,9 +40,17 @@ A release must:
 Run them through the [release runbook](release-runbook.md). Changing a
 scanner, asset or smoke test is a script and CI change, not a docs change.
 SBOMs and packages are build outputs; do not commit them.
-Dependency advisory checks also run on pull requests; the full SBOM scan
-remains scheduled. Require both dependency checks in branch protection before
-merge.
+Cargo deny checks dependency advisories, licenses, bans and sources on pull
+requests; the full SBOM scan remains scheduled. Require Cargo deny and the CI
+correctness checks in branch protection before merge.
+
+The scheduled SBOM workflow distinguishes scanner execution errors from
+findings: execution errors fail the step, and missing/malformed JSON or SARIF
+fails report validation. Reports are retained for seven days in the
+`sbom-security-reports` workflow artifact; SARIF also goes to GitHub Security.
+Grype HIGH/CRITICAL findings create or update an issue after the workflow
+ensures its `security-sbom` label exists. Scheduled findings are reported;
+the release evidence gate separately rejects HIGH/CRITICAL findings.
 
 ## Native licenses
 
