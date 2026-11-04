@@ -3,6 +3,7 @@ use crate::demux::*;
 use crate::probe::*;
 use crate::wire::*;
 use proptest::prelude::*;
+use restream_core::{AudioMeta, MediaType};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 // Shared packet builders and fixture probes used by multiple behavior slices.

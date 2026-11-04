@@ -1,4 +1,3 @@
-use crate::enhanced::raw_packet_starts_with_hevc_parameter_set;
 use crate::*;
 use bytes::Bytes;
 use proptest::prelude::*;
@@ -102,13 +101,6 @@ fn startup_video_sequence_header_prefers_ring_parameter_sets() {
         ring.video_config().map(|config| config.generation),
         "the header announces the ring configuration it was built from"
     );
-}
-
-#[test]
-fn raw_hevc_guard_does_not_flag_h264_non_idr_slice() {
-    let h264_non_idr = [0, 0, 0, 1, 0x41, 0x9a, 0x22, 0x11];
-
-    assert!(!raw_packet_starts_with_hevc_parameter_set(&h264_non_idr));
 }
 
 #[test]

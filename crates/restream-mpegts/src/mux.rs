@@ -58,12 +58,6 @@ pub struct TsMuxer {
     output: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TsSegmentView {
-    Video,
-    Audio(u32),
-}
-
 /// Per-packet timing/keyframe metadata for the `mux_packet*` family, bundled
 /// so those functions stay under clippy's argument-count lint. `Copy` and
 /// stack-sized (three scalars) so passing it costs nothing extra on the

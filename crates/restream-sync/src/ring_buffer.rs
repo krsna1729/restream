@@ -724,21 +724,6 @@ impl RingBuffer {
         self.notify.clone()
     }
 
-    pub fn min_read_idx(&self) -> usize {
-        let write_idx = self.write_idx.val.load(Ordering::Relaxed);
-        let readers = lock(&self.readers);
-        let mut min_idx = write_idx;
-        let mut has_readers = false;
-        for w in readers.iter() {
-            if let Some(info) = w.upgrade() {
-                let r_idx = info.read_idx.load(Ordering::Relaxed);
-                min_idx = min_idx.min(r_idx);
-                has_readers = true;
-            }
-        }
-        if has_readers { min_idx } else { write_idx }
-    }
-
     pub fn fill_and_capacity(&self) -> (usize, usize) {
         let write_idx = self.write_idx.val.load(Ordering::Relaxed);
         let readers = lock(&self.readers);
