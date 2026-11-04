@@ -30,7 +30,13 @@ fn workflow_scope(workflow: &str, job: &str) -> String {
     script
 }
 
-fn scope_runs(script: &str, paths: &str, event: &str, base: &str) -> bool {
+fn scope_output(
+    script: &str,
+    paths: &str,
+    event: &str,
+    base: &str,
+    diff_fails: bool,
+) -> std::process::Output {
     // Only Git is substituted: the real workflow's Bash and grep execute.
     // Writing the Actions output to stdout avoids shared process state or
     // temporary files when tests run concurrently.
@@ -38,12 +44,12 @@ fn scope_runs(script: &str, paths: &str, event: &str, base: &str) -> bool {
         "git() {{\n\
          case \"$1\" in\n\
          fetch) return 0 ;;\n\
-         diff) printf '%s\\n' \"$CHANGED_FILES\" ;;\n\
+         diff) if [ \"$DIFF_FAILS\" = 1 ]; then return 128; fi; printf '%s\\n' \"$CHANGED_FILES\" ;;\n\
          *) return 2 ;;\n\
          esac\n\
          }}\n{script}"
     );
-    let output = Command::new("bash")
+    Command::new("bash")
         .args(["-e", "-o", "pipefail", "-c", &script])
         .env("EVENT_NAME", event)
         .env("BASE_SHA", base)
@@ -51,8 +57,13 @@ fn scope_runs(script: &str, paths: &str, event: &str, base: &str) -> bool {
         .env("GITHUB_SHA", "head")
         .env("GITHUB_OUTPUT", "/dev/stdout")
         .env("CHANGED_FILES", paths)
+        .env("DIFF_FAILS", if diff_fails { "1" } else { "0" })
         .output()
-        .expect("execute workflow scope with Bash");
+        .expect("execute workflow scope with Bash")
+}
+
+fn scope_runs(script: &str, paths: &str, event: &str, base: &str) -> bool {
+    let output = scope_output(script, paths, event, base, false);
     assert!(
         output.status.success(),
         "scope failed for {paths}: {}",
@@ -131,14 +142,16 @@ fn ci_workflow_scopes_execute_extracted_crate_changes() {
                 true,
             ),
             ("fuzz/fuzz_targets/flv.rs", false, true, false),
-            ("crates/xtask/src/fuzz.rs", false, true, false),
-            ("crates/xtask/src/fuzz/seeds.rs", false, true, false),
-            ("crates/xtask/src/checks.rs", false, true, false),
-            ("crates/xtask/src/fetch.rs", false, false, true),
-            ("crates/xtask/src/fetch/moxygen.rs", false, false, true),
+            ("crates/xtask/src/fuzz.rs", true, true, false),
+            ("crates/xtask/src/fuzz/seeds.rs", true, true, false),
+            ("crates/xtask/src/checks.rs", true, true, false),
+            ("crates/xtask/src/fetch.rs", true, false, true),
+            ("crates/xtask/src/fetch/moxygen.rs", true, false, true),
             ("crates/xtask/src/container/smoke.rs", true, false, false),
             ("crates/xtask/src/release.rs", true, false, false),
             ("crates/xtask/src/qualify/evidence.rs", true, false, false),
+            ("web/ts/core/api.ts", true, false, false),
+            ("crates/xtask/src/ci_scope.rs", true, false, false),
         ] {
             let expected = match job {
                 "docker-runtime-smoke" => docker,
@@ -154,8 +167,6 @@ fn ci_workflow_scopes_execute_extracted_crate_changes() {
         }
         for path in [
             "README.md",
-            "web/ts/core/api.ts",
-            "crates/xtask/src/ci_scope.rs",
             "crates/unrelated/Cargo.toml",
             "docs/crates/restream-moq/src/media.rs",
         ] {
@@ -186,6 +197,67 @@ fn ci_workflow_scopes_execute_extracted_crate_changes() {
                 "base",
             ),
             "{job}: mixed diff"
+        );
+    }
+}
+
+#[test]
+fn ci_workflow_scopes_cover_container_build_inputs() {
+    let workflow = std::fs::read_to_string(crate::repo_root().join(".github/workflows/ci.yml"))
+        .expect("read ci.yml");
+    let scope = workflow_scope(&workflow, "docker-runtime-smoke");
+    for path in [
+        "src/main.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+        "build_identity.rs",
+        "rust-toolchain.toml",
+        ".cargo/config.toml",
+        ".dockerignore",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "vite.config.ts",
+        "web/pages/index.html",
+        "scripts/dev/bootstrap.sh",
+        "scripts/dev/frontend/prepare-assets.mjs",
+        "scripts/ci/install-system-deps.sh",
+        "scripts/data/debian-packages.tsv",
+        "vendor/moq-net/src/lib.rs",
+        "distribution/docker/restream-seccomp.json",
+        "tests/docker_build_recipe.rs",
+        ".github/workflows/ci.yml",
+        ".github/actions/kernel-tls/action.yml",
+    ] {
+        assert!(
+            scope_runs(&scope, path, "pull_request", "base"),
+            "container build input must run smoke: {path}"
+        );
+    }
+    let paths = format!("src/main.rs\n{}", "docs/unrelated.md\n".repeat(5_000));
+    assert!(
+        scope_runs(&scope, &paths, "pull_request", "base"),
+        "a large diff must not turn an early match into a pipe failure"
+    );
+}
+
+#[test]
+fn ci_workflow_scopes_reject_unreadable_diffs() {
+    let workflow = std::fs::read_to_string(crate::repo_root().join(".github/workflows/ci.yml"))
+        .expect("read ci.yml");
+    for job in ["docker-runtime-smoke", "fuzz-smoke", "moq-interop"] {
+        let output = scope_output(
+            &workflow_scope(&workflow, job),
+            "",
+            "pull_request",
+            "base",
+            true,
+        );
+        assert!(!output.status.success(), "{job}: unreadable diff must fail");
+        assert!(
+            output.stdout.is_empty(),
+            "{job}: cannot publish a scope decision without a diff"
         );
     }
 }

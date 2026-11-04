@@ -82,11 +82,13 @@ jobs:
           fi
 
           git fetch --no-tags origin "$base" --depth=1 || true
-          # `distribution/` covers the shipped seccomp profile and its deployment
-          # documentation. The restream crates (the engine's RTMP/RTMPS and SRT
-          # transports among them) and the test harness also qualify: they can
-          # change the real media container proof and its runtime contract.
-          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|crates/xtask/src/(release|container|qualify)(\.rs|/.*)|distribution/|tests/seccomp_profile\.rs|crates/restream-[^/]+/.*|crates/test_harness/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
+          if ! changed_files=$(git diff --name-only "$base" "$GITHUB_SHA"); then
+            echo "Cannot determine changed paths for Docker smoke." >&2
+            exit 1
+          fi
+          # Cover the Dockerfile's source, bootstrap, frontend and runtime inputs.
+          # Capture the complete diff before grep so an early match cannot SIGPIPE Git.
+          if grep -Eq '^(Dockerfile$|\.dockerignore$|\.cargo/|Cargo\.(toml|lock)$|build(_identity)?\.rs$|rust-toolchain\.toml$|package(-lock)?\.json$|tsconfig\.json$|vite\.config\.ts$|web/|src/|scripts/(dev/|ci/|data/)|vendor/|crates/(restream-[^/]+/|test_harness/|xtask/)|distribution/|tests/(seccomp_profile|docker_build_recipe)\.rs$|\.github/(workflows/(ci|release|ci-harness-runtime-image)\.yml$|actions/(ci-bootstrap|system-deps|kernel-tls)/))' <<<"$changed_files"; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
@@ -299,7 +301,11 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^(crates/restream-[^/]+/|crates/test_harness/|crates/xtask/src/(checks|fuzz)(\.rs$|/)|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+          if ! changed_files=$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA"); then
+            echo "Cannot determine changed paths for parser fuzzing." >&2
+            exit 1
+          fi
+          if grep -Eq '^(crates/restream-[^/]+/|crates/test_harness/|crates/xtask/src/(checks|fuzz)(\.rs$|/)|fuzz/|vendor/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)' <<<"$changed_files"; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
@@ -492,7 +498,11 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin "$BASE_SHA" --depth=1 || true
-          if git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -Eq '^((src|crates/restream-engine/src)/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|crates/restream-engine/src/egress/.*|crates/xtask/src/fetch(\.rs|/.*)|test/e2e/moq/.*|\.github/workflows/ci\.yml)$'; then
+          if ! changed_files=$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA"); then
+            echo "Cannot determine changed paths for MoQ interop." >&2
+            exit 1
+          fi
+          if grep -Eq '^((src|crates/restream-engine/src)/.*moq.*|crates/restream-(moq|core|sync)/.*|crates/test_harness/.*moq.*|crates/restream-engine/src/egress/.*|crates/xtask/src/fetch(\.rs|/.*)|test/e2e/moq/.*|\.github/workflows/ci\.yml)$' <<<"$changed_files"; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
