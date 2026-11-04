@@ -81,53 +81,6 @@ fn annexb_to_avcc_into_appends_to_existing_content() {
     assert!(out.len() > marker.len());
 }
 
-#[test]
-fn annexb_to_avcc_with_scratch_matches_reference() {
-    // Same oracle tests as annexb_to_avcc_into — with_scratch must produce
-    // identical output.
-    let cases: &[&[u8]] = &[
-        &[0x00, 0x00, 0x00, 0x01, 0x65, 0xAA, 0xBB],
-        &[0x00, 0x00, 0x01, 0x41, 0xCC, 0xDD],
-        &[
-            0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x00, 0x00, 0x00, 0x01, 0x41, 0x33, 0x44, 0x00,
-            0x00, 0x01, 0x41, 0x55,
-        ],
-        &[
-            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x00, 0x00,
-            0x00, 0x01, 0x09, 0xF0, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80,
-        ],
-    ];
-    for data in cases {
-        let reference = annexb_to_avcc_reference(data);
-        let mut scratch_out = Vec::new();
-        let mut sc = Vec::new();
-        annexb_to_avcc_with_scratch(data, &mut scratch_out, &mut sc);
-        assert_eq!(
-            scratch_out,
-            reference,
-            "with_scratch mismatch for input len={}",
-            data.len()
-        );
-    }
-}
-
-#[test]
-fn annexb_to_avcc_with_scratch_reuses_sc_buffer() {
-    let data = [0x00, 0x00, 0x00, 0x01, 0x41, 0xBB];
-    let mut out = Vec::new();
-    let mut sc: Vec<(usize, usize)> = Vec::new();
-    // First call: sc grows
-    annexb_to_avcc_with_scratch(&data, &mut out, &mut sc);
-    let cap_after_first = sc.capacity();
-    out.clear();
-    // Second call: sc should reuse its allocation (capacity unchanged or larger)
-    annexb_to_avcc_with_scratch(&data, &mut out, &mut sc);
-    assert!(
-        sc.capacity() >= cap_after_first,
-        "sc scratch should not shrink"
-    );
-}
-
 // --- Edge-case tests ---
 
 #[test]

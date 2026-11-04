@@ -146,7 +146,8 @@ proptest! {
             1..8,
         ),
     ) {
-        let avcc = annexb_to_avcc(&annexb(&nalus));
+        let mut avcc = Vec::new();
+        annexb_to_avcc_into(&annexb(&nalus), &mut avcc);
         let back = avcc_to_annexb(&avcc, 4);
 
         let expected: Vec<&[u8]> = nalus

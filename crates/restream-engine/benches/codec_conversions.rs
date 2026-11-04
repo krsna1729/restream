@@ -2,9 +2,9 @@
 //!
 //! Every function that runs per-packet on the media data path is measured here:
 //!   avcc_to_annexb  — FLV ingest → TS muxer (per video frame, O(NALUs))
-//!   annexb_to_avcc  — Ring buffer → RTMP egress (per video frame, O(NALUs))
+//!   annexb_to_avcc_into — Ring buffer → RTMP egress (per video frame, O(NALUs))
 //!   video_for_ts_into — FLV and Raw variants (HLS/transcoder/recording consumers)
-//!   video_for_rtmp  — Ring buffer → RTMP egress (alloc + AVCC wrap)
+//!   video_for_rtmp_into — Ring buffer → RTMP egress (AVCC wrap into a reused buffer)
 //!   hevc_for_enhanced_rtmp — H.265 ring → enhanced RTMP / fMP4 (length prefix)
 //!   audio_for_ts_into — Raw AAC: ADTS passthrough + ADTS synthesis
 //!   audio_for_rtmp_into — ADTS strip + FLV 2-byte header
@@ -17,11 +17,10 @@
 use bytes::Bytes;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream_core::PayloadFormat;
-use restream_core::codec::annexb_to_avcc;
-use restream_core::codec::annexb_to_avcc_with_scratch;
+use restream_core::codec::annexb_to_avcc_into;
 use restream_core::codec::audio_for_rtmp_into;
 use restream_core::codec::avcc_to_annexb;
-use restream_core::codec::video_for_rtmp;
+use restream_core::codec::video_for_rtmp_into;
 use restream_core::codec::video_for_rtmp_with_composition_into;
 use restream_engine::codec::audio_for_ts_into;
 use restream_engine::codec::video_for_ts_into;
@@ -125,19 +124,11 @@ fn bench_avcc_to_annexb(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// annexb_to_avcc  (ring buffer → RTMP egress per video frame)
-// Two variants benchmarked for hardware-specific comparison:
-//   two_pass:     split_annexb_nalus (2 Vec allocs/call; faster for IDR frames)
-//   with_scratch: reuses caller-provided positions Vec (0 allocs after warmup;
-//                 faster for small/multi-NALU frames)
-//
-// On the Zen reference host two_pass wins IDR 80k (+42%); with_scratch wins
-// P-frame 8k (+34%) and 3-NALU 30k (+9%). Production uses two_pass.
-// Re-run on target hardware before switching: cargo bench --bench codec_conversions
+// annexb_to_avcc_into  (ring buffer → RTMP egress per video frame)
 // ---------------------------------------------------------------------------
 
 fn bench_annexb_to_avcc(c: &mut Criterion) {
-    let mut group = c.benchmark_group("codec/annexb_to_avcc");
+    let mut group = c.benchmark_group("codec/annexb_to_avcc_into");
 
     for (label, num_nalus, nalu_size) in [
         ("p_frame_8k_1nalu", 1, 8 * 1024),
@@ -146,26 +137,13 @@ fn bench_annexb_to_avcc(c: &mut Criterion) {
     ] {
         let annexb = make_annexb(num_nalus, nalu_size);
         group.throughput(Throughput::Bytes(annexb.len() as u64));
-
-        // Production two-pass implementation (faster for IDR frames on the Zen reference host)
-        group.bench_with_input(BenchmarkId::new("two_pass", label), &annexb, |b, data| {
-            b.iter(|| black_box(annexb_to_avcc(data)))
+        group.bench_with_input(BenchmarkId::from_parameter(label), &annexb, |b, data| {
+            let mut out = Vec::with_capacity(data.len());
+            b.iter(|| {
+                out.clear();
+                black_box(annexb_to_avcc_into(data, &mut out));
+            })
         });
-
-        // Scratch-buffer variant: 0 Vec allocs per call after warmup
-        group.bench_with_input(
-            BenchmarkId::new("with_scratch", label),
-            &annexb,
-            |b, data| {
-                let mut out = Vec::with_capacity(data.len());
-                let mut sc = Vec::new();
-                b.iter(|| {
-                    out.clear();
-                    annexb_to_avcc_with_scratch(data, &mut out, &mut sc);
-                    black_box(out.len());
-                })
-            },
-        );
     }
 
     group.finish();
@@ -249,11 +227,11 @@ fn bench_video_for_ts(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// video_for_rtmp  (ring buffer → RTMP egress: Annex B → FLV/AVCC)
+// video_for_rtmp_into  (ring buffer → RTMP egress: Annex B → FLV/AVCC)
 // ---------------------------------------------------------------------------
 
 fn bench_video_for_rtmp(c: &mut Criterion) {
-    let mut group = c.benchmark_group("codec/video_for_rtmp");
+    let mut group = c.benchmark_group("codec/video_for_rtmp_into");
 
     for (label, num_nalus, nalu_size, is_key) in [
         ("pframe_8k", 1, 8 * 1024, false),
@@ -263,7 +241,8 @@ fn bench_video_for_rtmp(c: &mut Criterion) {
         let annexb = make_annexb(num_nalus, nalu_size);
         group.throughput(Throughput::Bytes(annexb.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(label), &annexb, |b, data| {
-            b.iter(|| black_box(video_for_rtmp(data, is_key)))
+            let mut out = Vec::with_capacity(data.len() + 5);
+            b.iter(|| black_box(video_for_rtmp_into(data, is_key, &mut out)))
         });
     }
 
