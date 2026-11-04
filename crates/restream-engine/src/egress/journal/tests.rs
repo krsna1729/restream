@@ -212,7 +212,6 @@ fn ring_feed_follows_grown_ring_for_reads_and_wakes() {
     );
 
     assert_eq!(feed.head_sequence(), old_head + 1);
-    assert_eq!(feed.retention_snapshot().head_sequence, old_head + 1);
     assert_eq!(feed.latest_sync_point(), Some(FeedCursor::new(0, 0)));
     match feed.read_from(FeedCursor::new(0, old_head), ReadBudget::default()) {
         FeedRead::Units { units, next_cursor } => {
@@ -250,48 +249,6 @@ fn ring_feed_respects_unit_budget() {
         FeedRead::Units { units, .. } => assert!(units.len() <= 3),
         other => panic!("expected Units, got {other:?}"),
     }
-}
-
-#[test]
-fn ring_feed_retention_snapshot_tracks_retained_bytes_and_media_age() {
-    let ring = Arc::new(RingBuffer::new(4));
-    let epoch = Arc::new(FeedEpoch::new());
-    for i in 0..6 {
-        push_packet_at(&ring, &[i as u8; 3], i == 4, i * 10);
-    }
-
-    let feed = RingFeed::new(ring, epoch);
-    let snapshot = feed.retention_snapshot();
-
-    assert_eq!(snapshot.head_sequence, 6);
-    assert_eq!(snapshot.oldest_sequence, 2);
-    assert_eq!(snapshot.retained_units, 4);
-    assert_eq!(snapshot.retained_bytes, 12);
-    assert_eq!(snapshot.media_age_ms, Some(30));
-    assert_eq!(snapshot.largest_unit_bytes, 3);
-}
-
-#[test]
-fn ring_feed_limit_status_reports_strict_retention_violations() {
-    let ring = Arc::new(RingBuffer::new(4));
-    let epoch = Arc::new(FeedEpoch::new());
-    push_packet_at(&ring, &[0; 2], true, 10);
-    push_packet_at(&ring, &[1; 8], false, 80);
-
-    let feed = RingFeed::new(ring, epoch);
-    let limits = FeedLimits {
-        max_retained_bytes: 9,
-        max_retained_units: 1,
-        max_retained_media_age: Duration::from_millis(50),
-        max_unit_bytes: 4,
-    };
-    let status = feed.limit_status(&limits);
-
-    assert!(status.retained_bytes_exceeded);
-    assert!(status.retained_units_exceeded);
-    assert!(status.media_age_exceeded);
-    assert_eq!(status.oversized_unit_count, 1);
-    assert!(!status.is_within_limits());
 }
 
 #[test]
@@ -430,12 +387,6 @@ fn thousand_leaf_feed_keeps_memory_bounded_with_lagging_cursors() {
                 other => panic!("healthy leaf read failed: {other:?}"),
             }
         }
-
-        // Retention stays capped by ring capacity no matter how many leaves
-        // exist or lag.
-        let snapshot = feed.retention_snapshot();
-        assert!(snapshot.retained_units <= CAPACITY);
-        assert!(snapshot.retained_bytes <= (CAPACITY * PAYLOAD_BYTES) as u64);
     }
 
     // Stalled cursors overrun deterministically at the retention boundary and
@@ -449,9 +400,6 @@ fn thousand_leaf_feed_keeps_memory_bounded_with_lagging_cursors() {
     }
     assert!(feed.latest_sync_point().is_some());
     assert_eq!(stalled_batches.len(), STALLED);
-    let snapshot = feed.retention_snapshot();
-    assert!(snapshot.retained_units <= CAPACITY);
-    assert!(snapshot.retained_bytes <= (CAPACITY * PAYLOAD_BYTES) as u64);
 }
 
 /// Coalesced shard wakes: wake amplification is proportional to interested
@@ -560,26 +508,6 @@ fn ts_feed_epoch_mismatch_on_advance() {
         feed.read_from(old_cursor, ReadBudget::default()),
         FeedRead::EpochMismatch { current_epoch: 1 }
     ));
-}
-
-#[test]
-fn ts_feed_retention_snapshot_tracks_retained_bytes() {
-    let cancel = CancellationToken::new();
-    let ts_ring = TsChunkRing::new(4, cancel);
-    for i in 0..6 {
-        ts_ring.push(Bytes::from(vec![i as u8; 2]), MediaType::Video, i == 4);
-    }
-
-    let epoch = Arc::new(FeedEpoch::new());
-    let feed = TsFeed::new(&ts_ring, epoch);
-    let snapshot = feed.retention_snapshot();
-
-    assert_eq!(snapshot.head_sequence, 6);
-    assert_eq!(snapshot.oldest_sequence, 2);
-    assert_eq!(snapshot.retained_units, 4);
-    assert_eq!(snapshot.retained_bytes, 8);
-    assert_eq!(snapshot.media_age_ms, Some(0));
-    assert_eq!(snapshot.largest_unit_bytes, 2);
 }
 
 #[test]
@@ -873,23 +801,6 @@ proptest::proptest! {
         );
         proptest::prop_assert_eq!(drain_runs(&ts_feed, cursor, &budgets, |chunk| chunk[0]), expected);
     }
-}
-
-// -----------------------------------------------------------------------
-// FeedOverrunStats
-// -----------------------------------------------------------------------
-
-#[test]
-fn overrun_stats_accumulate() {
-    let mut stats = FeedOverrunStats::default();
-    stats.record_overrun();
-    stats.record_overrun();
-    assert_eq!(stats.overrun_count, 2);
-    assert!(stats.last_overrun_at.is_some());
-    stats.record_epoch();
-    assert_eq!(stats.epoch_count, 1);
-    stats.record_oversized_unit();
-    assert_eq!(stats.oversized_unit_count, 1);
 }
 
 // -----------------------------------------------------------------------
