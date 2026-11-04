@@ -53,6 +53,8 @@ mod rtmp_negotiation;
 mod rtmp_wire;
 
 use rtmp_wire::RtmpWireMessage;
+#[doc(hidden)]
+pub use rtmp_wire::bench_frame_media;
 
 /// RTMPS connection and kTLS counters, reported under `rtmps` in the system
 /// telemetry.
