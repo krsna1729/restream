@@ -15,6 +15,9 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "cargo"
     directory: "/"
@@ -30,6 +33,12 @@ updates:
     commit-message:
       prefix: "cargo"
       include: "scope"
+    # Patch only: Dependabot ranks bumps by version digits, and a 0.x minor
+    # bump (0.40 -> 0.41) is breaking in Cargo. Grouped, one such break would
+    # hold every other update; those bumps stay one PR each.
+    groups:
+      cargo-patch:
+        update-types: ["patch"]
     ignore:
       # Every published moq-net (vendored as vendor/moq-net, latest 0.3.19)
       # implements web-transport-trait ^0.4. A 0.5 bump alone leaves two
@@ -58,6 +67,9 @@ updates:
     commit-message:
       prefix: "npm"
       include: "scope"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -73,3 +85,6 @@ updates:
     commit-message:
       prefix: "docker"
       include: "scope"
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
