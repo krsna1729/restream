@@ -585,8 +585,9 @@ impl RingBuffer {
     /// Publish a burst with one write-index release and one waiter notification.
     ///
     /// The ring is single-producer, so slots can be populated first and made
-    /// visible together by the final release store. Returns the number of
-    /// packets published.
+    /// visible together by the final release store; they share one
+    /// publication time, read once, at the first packet. Returns the number
+    /// of packets published.
     pub fn push_batch<I>(&self, packets: I) -> usize
     where
         I: IntoIterator<Item = MediaPacket>,
@@ -594,6 +595,7 @@ impl RingBuffer {
         let start_idx = self.write_idx.val.load(Ordering::Relaxed);
         let mut count = 0usize;
         let mut payload_bytes = 0u64;
+        let mut published_at_us = 0u64;
 
         for packet in packets {
             let idx = start_idx + count;
@@ -603,9 +605,12 @@ impl RingBuffer {
 
             let unit = self.next_frame_unit(&packet, idx);
             self.begin_write(idx + 1);
+            if published_at_us == 0 {
+                published_at_us = self.elapsed_us().max(1);
+            }
             self.slots[slot_idx]
                 .published_at_us
-                .store(self.elapsed_us().max(1), Ordering::Release);
+                .store(published_at_us, Ordering::Release);
             self.slots[slot_idx].unit.store(unit, Ordering::Release);
             self.slots[slot_idx].replace(Arc::new(packet));
             if is_keyframe {
