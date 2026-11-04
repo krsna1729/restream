@@ -1,31 +1,38 @@
 #[test]
-fn video_for_ts_flv_passthrough_raw() {
+fn video_for_ts_into_raw_passthrough_is_zero_copy() {
     let annexb_payload = vec![0, 0, 0, 1, 0x65, 0x88];
     let mut nls = 4;
     let mut cache = Vec::new();
-    let result = video_for_ts(&annexb_payload, PayloadFormat::Raw, &mut nls, &mut cache);
-    assert!(result.is_some());
-    // Raw should be zero-copy
-    assert!(matches!(result, Some(Cow::Borrowed(_))));
-    assert_eq!(&*result.unwrap(), &annexb_payload[..]);
+    let mut buf = Vec::new();
+    let result = video_for_ts_into(
+        &annexb_payload,
+        PayloadFormat::Raw,
+        &mut nls,
+        &mut cache,
+        &mut buf,
+    )
+    .expect("raw Annex B passes through");
+    assert!(std::ptr::eq(result, &annexb_payload[..]));
 }
 
 #[test]
-fn audio_for_ts_adds_adts_for_raw_without() {
+fn audio_for_ts_into_adds_adts_for_raw_without() {
     let raw_aac = vec![0xDE, 0xAD];
-    let result = audio_for_ts(&raw_aac, PayloadFormat::Raw, 48000, 2);
-    assert!(result.is_some());
-    let data = result.unwrap();
-    assert!(has_adts_sync(&data));
+    let mut buf = Vec::new();
+    let data = audio_for_ts_into(&raw_aac, PayloadFormat::Raw, 48000, 2, &mut buf)
+        .expect("raw AAC gets an ADTS header");
+    assert!(has_adts_sync(data));
     assert_eq!(&data[7..], &raw_aac[..]);
 }
 
 #[test]
-fn audio_for_ts_passes_through_existing_adts() {
+fn audio_for_ts_into_passes_through_existing_adts() {
     let mut with_adts = Vec::from(build_adts_header(4, 48000, 2).unwrap());
     with_adts.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-    let result = audio_for_ts(&with_adts, PayloadFormat::Raw, 48000, 2);
-    assert!(matches!(result, Some(Cow::Borrowed(_))));
+    let mut buf = Vec::new();
+    let result = audio_for_ts_into(&with_adts, PayloadFormat::Raw, 48000, 2, &mut buf)
+        .expect("ADTS passes through");
+    assert!(std::ptr::eq(result, &with_adts[..]), "passthrough is zero-copy");
 }
 
 #[test]
@@ -79,14 +86,3 @@ fn hevc_enhanced_rtmp_sequence_header_builds_from_bf0_fixture() {
     assert_eq!(seq_hdr[21], 0xfd);
 }
 
-#[test]
-fn audio_for_rtmp_strips_adts() {
-    let raw = [0xDE, 0xAD, 0xBE, 0xEF];
-    let mut with_adts = Vec::from(build_adts_header(raw.len(), 48000, 2).unwrap());
-    with_adts.extend_from_slice(&raw);
-
-    let result = audio_for_rtmp(&with_adts);
-    assert_eq!(result[0], 0xAF);
-    assert_eq!(result[1], 0x01);
-    assert_eq!(&result[2..], &raw);
-}

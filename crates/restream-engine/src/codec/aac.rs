@@ -5,45 +5,17 @@
     clippy::expect_used,
     clippy::panic
 )]
-use std::borrow::Cow;
-
 use restream_core::PayloadFormat;
 
 /// Prepare an audio payload for MPEG-TS muxing (ADTS-wrapped output).
 ///
-/// - **FLV**: strips 2-byte header, skips config packets (packet_type 0),
-///   prepends a 7-byte ADTS header to the raw AAC frame.
-/// - **Raw with ADTS** (from SRT ingest): pass-through.
-/// - **Raw without ADTS** (from transcoder/FFmpeg): prepends ADTS header.
-pub fn audio_for_ts<'a>(
-    payload: &'a [u8],
-    format: PayloadFormat,
-    sample_rate: u32,
-    channels: u32,
-) -> Option<Cow<'a, [u8]>> {
-    match format {
-        PayloadFormat::Raw => {
-            if payload.is_empty() {
-                return None;
-            }
-            if has_adts_sync(payload) {
-                Some(Cow::Borrowed(payload))
-            } else {
-                prepend_adts(payload, sample_rate, channels).map(Cow::Owned)
-            }
-        }
-        PayloadFormat::Flv => {
-            let raw_aac = flv_aac_frame(payload)?;
-            prepend_adts(raw_aac, sample_rate, channels).map(Cow::Owned)
-        }
-    }
-}
-
-/// Zero-allocation variant of [`audio_for_ts`].
+/// - **FLV**: strips the 2-byte header, skips config packets (packet_type 0),
+///   and writes a 7-byte ADTS header plus the raw AAC frame into `buf`.
+/// - **Raw with ADTS** (from SRT ingest): returns `Some(payload)` — zero-copy.
+/// - **Raw without ADTS** (from transcoder/FFmpeg): writes ADTS + frame into `buf`.
 ///
-/// For `Raw` with ADTS: returns `Some(payload)` directly — zero-copy.
-/// All other cases write into `buf` (cleared first) and return `Some(&buf[..])`.
-/// Returns `None` for config/sequence packets.
+/// `buf` is cleared before it is written. Returns `None` for config/sequence
+/// packets and frames the ADTS length field cannot hold.
 #[inline]
 pub fn audio_for_ts_into<'a>(
     payload: &'a [u8],
@@ -83,14 +55,4 @@ fn flv_aac_frame(payload: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// Prepare a Raw audio payload for RTMP publishing.
-///
-/// Strips ADTS header if present, prepends 2-byte FLV audio header `[0xAF, 0x01]`.
-pub fn audio_for_rtmp(payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    audio_for_rtmp_into(payload, &mut out);
-    out
-}
-
-use restream_core::codec::audio_for_rtmp_into;
-use restream_core::codec::{has_adts_sync, prepend_adts, prepend_adts_into};
+use restream_core::codec::{has_adts_sync, prepend_adts_into};

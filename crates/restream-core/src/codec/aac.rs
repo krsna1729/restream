@@ -142,14 +142,8 @@ pub fn adts_sample_rate(data: &[u8]) -> Option<u32> {
         .copied()
 }
 
-/// `raw_aac` behind an ADTS header, or `None` when it is too long for one.
-pub fn prepend_adts(raw_aac: &[u8], sample_rate: u32, channels: u32) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    prepend_adts_into(raw_aac, sample_rate, channels, &mut out)?;
-    Some(out)
-}
-
-/// Like [`prepend_adts`] but writes into a caller-provided reusable buffer.
+/// Append `raw_aac` behind an ADTS header to `out`, or `None` (nothing
+/// written) when it is too long for one.
 pub fn prepend_adts_into(
     raw_aac: &[u8],
     sample_rate: u32,
