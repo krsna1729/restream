@@ -11,14 +11,14 @@
 //! ```text
 //! Ingest (RTMP/SRT demuxer)
 //!   → push(MediaPacket)
-//!     → ArcSwapOption::store() on slot[write_idx % capacity]
+//!     → RingSlot::replace() on slot[write_idx % capacity]
 //!     → AtomicUsize::store(write_idx + 1, Release)
 //!     → Notify::notify_waiters()
 //!
 //! Reader (egress / HLS / recording)
 //!   → wait_for_data()  (Notify::notified().await)
 //!   → pull()
-//!     → ArcSwapOption::load_full() on slot[read_idx % capacity]
+//!     → RingSlot::packet() on slot[read_idx % capacity]
 //!     → returns Arc<MediaPacket> (zero-copy, ref-counted)
 //! ```
 //!
@@ -38,12 +38,6 @@
 //! edge when no keyframe is retained. Until the next video keyframe the
 //! reader then skips video interframes, whose references it never delivered;
 //! audio passes.
-//!
-//! # Why ArcSwap
-//!
-//! Multiple readers call `load_full()` concurrently without locking. That
-//! eliminates per-slot `RwLock` contention that would otherwise dominate at
-//! hundreds of concurrent egress readers.
 //!
 //! # Single writer
 //!
@@ -67,7 +61,7 @@
 //! right before the packet that carries them.
 //!
 //! Reads by sequence, and the once-per-run lap check of the egress feed,
-//! live in `sequence_reads`.
+//! live in `sequence_reads`; a slot and its lock live in `slot`.
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;
@@ -97,13 +91,6 @@ pub const MEDIA_PRODUCER_BATCH_PACKETS: usize = MEDIA_PULL_BURST_PACKETS;
 // much larger than the source ring — 512 slots already dominate memory at high
 // bitrates. Scale-test evidence: no transcoder ring overflows across 15 cases.
 pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
-
-pub struct RingSlot {
-    data: ArcSwapOption<MediaPacket>,
-    published_at_us: AtomicU64,
-    /// Packed [`FrameUnit`] of the packet in `data`; 0 before the first write.
-    unit: AtomicU64,
-}
 
 #[repr(align(64))]
 pub struct AlignedAtomicUsize {
@@ -189,13 +176,7 @@ pub struct RingBuffer {
 impl RingBuffer {
     pub fn new(capacity: usize) -> Self {
         let mut slots = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            slots.push(RingSlot {
-                data: ArcSwapOption::empty(),
-                published_at_us: AtomicU64::new(0),
-                unit: AtomicU64::new(0),
-            });
-        }
+        slots.resize_with(capacity, RingSlot::new);
         debug!(target: "restream_engine::ring_buffer", capacity, "ring buffer created");
         Self {
             slots,
@@ -315,7 +296,7 @@ impl RingBuffer {
             self.slots[slot_idx]
                 .published_at_us
                 .store(self.elapsed_us().max(1), Ordering::Release);
-            self.slots[slot_idx].data.store(Some(packet.clone()));
+            self.slots[slot_idx].replace(packet.clone());
             self.slots[slot_idx].unit.store(unit, Ordering::Release);
             if packet.media_type == MediaType::Video && packet.is_keyframe {
                 last_keyframe_idx = idx;
@@ -589,7 +570,7 @@ impl RingBuffer {
             .published_at_us
             .store(self.elapsed_us().max(1), Ordering::Release);
         self.slots[slot_idx].unit.store(unit, Ordering::Release);
-        self.slots[slot_idx].data.store(Some(Arc::new(packet)));
+        self.slots[slot_idx].replace(Arc::new(packet));
 
         if is_keyframe {
             self.last_keyframe_idx.val.store(idx, Ordering::Release);
@@ -626,7 +607,7 @@ impl RingBuffer {
                 .published_at_us
                 .store(self.elapsed_us().max(1), Ordering::Release);
             self.slots[slot_idx].unit.store(unit, Ordering::Release);
-            self.slots[slot_idx].data.store(Some(Arc::new(packet)));
+            self.slots[slot_idx].replace(Arc::new(packet));
             if is_keyframe {
                 self.last_keyframe_idx.val.store(idx, Ordering::Release);
             }
@@ -749,15 +730,16 @@ impl RingBuffer {
         let mut min_payload = usize::MAX;
 
         for slot in &self.slots {
-            let Some(packet) = slot.data.load_full() else {
+            let Some((len, media_type)) =
+                slot.inspect(|packet| (packet.payload.len(), packet.media_type))
+            else {
                 continue;
             };
-            let len = packet.payload.len();
             stats.slots += 1;
             stats.payload_bytes = stats.payload_bytes.saturating_add(len);
             min_payload = min_payload.min(len);
             stats.max_payload_bytes = stats.max_payload_bytes.max(len);
-            match packet.media_type {
+            match media_type {
                 MediaType::Video => {
                     stats.video_bytes = stats.video_bytes.saturating_add(len);
                 }
@@ -779,10 +761,11 @@ impl RingBuffer {
     fn payload_by_dts(&self) -> Vec<(i64, u64)> {
         let mut samples = Vec::with_capacity(self.capacity);
         for slot in &self.slots {
-            let Some(packet) = slot.data.load_full() else {
+            let Some(sample) = slot.inspect(|packet| (packet.dts, packet.payload.len() as u64))
+            else {
                 continue;
             };
-            samples.push((packet.dts, packet.payload.len() as u64));
+            samples.push(sample);
         }
         samples.sort_unstable_by_key(|(dts, _)| *dts);
 
@@ -867,7 +850,7 @@ impl RingBuffer {
                 None
             } else {
                 let slot = &self.slots[read_idx % self.capacity];
-                if slot.data.load_full().is_some() {
+                if slot.inspect(|_| ()).is_some() {
                     let published_at_us = slot.published_at_us.load(Ordering::Acquire);
                     (published_at_us > 0).then(|| now_us.saturating_sub(published_at_us) / 1000)
                 } else {
@@ -968,6 +951,9 @@ fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
 }
 
 mod sequence_reads;
+mod slot;
+
+pub use slot::RingSlot;
 
 #[cfg(test)]
 // These white-box tests deliberately poison and inspect the raw mutex.

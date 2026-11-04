@@ -45,7 +45,10 @@ flowchart LR
 ```
 
 - Encoded payloads move as reference-counted `Bytes`. A `RingBuffer` is
-  single-producer, multi-consumer; each reader has its own cursor.
+  single-producer, multi-consumer; each reader has its own cursor. Each
+  slot keeps its packet behind its own mutex, held only to swap or clone
+  the `Arc`, so a publication costs the same however many threads the
+  process runs.
 - `TsChunkRing` shares packaged MPEG-TS chunks across SRT destinations.
 - Egress shards read rings directly by cursor
   ([Egress architecture](egress-architecture.md)).

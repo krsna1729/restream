@@ -5,13 +5,13 @@
 //! Reduced to the slot atomics, the write index and `write_begin`: before
 //! each slot the producer stores `write_begin` (Relaxed), then the slot's
 //! unit word (Release), tagged with its sequence, then the slot's packet
-//! (the `ArcSwap` store, a SeqCst swap, modelled as a Release store of the
-//! sequence), and stores the write index (Release) only after the whole
-//! publication; for a batch that is after several slots. A reader loads the
-//! write index, keeps only the retained window, loads what it needs (all
-//! Acquire) and accepts it only when the unit's tag names the sequence
-//! asked. A run's packet loads are modelled Relaxed (Restream does not rely
-//! on `ArcSwap`'s load ordering there); the run is accepted when
+//! (the slot mutex's replace, whose unlock is modelled as a Release store
+//! of the sequence), and stores the write index (Release) only after the
+//! whole publication; for a batch that is after several slots. A reader
+//! loads the write index, keeps only the retained window, loads what it
+//! needs (all Acquire) and accepts it only when the unit's tag names the
+//! sequence asked. A run's packet loads are modelled Relaxed (Restream does
+//! not rely on the slot lock's Acquire there); the run is accepted when
 //! `write_begin`, read after an Acquire fence, shows no lap had begun over
 //! it, or else by every slot's tag.
 
