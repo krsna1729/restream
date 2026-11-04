@@ -113,14 +113,6 @@ pub(super) fn sample_validity(
             )),
         }
     }
-    if let Some(retries) = sample["shardRetriesPerSec"].as_f64() {
-        require(
-            &mut invalid,
-            &mut reasons,
-            retries > 0.0,
-            format!("output retries during the sample ({retries}/s)"),
-        );
-    }
     require(
         &mut invalid,
         &mut reasons,

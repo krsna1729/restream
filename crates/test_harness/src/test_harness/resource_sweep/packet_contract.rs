@@ -76,7 +76,6 @@ pub(super) struct PacketCounters {
     pub(super) shard_loop_iterations: Option<u64>,
     pub(super) shard_media_ticks: Option<u64>,
     pub(super) shard_ready_visits: Option<u64>,
-    pub(super) shard_retries: Option<u64>,
     pub(super) udp_in_errors: Option<u64>,
     pub(super) udp_rcvbuf_errors: Option<u64>,
     pub(super) udp_sndbuf_errors: Option<u64>,
@@ -146,7 +145,6 @@ impl PacketCounters {
             shard_loop_iterations: shard_field("loopIterations"),
             shard_media_ticks: shard_field("mediaTicks"),
             shard_ready_visits: shard_field("readyVisits"),
-            shard_retries: shard_field("retryEvents"),
             udp_in_errors: host.udp_in_errors,
             udp_rcvbuf_errors: host.udp_rcvbuf_errors,
             udp_sndbuf_errors: host.udp_sndbuf_errors,
@@ -623,10 +621,6 @@ pub(super) async fn record_at(
             json!(rate(counters.shard_ready_visits, |c| c.shard_ready_visits).map(round2)),
         );
         record.insert(
-            "shardRetriesPerSec".to_string(),
-            json!(rate(counters.shard_retries, |c| c.shard_retries).map(round2)),
-        );
-        record.insert(
             "shardUnhealthyCount".to_string(),
             json!(unhealthy_shards(&shards)),
         );
@@ -947,8 +941,8 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
         "rungs": rungs,
         "samples": samples,
         "unavailable": {
-            "schedulerWakeRate": "ShardMetrics::record_useful_wake/record_empty_wake have no production caller in the current tree, so feedWakesUseful/feedWakesEmpty read 0 for every backend. loopIterationsPerSec, mediaTicksPerSec and readyVisitsPerSec are the scheduler-activity signals that are actually produced.",
-            "sqesPerSubmission": "Compio runtime ring counters are not exposed; current RTMP and SRT Owner production paths do not publish shard sqes/cqes counters, so these values remain zero.",
+            "schedulerWakeRate": "No backend counts useful versus empty feed wakes, so the diagnostics do not publish them. loopIterationsPerSec, mediaTicksPerSec and readyVisitsPerSec are the scheduler-activity signals that are actually produced.",
+            "sqesPerSubmission": "Compio runtime ring counters are not exposed: no shard publishes io_uring submissions, and `cqes` counts the readiness notifications Compio worker tasks send, not ring CQEs.",
             "ioUringEntersPerSec": "Same gap: no runtime enter counter is published.",
             "cyclesPerPacket": "No PMU on the reference hosts; cpuMicrosPerSrtPacket is the portable stand-in.",
         }

@@ -59,7 +59,6 @@ pub(super) fn rung_summary(
         "shardLoopIterationsPerSec",
         "shardMediaTicksPerSec",
         "shardReadyVisitsPerSec",
-        "shardRetriesPerSec",
         "udpInErrorsPerSec",
         "udpRcvbufErrorsPerSec",
         "udpSndbufErrorsPerSec",

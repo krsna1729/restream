@@ -22,7 +22,6 @@ pub(super) fn system_with_owners(owners: Value) -> Value {
             "loopIterations": 100,
             "mediaTicks": 7,
             "readyVisits": 40,
-            "retryEvents": 0,
             "resyncCount": 0,
             "queueOverflows": 0,
             "budgetExhaustions": 0,
@@ -62,7 +61,6 @@ fn counters_split_data_and_control_for_srt_shards_only() {
                 "loopIterations": 100,
                 "mediaTicks": 7,
                 "readyVisits": 40,
-                "retryEvents": 2,
                 "srtOwners": [
                     {"present": true, "txPackets": 1000, "txCompletedOk": 900, "rxPackets": 30,
                      "serviceVisits": 55, "serviceActions": 900, "maintenanceActions": 4,
@@ -75,7 +73,6 @@ fn counters_split_data_and_control_for_srt_shards_only() {
                 "loopIterations": 50,
                 "mediaTicks": 3,
                 "readyVisits": 20,
-                "retryEvents": 0,
                 "srtOwners": [
                     {"present": true, "txPackets": 500, "txCompletedOk": 400, "rxPackets": 10,
                      "serviceVisits": 25, "serviceActions": 400, "maintenanceActions": 1,
@@ -109,7 +106,6 @@ fn counters_split_data_and_control_for_srt_shards_only() {
     assert_eq!(counters.shard_loop_iterations, Some(150));
     assert_eq!(counters.shard_media_ticks, Some(10));
     assert_eq!(counters.shard_ready_visits, Some(60));
-    assert_eq!(counters.shard_retries, Some(2));
     assert_eq!(srt_shards(&system).len(), 2);
 }
 
@@ -121,7 +117,6 @@ fn absent_sources_read_none_instead_of_zero() {
     let counters = PacketCounters::read(&json!({"egressShards": []}));
     assert_eq!(counters.srt_tx_datagrams, None, "no SRT shard at all");
     assert_eq!(counters.shard_loop_iterations, None);
-    assert_eq!(counters.shard_retries, None);
 
     // A shard without the Owner class breakdown cannot produce the split.
     let counters = PacketCounters::read(&system_with_owners(json!([
@@ -167,7 +162,6 @@ pub(super) fn clean_sample() -> Value {
         "srtOwnerCount": 6,
         "shardUnhealthyCount": 0,
         "capacityActiveLeaves": 100,
-        "shardRetriesPerSec": 0.0,
         "ownerFaulted": false,
         "ownerTxFailedSends": 0,
         "ownerTxExhaustions": 0,
@@ -226,7 +220,7 @@ fn validity_separates_healthy_contaminated_and_invalid_rungs() {
             .any(|reason| reason.contains("not observable"))
     );
 
-    // Missing participants, retries and faults invalidate the rung.
+    // Missing participants and faults invalidate the rung.
     for (patch, needle) in [
         (
             json!({"capacityActiveLeaves": 99}),
@@ -237,7 +231,6 @@ fn validity_separates_healthy_contaminated_and_invalid_rungs() {
             "no live SRT shard",
         ),
         (json!({"shardUnhealthyCount": 1}), "non-healthy state"),
-        (json!({"shardRetriesPerSec": 3.0}), "output retries"),
         (json!({"ownerFaulted": true}), "owner faulted"),
         (
             json!({"ownerTxFailedSendsDelta": 2}),

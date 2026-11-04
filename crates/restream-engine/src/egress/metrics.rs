@@ -209,11 +209,7 @@ pub struct ShardMetrics {
     pub timers_processed: u64,
     pub pending_timers: u32,
 
-    // --- Feed wakes ---
-    /// Number of wakeups that found new feed data.
-    pub feed_wakes_useful: u64,
-    /// Number of wakeups that found nothing new.
-    pub feed_wakes_empty: u64,
+    // --- Feed ---
     /// Total leaf feed overruns / resynchronization events.
     pub feed_resyncs: u64,
 
@@ -222,9 +218,6 @@ pub struct ShardMetrics {
     pub media_ticks: u64,
     /// Sum of loop durations for latency percentile computation.
     pub loop_duration_sum_us: u64,
-
-    // --- Retry ---
-    pub retry_events: u64,
 
     // --- Backend transport counters ---
     pub rx_packets: u64,
@@ -235,15 +228,9 @@ pub struct ShardMetrics {
     /// Compio worker tasks send after their io_uring operations complete, not
     /// raw io_uring CQEs (one notification can follow several CQEs).
     pub cqes: u64,
-    pub sqes: u64,
     pub ready_visits: u64,
     pub budget_exhaustions: u64,
     pub stale_completions: u64,
-    pub rx_pool_empty: u64,
-    pub tx_pool_empty: u64,
-    pub send_zc_attempts: u64,
-    pub send_zc_fallbacks: u64,
-    pub cq_overflows: u64,
     pub ready_overflows: u64,
     /// Bounded backend work queues rejected an enqueue. A nonzero value is
     /// an overload or scheduler-invariant signal, never permission to grow.
@@ -287,16 +274,6 @@ impl ShardMetrics {
         }
     }
 
-    /// Record a useful (non-empty) feed wakeup.
-    pub fn record_useful_wake(&mut self) {
-        self.feed_wakes_useful += 1;
-    }
-
-    /// Record an empty (spurious or coalesced) feed wakeup.
-    pub fn record_empty_wake(&mut self) {
-        self.feed_wakes_empty += 1;
-    }
-
     /// Record a loop iteration with its measured duration.
     pub fn record_loop_iteration(&mut self, duration: Duration) {
         self.loop_iterations += 1;
@@ -305,6 +282,7 @@ impl ShardMetrics {
             .saturating_add(duration.as_micros() as u64);
     }
 }
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -330,16 +308,6 @@ mod tests {
         m.record_loop_iteration(Duration::from_micros(300));
         assert_eq!(m.loop_iterations, 2);
         assert_eq!(m.loop_duration_sum_us, 800);
-    }
-
-    #[test]
-    fn wake_counts_separate() {
-        let mut m = ShardMetrics::new(ShardId::new(0));
-        m.record_useful_wake();
-        m.record_useful_wake();
-        m.record_empty_wake();
-        assert_eq!(m.feed_wakes_useful, 2);
-        assert_eq!(m.feed_wakes_empty, 1);
     }
 
     #[test]
