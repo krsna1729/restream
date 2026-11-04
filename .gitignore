@@ -51,9 +51,8 @@ scale.csv
 *.pfx
 
 # Checked-in exception: self-signed, harness-only RTMPS test cert/key with no
-# production trust value (test/fixtures/tls/, registered in
-# REQUIRED_CHECKED_IN_FIXTURES). Not a real secret — see
-# docs/egress-implementation.md's RTMPS-at-scale writeup.
+# production trust value. Registered in REQUIRED_CHECKED_IN_FIXTURES in
+# crates/restream-engine/src/test_fixtures/paths.rs.
 !test/fixtures/tls/*.pem
 *tls*.tgz
 *cert*.tgz
