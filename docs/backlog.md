@@ -13,6 +13,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Q-116 MoQ ingest follows catalog updates](#q-116-correctness-opus-moq-ingest-takes-tracks-a-publisher-adds-after-its-first-catalog)
+- [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf-once-releases-carry-the-fixes)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -84,6 +85,22 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: a session test where the publisher's first catalog has audio only
   and a later version adds video puts both tracks in the ring; a catalog
   update that removes or retypes a live track keeps today's behavior.
+
+### Q-117 [platform] [sonnet] Drop the vendored hang and moq-msf once releases carry the fixes
+- Goal: `hang` and `moq-msf` come from crates.io again, so Dependabot and
+  the advisory checks see their real versions. Both fixes were reported to
+  moq-dev/moq through its private vulnerability reporting.
+- `hang`: upstream `main` fixed the H.264 codec-string panic
+  (moq-dev/moq#6847, reworked in #7035; it accepts only ASCII hex digits,
+  stricter than our `is_ascii()` guard). 0.21.21 still panics.
+- `moq-msf`: 0.5.1 and `main` still clone `initRef` payloads into every
+  track with no track, entry or total-byte bound.
+- Gates, per crate: a release passes the vendored regression cases (the
+  non-ASCII codec sweep; the 65th track/init entry and over-budget resolved
+  bytes rejected before expansion), ported to Restream tests against the
+  public API. Then delete `vendor/<crate>` and its `[patch.crates-io]`
+  entries in the root and `fuzz/` manifests, and the `moq_ingest` fuzz smoke
+  stays clean.
 
 ## Not planned
 
