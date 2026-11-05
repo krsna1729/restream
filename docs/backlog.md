@@ -14,6 +14,8 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Q-116 MoQ ingest follows catalog updates](#q-116-correctness-opus-moq-ingest-takes-tracks-a-publisher-adds-after-its-first-catalog)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
+- [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
+- [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -93,6 +95,40 @@ the [assurance roadmap](assurance-roadmap.md).
   cases, ported to Restream tests against the public API. Then delete
   `vendor/<crate>` and its `[patch.crates-io]` entries in the root and
   `fuzz/` manifests, and the `moq_ingest` fuzz smoke stays clean.
+
+### Q-118 [architecture] [opus] One concrete control-plane composition root
+- Goal: HTTP handlers reach `db::*`, `MediaEngine` and config through one
+  concrete application root, not `AppServices` (`src/api/mod.rs`) built by
+  `SqliteServiceFactory` (`src/infrastructure/service_wiring.rs`) over
+  `Arc<dyn …Store>` ports whose only production implementations are the
+  SQLite adapters in `src/infrastructure/` (tests add fakes).
+  Logs, outputs and health are already plain application functions.
+- Keep the services that hold policy (stream-key lookup, auth and sessions,
+  settings workflows, file ingest, media library, agent mutations); delete
+  ports, adapters and factory methods that only forward to `db::*`.
+- Gates: one vertical slice per change with its handler tests unchanged;
+  API contract tests stay green; the noun checks in
+  `tests/architecture/service_wiring.rs` go with the types they name; net
+  production lines go down.
+
+### Q-119 [architecture] [opus] Delete egress abstractions that only forward
+- Goal: each candidate is kept with a stated reason or deleted:
+  - `ResolvingSrtShardBackend` (`egress/backends/srt/resolve_runtime.rs`) and
+    `ResolvingRtmpShardBackend` (`egress/backends/rtmp_shard_resolve_runtime.rs`):
+    decorators whose methods mostly forward to the inner backend. Move
+    resolution batching into the backend if nothing else needs the wrapper.
+  - `LeafLimits` (`egress/policy.rs`): a renamed subset of `LeafPolicy` built
+    by `from_policy`.
+  - `EgressFeed` (`egress/feed.rs`): keep unless one concrete feed can serve
+    both rings. `RingFeed` follows the ring chain and `TsFeed` differs in
+    its keyframe checks, so the two are not one implementation with a
+    different `Unit`.
+- Out of scope: `EngineProgress`, `CloseReason`, `WakeGate` coalescing,
+  muxer port reuse, the connect-admission semaphore, and the model-based
+  proptests (`scheduler.rs`, `journal/tests.rs`).
+- Gates: per candidate, a layering-audit read of every call site; the egress
+  unit tests, proptests and Kani proofs unchanged and passing; the
+  `egress_visit` benchmark before and after for any change on the visit path.
 
 ## Not planned
 
