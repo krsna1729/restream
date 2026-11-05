@@ -1,0 +1,45 @@
+name: CodeQL
+
+# Advanced setup, replacing the repository's default setup: default setup never
+# analyzes Dependabot pull requests, so its Analyze checks could not be
+# required on master. Code scanning accepts uploads from pull_request runs even
+# with Dependabot's read-only token. Keep the job name and categories: branch
+# protection requires "Analyze (<language>)", and the categories continue the
+# alerts default setup recorded.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: '23 2 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

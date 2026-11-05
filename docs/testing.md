@@ -82,6 +82,13 @@ a nightly container smoke and the full harness shard matrix. Nightly and
 release both read that matrix from `crates/xtask/src/qualify/shards.rs`; the PR and
 `master` shard lists above live in `ci.yml`.
 
+`codeql.yml` runs CodeQL (`Analyze (actions)`, `Analyze (javascript-typescript)`,
+`Analyze (rust)`) on every pull request, `master` push and weekly. It replaces
+GitHub's default setup, which skips Dependabot pull requests. `master` requires
+all three Analyze checks, so analysis must complete, and the `CodeQL` result
+check, which fails on new alerts at the repository's severity threshold
+(GitHub's default: `error`, `critical` or `high`).
+
 The Docker, parser-fuzz and MoQ path filters must fail if Git cannot read the
 diff; an unavailable diff is not an unchanged path. Each captures the complete
 path list before matching, so an early match cannot terminate Git with SIGPIPE.
