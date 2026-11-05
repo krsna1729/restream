@@ -2,9 +2,7 @@
 
 Vendored from crates.io `hang` 0.21.16 (MIT OR Apache-2.0, `LICENSE-MIT` and
 `LICENSE-APACHE` from <https://github.com/moq-dev/moq>) and wired in through
-`[patch.crates-io]` in the root and `fuzz/` `Cargo.toml`. Upstream `main` has
-since fixed the bug (moq-dev/moq#6847, reworked in #7035), but no release
-carries the fix as of 0.21.21.
+`[patch.crates-io]` in the root and `fuzz/` `Cargo.toml`.
 
 Patch scope, marked `restream vendor patch` in the source:
 
