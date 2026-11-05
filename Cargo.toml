@@ -26,6 +26,9 @@ members = [
     "crates/test_harness",
 ]
 default-members = [".", "crates/*"]
+# Carried patches (`[patch.crates-io]` below), not members. Excluding them
+# lets each manifest load on its own, which CodeQL needs to analyze them.
+exclude = ["vendor/hang", "vendor/moq-msf", "vendor/moq-net", "vendor/rml_rtmp"]
 
 # `restream-mcp` checks that its target reports the same version and commit.
 [workspace.package]

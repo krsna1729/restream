@@ -87,7 +87,9 @@ release both read that matrix from `crates/xtask/src/qualify/shards.rs`; the PR 
 GitHub's default setup, which skips Dependabot pull requests. `master` requires
 all three Analyze checks, so analysis must complete, and the `CodeQL` result
 check, which fails on new alerts at the repository's severity threshold
-(GitHub's default: `error`, `critical` or `high`).
+(GitHub's default: `error`, `critical` or `high`). The Rust analysis covers
+the carried crates under `vendor/`. The root `[workspace]` excludes them, so
+each manifest loads on its own.
 
 The Docker, parser-fuzz and MoQ path filters must fail if Git cannot read the
 diff; an unavailable diff is not an unchanged path. Each captures the complete
