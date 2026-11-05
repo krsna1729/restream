@@ -3,7 +3,14 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # cargo-deny 0.20 derives advisory severity from the advisory database. Keep
 # this section minimal so release CI can use the current prebuilt cargo-deny
 # binary without schema drift blocking the real vulnerability check.
-ignore = []
+# Each ignore names why it ships nothing; cargo-deny warns once it no longer
+# matches, so delete it then.
+ignore = [
+  # pin-utils unmaintained: reached only via loom (our loom-model
+  # dev-dependency and upstream cfg(loom) builds) and wasm32-only wasmtimer.
+  # loom 0.7.2 is the latest release; no shipped binary links it.
+  { id = "RUSTSEC-2026-0441", reason = "dev/cfg(loom)/wasm32-only via loom 0.7.2 and wasmtimer; not in shipped binaries" },
+]
 
 [licenses]
 allow = [
