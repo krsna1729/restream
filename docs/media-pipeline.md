@@ -476,6 +476,12 @@ lifecycle and probe events (dotted).
   list holds them; a visit consumes at most 64 chunks, 16 per message, and
   retires at most 64 actions. Events keep queue order, so a disconnect never
   overtakes queued media (`crates/restream-engine/src/srt/ingress_owner_payload.rs`).
+- **TSBPD readiness.** The pinned srt-rs receiver releases only the circular
+  sequence head when its play time is due. A later packet with an earlier
+  timestamp cannot bypass it. A duplicate DATA readiness check inspects that
+  head, not the retained receive window; pending peer-shutdown scheduling uses
+  the head's deadline too. This removes a window-sized scan inside one Owner
+  visit rather than adding a second Restream-side delivery scheduler.
 - **Probe hold.** Before attach, an owner holds up to 2.5 MB per peer and
   32 MiB in total. After the probe it holds up to 4 MiB per publisher, 64 MiB
   per owner, for 2 s; overflow publishes to the current ring.
