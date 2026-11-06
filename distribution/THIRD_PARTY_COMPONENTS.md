@@ -9,7 +9,7 @@ component. It is intentionally not a replacement for the license texts in
 
 | Component | Exact distributed input | License | Source |
 |---|---|---|---|
-| srt-rs | git commit `79b45d2fd4dcd1111d3bd919075b378557d66909` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
+| srt-rs | git commit `91eeef82a2c0dd0e3f1263ab0a8e062af572d8d2` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
 | hls.js | npm package `hls.js@1.7.3` | Apache-2.0 | <https://github.com/video-dev/hls.js> |
 | FFmpeg executable (container images; `restream ffmpeg-fetch`) | BtbN release `autobuild-2026-09-30-13-08`, `ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0` (or `linuxarm64`), verified against the SHA-256 pinned in `crates/restream-engine/src/ffmpeg_binary.rs` | GPL-3.0-or-later (`--enable-gpl --enable-version3`) | <https://github.com/BtbN/FFmpeg-Builds> |
 
