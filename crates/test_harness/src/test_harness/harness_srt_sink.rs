@@ -378,6 +378,12 @@ fn build_listener_plan(port: u16, udp_buffer: usize) -> Result<OwnerListenerPlan
     let config = ListenerConfig::builder(SocketAddr::from(([0, 0, 0, 0], port)))
         .topology(topology)
         .bonded_inputs(BondedInputPolicy::Accept)
+        // Bonded callers require the receiver's mirror GROUP extension.
+        // Each independent sink port has its own receiving-group identity.
+        .group(srt_transport::GroupConfig::new(
+            u32::from(port),
+            srt_proto::handshake::GroupType::Broadcast,
+        ))
         .configure_transport(|transport| {
             transport.socket_buffers = NonZeroUsize::new(udp_buffer)
                 .map(SocketBufferConfig::Bytes)

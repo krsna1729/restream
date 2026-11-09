@@ -752,7 +752,9 @@ More modes qualify SRT egress and fabric admission:
   relays to one harness sink, then blackholes the relay carrying the media.
   The sink's MPEG-TS continuity check must see no counter jump, delivery must
   resume at steady pace, and the output must never redial. It runs in the
-  `direct-play` shard.
+  `direct-play` shard. Each harness sink port advertises a distinct receiving
+  GROUP identity, so both relayed legs negotiate the same receiving group
+  without weakening the caller's mirror-GROUP requirement.
 - `sink.admission` applies the same gate to `sink://` discard outputs,
   4224 per shard by default. A sink shard's 4,096-leaf table fills long
   before its CPU (one shard ran 4,096 at 8% busy), so the excess is refused
