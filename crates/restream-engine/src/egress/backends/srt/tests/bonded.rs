@@ -41,7 +41,7 @@ fn group_legs(harness: &Harness) -> Vec<(u32, String, u64)> {
 /// upstream's group tests do; the sink merges the legs into one stream).
 #[test]
 fn broadcast_bond_is_one_leaf_one_logical_caller_and_reaches_every_leg() {
-    let sink = SinkPeer::v4();
+    let sink = SinkPeer::bonded_v4();
     let mut harness = Harness::new();
     let unit = Bytes::from(vec![0x47u8; 1316]);
     harness.add_resolved(
@@ -83,7 +83,7 @@ fn broadcast_bond_is_one_leaf_one_logical_caller_and_reaches_every_leg() {
 /// group core selects the connected leg; Restream does nothing leg-specific.
 #[test]
 fn backup_bond_delivers_over_the_working_leg() {
-    let live = SinkPeer::v4();
+    let live = SinkPeer::bonded_v4();
     let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let dead_addr = dead.local_addr().unwrap();
     let mut harness = Harness::new();
@@ -102,7 +102,7 @@ fn backup_bond_delivers_over_the_working_leg() {
 /// Restream still holds exactly one leaf.
 #[test]
 fn one_failed_leg_does_not_remove_the_bonded_output() {
-    let live = SinkPeer::v4();
+    let live = SinkPeer::bonded_v4();
     let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let dead_addr = dead.local_addr().unwrap();
     let (spec, flag) = srt_spec_with_flag("bond", 1, &bond_url(live.addr, dead_addr, "broadcast"));

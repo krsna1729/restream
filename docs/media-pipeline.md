@@ -506,6 +506,20 @@ Ingest latency comes from the saved SRT ingest policy: default 250 ms, valid
 20–8000 ms. A passphrase is 10–79 bytes; key length is 16, 24 or 32
 (`crates/restream-domain/src/domain/srt_ingest.rs`).
 
+Handshake latency is directional: each receive delay is the maximum of the
+local receive request and the peer's send-delay request, not a shared maximum
+across both directions. Encrypted sessions keep independent receive and send
+keys and refresh state; receiving a peer's key refresh does not rotate local
+send keys.
+
+The transport bounds repeatable work for packet/control processing and service
+visits so a replayed future receive head cannot repeatedly scan the whole
+window and starve peers sharing an Owner. This is not a blanket constant-time
+guarantee: retirement and expiry work is amortized over retained state.
+TLPKTDROP expires only a gap at the unread receive-buffer head. An unread
+packet before a loss keeps that loss recoverable; the connection alternates
+ready delivery and newly exposed gap expiry within its existing visit budget.
+
 ### SRT call inputs
 
 An `srtCall` input reverses the handshake: the engine is the caller.
@@ -582,9 +596,10 @@ flowchart LR
 
 The diagram shows one SRT output from its ring to the remote receiver.
 
-- **URL.** `srt://host:port?streamid=…&passphrase=…&pbkeylen=…&bond=…&type=…`.
-  Other parameters, such as `latency`, are ignored
-  (`crates/restream-srt/src/egress_connect.rs`). Restream is always the caller.
+- **URL.** `srt://host:port?streamid=…&passphrase=…&pbkeylen=…&latency=…&bond=…&type=…`.
+  `latency` is in milliseconds and proposes the session's TSBPD delay; invalid
+  values are rejected at the API boundary (`crates/restream-srt/src/egress_connect.rs`).
+  Restream is always the caller.
 - **Muxer.** `start_shared_ts_muxer` (`crates/restream-engine/src/srt/shared_muxer.rs`) runs on
   the MEDIA executor. It is keyed by pipeline and stage. With
   `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` above 0 (max 10000),

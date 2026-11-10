@@ -213,6 +213,10 @@ pub(super) struct SinkPeer {
 
 impl SinkPeer {
     pub(super) fn start(bind: &str) -> Option<Self> {
+        Self::start_with_group(bind, None)
+    }
+
+    fn start_with_group(bind: &str, group: Option<srt_transport::GroupConfig>) -> Option<Self> {
         let stats = Arc::new(SinkStats::default());
         let stall = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -232,9 +236,13 @@ impl SinkPeer {
                         )
                         .configure_transport(|transport| {
                             transport.promotion = srt_transport::PromotionPolicy::Never;
-                        })
-                        .build()
-                        .expect("listener config");
+                        });
+                    let config = match group {
+                        Some(group) => config.group(group),
+                        None => config,
+                    }
+                    .build()
+                    .expect("listener config");
                     let mut owner = Owner::new(64);
                     if owner.listen(&config).is_err() {
                         let _ = addr_tx.send(None);
@@ -292,6 +300,17 @@ impl SinkPeer {
 
     pub(super) fn v4() -> Self {
         Self::start("127.0.0.1:0").expect("IPv4 sink listens")
+    }
+
+    pub(super) fn bonded_v4() -> Self {
+        Self::start_with_group(
+            "127.0.0.1:0",
+            Some(srt_transport::GroupConfig::new(
+                0x77,
+                srt_proto::handshake::GroupType::Broadcast,
+            )),
+        )
+        .expect("bonded IPv4 sink listens")
     }
 
     /// `None` on hosts without IPv6 loopback.
