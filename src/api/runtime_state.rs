@@ -137,6 +137,9 @@ pub async fn v1_state_stream_handler(
                 // goes, since only HLS upload connections are served with
                 // half-close (`api::http_server`).
                 () = tx.closed() => return,
+                // Shutdown: end the stream so the HTTP drain is not held
+                // open by a response that never completes on its own.
+                () = hub.streams_closed() => return,
             }
         }
     });

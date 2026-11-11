@@ -53,7 +53,10 @@ async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
     tokio::spawn(crate::api::http_server::serve(
         listener,
         app,
-        crate::api::http_server::ServeOptions::new(1_024),
+        crate::api::http_server::ServeOptions::new(
+            1_024,
+            tokio_util::sync::CancellationToken::new(),
+        ),
     ));
     Server {
         engine,

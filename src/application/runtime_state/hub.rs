@@ -67,6 +67,9 @@ pub struct StateHub {
     ports: ServerPorts,
     /// The retry budget each output's state reports.
     output_max_retries: u32,
+    /// Cancelled at shutdown: live state streams end so the HTTP drain
+    /// waits only for requests that finish on their own.
+    streams_closing: tokio_util::sync::CancellationToken,
 }
 
 /// When the last rebuild completed, and the marked-change count it read
@@ -113,6 +116,7 @@ impl StateHub {
             changes: AtomicU64::new(0),
             ports,
             output_max_retries,
+            streams_closing: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -126,6 +130,16 @@ impl StateHub {
     /// [`Self::snapshot`], then skip deltas at or below what was sent.
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<StateDelta>> {
         self.deltas.subscribe()
+    }
+
+    /// End every live state stream; shutdown calls this before draining HTTP.
+    pub fn close_streams(&self) {
+        self.streams_closing.cancel();
+    }
+
+    /// Resolves once [`Self::close_streams`] has been called.
+    pub async fn streams_closed(&self) {
+        self.streams_closing.cancelled().await;
     }
 
     /// Installs `projection` as current. Returns the published delta, or

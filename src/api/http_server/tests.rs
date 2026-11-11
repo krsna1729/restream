@@ -2,7 +2,7 @@
 //! deadline and shutdown drain.
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -11,6 +11,7 @@ use futures_util::StreamExt as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use super::{ServeOptions, serve, targets_hls_upload};
 
@@ -56,7 +57,7 @@ impl Drop for Released {
 }
 
 async fn start(app: Router) -> SocketAddr {
-    start_with(app, ServeOptions::new(1_024)).await
+    start_with(app, ServeOptions::new(1_024, CancellationToken::new())).await
 }
 
 async fn start_with(app: Router, options: ServeOptions) -> SocketAddr {
@@ -182,10 +183,12 @@ async fn a_request_line_split_by_a_stall_is_served_whole() {
 }
 
 /// Short deadlines so a test observes them; production uses the defaults.
-fn options(max_connections: usize) -> ServeOptions {
+fn options(max_connections: usize, shutdown: &CancellationToken) -> ServeOptions {
     ServeOptions {
         max_connections,
         header_read_timeout: Duration::from_millis(300),
+        drain_timeout: Duration::from_secs(5),
+        shutdown: shutdown.clone(),
     }
 }
 
@@ -198,7 +201,7 @@ fn ping_app() -> Router {
 /// admission permit forever.
 #[tokio::test]
 async fn a_silent_client_is_closed_at_the_header_deadline() {
-    let address = start_with(ping_app(), options(8)).await;
+    let address = start_with(ping_app(), options(8, &CancellationToken::new())).await;
 
     let mut partial = TcpStream::connect(address).await.unwrap();
     partial
@@ -232,11 +235,12 @@ async fn a_silent_client_is_closed_at_the_header_deadline() {
 /// served, and is served as soon as one is released.
 #[tokio::test]
 async fn a_connection_past_the_limit_waits_for_a_free_permit() {
+    let shutdown = CancellationToken::new();
     let address = start_with(
         ping_app(),
         ServeOptions {
             header_read_timeout: Duration::from_secs(10),
-            ..options(1)
+            ..options(1, &shutdown)
         },
     )
     .await;
@@ -267,4 +271,98 @@ async fn a_connection_past_the_limit_waits_for_a_free_permit() {
         .expect("the waiting connection is served once the permit is released")
         .unwrap();
     assert!(response.starts_with(b"HTTP/1.1 200"));
+}
+
+/// Shutdown lets an in-flight request finish, closes its keep-alive
+/// connection after the response, refuses new connections, and returns
+/// without waiting out the drain deadline.
+#[tokio::test]
+async fn shutdown_finishes_in_flight_responses_then_returns() {
+    let (entered, on_enter) = oneshot::channel::<()>();
+    let entered = std::sync::Arc::new(std::sync::Mutex::new(Some(entered)));
+    let app = Router::new().route(
+        "/slow",
+        get(move || {
+            if let Some(sender) = restream_sync::lock::lock(&entered).take() {
+                let _ = sender.send(());
+            }
+            async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                "done"
+            }
+        }),
+    );
+    let shutdown = CancellationToken::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve(listener, app, options(8, &shutdown)));
+
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    on_enter.await.unwrap();
+    let cancelled_at = Instant::now();
+    shutdown.cancel();
+
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut response))
+        .await
+        .expect("the keep-alive connection closes after its in-flight response")
+        .unwrap();
+    let response = String::from_utf8_lossy(&response);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.ends_with("done"), "{response}");
+
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("serve returns once in-flight work is done")
+        .unwrap();
+    assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+    assert!(
+        TcpStream::connect(address).await.is_err(),
+        "the listener is closed"
+    );
+}
+
+/// A response that never ends cannot hold shutdown past the drain deadline.
+#[tokio::test]
+async fn shutdown_returns_at_the_drain_deadline() {
+    let app = Router::new().route(
+        "/forever",
+        get(|| async {
+            let first = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(Bytes::from_static(b"data: hello\n\n"))
+            });
+            Body::from_stream(first.chain(futures_util::stream::pending()))
+        }),
+    );
+    let shutdown = CancellationToken::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve(
+        listener,
+        app,
+        ServeOptions {
+            drain_timeout: Duration::from_millis(300),
+            ..options(8, &shutdown)
+        },
+    ));
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(b"GET /forever HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = [0u8; 256];
+    tokio::time::timeout(Duration::from_secs(2), client.read(&mut first))
+        .await
+        .expect("the stream starts")
+        .unwrap();
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("serve returns at the drain deadline")
+        .unwrap();
 }
