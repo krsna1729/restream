@@ -50,7 +50,11 @@ async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
     let app = crate::api::create_hls_ingest_router(ingest.clone(), inputs.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(crate::api::http_server::serve(listener, app));
+    tokio::spawn(crate::api::http_server::serve(
+        listener,
+        app,
+        crate::api::http_server::ServeOptions::new(1_024),
+    ));
     Server {
         engine,
         base: format!("http://{address}/ingest/hls"),

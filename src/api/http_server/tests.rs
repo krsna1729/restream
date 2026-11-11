@@ -1,4 +1,5 @@
-//! The listener's per-connection half-close policy.
+//! The listener's per-connection half-close policy, admission, header
+//! deadline and shutdown drain.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
-use super::{serve, targets_hls_upload};
+use super::{ServeOptions, serve, targets_hls_upload};
 
 #[test]
 fn the_first_request_line_decides_the_policy() {
@@ -55,9 +56,13 @@ impl Drop for Released {
 }
 
 async fn start(app: Router) -> SocketAddr {
+    start_with(app, ServeOptions::new(1_024)).await
+}
+
+async fn start_with(app: Router, options: ServeOptions) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(serve(listener, app));
+    tokio::spawn(serve(listener, app, options));
     address
 }
 
@@ -174,4 +179,92 @@ async fn a_request_line_split_by_a_stall_is_served_whole() {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.ends_with(expected), "{response}");
     }
+}
+
+/// Short deadlines so a test observes them; production uses the defaults.
+fn options(max_connections: usize) -> ServeOptions {
+    ServeOptions {
+        max_connections,
+        header_read_timeout: Duration::from_millis(300),
+    }
+}
+
+fn ping_app() -> Router {
+    Router::new().route("/api/ping", get(|| async { "pong" }))
+}
+
+/// A client that stalls mid-head, or goes quiet on a keep-alive connection,
+/// is closed at the header deadline: a silent socket cannot hold its
+/// admission permit forever.
+#[tokio::test]
+async fn a_silent_client_is_closed_at_the_header_deadline() {
+    let address = start_with(ping_app(), options(8)).await;
+
+    let mut partial = TcpStream::connect(address).await.unwrap();
+    partial
+        .write_all(b"GET /api/ping HTTP/1.1\r\nHost:")
+        .await
+        .unwrap();
+    let mut idle = TcpStream::connect(address).await.unwrap();
+    idle.write_all(b"GET /api/ping HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = [0u8; 512];
+    let read = tokio::time::timeout(Duration::from_secs(2), idle.read(&mut first))
+        .await
+        .expect("the keep-alive request is answered")
+        .unwrap();
+    assert!(first[..read].starts_with(b"HTTP/1.1 200"));
+
+    for (name, client) in [
+        ("stalled head", &mut partial),
+        ("idle keep-alive", &mut idle),
+    ] {
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut rest))
+            .await
+            .unwrap_or_else(|_| panic!("the {name} connection is closed at the header deadline"))
+            .unwrap();
+    }
+}
+
+/// Past `max_connections` a connection waits for a permit instead of being
+/// served, and is served as soon as one is released.
+#[tokio::test]
+async fn a_connection_past_the_limit_waits_for_a_free_permit() {
+    let address = start_with(
+        ping_app(),
+        ServeOptions {
+            header_read_timeout: Duration::from_secs(10),
+            ..options(1)
+        },
+    )
+    .await;
+    let mut holder = TcpStream::connect(address).await.unwrap();
+    holder
+        .write_all(b"GET /api/ping HTTP/1.1\r\nHost:")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut waiting = TcpStream::connect(address).await.unwrap();
+    waiting
+        .write_all(b"GET /api/ping HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut early = [0u8; 64];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), waiting.read(&mut early))
+            .await
+            .is_err(),
+        "a connection past the limit must not be served while the permit is held"
+    );
+
+    drop(holder);
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), waiting.read_to_end(&mut response))
+        .await
+        .expect("the waiting connection is served once the permit is released")
+        .unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200"));
 }

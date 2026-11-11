@@ -124,6 +124,7 @@ fn runtime_tuning_is_loaded_by_config_module() {
             ("RESTREAM_RECONCILE_INTERVAL_MS", "5"),
             ("RESTREAM_OUTPUT_RETRY_BASE_MS", "0"),
             ("RESTREAM_HLS_IDLE_TIMEOUT_MS", "90000"),
+            ("RESTREAM_HTTP_MAX_CONNECTIONS", "512"),
         ],
         || {
             let tuning = RuntimeTuning::from_env();
@@ -131,6 +132,7 @@ fn runtime_tuning_is_loaded_by_config_module() {
             assert_eq!(tuning.reconciler_interval_ms, 100);
             assert_eq!(tuning.output_retry_base_ms, 1);
             assert_eq!(tuning.hls_idle_timeout_ms, 90000);
+            assert_eq!(tuning.http_max_connections, 512);
         },
     );
 }
