@@ -2,4 +2,5 @@ disallowed-methods = [
   { path = "std::sync::Mutex::lock", reason = "use restream_sync::lock::lock: a poisoned lock must not panic every later reader" },
   { path = "std::sync::RwLock::read", reason = "use restream_sync::lock::read (poison-tolerant)" },
   { path = "std::sync::RwLock::write", reason = "use restream_sync::lock::write (poison-tolerant)" },
+  { path = "sqlx::Row::get", reason = "use Row::try_get with ?: a NULL or mistyped column (SQLite stores any type) must be an error, not a panic" },
 ]

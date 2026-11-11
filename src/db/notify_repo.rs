@@ -25,22 +25,21 @@ pub async fn list_channels(pool: &SqlitePool) -> Result<Vec<ChannelRow>, sqlx::E
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .iter()
+    rows.iter()
         .map(|row| {
-            (
-                row.get(0),
-                row.get(1),
-                row.get(2),
-                row.get(3),
-                row.get(4),
-                row.get(5),
-                row.get::<i64, _>(6) != 0,
-                row.get::<i64, _>(7) != 0,
-                row.get(8),
-            )
+            Ok((
+                row.try_get(0)?,
+                row.try_get(1)?,
+                row.try_get(2)?,
+                row.try_get(3)?,
+                row.try_get(4)?,
+                row.try_get(5)?,
+                row.try_get::<i64, _>(6)? != 0,
+                row.try_get::<i64, _>(7)? != 0,
+                row.try_get(8)?,
+            ))
         })
-        .collect())
+        .collect()
 }
 
 pub async fn save_channel(pool: &SqlitePool, row: &ChannelRow) -> Result<(), sqlx::Error> {
@@ -86,20 +85,19 @@ pub async fn list_subscriptions(pool: &SqlitePool) -> Result<Vec<SubscriptionRow
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .iter()
+    rows.iter()
         .map(|row| {
-            (
-                row.get(0),
-                row.get(1),
-                row.get(2),
-                row.get(3),
-                row.get(4),
-                row.get(5),
-                row.get(6),
-            )
+            Ok((
+                row.try_get(0)?,
+                row.try_get(1)?,
+                row.try_get(2)?,
+                row.try_get(3)?,
+                row.try_get(4)?,
+                row.try_get(5)?,
+                row.try_get(6)?,
+            ))
         })
-        .collect())
+        .collect()
 }
 
 /// A browser re-subscribing (same endpoint) replaces its row.
@@ -187,23 +185,22 @@ pub async fn list_deliveries(
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .iter()
+    rows.iter()
         .map(|row| {
-            (
-                row.get(0),
+            Ok((
+                row.try_get(0)?,
                 (
-                    row.get(1),
-                    row.get(2),
-                    row.get(3),
-                    row.get(4),
-                    row.get(5),
-                    row.get(6),
-                    row.get::<i64, _>(7) != 0,
-                    row.get(8),
-                    row.get(9),
+                    row.try_get(1)?,
+                    row.try_get(2)?,
+                    row.try_get(3)?,
+                    row.try_get(4)?,
+                    row.try_get(5)?,
+                    row.try_get(6)?,
+                    row.try_get::<i64, _>(7)? != 0,
+                    row.try_get(8)?,
+                    row.try_get(9)?,
                 ),
-            )
+            ))
         })
-        .collect())
+        .collect()
 }

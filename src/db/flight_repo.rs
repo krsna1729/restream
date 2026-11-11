@@ -41,7 +41,9 @@ pub async fn window(
     .bind(until_ms)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    rows.iter()
+        .map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+        .collect()
 }
 
 /// The oldest kept sample of a pipeline, if any.
@@ -49,8 +51,8 @@ pub async fn oldest(pool: &SqlitePool, pipeline_id: &str) -> Result<Option<i64>,
     sqlx::query("SELECT MIN(at_ms) FROM flight_samples WHERE pipeline_id = ?")
         .bind(pipeline_id)
         .fetch_one(pool)
-        .await
-        .map(|row| row.get(0))
+        .await?
+        .try_get(0)
 }
 
 /// Drops every sample older than `before_ms`.

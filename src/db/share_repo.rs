@@ -19,18 +19,19 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<ShareLinkRecord>, sqlx::Error
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .iter()
-        .map(|row| ShareLinkRecord {
-            id: row.get(0),
-            pipeline_id: row.get(1),
-            label: row.get(2),
-            token: row.get(3),
-            created_at_ms: row.get(4),
-            expires_at_ms: row.get(5),
-            views: row.get(6),
+    rows.iter()
+        .map(|row| {
+            Ok(ShareLinkRecord {
+                id: row.try_get(0)?,
+                pipeline_id: row.try_get(1)?,
+                label: row.try_get(2)?,
+                token: row.try_get(3)?,
+                created_at_ms: row.try_get(4)?,
+                expires_at_ms: row.try_get(5)?,
+                views: row.try_get(6)?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 pub async fn insert(pool: &SqlitePool, link: &ShareLinkRecord) -> Result<(), sqlx::Error> {

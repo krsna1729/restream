@@ -83,7 +83,7 @@ async fn reconciler(catalog: Arc<dyn PipelineStore>) -> Reconciler {
         restream_engine::hls_ingest::HlsIngestLimits::default(),
     );
     let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
-        config.ports.clone(),
+        config.ports,
         config.tuning.output_max_retries,
     ));
     Reconciler::new(

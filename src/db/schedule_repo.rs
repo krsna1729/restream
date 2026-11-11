@@ -20,20 +20,20 @@ pub struct ScheduleRecord {
 
 const COLUMNS: &str = "id, pipeline_id, name, action, output_ids, at, repeat, enabled, last_run, last_result, created_at";
 
-fn record(row: &sqlx::sqlite::SqliteRow) -> ScheduleRecord {
-    ScheduleRecord {
-        id: row.get(0),
-        pipeline_id: row.get(1),
-        name: row.get(2),
-        action: row.get(3),
-        output_ids: row.get(4),
-        at_ms: row.get(5),
-        repeat: row.get(6),
-        enabled: row.get::<i64, _>(7) != 0,
-        last_run_ms: row.get(8),
-        last_result: row.get(9),
-        created_at_ms: row.get(10),
-    }
+fn record(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduleRecord, sqlx::Error> {
+    Ok(ScheduleRecord {
+        id: row.try_get(0)?,
+        pipeline_id: row.try_get(1)?,
+        name: row.try_get(2)?,
+        action: row.try_get(3)?,
+        output_ids: row.try_get(4)?,
+        at_ms: row.try_get(5)?,
+        repeat: row.try_get(6)?,
+        enabled: row.try_get::<i64, _>(7)? != 0,
+        last_run_ms: row.try_get(8)?,
+        last_result: row.try_get(9)?,
+        created_at_ms: row.try_get(10)?,
+    })
 }
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<ScheduleRecord>, sqlx::Error> {
@@ -42,7 +42,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<ScheduleRecord>, sqlx::Error>
     )))
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(record).collect())
+    rows.iter().map(record).collect()
 }
 
 pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<ScheduleRecord>, sqlx::Error> {
@@ -52,7 +52,7 @@ pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<ScheduleRecord>, 
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(record))
+    row.as_ref().map(record).transpose()
 }
 
 pub async fn save(pool: &SqlitePool, record: &ScheduleRecord) -> Result<(), sqlx::Error> {

@@ -34,14 +34,14 @@ pub async fn get_session_created_at(
         .bind(token)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|r| r.get::<i64, _>(0)))
+    row.map(|r| r.try_get::<i64, _>(0)).transpose()
 }
 
 pub async fn list_sessions(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     let rows = sqlx::query("SELECT token FROM sessions")
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
+    rows.iter().map(|r| r.try_get::<String, _>(0)).collect()
 }
 
 pub async fn prune_expired_sessions(pool: &SqlitePool, max_age_ms: i64) -> Result<(), sqlx::Error> {
