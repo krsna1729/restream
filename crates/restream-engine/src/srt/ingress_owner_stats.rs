@@ -172,7 +172,8 @@ mod tests {
 
     use super::super::super::ingress_admission::ReceiverGroupId;
     use super::super::super::tokio_ingress::SrtIngestPolicyStore;
-    use super::super::{IngressConfig, OwnerSeat, build, listener_plans};
+    use super::super::lifecycle::{build, listener_plans};
+    use super::super::{IngressConfig, OwnerSeat};
     use crate::snapshots::ListenerSocketStats;
     use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
