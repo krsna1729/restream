@@ -56,6 +56,7 @@ Request limits:
 |---|---|---|
 | Open connections | 1024; past it new connections wait in the kernel backlog | `RESTREAM_HTTP_MAX_CONNECTIONS` |
 | Request head, including idle keep-alive | 10 s after the 5 s first-line sniff, then the connection closes | `HEADER_READ_TIMEOUT` |
+| Request body and response progress | Time spent waiting on the client: 20 s, earning 1 s back per 500 bytes moved (at most 20 s banked). A body that runs out gets `400`; a response the client stops taking closes the connection. An idle state stream or a slow handler costs nothing | `progress::PACE` |
 | Shutdown drain | Listener closes, state streams end, in-flight responses get 5 s | `DRAIN_TIMEOUT` |
 | Request body (default) | 4 MiB, else `413` | `DEFAULT_API_BODY_LIMIT_BYTES` |
 | `POST /api/v1/agent/operations` body | 256 KiB | `AGENT_OPERATION_BODY_LIMIT_BYTES` |

@@ -23,9 +23,17 @@
 //! complete request head within `header_read_timeout` (idle keep-alive
 //! included) is closed, so silent sockets cannot hold permits forever.
 //!
+//! Progress: a request body that arrives, or a response the client takes,
+//! slower than [`progress::PACE`] ends after its grace, so a client that
+//! trickles bytes cannot hold a permit either ([`progress`]).
+//!
 //! Shutdown: once `shutdown` is cancelled the listener closes, every live
 //! connection finishes its in-flight response and then closes, and `serve`
 //! returns when all have, or after `drain_timeout`.
+
+mod progress;
+
+pub use progress::Pace;
 
 use std::io;
 use std::net::SocketAddr;
@@ -59,6 +67,7 @@ pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct ServeOptions {
     pub max_connections: usize,
     pub header_read_timeout: Duration,
+    pub progress: Pace,
     pub drain_timeout: Duration,
     pub shutdown: CancellationToken,
 }
@@ -68,6 +77,7 @@ impl ServeOptions {
         Self {
             max_connections,
             header_read_timeout: HEADER_READ_TIMEOUT,
+            progress: progress::PACE,
             drain_timeout: DRAIN_TIMEOUT,
             shutdown,
         }
@@ -117,9 +127,11 @@ pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
             Ok(service) => service,
             Err(never) => match never {},
         };
-        let service = TowerToHyperService::new(
-            service.map_request(|request: Request<Incoming>| request.map(Body::new)),
-        );
+        let pace = options.progress;
+        let service =
+            TowerToHyperService::new(service.map_request(move |request: Request<Incoming>| {
+                request.map(|body| Body::new(progress::PacedBody::new(body, pace)))
+            }));
         let shutdown = options.shutdown.clone();
         let header_read_timeout = options.header_read_timeout;
         tokio::spawn(async move {
@@ -132,7 +144,7 @@ pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
                 .timer(TokioTimer::new())
                 .header_read_timeout(header_read_timeout)
                 .half_close(half_close)
-                .serve_connection(TokioIo::new(stream), service)
+                .serve_connection(TokioIo::new(progress::PacedIo::new(stream, pace)), service)
                 .with_upgrades();
             let mut connection = std::pin::pin!(connection);
             let result = tokio::select! {
