@@ -72,9 +72,9 @@ pub(in crate::srt) fn run_owner_thread(
     ready: flume::Sender<Result<SocketAddr, String>>,
 ) -> IngressExit {
     match build(seat, config, commands, events, telemetry) {
-        Ok((mut owner_loop, local_addr)) => {
+        Ok((owner_loop, local_addr)) => {
             let _ = ready.send(Ok(local_addr));
-            owner_loop.serve()
+            serve_contained(owner_loop)
         }
         Err(message) => {
             error!(error = %message, "SRT ingress Owner failed to start");
@@ -85,6 +85,52 @@ pub(in crate::srt) fn run_owner_thread(
             }
         }
     }
+}
+
+/// Thread-entry fault boundary. A panic anywhere in the serve loop (srt-rs
+/// service and the admission resolver it runs, command apply, reader sends)
+/// is caught here, after the unwind, and taken down the Owner fault path:
+/// counted, `faulted` set, the `Fault` event sent (Tokio stops the listener
+/// and `SupervisedListener` restarts it), and the Owner torn down canonically
+/// rather than dropped mid-unwind (compio aborts the process if a task is
+/// polled while the thread is panicking, and a live managed-RX Owner is never
+/// just dropped). If that teardown panics too, the Owner and its runtime are
+/// leaked, not dropped; only the bridge endpoints are released, so Tokio and
+/// the other Owners still see this one gone.
+fn serve_contained(mut owner_loop: OwnerLoop) -> IngressExit {
+    let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner_loop.serve()));
+    let payload = match served {
+        Ok(exit) => return exit,
+        Err(payload) => payload,
+    };
+    let detail = format!(
+        "SRT ingress Owner panicked: {}",
+        crate::panic_boundary::record_contained(payload.as_ref())
+    );
+    error!(fault = %detail, "SRT ingress Owner faulted; the listener is stopping");
+    owner_loop
+        .stats
+        .ingress_owner
+        .faulted
+        .store(true, Ordering::Relaxed);
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner_loop.finish(Some(detail.clone()))
+    }));
+    finished.unwrap_or_else(|payload| {
+        let panic = crate::panic_boundary::record_contained(payload.as_ref());
+        error!(
+            panic,
+            "SRT ingress Owner teardown panicked; leaking the Owner"
+        );
+        owner_loop.report_fault(&detail);
+        owner_loop.release_bridges();
+        owner_loop.withdraw_gauges();
+        std::mem::forget(owner_loop);
+        IngressExit {
+            quiescent: false,
+            fault: Some(detail),
+        }
+    })
 }
 
 pub(super) fn build(
@@ -271,5 +317,16 @@ impl OwnerLoop {
                 }
             }
         }
+    }
+
+    /// Drop this Owner's ends of every bridge (replacing them with detached
+    /// ones), for an Owner that is leaked instead of dropped: Tokio's
+    /// `is_closed` and the other Owners' transfer sends must still see it gone.
+    fn release_bridges(&mut self) {
+        self.commands = flume::bounded(1).1;
+        self.inbox = flume::bounded(1).1;
+        self.events = mpsc::channel(1).0;
+        self.telemetry = mpsc::channel(1).0;
+        self.members.clear();
     }
 }
