@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::FutureExt as _;
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::application::ports::PipelineStore;
 use crate::application::reconcile::build_recording_reconcile_plan;
@@ -120,31 +121,56 @@ impl Reconciler {
             let now = Instant::now();
             if now >= next_pass_allowed && (self.requests.take_due(now) || now >= next_backstop) {
                 next_backstop = now + backstop;
-                self.output_pass(interval).await;
+                self.contained_output_pass(interval).await;
                 next_pass_allowed = Instant::now() + interval;
             }
             if now >= next_tick {
                 next_tick = now + interval;
                 tick += 1;
-                if tick.is_multiple_of(session_prune_every_ticks) {
-                    self.prune_sessions_and_logs().await;
-                }
-                self.engine.resize_srt_fabrics().await;
-                self.engine.resize_rtmp_fabrics().await;
-                self.engine.resize_moq_fabrics().await;
-                self.engine.resize_sink_fabrics().await;
-                self.engine.resize_pipeline_fabrics().await;
-                self.engine.resize_hls_put_fabrics().await;
-                if self.reconcile_recordings(tick).await {
-                    self.reconcile_stream_qa(tick).await;
-                    self.sweep_idle_hls().await;
-                    self.engine.reap_file_ingests().await;
-                }
+                self.contained_housekeeping(tick, session_prune_every_ticks)
+                    .await;
             }
         }
         // Pull tasks fetch from origins that are not ours: stop them with the
         // runtime rather than leaving requests in flight at shutdown.
         self.hls_ingest.cancel_all_pulls();
+    }
+
+    /// One output pass behind the panic boundary; after a panic the pass is
+    /// retried after the usual gap rather than waiting for a trigger.
+    async fn contained_output_pass(&self, interval: Duration) -> bool {
+        let completed = contained("output_pass", self.output_pass(interval)).await;
+        if !completed {
+            self.requests.wake_at(Instant::now() + interval);
+        }
+        completed
+    }
+
+    /// Housekeeping behind the panic boundary.
+    async fn contained_housekeeping(&self, tick: u64, session_prune_every_ticks: u64) -> bool {
+        contained(
+            "housekeeping",
+            self.housekeeping(tick, session_prune_every_ticks),
+        )
+        .await
+    }
+
+    /// Work that reads no outputs, every interval.
+    async fn housekeeping(&self, tick: u64, session_prune_every_ticks: u64) {
+        if tick.is_multiple_of(session_prune_every_ticks) {
+            self.prune_sessions_and_logs().await;
+        }
+        self.engine.resize_srt_fabrics().await;
+        self.engine.resize_rtmp_fabrics().await;
+        self.engine.resize_moq_fabrics().await;
+        self.engine.resize_sink_fabrics().await;
+        self.engine.resize_pipeline_fabrics().await;
+        self.engine.resize_hls_put_fabrics().await;
+        if self.reconcile_recordings(tick).await {
+            self.reconcile_stream_qa(tick).await;
+            self.sweep_idle_hls().await;
+            self.engine.reap_file_ingests().await;
+        }
     }
 
     async fn output_pass(&self, interval: Duration) {
@@ -284,3 +310,25 @@ impl Reconciler {
         }
     }
 }
+
+/// Runs one reconciler step behind a panic boundary: the reconciler runs on
+/// the main future, so a panic in any step would otherwise end the process.
+/// Returns whether the step completed.
+async fn contained(step: &'static str, work: impl std::future::Future<Output = ()>) -> bool {
+    let completed = std::panic::AssertUnwindSafe(work)
+        .catch_unwind()
+        .await
+        .is_ok();
+    if !completed {
+        error!(
+            step,
+            event_class = "lifecycle",
+            event_type = "reconciler.step_panicked",
+            "panic in reconciler step; continuing with the next tick"
+        );
+    }
+    completed
+}
+
+#[cfg(test)]
+mod tests;
