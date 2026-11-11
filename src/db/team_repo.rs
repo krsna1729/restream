@@ -8,15 +8,15 @@ pub type UserRow = (String, String, String, i64, bool, String);
 /// The audit log keeps this many most recent entries.
 pub const AUDIT_LOG_CAP: i64 = 10_000;
 
-fn user_row(row: &sqlx::sqlite::SqliteRow) -> UserRow {
-    (
-        row.get(0),
-        row.get(1),
-        row.get(2),
-        row.get(3),
-        row.get::<i64, _>(4) != 0,
-        row.get(5),
-    )
+fn user_row(row: &sqlx::sqlite::SqliteRow) -> Result<UserRow, sqlx::Error> {
+    Ok((
+        row.try_get(0)?,
+        row.try_get(1)?,
+        row.try_get(2)?,
+        row.try_get(3)?,
+        row.try_get::<i64, _>(4)? != 0,
+        row.try_get(5)?,
+    ))
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>, sqlx::Error> {
@@ -25,7 +25,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>, sqlx::Error> 
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(user_row).collect())
+    rows.iter().map(user_row).collect()
 }
 
 /// `(username, ms)` for everyone with a kept sign-in or audited change:
@@ -48,7 +48,9 @@ pub async fn last_active(
     .bind(builtin_admin)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    rows.iter()
+        .map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+        .collect()
 }
 
 pub async fn find_user_by_username(
@@ -61,7 +63,7 @@ pub async fn find_user_by_username(
     .bind(username)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(user_row))
+    row.as_ref().map(user_row).transpose()
 }
 
 pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<UserRow>, sqlx::Error> {
@@ -71,7 +73,7 @@ pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<UserRow>, s
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(user_row))
+    row.as_ref().map(user_row).transpose()
 }
 
 /// Inserts a member; `Ok(false)` when the username is taken.
@@ -169,7 +171,8 @@ pub async fn session_principal(
         .bind(token)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|row| (row.get(0), row.get(1))))
+    row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+        .transpose()
 }
 
 /// One audit row: id, at, username, role, method, path, status.
@@ -221,18 +224,17 @@ pub async fn list_audit(
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .iter()
+    rows.iter()
         .map(|row| {
-            (
-                row.get(0),
-                row.get(1),
-                row.get(2),
-                row.get(3),
-                row.get(4),
-                row.get(5),
-                row.get(6),
-            )
+            Ok((
+                row.try_get(0)?,
+                row.try_get(1)?,
+                row.try_get(2)?,
+                row.try_get(3)?,
+                row.try_get(4)?,
+                row.try_get(5)?,
+                row.try_get(6)?,
+            ))
         })
-        .collect())
+        .collect()
 }

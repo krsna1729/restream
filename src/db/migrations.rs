@@ -108,8 +108,8 @@ async fn rebuild(pool: &SqlitePool, tables: &[(&str, &str)]) -> Result<(), sqlx:
             .fetch_all(&mut *tx)
             .await?;
         for orphan in orphans {
-            let table: String = orphan.get(0);
-            let rowid: i64 = orphan.get(1);
+            let table: String = orphan.try_get(0)?;
+            let rowid: i64 = orphan.try_get(1)?;
             sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM \"{table}\" WHERE rowid = ?"
             )))
@@ -133,10 +133,9 @@ async fn columns(
     let rows = sqlx::query(AssertSqlSafe(format!("PRAGMA table_info({table})")))
         .fetch_all(conn)
         .await?;
-    Ok(rows
-        .iter()
-        .map(|row| row.get::<String, _>("name"))
-        .collect())
+    rows.iter()
+        .map(|row| row.try_get::<String, _>("name"))
+        .collect()
 }
 
 #[cfg(test)]
