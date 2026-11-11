@@ -8,7 +8,13 @@ pub async fn get_meta(
         .bind(key)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|r| r.get::<String, _>(0)))
+    // `value` is nullable in the schema, and a restored or hand-edited database
+    // can hold any type: decode fallibly so such a row is an error or `None`,
+    // never a panic in a startup or reconciler caller.
+    Ok(row
+        .map(|r| r.try_get::<Option<String>, _>(0))
+        .transpose()?
+        .flatten())
 }
 
 pub async fn set_meta(pool: &SqlitePool, key: &str, value: &str) -> Result<String, sqlx::Error> {
@@ -31,4 +37,43 @@ pub async fn get_ingest_host(
 
 pub async fn set_ingest_host(pool: &SqlitePool, host: &str) -> Result<String, sqlx::Error> {
     set_meta(pool, "ingest_host", host.trim()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{create_pool, setup_database_schema};
+
+    async fn test_pool() -> SqlitePool {
+        let pool = create_pool("sqlite::memory:").await.unwrap();
+        setup_database_schema(&pool).await.unwrap();
+        pool
+    }
+
+    /// A NULL or non-text `meta.value` (the column is nullable, and SQLite
+    /// stores any type) reads as absent or as an error, never a panic.
+    #[tokio::test]
+    async fn a_null_or_mistyped_meta_value_is_not_a_panic() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO meta (key, value) VALUES ('ingest_host', NULL), ('k', x'00ff')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let null = tokio::spawn({
+            let pool = pool.clone();
+            async move { get_ingest_host(&pool).await }
+        })
+        .await
+        .expect("reading a NULL meta value does not panic");
+        assert_eq!(null.unwrap(), None);
+
+        let mistyped = tokio::spawn({
+            let pool = pool.clone();
+            async move { get_meta(&pool, "k").await }
+        })
+        .await
+        .expect("reading a non-text meta value does not panic");
+        assert!(mistyped.is_err(), "{mistyped:?}");
+    }
 }
