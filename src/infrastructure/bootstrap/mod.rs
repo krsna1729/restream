@@ -291,8 +291,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
     reconciler.run(&mut runtime, &shutdown).await;
     projector_stop.cancel();
 
-    let (http, rtmp, srt) = runtime.into_handles();
-    shutdown::cleanup(&engine, &pool, http, rtmp, srt).await;
+    let (http, http_stop, rtmp, srt) = runtime.into_handles();
+    shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
 }
 
 #[cfg(test)]

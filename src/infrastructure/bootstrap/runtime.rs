@@ -27,8 +27,23 @@ pub(super) struct RuntimeLaunch {
 
 pub(super) struct RuntimeTasks {
     http: JoinHandle<()>,
+    http_stop: HttpStop,
     rtmp: SupervisedListener,
     srt: SupervisedListener,
+}
+
+/// Ends the dashboard listener first at shutdown: live state streams close,
+/// then the listener stops accepting and drains in-flight responses.
+pub(super) struct HttpStop {
+    listener: CancellationToken,
+    streams: Arc<crate::application::runtime_state::hub::StateHub>,
+}
+
+impl HttpStop {
+    pub fn begin(&self) {
+        self.streams.close_streams();
+        self.listener.cancel();
+    }
 }
 
 impl RuntimeTasks {
@@ -45,6 +60,10 @@ impl RuntimeTasks {
         } = launch;
 
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
+        let http_stop = HttpStop {
+            listener: CancellationToken::new(),
+            streams: state.runtime_state.clone(),
+        };
         let app = crate::api::create_router(state)
             .merge(crate::api::create_hls_ingest_router(hls_ingest, hls_inputs));
         let listener = tokio::net::TcpListener::bind(&http_addr)
@@ -64,7 +83,10 @@ impl RuntimeTasks {
         let http = tokio::spawn(crate::api::http_server::serve(
             listener,
             app,
-            crate::api::http_server::ServeOptions::new(config.tuning.http_max_connections),
+            crate::api::http_server::ServeOptions::new(
+                config.tuning.http_max_connections,
+                http_stop.listener.clone(),
+            ),
         ));
 
         let rtmp_port = config.ports.rtmp;
@@ -119,7 +141,12 @@ impl RuntimeTasks {
         let spawn_srt = move || tokio::spawn(Arc::clone(&srt_server).run(srt_port));
         let srt = SupervisedListener::new("srt", spawn_srt(), Box::new(spawn_srt), srt_restarts);
 
-        Self { http, rtmp, srt }
+        Self {
+            http,
+            http_stop,
+            rtmp,
+            srt,
+        }
     }
 
     pub async fn wait_for_reconcile_tick(
@@ -150,7 +177,12 @@ impl RuntimeTasks {
         }
     }
 
-    pub fn into_handles(self) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
-        (self.http, self.rtmp.into_handle(), self.srt.into_handle())
+    pub fn into_handles(self) -> (JoinHandle<()>, HttpStop, JoinHandle<()>, JoinHandle<()>) {
+        (
+            self.http,
+            self.http_stop,
+            self.rtmp.into_handle(),
+            self.srt.into_handle(),
+        )
     }
 }

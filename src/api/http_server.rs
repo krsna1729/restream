@@ -22,6 +22,10 @@
 //! from the table RTMP, SRT and FFmpeg pipes share. A client that sends no
 //! complete request head within `header_read_timeout` (idle keep-alive
 //! included) is closed, so silent sockets cannot hold permits forever.
+//!
+//! Shutdown: once `shutdown` is cancelled the listener closes, every live
+//! connection finishes its in-flight response and then closes, and `serve`
+//! returns when all have, or after `drain_timeout`.
 
 use std::io;
 use std::net::SocketAddr;
@@ -39,55 +43,70 @@ use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 use tower::{Service, ServiceExt};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 /// How long a connection may take to send a complete request head, counted
 /// from when the connection starts waiting for one. With the 5 s sniff this
 /// bounds how long a silent socket holds a permit to about 15 s.
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long shutdown waits for in-flight responses.
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Admission and timeout settings for [`serve`].
+/// Admission, timeout and shutdown settings for [`serve`].
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
     pub max_connections: usize,
     pub header_read_timeout: Duration,
+    pub drain_timeout: Duration,
+    pub shutdown: CancellationToken,
 }
 
 impl ServeOptions {
-    pub fn new(max_connections: usize) -> Self {
+    pub fn new(max_connections: usize, shutdown: CancellationToken) -> Self {
         Self {
             max_connections,
             header_read_timeout: HEADER_READ_TIMEOUT,
+            drain_timeout: DRAIN_TIMEOUT,
+            shutdown,
         }
     }
 }
 
-/// Serve `app` on `listener` until the task is dropped. Accept errors that
-/// concern one connection are skipped; others (descriptor exhaustion) are
-/// logged and retried after a second, as `axum::serve` does.
+/// Serve `app` on `listener` until `options.shutdown` is cancelled, then
+/// drain. Accept errors that concern one connection are skipped; others
+/// (descriptor exhaustion) are logged and retried after a second, as
+/// `axum::serve` does.
 pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
     let max_connections = options.max_connections.clamp(1, Semaphore::MAX_PERMITS);
     let permits = Arc::new(Semaphore::new(max_connections));
     let mut make_service = app.into_make_service_with_connect_info::<SocketAddr>();
     loop {
-        let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
-            return;
+        let permit = tokio::select! {
+            () = options.shutdown.cancelled() => break,
+            permit = Arc::clone(&permits).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_closed) => break,
+            },
         };
-        let (stream, remote) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(accept_error) => {
-                if !matches!(
-                    accept_error.kind(),
-                    io::ErrorKind::ConnectionRefused
-                        | io::ErrorKind::ConnectionAborted
-                        | io::ErrorKind::ConnectionReset
-                ) {
-                    error!(err = %accept_error, "HTTP accept error");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+        let (stream, remote) = tokio::select! {
+            () = options.shutdown.cancelled() => break,
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(accept_error) => {
+                    if !matches!(
+                        accept_error.kind(),
+                        io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::ConnectionReset
+                    ) {
+                        error!(err = %accept_error, "HTTP accept error");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    continue;
                 }
-                continue;
-            }
+            },
         };
         // Small JSON replies and SSE events are single short writes; without
         // this each waits on the client's delayed ACK of the previous one.
@@ -101,20 +120,44 @@ pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
         let service = TowerToHyperService::new(
             service.map_request(|request: Request<Incoming>| request.map(Body::new)),
         );
+        let shutdown = options.shutdown.clone();
         let header_read_timeout = options.header_read_timeout;
         tokio::spawn(async move {
             let _permit = permit;
-            let (half_close, stream) = classify(stream).await;
+            let (half_close, stream) = tokio::select! {
+                () = shutdown.cancelled() => return,
+                classified = classify(stream) => classified,
+            };
             let connection = hyper::server::conn::http1::Builder::new()
                 .timer(TokioTimer::new())
                 .header_read_timeout(header_read_timeout)
                 .half_close(half_close)
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades();
-            if let Err(serve_error) = connection.await {
+            let mut connection = std::pin::pin!(connection);
+            let result = tokio::select! {
+                result = connection.as_mut() => result,
+                () = shutdown.cancelled() => {
+                    connection.as_mut().graceful_shutdown();
+                    connection.await
+                }
+            };
+            if let Err(serve_error) = result {
                 debug!(err = %serve_error, "HTTP connection ended with an error");
             }
         });
+    }
+    // Refuse new connections while the live ones finish.
+    drop(listener);
+    let all = u32::try_from(max_connections).unwrap_or(u32::MAX);
+    if tokio::time::timeout(options.drain_timeout, permits.acquire_many(all))
+        .await
+        .is_err()
+    {
+        warn!(
+            open = max_connections.saturating_sub(permits.available_permits()),
+            "HTTP drain timed out; closing the remaining connections"
+        );
     }
 }
 

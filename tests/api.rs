@@ -58,6 +58,11 @@ async fn test_app() -> (axum::Router, SqlitePool) {
 }
 
 async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) {
+    let (state, pool, engine) = test_state().await;
+    (api::create_router(state), pool, engine)
+}
+
+async fn test_state() -> (Arc<api::AppState>, SqlitePool, Arc<MediaEngine>) {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&pool).await.unwrap();
 
@@ -81,8 +86,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
         engine.clone(),
         log_broadcast,
     ));
-
-    (api::create_router(state), pool, engine)
+    (state, pool, engine)
 }
 
 async fn test_app_with_secure_cookies() -> axum::Router {

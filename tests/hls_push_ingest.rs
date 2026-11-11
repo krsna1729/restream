@@ -90,7 +90,10 @@ async fn serve() -> Server {
     tokio::spawn(restream::api::http_server::serve(
         listener,
         app,
-        restream::api::http_server::ServeOptions::new(1_024),
+        restream::api::http_server::ServeOptions::new(
+            1_024,
+            tokio_util::sync::CancellationToken::new(),
+        ),
     ));
     Server {
         engine,

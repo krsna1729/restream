@@ -8,6 +8,8 @@ use tracing::{info, warn};
 
 use restream_engine::engine::MediaEngine;
 
+use super::runtime::HttpStop;
+
 pub(super) fn spawn_signal_watcher() -> CancellationToken {
     let shutdown = CancellationToken::new();
     let shutdown_task = shutdown.clone();
@@ -45,7 +47,8 @@ pub(super) fn spawn_signal_watcher() -> CancellationToken {
 pub(super) async fn cleanup(
     engine: &Arc<MediaEngine>,
     pool: &SqlitePool,
-    http_handle: JoinHandle<()>,
+    mut http_handle: JoinHandle<()>,
+    http_stop: HttpStop,
     rtmp_handle: JoinHandle<()>,
     srt_handle: JoinHandle<()>,
 ) {
@@ -54,6 +57,18 @@ pub(super) async fn cleanup(
         event_type = "restream.shutdown.started",
         "shutdown: cancelling all active tasks",
     );
+    // The dashboard first, while the engine and database its handlers use
+    // are still up: stop accepting, finish in-flight responses. `serve`
+    // bounds its own drain; the extra second only guards that bound.
+    http_stop.begin();
+    let http_deadline = crate::api::http_server::DRAIN_TIMEOUT + Duration::from_secs(1);
+    if tokio::time::timeout(http_deadline, &mut http_handle)
+        .await
+        .is_err()
+    {
+        http_handle.abort();
+    }
+
     engine.cancel_all_active_tasks().await;
     engine.shutdown_all_hls_segmenters().await;
     engine.shutdown_listeners();
@@ -73,9 +88,6 @@ pub(super) async fn cleanup(
 
     pool.close().await;
 
-    if !http_handle.is_finished() {
-        http_handle.abort();
-    }
     if !rtmp_handle.is_finished() {
         rtmp_handle.abort();
     }

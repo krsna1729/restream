@@ -946,3 +946,38 @@ async fn runtime_state_reports_outputs_and_the_stream_starts_from_a_snapshot() {
         "a token from another server run resyncs: {frame}"
     );
 }
+
+/// Shutdown closes live state streams, so a connected dashboard does not hold
+/// the HTTP drain open until its deadline.
+#[tokio::test]
+async fn closing_state_streams_ends_an_open_stream() {
+    use http_body_util::BodyExt;
+    let (state, _pool, _engine) = test_state().await;
+    let app = api::create_router(state.clone());
+    let cookie = login(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/state/stream", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut body = resp.into_body();
+    tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
+        .await
+        .expect("the stream starts with a snapshot")
+        .expect("a first frame")
+        .unwrap();
+
+    state.runtime_state.close_streams();
+    loop {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), body.frame())
+            .await
+            .expect("the stream ends once streams are closed, not at a later heartbeat");
+        match frame {
+            None => break,
+            Some(frame) => {
+                frame.unwrap();
+            }
+        }
+    }
+}
