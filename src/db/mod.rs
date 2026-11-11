@@ -89,6 +89,8 @@ pub async fn create_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
     use std::str::FromStr;
 
+    sanitize_preexisting_wal(url);
+
     let opts = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
@@ -108,6 +110,57 @@ pub(crate) fn is_database_locked(err: &sqlx::Error) -> bool {
             db_err.code().as_deref() == Some("5") || db_err.message().contains("database is locked")
         }
         _ => false,
+    }
+}
+
+/// Defense-in-depth against SQLite WAL page-size mismatch (CVE-2026-119375).
+/// If a pre-existing sibling `-wal` file has a page size differing from the
+/// database header, remove it before SQLite's pager opens it.
+fn sanitize_preexisting_wal(url: &str) {
+    let path_str = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"));
+    let Some(raw_path) = path_str else { return };
+    if raw_path.starts_with(':') || raw_path.contains("mode=memory") {
+        return;
+    }
+    let file_path = raw_path.split('?').next().unwrap_or(raw_path);
+    if file_path.is_empty() {
+        return;
+    }
+    let db_path = std::path::Path::new(file_path);
+    let mut wal_os = db_path.as_os_str().to_os_string();
+    wal_os.push("-wal");
+    let wal_path = std::path::PathBuf::from(wal_os);
+    if !wal_path.is_file() {
+        return;
+    }
+    let Ok(db_bytes) = std::fs::read(db_path) else {
+        return;
+    };
+    let Ok(wal_bytes) = std::fs::read(&wal_path) else {
+        return;
+    };
+    if db_bytes.len() < 18 || wal_bytes.len() < 12 {
+        return;
+    }
+    let mut db_page_size = u16::from_be_bytes([db_bytes[16], db_bytes[17]]) as u32;
+    if db_page_size == 1 {
+        db_page_size = 65536;
+    }
+    let wal_page_size =
+        u32::from_be_bytes([wal_bytes[8], wal_bytes[9], wal_bytes[10], wal_bytes[11]]);
+    if db_page_size != 0 && wal_page_size != 0 && db_page_size != wal_page_size {
+        tracing::warn!(
+            db = %db_path.display(),
+            db_page_size,
+            wal_page_size,
+            "Removing mismatched SQLite WAL file before connection (CVE-2026-119375 mitigation)"
+        );
+        let _ = std::fs::remove_file(&wal_path);
+        let mut shm_os = db_path.as_os_str().to_os_string();
+        shm_os.push("-shm");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(shm_os));
     }
 }
 
@@ -155,5 +208,40 @@ mod tests {
         .unwrap();
         assert_eq!(result, 7);
         assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn mismatched_preexisting_wal_is_removed_before_opening() {
+        let dir = std::env::temp_dir().join(format!(
+            "restream-wal-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_file = dir.join("test.db");
+        let wal_file = dir.join("test.db-wal");
+        // Write a minimal SQLite header with page size 4096 (bytes 16..18 = 0x1000).
+        let mut db_header = vec![0u8; 100];
+        db_header[..16].copy_from_slice(b"SQLite format 3\0");
+        db_header[16..18].copy_from_slice(&4096u16.to_be_bytes());
+        std::fs::write(&db_file, db_header).unwrap();
+
+        // Write a minimal WAL header with mismatched page size 1024 (bytes 8..12 = 0x00000400).
+        let mut wal_header = vec![0u8; 32];
+        wal_header[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+        wal_header[8..12].copy_from_slice(&1024u32.to_be_bytes());
+        std::fs::write(&wal_file, wal_header).unwrap();
+
+        assert!(wal_file.is_file());
+        let url = format!("sqlite://{}", db_file.display());
+        sanitize_preexisting_wal(&url);
+        assert!(
+            !wal_file.exists(),
+            "mismatched WAL must be unlinked before SQLite pager can access it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

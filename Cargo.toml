@@ -28,7 +28,7 @@ members = [
 default-members = [".", "crates/*"]
 # Carried patches (`[patch.crates-io]` below), not members. Excluding them
 # lets each manifest load on its own, which CodeQL needs to analyze them.
-exclude = ["vendor/hang", "vendor/moq-msf", "vendor/moq-net", "vendor/rml_rtmp", "vendor/sqlx-sqlite"]
+exclude = ["vendor/hang", "vendor/moq-msf", "vendor/moq-net", "vendor/rml_rtmp"]
 
 # `restream-mcp` checks that its target reports the same version and commit.
 [workspace.package]
@@ -93,7 +93,7 @@ hyper-util = { version = "0.1", features = ["tokio", "service"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "cors", "set-header", "compression-gzip"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
-libsqlite3-sys = { version = "0.39.1", features = ["bundled"] }
+libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1.12"
@@ -193,4 +193,3 @@ moq-msf = { path = "vendor/moq-msf" }
 rml_rtmp = { path = "vendor/rml_rtmp" }
 # moq-net 0.3.15 plus the `unsend` feature (see vendor/moq-net/PATCH.md).
 moq-net = { path = "vendor/moq-net" }
-sqlx-sqlite = { path = "vendor/sqlx-sqlite" }

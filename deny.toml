@@ -10,6 +10,11 @@ ignore = [
   # dev-dependency and upstream cfg(loom) builds) and wasm32-only wasmtimer.
   # loom 0.7.2 is the latest release; no shipped binary links it.
   { id = "RUSTSEC-2026-0441", reason = "dev/cfg(loom)/wasm32-only via loom 0.7.2 and wasmtimer; not in shipped binaries" },
+  # SQLite WAL page-size mismatch (CVE-2026-119375). Restream opens only
+  # its internal database and in-memory test databases; no user-supplied
+  # SQLite/WAL files are opened. Upstream sqlx main has relaxed the
+  # constraint (<0.40); delete this once sqlx 0.9.1 is released on crates.io.
+  { id = "RUSTSEC-2026-0459", reason = "internal DB only; no user-supplied SQLite/WAL files; awaiting upstream sqlx 0.9.1" },
 ]
 
 [licenses]
