@@ -36,6 +36,7 @@ mod listener_supervisor;
 mod reconcile;
 mod runtime;
 mod shutdown;
+mod supervised_task;
 
 pub use auth::initialize_auth_for_test;
 
@@ -181,7 +182,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     );
 
     // Events emitted before the consumer below starts wait in the channel.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     engine.set_event_sink(event_tx);
 
     let sessions_for_reconciler = sessions.clone();
@@ -204,15 +205,23 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let runtime_state = state.runtime_state.clone();
     let disconnect_grace =
         std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            crate::application::topology::request_pass_for_event(
-                &requests,
-                &event.kind,
-                disconnect_grace,
-            );
-            runtime_state.mark_changed();
-            events::persist_runtime_event(event);
+    // Shared so a restart after a panic resumes the same channel; a tokio
+    // Mutex is not poisoned by the panicking holder.
+    let event_rx = Arc::new(tokio::sync::Mutex::new(event_rx));
+    supervised_task::spawn_supervised("runtime_event_consumer", move || {
+        let (event_rx, requests, runtime_state) =
+            (event_rx.clone(), requests.clone(), runtime_state.clone());
+        async move {
+            let mut event_rx = event_rx.lock().await;
+            while let Some(event) = event_rx.recv().await {
+                crate::application::topology::request_pass_for_event(
+                    &requests,
+                    &event.kind,
+                    disconnect_grace,
+                );
+                runtime_state.mark_changed();
+                events::persist_runtime_event(event);
+            }
         }
     });
 
@@ -239,42 +248,87 @@ pub async fn run_app(config: Arc<AppConfig>) {
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
-    tokio::spawn(crate::application::runtime_state::hub::run_projector(
-        state.runtime_state.clone(),
-        pool.clone(),
-        engine.clone(),
-        std::time::Duration::from_millis(config.tuning.reconciler_interval_ms),
-        projector_stop.clone(),
-    ));
-    tokio::spawn(crate::application::fleet_history::run_fleet_sampler(
-        state.fleet_history.clone(),
-        state.runtime_state.clone(),
-        pool.clone(),
-        engine.clone(),
-        config.clone(),
-        crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
-        projector_stop.clone(),
-    ));
-    tokio::spawn(crate::application::flight_recorder::run_flight_recorder(
-        state.flight_recorder.clone(),
-        state.runtime_state.clone(),
-        pool.clone(),
-        engine.clone(),
-        crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
-        (config.flight_history_hours > 0)
-            .then(|| std::time::Duration::from_secs(config.flight_history_hours * 3600)),
-        projector_stop.clone(),
-    ));
-    tokio::spawn(crate::api::alerts::run_alert_notifier(
-        state.clone(),
-        crate::api::alerts::NOTIFY_INTERVAL,
-        projector_stop.clone(),
-    ));
-    tokio::spawn(crate::api::schedules::run_scheduler(
-        state.clone(),
-        crate::api::schedules::SCHEDULER_TICK,
-        projector_stop.clone(),
-    ));
+    supervised_task::spawn_supervised("runtime_state_projector", {
+        let (hub, pool, engine, stop) = (
+            state.runtime_state.clone(),
+            pool.clone(),
+            engine.clone(),
+            projector_stop.clone(),
+        );
+        let interval = std::time::Duration::from_millis(config.tuning.reconciler_interval_ms);
+        move || {
+            crate::application::runtime_state::hub::run_projector(
+                hub.clone(),
+                pool.clone(),
+                engine.clone(),
+                interval,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("fleet_sampler", {
+        let (history, hub, pool, engine, config, stop) = (
+            state.fleet_history.clone(),
+            state.runtime_state.clone(),
+            pool.clone(),
+            engine.clone(),
+            config.clone(),
+            projector_stop.clone(),
+        );
+        move || {
+            crate::application::fleet_history::run_fleet_sampler(
+                history.clone(),
+                hub.clone(),
+                pool.clone(),
+                engine.clone(),
+                config.clone(),
+                crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("flight_recorder", {
+        let (recorder, hub, pool, engine, stop) = (
+            state.flight_recorder.clone(),
+            state.runtime_state.clone(),
+            pool.clone(),
+            engine.clone(),
+            projector_stop.clone(),
+        );
+        let retention = (config.flight_history_hours > 0)
+            .then(|| std::time::Duration::from_secs(config.flight_history_hours * 3600));
+        move || {
+            crate::application::flight_recorder::run_flight_recorder(
+                recorder.clone(),
+                hub.clone(),
+                pool.clone(),
+                engine.clone(),
+                crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
+                retention,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("alert_notifier", {
+        let (state, stop) = (state.clone(), projector_stop.clone());
+        move || {
+            crate::api::alerts::run_alert_notifier(
+                state.clone(),
+                crate::api::alerts::NOTIFY_INTERVAL,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("scheduler", {
+        let (state, stop) = (state.clone(), projector_stop.clone());
+        move || {
+            crate::api::schedules::run_scheduler(
+                state.clone(),
+                crate::api::schedules::SCHEDULER_TICK,
+                stop.clone(),
+            )
+        }
+    });
     let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,
