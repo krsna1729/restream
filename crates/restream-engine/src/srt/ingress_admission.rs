@@ -62,6 +62,10 @@ pub(crate) fn resolve_ingress_policy(
     receiver: ReceiverGroupId,
     request: &AdmissionRequest,
 ) -> AdmissionResolution {
+    #[cfg(test)]
+    if request.claimed_identity.stream_id.as_deref() == Some(INJECTED_RESOLVER_PANIC_STREAM_ID) {
+        std::panic::resume_unwind(Box::new("injected SRT admission resolver panic"));
+    }
     resolve_policy(
         store,
         receiver,
@@ -149,6 +153,12 @@ fn receiver_group_for(
         _ => None,
     }
 }
+
+/// A StreamID whose admission panics on the Owner thread, outside the
+/// per-peer media boundary (srt-rs runs the resolver inside `Owner::service`).
+#[cfg(test)]
+pub(crate) const INJECTED_RESOLVER_PANIC_STREAM_ID: &str =
+    "#!::r=restream-test-injected-resolver-panic,m=publish";
 
 #[cfg(test)]
 mod tests {

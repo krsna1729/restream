@@ -487,9 +487,14 @@ lifecycle and probe events (dotted).
   per owner, for 2 s; overflow publishes to the current ring.
 - **Retirement.** A locally closed peer retires after its terminal event or
   500 ms. Stale commands for a retired peer are counted (`staleCommands`).
-- **Fault.** An owner fault ends its thread. The listener supervisor restarts
-  the whole listener with backoff from 1 s to 30 s, reset after 60 s of
-  health (`src/infrastructure/bootstrap/listener_supervisor.rs`).
+- **Fault.** An owner fault ends its thread. A panic on the owner thread
+  outside per-peer media containment (srt-rs service, the admission resolver,
+  command apply) is caught at the thread entry and takes the same path: it is
+  counted as a contained panic, sets `ingressOwner.faulted`, sends `Fault` and
+  tears the Owner down canonically; if that teardown panics too the Owner is
+  leaked rather than dropped. The listener supervisor restarts the whole
+  listener with backoff from 1 s to 30 s, reset after 60 s of health
+  (`src/infrastructure/bootstrap/listener_supervisor.rs`).
 - **Metrics.** `srtListener.ingressOwner` in engine status, with no peer or
   StreamID labels (see [Observability](observability.md)).
 

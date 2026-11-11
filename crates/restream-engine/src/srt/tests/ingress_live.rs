@@ -383,6 +383,95 @@ async fn a_panicking_publisher_is_disconnected_and_the_owner_keeps_serving() {
     server.stop().await;
 }
 
+/// A panic on the Owner thread outside the per-peer media boundary (here
+/// injected in the admission resolver, which srt-rs runs inside
+/// `Owner::service`) is caught at the thread entry and taken down the Owner
+/// fault path: the process survives, the Owner is torn down canonically, the
+/// listener task reports the fault and returns (so `SupervisedListener`
+/// restarts it), and the restarted listener on the same port serves a
+/// legitimate publisher.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_thread_panic_faults_the_listener_and_its_restart_serves() {
+    let server = TestServer::start(&["healthy"], vec![plain("healthy")]).await;
+    let remote = server.remote;
+    let before = crate::panic_boundary::contained_panics();
+
+    let doomed = blocking(move || {
+        run_caller(
+            direct(
+                remote,
+                super::super::ingress_admission::INJECTED_RESOLVER_PANIC_STREAM_ID,
+                None,
+            ),
+            Duration::from_millis(1500),
+            |_| false,
+        )
+    })
+    .await;
+    assert!(!doomed.connected, "{doomed:?}");
+    server
+        .wait_until(
+            "the faulted listener task returns",
+            Duration::from_secs(5),
+            || async { server.task.is_finished() },
+        )
+        .await;
+    assert!(crate::panic_boundary::contained_panics() > before);
+    let stats = server
+        .engine
+        .listener_stats_handle()
+        .ingress_owner
+        .snapshot();
+    assert!(stats.faulted, "{stats:?}");
+    assert!(
+        !server
+            .engine
+            .listener_stats_handle()
+            .bonding_available
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "the listener reported itself stopped"
+    );
+
+    // What `SupervisedListener` does: run the same server on the same port.
+    let TestServer {
+        server: srt,
+        engine,
+        ..
+    } = server;
+    let task = tokio::spawn(srt.clone().run(remote.port()));
+    let restarted = TestServer {
+        server: srt,
+        engine,
+        remote,
+        task,
+    };
+    restarted
+        .wait_until(
+            "the restarted listener is ready",
+            Duration::from_secs(10),
+            || async {
+                restarted
+                    .engine
+                    .listener_stats_handle()
+                    .bonding_available
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            },
+        )
+        .await;
+    let chunks = ts_chunks(400);
+    let healthy = blocking(move || {
+        run_caller(
+            direct(remote, "#!::r=healthy,m=publish", None),
+            Duration::from_secs(20),
+            publish_step(chunks),
+        )
+    })
+    .await;
+    assert!(healthy.connected, "{healthy:?}");
+    assert!(restarted.ring_progress("pipeline-healthy").await > 0);
+    restarted.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_publisher_panic_retires_tail_without_stalling_an_existing_sibling() {
     use std::sync::{
