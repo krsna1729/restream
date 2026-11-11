@@ -1,19 +1,19 @@
 //! The listener's per-connection half-close policy, admission, header
-//! deadline and shutdown drain.
+//! deadline, progress budgets and shutdown drain.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use futures_util::StreamExt as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::{ServeOptions, serve, targets_hls_upload};
+use super::{Pace, ServeOptions, serve, targets_hls_upload};
 
 #[test]
 fn the_first_request_line_decides_the_policy() {
@@ -187,6 +187,10 @@ fn options(max_connections: usize, shutdown: &CancellationToken) -> ServeOptions
     ServeOptions {
         max_connections,
         header_read_timeout: Duration::from_millis(300),
+        progress: Pace {
+            grace: Duration::from_millis(300),
+            min_bytes_per_sec: 1_000,
+        },
         drain_timeout: Duration::from_secs(5),
         shutdown: shutdown.clone(),
     }
@@ -365,4 +369,189 @@ async fn shutdown_returns_at_the_drain_deadline() {
         .await
         .expect("serve returns at the drain deadline")
         .unwrap();
+}
+
+/// A fresh `GET /api/ping` on its own connection: whether it got a 200.
+async fn ping(address: SocketAddr) -> bool {
+    ping_on(&mut TcpStream::connect(address).await.unwrap()).await
+}
+
+/// A last `GET /api/ping` on `client`: whether it got a 200.
+async fn ping_on(client: &mut TcpStream) -> bool {
+    client
+        .write_all(b"GET /api/ping HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = client.read_to_end(&mut response).await;
+    response.starts_with(b"HTTP/1.1 200")
+}
+
+/// A request body trickled below the minimum rate ends at its budget, so the
+/// client cannot hold its permit by sending a byte before every idle period.
+#[tokio::test]
+async fn a_body_trickled_below_the_minimum_rate_frees_its_permit() {
+    let app = ping_app().route(
+        "/echo",
+        post(|body: Bytes| async move { body.len().to_string() }),
+    );
+    let address = start_with(
+        app,
+        ServeOptions {
+            header_read_timeout: Duration::from_secs(10),
+            ..options(1, &CancellationToken::new())
+        },
+    )
+    .await;
+    let mut trickler = TcpStream::connect(address).await.unwrap();
+    trickler
+        .write_all(b"POST /echo HTTP/1.1\r\nHost: test\r\nContent-Length: 1000\r\n\r\n")
+        .await
+        .unwrap();
+    // 20 B/s, 50 ms apart: shorter than any idle timer, far below the rate.
+    let trickle = tokio::spawn(async move {
+        for _ in 0..60 {
+            if trickler.write_all(b"x").await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let served = tokio::time::timeout(Duration::from_secs(2), ping(address))
+        .await
+        .expect("the trickled body's permit is freed at its budget");
+    assert!(served);
+    trickle.abort();
+}
+
+/// A client that takes part of a response and then stops reading is closed
+/// once its writes stay blocked past the grace: credit earned by the bytes it
+/// did take is capped, so a long healthy transfer banks no hours of it.
+#[tokio::test]
+async fn a_client_that_stops_reading_frees_its_permit() {
+    let big = Bytes::from(vec![b'x'; 16 << 20]);
+    let app = ping_app().route("/big", get(move || async move { big.clone() }));
+    let address = start_with(
+        app,
+        ServeOptions {
+            header_read_timeout: Duration::from_secs(10),
+            ..options(1, &CancellationToken::new())
+        },
+    )
+    .await;
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4_096).unwrap();
+    let mut reader = socket.connect(address).await.unwrap();
+    reader
+        .write_all(b"GET /big HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut taken = vec![0u8; 2 << 20];
+    reader.read_exact(&mut taken).await.unwrap();
+
+    let served = tokio::time::timeout(Duration::from_secs(3), ping(address))
+        .await
+        .expect("the stalled reader's permit is freed once its writes stay blocked");
+    assert!(served);
+    drop(reader);
+}
+
+/// The budgets drain only while a transfer waits on the peer: a stream idle
+/// between events, a handler slower than the grace (with or without a body)
+/// and a steady client on a transfer longer than the grace are all served.
+#[tokio::test]
+async fn idle_streams_slow_handlers_and_steady_clients_outlive_the_grace() {
+    let big = Bytes::from(vec![b'x'; 8 << 20]);
+    let app = ping_app()
+        .route(
+            "/events",
+            get(|| async {
+                let events = futures_util::stream::iter(0..4).then(|index| async move {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    Ok::<_, std::io::Error>(Bytes::from(format!("data: {index}\n\n")))
+                });
+                Body::from_stream(events)
+            }),
+        )
+        .route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                "slow"
+            })
+            .post(|body: Bytes| async move {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                body.len().to_string()
+            }),
+        )
+        .route("/big", get(move || async move { big.clone() }));
+    let address = start_with(
+        app,
+        ServeOptions {
+            header_read_timeout: Duration::from_secs(10),
+            ..options(8, &CancellationToken::new())
+        },
+    )
+    .await;
+
+    // Keep-alive, as browsers use it: hyper also reads the socket between
+    // and during exchanges, where a socket-level read timer would fire.
+    let exchange = |request: &'static [u8], end: &'static str| async move {
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client.write_all(request).await.unwrap();
+        let mut response = Vec::new();
+        let mut chunk = [0u8; 4_096];
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !response.ends_with(end.as_bytes()) {
+                let read = client.read(&mut chunk).await.unwrap();
+                assert!(
+                    read > 0,
+                    "closed early: {}",
+                    String::from_utf8_lossy(&response)
+                );
+                response.extend_from_slice(&chunk[..read]);
+            }
+        })
+        .await
+        .expect("the exchange completes");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            ping_on(&mut client).await,
+            "the connection is reused after idling past the grace"
+        );
+        String::from_utf8_lossy(&response).into_owned()
+    };
+    let events = exchange(b"GET /events HTTP/1.1\r\nHost: test\r\n\r\n", "0\r\n\r\n").await;
+    assert!(events.contains("data: 3"), "{events}");
+    exchange(b"GET /slow HTTP/1.1\r\nHost: test\r\n\r\n", "slow").await;
+    exchange(
+        b"POST /slow HTTP/1.1\r\nHost: test\r\nContent-Length: 10\r\n\r\n0123456789",
+        "10",
+    )
+    .await;
+
+    // About 8 MB/s, well above the rate, over a body larger than the socket
+    // buffers, so the server's writes block for longer than the grace in total.
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(16_384).unwrap();
+    let mut steady = socket.connect(address).await.unwrap();
+    steady
+        .write_all(b"GET /big HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut received = 0usize;
+    let mut chunk = vec![0u8; 16_384];
+    loop {
+        let read = steady.read(&mut chunk).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        received += read;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert!(
+        received > 8 << 20,
+        "the whole body arrives: {received} bytes"
+    );
 }
