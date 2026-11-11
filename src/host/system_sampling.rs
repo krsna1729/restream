@@ -219,12 +219,17 @@ pub(crate) fn proc_total_ticks() -> Option<u64> {
 }
 
 pub(crate) fn proc_process_ticks(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// utime + stime from a `/proc/<pid>/stat` line; the command name may hold
+/// spaces and parentheses, so fields start after the last `)`.
+fn process_ticks(stat: &str) -> Option<u64> {
     let end_comm = stat.rfind(')')?;
-    let fields: Vec<&str> = stat[end_comm + 2..].split_whitespace().collect();
+    let fields: Vec<&str> = stat.get(end_comm + 2..)?.split_whitespace().collect();
     let utime = fields.get(11)?.parse::<u64>().ok()?;
     let stime = fields.get(12)?.parse::<u64>().ok()?;
-    Some(utime + stime)
+    utime.checked_add(stime)
 }
 
 fn proc_rss_bytes(pid: u32) -> Option<u64> {
@@ -515,6 +520,18 @@ mod tests {
 #[cfg(test)]
 mod sampler_tests {
     use super::*;
+
+    /// A stat line cut off at or just after the command name is absent data,
+    /// not a panic; a command name holding `)` still parses.
+    #[test]
+    fn process_ticks_reads_utime_and_stime_and_rejects_a_truncated_line() {
+        assert_eq!(process_ticks("1 (x)"), None);
+        assert_eq!(process_ticks("1 (x) "), None);
+        assert_eq!(
+            process_ticks("7 (a) b) S 1 7 7 0 -1 4194560 100 0 0 0 30 12 0 0 20 0 1 0"),
+            Some(42)
+        );
+    }
 
     #[test]
     #[cfg(target_os = "linux")]
