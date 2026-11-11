@@ -15,10 +15,18 @@
 //! connection open uses it only for uploads. The line is read (a stalled
 //! client costs nothing while it waits), and the bytes read are given back to
 //! hyper ahead of the socket.
+//!
+//! Admission: at most `max_connections` connections are served at once. The
+//! permit is taken before `accept`, so past the limit new connections wait in
+//! the kernel backlog instead of costing a task, a buffer and a descriptor
+//! from the table RTMP, SRT and FFmpeg pipes share. A client that sends no
+//! complete request head within `header_read_timeout` (idle keep-alive
+//! included) is closed, so silent sockets cannot hold permits forever.
 
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -26,27 +34,54 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use hyper::body::Incoming;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 use tower::{Service, ServiceExt};
 use tracing::{debug, error};
+
+/// How long a connection may take to send a complete request head, counted
+/// from when the connection starts waiting for one. With the 5 s sniff this
+/// bounds how long a silent socket holds a permit to about 15 s.
+pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Admission and timeout settings for [`serve`].
+#[derive(Debug, Clone)]
+pub struct ServeOptions {
+    pub max_connections: usize,
+    pub header_read_timeout: Duration,
+}
+
+impl ServeOptions {
+    pub fn new(max_connections: usize) -> Self {
+        Self {
+            max_connections,
+            header_read_timeout: HEADER_READ_TIMEOUT,
+        }
+    }
+}
 
 /// Serve `app` on `listener` until the task is dropped. Accept errors that
 /// concern one connection are skipped; others (descriptor exhaustion) are
 /// logged and retried after a second, as `axum::serve` does.
-pub async fn serve(listener: TcpListener, app: Router) {
+pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
+    let max_connections = options.max_connections.clamp(1, Semaphore::MAX_PERMITS);
+    let permits = Arc::new(Semaphore::new(max_connections));
     let mut make_service = app.into_make_service_with_connect_info::<SocketAddr>();
     loop {
+        let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
+            return;
+        };
         let (stream, remote) = match listener.accept().await {
             Ok(accepted) => accepted,
             Err(accept_error) => {
                 if !matches!(
                     accept_error.kind(),
-                    std::io::ErrorKind::ConnectionRefused
-                        | std::io::ErrorKind::ConnectionAborted
-                        | std::io::ErrorKind::ConnectionReset
+                    io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::ConnectionReset
                 ) {
                     error!(err = %accept_error, "HTTP accept error");
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -54,6 +89,11 @@ pub async fn serve(listener: TcpListener, app: Router) {
                 continue;
             }
         };
+        // Small JSON replies and SSE events are single short writes; without
+        // this each waits on the client's delayed ACK of the previous one.
+        if let Err(nodelay_error) = stream.set_nodelay(true) {
+            debug!(err = %nodelay_error, "TCP_NODELAY not set on HTTP connection");
+        }
         let service = match make_service.call(remote).await {
             Ok(service) => service,
             Err(never) => match never {},
@@ -61,9 +101,13 @@ pub async fn serve(listener: TcpListener, app: Router) {
         let service = TowerToHyperService::new(
             service.map_request(|request: Request<Incoming>| request.map(Body::new)),
         );
+        let header_read_timeout = options.header_read_timeout;
         tokio::spawn(async move {
+            let _permit = permit;
             let (half_close, stream) = classify(stream).await;
             let connection = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(header_read_timeout)
                 .half_close(half_close)
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades();

@@ -61,7 +61,11 @@ impl RuntimeTasks {
             addr = %http_addr,
             "dashboard API server listening",
         );
-        let http = tokio::spawn(crate::api::http_server::serve(listener, app));
+        let http = tokio::spawn(crate::api::http_server::serve(
+            listener,
+            app,
+            crate::api::http_server::ServeOptions::new(config.tuning.http_max_connections),
+        ));
 
         let rtmp_port = config.ports.rtmp;
         let rtmp_restarts = Arc::clone(&engine.runtime.rtmp_listener_stats.restarts);

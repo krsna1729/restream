@@ -30,6 +30,7 @@ pub struct RuntimeTuning {
     pub output_retry_base_ms: u64,
     pub output_retry_max_ms: u64,
     pub hls_idle_timeout_ms: u64,
+    pub http_max_connections: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +58,7 @@ impl Default for RuntimeTuning {
             output_retry_base_ms: 5_000,
             output_retry_max_ms: 300_000,
             hls_idle_timeout_ms: 60_000,
+            http_max_connections: 1_024,
         }
     }
 }
@@ -231,6 +233,11 @@ impl RuntimeTuning {
                 defaults.hls_idle_timeout_ms,
             )
             .max(1),
+            http_max_connections: env_u64(
+                "RESTREAM_HTTP_MAX_CONNECTIONS",
+                defaults.http_max_connections as u64,
+            )
+            .clamp(1, 65_536) as usize,
         }
     }
 }

@@ -87,7 +87,11 @@ async fn serve() -> Server {
     let app = restream::api::create_hls_ingest_router(ingest.clone(), Arc::new(OneKey));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(restream::api::http_server::serve(listener, app));
+    tokio::spawn(restream::api::http_server::serve(
+        listener,
+        app,
+        restream::api::http_server::ServeOptions::new(1_024),
+    ));
     Server {
         engine,
         address,

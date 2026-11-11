@@ -63,6 +63,7 @@ noted.
 | `RESTREAM_HTTP_PORT` | `3030` | `1..=65535`; `0` is rejected (warning, default used) | Dashboard/API port; also the HLS push ingest port |
 | `RESTREAM_RTMP_PORT` | `1935` | as above | RTMP ingest listener on `0.0.0.0` |
 | `RESTREAM_SRT_PORT` | `10080` | as above | SRT ingest listener on `0.0.0.0` |
+| `RESTREAM_HTTP_MAX_CONNECTIONS` | `1024` | `1..=65536` | Dashboard/API connections served at once. Past it, new connections wait in the kernel backlog until one closes; a client silent for 10 s after its first line (idle keep-alive included) is closed, so silent sockets cannot hold the limit |
 | `RESTREAM_DB_PATH` | `.restream/data/restream.db` | File path | SQLite database (plus WAL/SHM sidecars) |
 | `RESTREAM_MEDIA_DIR` | `.restream/media` | Directory | Uploads and recordings (`DEFAULT_MEDIA_DIR`) |
 | `RESTREAM_LOG_DIR` | `.restream/logs` | Directory | Rotated text log files |
