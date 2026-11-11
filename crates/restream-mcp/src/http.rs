@@ -1,5 +1,7 @@
 //! HTTP backend that talks to the existing `/api/v1/agent/*` routes.
 
+use std::time::Duration;
+
 use reqwest::header::{CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue};
 use restream_agent_contract::{
     AgentBackend, AgentError, AgentFuture, ApprovalRequest, InvestigationRequest,
@@ -28,14 +30,40 @@ struct BuildIdentity {
     commit: String,
 }
 
+/// Bound on reaching the target.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound on a whole exchange, body included. The agent routes do database
+/// work and return; none waits on media, so this only ends a stalled target.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn transport_error(error: reqwest::Error) -> AgentError {
+    if error.is_timeout() {
+        // A mutation that timed out may still have been applied: read the
+        // operation back before retrying it.
+        return AgentError::Transport(format!(
+            "target did not answer in time; its outcome is unknown: {error}"
+        ));
+    }
     AgentError::Transport(error.to_string())
 }
 
 impl HttpAgentBackend {
     pub fn new(base_url: impl Into<String>, auth: HttpAgentAuth) -> Self {
+        Self::with_timeouts(base_url, auth, CONNECT_TIMEOUT, REQUEST_TIMEOUT)
+    }
+
+    fn with_timeouts(
+        base_url: impl Into<String>,
+        auth: HttpAgentAuth,
+        connect: Duration,
+        request: Duration,
+    ) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(connect)
+                .timeout(request)
+                .build()
+                .expect("the reqwest client builds with the bundled TLS roots"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             auth,
         }
@@ -287,6 +315,40 @@ mod tests {
 
         assert!(
             error.to_string().contains("missing 'restream.commit'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A target that accepts connections and never answers.
+    async fn stalled_target() -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        address
+    }
+
+    /// A stalled target ends the call at the request deadline, reported as
+    /// an unknown outcome, instead of hanging the agent.
+    #[tokio::test]
+    async fn a_stalled_target_ends_at_the_request_deadline() {
+        let address = stalled_target().await;
+        let backend = HttpAgentBackend::with_timeouts(
+            format!("http://{address}"),
+            HttpAgentAuth::None,
+            Duration::from_secs(1),
+            Duration::from_millis(300),
+        );
+        let error = tokio::time::timeout(Duration::from_secs(5), backend.capabilities())
+            .await
+            .expect("the call ends at its deadline")
+            .expect_err("a stalled target is an error");
+        assert!(
+            error.to_string().contains("outcome is unknown"),
             "unexpected error: {error}"
         );
     }
