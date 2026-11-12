@@ -33,6 +33,7 @@ struct RtmpResolveRequest {
 }
 
 struct RtmpResolveWorkerSet {
+    completion_sender: SyncSender<RtmpResolvedConnect>,
     request_sender: Option<SyncSender<RtmpResolveRequest>>,
     stopping: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -40,34 +41,50 @@ struct RtmpResolveWorkerSet {
 
 impl RtmpResolveWorkerSet {
     fn new(completion_sender: SyncSender<RtmpResolvedConnect>) -> Self {
-        let (request_sender, request_receiver) =
-            mpsc::sync_channel::<RtmpResolveRequest>(RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY);
-        let stopping = Arc::new(AtomicBool::new(false));
-        let worker_stopping = Arc::clone(&stopping);
-        let worker = std::thread::spawn(move || {
-            while let Ok(request) = request_receiver.recv() {
-                if worker_stopping.load(Ordering::SeqCst) {
-                    break;
-                }
-                // A blocking send backpressures the worker onto the bounded
-                // request queue instead of dropping a completion, which would
-                // leave its pending connect resident forever. The shard drops
-                // its completion receiver before joining this worker.
-                let completion = RtmpResolvedConnect {
-                    peer_addr: resolve_rtmp_peer_host(&request.host, request.port),
-                    output_id: request.output_id,
-                    generation: request.generation,
-                };
-                if completion_sender.send(completion).is_err() {
-                    break;
-                }
-            }
-        });
         Self {
-            request_sender: Some(request_sender),
-            stopping,
-            worker: Some(worker),
+            completion_sender,
+            request_sender: None,
+            stopping: Arc::new(AtomicBool::new(false)),
+            worker: None,
         }
+    }
+
+    /// Starts the worker on first use. A thread that cannot be created
+    /// (thread or memory limits) rejects the request instead of panicking
+    /// the shard factory; the next request tries again.
+    fn ensure_started(&mut self) -> Option<&SyncSender<RtmpResolveRequest>> {
+        if self.request_sender.is_none() {
+            let (request_sender, request_receiver) =
+                mpsc::sync_channel::<RtmpResolveRequest>(RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY);
+            let worker_stopping = Arc::clone(&self.stopping);
+            let completion_sender = self.completion_sender.clone();
+            let worker = std::thread::Builder::new()
+                .name("rtmp-dns-res".to_string())
+                .spawn(move || {
+                    while let Ok(request) = request_receiver.recv() {
+                        if worker_stopping.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        // A blocking send backpressures the worker onto the
+                        // bounded request queue instead of dropping a
+                        // completion, which would leave its pending connect
+                        // resident forever. The shard drops its completion
+                        // receiver before joining this worker.
+                        let completion = RtmpResolvedConnect {
+                            peer_addr: resolve_rtmp_peer_host(&request.host, request.port),
+                            output_id: request.output_id,
+                            generation: request.generation,
+                        };
+                        if completion_sender.send(completion).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .ok()?;
+            self.request_sender = Some(request_sender);
+            self.worker = Some(worker);
+        }
+        self.request_sender.as_ref()
     }
 
     fn spawn(
@@ -77,7 +94,7 @@ impl RtmpResolveWorkerSet {
         host: String,
         port: u16,
     ) -> bool {
-        let Some(sender) = self.request_sender.as_ref() else {
+        let Some(sender) = self.ensure_started() else {
             return false;
         };
         let request = RtmpResolveRequest {
@@ -142,7 +159,7 @@ where
         {
             tracing::warn!(
                 output_id = %rejected_output,
-                "rtmp fabric leaf rejected: resolver request queue is full"
+                "rtmp fabric leaf rejected: resolver unavailable or its request queue is full"
             );
             self.backend
                 .on_command(EgressCommand::Remove(rejected_output));

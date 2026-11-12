@@ -57,14 +57,30 @@ fn rejected_resolver_request_does_not_leave_output_pending() {
         Duration::from_secs(3),
         8,
     );
-    drop(backend.resolve_workers.request_sender.take());
-    backend
-        .resolve_workers
+    // A stopping worker exits on its next request, leaving a queue that
+    // refuses every later one.
+    let workers = &mut backend.resolve_workers;
+    workers.ensure_started().expect("resolver worker starts");
+    workers
+        .stopping
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    workers
+        .request_sender
+        .as_ref()
+        .expect("started")
+        .send(RtmpResolveRequest {
+            output_id: OutputId::new("probe"),
+            generation: 0,
+            host: "127.0.0.1".to_string(),
+            port: 1,
+        })
+        .expect("the worker is still receiving");
+    workers
         .worker
         .take()
         .expect("resolver worker")
         .join()
-        .expect("resolver worker should exit after its request sender closes");
+        .expect("resolver worker should exit once stopping");
 
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut spec = output_spec("out-1", "rtmp://127.0.0.1:1/live/key", 1);
