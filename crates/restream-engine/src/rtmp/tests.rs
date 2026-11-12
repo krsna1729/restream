@@ -12,3 +12,4 @@ include!("tests/parser_memory.rs");
 include!("tests/egress_startup.rs");
 include!("tests/flv.rs");
 include!("tests/admission.rs");
+include!("tests/panic_containment.rs");

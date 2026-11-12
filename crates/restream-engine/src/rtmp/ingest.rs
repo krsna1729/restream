@@ -951,9 +951,11 @@ async fn read_rtmp_input_or_quality(
     }
 }
 
-/// Test-only fault point: a connection from a marked peer address unwinds
-/// right after the handshake, as a parser bug would, to prove the listener
-/// contains it. `resume_unwind` skips the panic hook, so logs stay quiet.
+/// Test-only fault points. A connection from a marked peer address unwinds
+/// right after the handshake, as a parser bug would; an owner-marked one
+/// unwinds the owner thread itself when that connection ends, outside the
+/// per-connection boundary. Both prove the listener contains them.
+/// `resume_unwind` skips the panic hook, so logs stay quiet.
 #[cfg(test)]
 pub(super) mod injected_panics {
     use std::collections::HashSet;
@@ -961,19 +963,37 @@ pub(super) mod injected_panics {
     use std::sync::Mutex;
 
     static MARKED: Mutex<Option<HashSet<SocketAddr>>> = Mutex::new(None);
+    static OWNER_MARKED: Mutex<Option<HashSet<SocketAddr>>> = Mutex::new(None);
 
     pub(in crate::rtmp) fn mark(peer: SocketAddr) {
-        restream_sync::lock::lock(&MARKED)
+        insert(&MARKED, peer);
+    }
+
+    pub(in crate::rtmp) fn mark_owner(peer: SocketAddr) {
+        insert(&OWNER_MARKED, peer);
+    }
+
+    pub(super) fn unwind_if_marked(peer: SocketAddr) {
+        if take(&MARKED, peer) {
+            std::panic::resume_unwind(Box::new("injected RTMP connection panic"));
+        }
+    }
+
+    pub(in crate::rtmp) fn owner_unwind_if_marked(peer: SocketAddr) {
+        if take(&OWNER_MARKED, peer) {
+            std::panic::resume_unwind(Box::new("injected RTMP owner panic"));
+        }
+    }
+
+    fn insert(set: &Mutex<Option<HashSet<SocketAddr>>>, peer: SocketAddr) {
+        restream_sync::lock::lock(set)
             .get_or_insert_with(HashSet::new)
             .insert(peer);
     }
 
-    pub(super) fn unwind_if_marked(peer: SocketAddr) {
-        let marked = restream_sync::lock::lock(&MARKED)
+    fn take(set: &Mutex<Option<HashSet<SocketAddr>>>, peer: SocketAddr) -> bool {
+        restream_sync::lock::lock(set)
             .as_mut()
-            .is_some_and(|set| set.remove(&peer));
-        if marked {
-            std::panic::resume_unwind(Box::new("injected RTMP connection panic"));
-        }
+            .is_some_and(|set| set.remove(&peer))
     }
 }
