@@ -17,6 +17,12 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
+- [Q-121 per-attempt ingest lease](#q-121-correctness-opus-an-ingest-registration-cannot-outlive-its-input-attempt)
+- [Q-122 no database on a connect path](#q-122-correctness-opus-ingest-admission-reads-an-in-memory-catalog-snapshot)
+- [Q-123 typed dependency deadlines](#q-123-correctness-opus-every-control-plane-dependency-wait-has-a-deadline)
+- [Q-124 control-plane isolation rows](#q-124-correctness-opus-the-isolation-audit-covers-the-control-plane)
+- [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
+- [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -141,6 +147,68 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: a test that injects the accept-loop panic
   (`INJECTED_PANIC_MAX_CONNECTIONS`) then publishes successfully to the same
   port after the restart; the listener thread still joins at shutdown.
+
+### Q-121 [correctness] [opus] An ingest registration cannot outlive its input attempt
+- Goal: `IngestRegistration` becomes a lease the session owns, one per
+  input attempt. Dropping it, after a disconnect, a panic, a cancelled task
+  or a listener exit, unregisters that attempt. No code path can then leave
+  a key locked as a duplicate publisher. Today each protocol calls
+  `unregister_ingest_if_current` by hand, and a panic inside SRT
+  `start_publisher` after registration still leaks it.
+- Gates: every protocol gets a test that drops the lease without the
+  explicit finish and then registers again on the same key. Removing the
+  drop path must make that test fail. The hand-written finish calls are
+  deleted.
+
+### Q-122 [correctness] [opus] Ingest admission reads an in-memory catalog snapshot
+- Goal: the RTMP, SRT, HLS push and MoQ connect paths authenticate against an
+  immutable stream-key index that catalog writes replace, never against
+  SQLite. A stalled or failing database then cannot stop any input from
+  connecting. Today every connect awaits `get_pipeline_by_stream_key`, and
+  that call can wait up to the 30 s pool acquire plus the 30 s busy timeout.
+- Gates: a test holds the database (pool exhausted) and checks that a
+  publisher on every protocol still connects. Another test checks that a
+  catalog write (new key, rotated key, deleted pipeline) is visible to the
+  next connect.
+
+### Q-123 [correctness] [opus] Every control-plane dependency wait has a deadline
+- Goal: database, DNS and IPC waits in the control plane go through wrappers
+  that take a deadline. `clippy.toml` `disallowed-methods` bans the raw calls
+  outside those wrappers, as it already does for lock access. RTMP publish
+  and play authentication races only against shutdown today.
+- Gates: clippy `-D warnings` with the ban in place. A test for each
+  wrapper shows that a stalled dependency returns at the deadline.
+
+### Q-124 [correctness] [opus] The isolation audit covers the control plane
+- Goal: [isolation audit](isolation-audit.md) rows, each with a bound and a
+  test, for:
+  - the engine async locks (`ingests.pipelines`, `ingests.active` and the
+    rest), so that none is held across a dependency await;
+  - the awaits still left in the SRT Tokio loop: probe application,
+    `finish_publisher`, telemetry folding and engine-placed calls;
+  - the reconciler, the egress shard command loops and the SQLite pool.
+
+  One input or output must not stall lifecycle work for another.
+- Gates: for each finding, a test where one entity's stalled dependency
+  leaves a sibling's connect, disconnect and probe answer on time.
+
+### Q-125 [correctness] [opus] The isolation audit covers HLS push and MoQ
+- Goal: close the audit's open scope. HLS push ingest and MoQ ingest/origin
+  get shared-resource rows with per-entity bounds, total bounds and proofs,
+  as RTMP, SRT and egress already have. Q-120 (MoQ listener supervision)
+  is part of this.
+- Gates: the rows exist and each one names a test that passes.
+
+### Q-126 [correctness] [opus] Live fault gates prove siblings are unaffected
+- Goal: contract modes that inject one fault into one entity and assert on
+  its siblings. The faults are a panic, a stall, malformed media, a stalled
+  reader, a stalled database and an Owner fault. The siblings checked are a
+  sibling output of the same pipeline, a sibling input of the same pipeline
+  and another pipeline: each keeps media flowing without a gap, and its
+  status stays healthy.
+- Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
+  Disabling an existing boundary, for example the per-peer SRT containment,
+  must fail the matching mode.
 
 ## Not planned
 
