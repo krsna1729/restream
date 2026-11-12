@@ -24,14 +24,14 @@ struct Inputs(std::sync::RwLock<PushAuth>);
 impl CatalogAuthSource for Inputs {
     fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            Ok(vec![PipelineInput {
+            Ok(vec![Ok(PipelineInput {
                 id: INPUT_ID.to_string(),
                 pipeline_id: PIPELINE_ID.to_string(),
                 stream_key: STREAM_KEY.to_string(),
                 enabled: true,
                 push_auth: self.0.read().unwrap().clone(),
                 ..PipelineInput::keyed_default()
-            }])
+            })])
         })
     }
 }

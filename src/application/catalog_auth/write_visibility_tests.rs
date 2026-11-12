@@ -21,6 +21,15 @@ const ALL_MODES: [PipelineAccessMode; 6] = [
     PipelineAccessMode::MoqPublish,
 ];
 
+/// Removes the test's database directory when the test ends.
+struct TempDir(std::path::PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub(super) struct Catalog {
     pub(super) pool: sqlx::SqlitePool,
     pub(super) pipelines: PipelineService,
@@ -28,6 +37,7 @@ pub(super) struct Catalog {
     pub(super) catalog: Arc<CatalogAuth>,
     security: Arc<IngestSecurityService>,
     auth: CatalogIngestAuthenticator,
+    _dir: TempDir,
 }
 
 impl Catalog {
@@ -43,7 +53,8 @@ impl Catalog {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let url = format!("sqlite://{}", dir.join("db.sqlite").display());
+        let dir = TempDir(dir);
+        let url = format!("sqlite://{}", dir.0.join("db.sqlite").display());
         let pool = crate::db::create_pool(&url).await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
         let factory = SqliteServiceFactory::new(&pool);
@@ -66,6 +77,7 @@ impl Catalog {
             catalog,
             security,
             auth,
+            _dir: dir,
         }
     }
 
@@ -75,6 +87,67 @@ impl Catalog {
         key: &str,
     ) -> Option<AuthenticatedPipeline> {
         self.auth.authenticate(mode, key, CLIENT_IP).await.ok()
+    }
+}
+
+/// An enabled input whose stored row does not decode keeps its key known:
+/// every attempt on it is refused without counting a failure, so the
+/// client's address is not banned from its healthy keys. Before, the row was
+/// dropped on reload and its key looked wrong.
+#[tokio::test]
+async fn an_undecodable_input_row_is_refused_without_banning_the_client() {
+    let c = Catalog::open("undecodable").await;
+    c.pipelines
+        .create_pipeline("pipe", "Pipe", "healthy-key", None, None)
+        .await
+        .unwrap();
+    let broken = c
+        .inputs
+        .create("pipe", "Broken", PipelineInputSource::keyed())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE pipeline_inputs SET push_auth = '{\"kind\":\"basic\"}' WHERE id = ?")
+        .bind(&broken.id)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+    c.catalog.refresh().await;
+    // A ban after two failures in a scope.
+    let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig {
+        failure_limit: 2,
+        failure_window_ms: 60_000,
+        ban_ms: 60_000,
+        tracked_ip_limit: 100,
+    }));
+    let auth = CatalogIngestAuthenticator::new(c.catalog.clone(), security.clone());
+
+    for _ in 0..5 {
+        for mode in ALL_MODES {
+            assert_eq!(
+                auth.authenticate(mode, &broken.stream_key, CLIENT_IP).await,
+                Err(PipelineAccessError::InputUnreadable),
+                "{mode:?}"
+            );
+        }
+    }
+    assert!(
+        security.snapshots().is_empty(),
+        "a broken row counted failures against the client: {:?}",
+        security.snapshots()
+    );
+    for scope in [
+        RateLimitScope::RtmpPublish,
+        RateLimitScope::SrtPublish,
+        RateLimitScope::SrtRead,
+        RateLimitScope::HlsPublish,
+        RateLimitScope::MoqPublish,
+    ] {
+        assert!(security.is_ip_banned_for(scope, CLIENT_IP).is_none());
+    }
+    for mode in ALL_MODES {
+        auth.authenticate(mode, "healthy-key", CLIENT_IP)
+            .await
+            .expect("a healthy key from the same client still connects");
     }
 }
 

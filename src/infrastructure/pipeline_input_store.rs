@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::application::catalog_auth::{CatalogAuthLoadFuture, CatalogAuthSource};
+use crate::application::catalog_auth::{CatalogAuthLoadFuture, CatalogAuthSource, UnreadableInput};
 use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
 use crate::application::pipeline_inputs::{
     InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
@@ -133,9 +133,22 @@ impl PipelineInputLookup for SqlitePipelineInputStore {
 impl CatalogAuthSource for SqlitePipelineInputStore {
     fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| crate::db::list_all_pipeline_inputs(&self.pool))
-                .await
-                .map_err(|error| PipelineStoreError::new(error.to_string()))
+            let rows = crate::db::with_busy_retry(|| {
+                crate::db::list_pipeline_inputs_for_admission(&self.pool)
+            })
+            .await
+            .map_err(|error| PipelineStoreError::new(error.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|row| {
+                    row.map_err(|row| UnreadableInput {
+                        input_id: row.id,
+                        stream_key: row.stream_key,
+                        enabled: row.enabled,
+                        error: row.error.to_string(),
+                    })
+                })
+                .collect())
         })
     }
 }

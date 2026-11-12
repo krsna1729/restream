@@ -411,6 +411,17 @@ async fn authorize_publish(
                 error: "Invalid stream key",
             };
         }
+        Err(PipelineAccessError::InputUnreadable) => {
+            warn!(
+                stream_key = %redact_secret(context.stream_key),
+                "publish refused: the input's stored configuration is unreadable"
+            );
+            return PublishAuthorization::Rejected {
+                code: "NetStream.Publish.BadName",
+                description: "Input unavailable",
+                error: "Input configuration unreadable",
+            };
+        }
     };
 
     // Every early return below drops the lease, which releases the attempt.
@@ -580,6 +591,11 @@ async fn authorize_play(
             code: "NetStream.Play.StreamNotFound",
             description: "Invalid stream key",
             error: "Invalid stream key for play",
+        },
+        Err(PipelineAccessError::InputUnreadable) => PlayAuthorization::Rejected {
+            code: "NetStream.Play.StreamNotFound",
+            description: "Input unavailable",
+            error: "Input configuration unreadable for play",
         },
     }
 }

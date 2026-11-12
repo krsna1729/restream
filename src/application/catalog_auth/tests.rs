@@ -65,7 +65,7 @@ impl CatalogAuthSource for FakeCatalog {
             if self.failing.load(Ordering::SeqCst) {
                 return Err(PipelineStoreError::new("database is locked"));
             }
-            Ok(inputs)
+            Ok(inputs.into_iter().map(Ok).collect())
         })
     }
 }

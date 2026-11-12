@@ -259,14 +259,13 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
     // Bounds how stale the admission index can get from a change no write
-    // reported; stopped with the projector at shutdown.
+    // reported; `shutdown` below ends it and any reload retry.
     supervised_task::spawn_supervised("catalog_auth_reload", {
-        let (catalog, stop) = (catalog_auth.clone(), projector_stop.clone());
+        let catalog = catalog_auth.clone();
         move || {
-            catalog.clone().reload_periodically(
-                crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL,
-                stop.clone(),
-            )
+            catalog
+                .clone()
+                .reload_periodically(crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL)
         }
     });
     supervised_task::spawn_supervised("runtime_state_projector", {
@@ -358,13 +357,14 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         pipeline_access: ingest_authenticator,
         srt_ingest_policy_store,
         hls_ingest,
-        hls_catalog: catalog_auth,
+        hls_catalog: catalog_auth.clone(),
     })
     .await?;
     let shutdown = shutdown::spawn_signal_watcher();
 
     reconciler.run(&mut runtime, &shutdown).await;
     projector_stop.cancel();
+    catalog_auth.shutdown();
 
     let (http, http_stop, rtmp, srt) = runtime.into_handles();
     shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
