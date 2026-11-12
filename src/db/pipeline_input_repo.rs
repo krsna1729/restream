@@ -233,6 +233,41 @@ pub async fn list_all_pipeline_inputs(
     Ok(convert_rows(rows))
 }
 
+/// A `pipeline_inputs` row that does not decode, by identity.
+#[derive(Debug)]
+pub struct UndecodableInputRow {
+    pub id: String,
+    pub stream_key: String,
+    pub enabled: bool,
+    pub error: sqlx::Error,
+}
+
+/// Every input row, for the ingest admission index. Unlike
+/// [`list_all_pipeline_inputs`], a row that does not decode is returned by
+/// identity rather than skipped: its key must stay known (refused without
+/// counting against the client) instead of looking like a wrong key.
+pub async fn list_pipeline_inputs_for_admission(
+    pool: &SqlitePool,
+) -> Result<Vec<Result<PipelineInput, UndecodableInputRow>>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, PipelineInputRow>(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT_FIELDS} FROM pipeline_inputs"
+    )))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let (id, stream_key, enabled) = (row.id.clone(), row.stream_key.clone(), row.enabled);
+            PipelineInput::try_from(row).map_err(|error| UndecodableInputRow {
+                id,
+                stream_key,
+                enabled,
+                error,
+            })
+        })
+        .collect())
+}
+
 pub async fn create_pipeline_input(
     pool: &SqlitePool,
     id: &str,

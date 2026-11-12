@@ -29,8 +29,12 @@ pub struct AuthenticatedPipeline {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineAccessError {
-    /// Unknown or disabled key, or a push to an input that takes none.
+    /// Unknown or disabled key, or a push to an input that takes none. The
+    /// client's failure: counted toward its ban.
     InvalidStreamKey,
+    /// The key names an input whose stored configuration cannot be read. Not
+    /// the client's failure: refused without counting toward a ban.
+    InputUnreadable,
 }
 
 pub type PipelineAccessFuture<'a> =

@@ -561,6 +561,12 @@ such as a row edited outside the services or a write task that panicked, to
 delays catalog writes, never connects. While it stays stalled, the last loaded
 index stays in force. The index belongs to one process; a second process
 writing the same database file is seen only at the next periodic reload.
+An enabled input whose stored row does not decode (for example a malformed
+push credential) stays in the index as a known key that is refused without
+counting a failure against the client: RTMP rejects it, SRT drops it, MoQ
+answers unavailable and HLS push returns 503. Each reload logs the row's input
+id. A broken row therefore cannot get the client's address banned from its
+healthy keys.
 
 The HTTP listener binds `127.0.0.1` by default. A deployment that exposes it
 must supply TLS and the network boundary. See [Configuration](configuration.md).

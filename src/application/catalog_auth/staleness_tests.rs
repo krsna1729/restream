@@ -144,12 +144,7 @@ async fn the_periodic_reload_enforces_a_change_no_write_reported() {
         .create_pipeline("pipe", "Pipe", "key-a", None, None)
         .await
         .unwrap();
-    let stop = tokio_util::sync::CancellationToken::new();
-    let reloads = tokio::spawn(
-        c.catalog
-            .clone()
-            .reload_periodically(INTERVAL, stop.clone()),
-    );
+    let reloads = tokio::spawn(c.catalog.clone().reload_periodically(INTERVAL));
 
     sqlx::query("UPDATE pipeline_inputs SET enabled = 0 WHERE pipeline_id = 'pipe'")
         .execute(&c.pool)
@@ -160,7 +155,7 @@ async fn the_periodic_reload_enforces_a_change_no_write_reported() {
         eventually_refused(&c, "key-a", INTERVAL * 4).await,
         "a disabled key still connects after four reload intervals"
     );
-    stop.cancel();
+    c.catalog.shutdown();
     tokio::time::timeout(Duration::from_secs(1), reloads)
         .await
         .expect("the periodic reload stops when told to")

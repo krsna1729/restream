@@ -36,6 +36,9 @@ const INITIAL_BODY_CAPACITY: usize = 1024 * 1024;
 pub enum AuthorizeError {
     /// Unknown key, disabled input, or a banned client.
     Forbidden,
+    /// The key names an input whose stored configuration cannot be read; no
+    /// failure is counted against the client.
+    InputUnreadable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,6 +470,13 @@ impl HlsIngest {
                 warn!(stream_key = %redact_secret(stream_key), "hls ingest stream key rejected");
                 Err(AuthorizeError::Forbidden)
             }
+            Err(PipelineAccessError::InputUnreadable) => {
+                warn!(
+                    stream_key = %redact_secret(stream_key),
+                    "hls ingest refused: the input's stored configuration is unreadable"
+                );
+                Err(AuthorizeError::InputUnreadable)
+            }
         }
     }
 
@@ -654,6 +664,7 @@ impl HlsIngest {
                 Err(AuthorizeError::Forbidden) => {
                     return Err(DispatchError::AuthorizationChanged);
                 }
+                Err(AuthorizeError::InputUnreadable) => return Err(DispatchError::Unavailable),
             }
         }
         let engine = &self.engine;

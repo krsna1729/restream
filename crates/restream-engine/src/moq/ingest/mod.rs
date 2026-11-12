@@ -88,7 +88,8 @@ pub(crate) enum Rejection {
     Unauthorized,
     /// The input already has a publisher.
     Duplicate,
-    /// Lookup or engine failure; the publisher may retry.
+    /// The input's stored configuration is unreadable, or an engine failure;
+    /// the publisher may retry.
     Unavailable(String),
 }
 
@@ -167,9 +168,14 @@ impl MoqIngestServer {
             .pipeline_access
             .authenticate(PipelineAccessMode::MoqPublish, stream_key, &client_ip)
             .await
-            .map_err(
-                |crate::ingest_auth::PipelineAccessError::InvalidStreamKey| Rejection::Unauthorized,
-            )?;
+            .map_err(|error| match error {
+                crate::ingest_auth::PipelineAccessError::InvalidStreamKey => {
+                    Rejection::Unauthorized
+                }
+                crate::ingest_auth::PipelineAccessError::InputUnreadable => {
+                    Rejection::Unavailable("the input's stored configuration is unreadable".into())
+                }
+            })?;
         let ring = self.engine.get_or_create_pipeline(&pipeline.id).await;
         // Every early return below drops the lease, which releases the
         // attempt.

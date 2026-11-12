@@ -66,8 +66,23 @@ impl From<WriteAborted> for PipelineInputStoreError {
     }
 }
 
+/// A stored input whose row does not decode (for example a malformed push
+/// credential). Its key stays known, so it is refused without counting a
+/// failure against the client: one broken row must not get the client's
+/// address banned from its healthy keys.
+#[derive(Debug)]
+pub struct UnreadableInput {
+    pub input_id: String,
+    pub stream_key: String,
+    pub enabled: bool,
+    pub error: String,
+}
+
+/// One stored input, decoded or not.
+pub type CatalogRow = Result<PipelineInput, UnreadableInput>;
+
 pub type CatalogAuthLoadFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<PipelineInput>, PipelineStoreError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<Vec<CatalogRow>, PipelineStoreError>> + Send + 'a>>;
 
 /// Reads every pipeline input, for a full rebuild of the index.
 pub trait CatalogAuthSource: Send + Sync {
@@ -87,34 +102,56 @@ pub struct StreamKeyGrant {
     pub push_auth: PushAuth,
 }
 
+#[derive(Debug)]
+enum Admission {
+    Grant(StreamKeyGrant),
+    /// An enabled input whose row does not decode.
+    Unreadable,
+}
+
 /// The stream keys of every enabled input. A disabled input's key is absent,
 /// exactly as if it did not exist.
 #[derive(Debug, Default)]
 pub struct CatalogAuthSnapshot {
-    grants: HashMap<String, StreamKeyGrant>,
+    keys: HashMap<String, Admission>,
 }
 
 impl CatalogAuthSnapshot {
-    fn from_inputs(inputs: Vec<PipelineInput>) -> Self {
-        let grants = inputs
-            .into_iter()
-            .filter(|input| input.enabled)
-            .map(|input| {
-                let grant = StreamKeyGrant {
-                    pipeline_id: input.pipeline_id,
-                    input_id: input.id,
-                    selected: input.selected,
-                    accepts_push: input.source_kind == PipelineInputSourceKind::Keyed,
-                    push_auth: input.push_auth,
-                };
-                (input.stream_key, grant)
-            })
-            .collect();
-        Self { grants }
+    fn from_rows(rows: Vec<CatalogRow>) -> Self {
+        let mut keys = HashMap::with_capacity(rows.len());
+        for row in rows {
+            match row {
+                Ok(input) if input.enabled => {
+                    let grant = StreamKeyGrant {
+                        pipeline_id: input.pipeline_id,
+                        input_id: input.id,
+                        selected: input.selected,
+                        accepts_push: input.source_kind == PipelineInputSourceKind::Keyed,
+                        push_auth: input.push_auth,
+                    };
+                    keys.insert(input.stream_key, Admission::Grant(grant));
+                }
+                Err(unreadable) if unreadable.enabled => {
+                    warn!(
+                        input_id = %unreadable.input_id,
+                        error = %unreadable.error,
+                        "pipeline input row does not decode; its key is refused until the row is fixed",
+                    );
+                    keys.insert(unreadable.stream_key, Admission::Unreadable);
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        Self { keys }
     }
 
+    /// The grant for an enabled input's key; `None` for an unknown key and for
+    /// an input whose row does not decode.
     pub fn get(&self, stream_key: &str) -> Option<&StreamKeyGrant> {
-        self.grants.get(stream_key)
+        match self.keys.get(stream_key) {
+            Some(Admission::Grant(grant)) => Some(grant),
+            Some(Admission::Unreadable) | None => None,
+        }
     }
 }
 
@@ -131,11 +168,13 @@ pub struct CatalogAuth {
     covered: AtomicU64,
     /// A retry task is running.
     retrying: AtomicBool,
+    /// Ends the retry task and the periodic reload at shutdown.
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl CatalogAuth {
     /// An index with no keys, refusing every connect until [`Self::load`]
-    /// or a refresh fills it.
+    /// or a reload fills it.
     pub fn new(source: Arc<dyn CatalogAuthSource>) -> Arc<Self> {
         Arc::new(Self {
             snapshot: ArcSwap::from_pointee(CatalogAuthSnapshot::default()),
@@ -144,7 +183,13 @@ impl CatalogAuth {
             requested: AtomicU64::new(0),
             covered: AtomicU64::new(0),
             retrying: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         })
+    }
+
+    /// Stops the periodic reload and any retry task. A write still reloads.
+    pub fn shutdown(&self) {
+        self.shutdown.cancel();
     }
 
     /// The startup load, before any ingest listener starts. Its error fails
@@ -185,28 +230,25 @@ impl CatalogAuth {
     }
 
     /// A reload with no write in front of it, on the same uncancellable path.
-    pub async fn refresh(self: &Arc<Self>) {
+    #[cfg(test)]
+    pub(crate) async fn refresh(self: &Arc<Self>) {
         let _ = self
             .commit(std::future::ready(Ok::<(), WriteAborted>(())))
             .await;
     }
 
-    /// Reloads every `interval` until `stop`. A change no write reported (a
-    /// row edited outside the services, a write task that panicked) is
-    /// enforced within one interval plus a reload. Takes a ticket like any
-    /// refresh, so it never runs beside another reload.
-    pub async fn reload_periodically(
-        self: Arc<Self>,
-        interval: Duration,
-        stop: tokio_util::sync::CancellationToken,
-    ) {
+    /// Reloads every `interval` until [`Self::shutdown`]. A change no write
+    /// reported (a row edited outside the services, a write task that
+    /// panicked) is enforced within one interval plus a reload. Takes a ticket
+    /// like any refresh, so it never runs beside another reload.
+    pub async fn reload_periodically(self: Arc<Self>, interval: Duration) {
         loop {
             tokio::select! {
-                () = stop.cancelled() => return,
+                () = self.shutdown.cancelled() => return,
                 () = tokio::time::sleep(interval) => {}
             }
             tokio::select! {
-                () = stop.cancelled() => return,
+                () = self.shutdown.cancelled() => return,
                 () = self.reload_or_retry() => {}
             }
         }
@@ -240,9 +282,9 @@ impl CatalogAuth {
             return Ok(());
         }
         let target = self.requested.load(Ordering::SeqCst);
-        let inputs = self.source.load_inputs().await?;
+        let rows = self.source.load_inputs().await?;
         self.snapshot
-            .store(Arc::new(CatalogAuthSnapshot::from_inputs(inputs)));
+            .store(Arc::new(CatalogAuthSnapshot::from_rows(rows)));
         self.covered.store(target, Ordering::SeqCst);
         Ok(())
     }
@@ -258,9 +300,16 @@ impl CatalogAuth {
     async fn retry_until_covered(&self) {
         let mut delay = RETRY_INITIAL_DELAY;
         loop {
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+                () = self.shutdown.cancelled() => return,
+                () = tokio::time::sleep(delay) => {}
+            }
             let ticket = self.requested.load(Ordering::SeqCst);
-            match self.reload(ticket).await {
+            let reloaded = tokio::select! {
+                () = self.shutdown.cancelled() => return,
+                reloaded = self.reload(ticket) => reloaded,
+            };
+            match reloaded {
                 Ok(()) => {
                     info!(
                         event_class = "lifecycle",
@@ -322,11 +371,17 @@ impl CatalogIngestAuthenticator {
             PipelineAccessMode::MoqPublish => Some((RateLimitScope::MoqPublish, true)),
         };
         let snapshot = self.catalog.snapshot.load();
-        let Some(grant) = snapshot.get(stream_key) else {
-            if let Some((scope, _)) = limit {
-                self.security.record_failure_for(scope, client_ip);
+        let grant = match snapshot.keys.get(stream_key) {
+            Some(Admission::Grant(grant)) => grant,
+            // The key is right; the stored input is broken. Not the client's
+            // failure, so nothing is counted against its address.
+            Some(Admission::Unreadable) => return Err(PipelineAccessError::InputUnreadable),
+            None => {
+                if let Some((scope, _)) = limit {
+                    self.security.record_failure_for(scope, client_ip);
+                }
+                return Err(PipelineAccessError::InvalidStreamKey);
             }
-            return Err(PipelineAccessError::InvalidStreamKey);
         };
         if let Some((scope, true)) = limit {
             self.security.record_success_for(scope, client_ip);

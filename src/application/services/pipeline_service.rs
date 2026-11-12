@@ -18,8 +18,11 @@ use super::error::{ServiceError, ServiceResult};
 /// directly. Infrastructure wiring provides the default SQLite constructor;
 /// tests can inject any implementation.
 ///
-/// Every committed write refreshes the ingest admission index before it
-/// returns, so the next connect sees it.
+/// Each write runs with a reload of the ingest admission index as one task
+/// ([`CatalogAuth::commit`]) and returns after the reload, so the next
+/// connect sees it. If that reload fails, the write still returns its own
+/// answer and the previous index stays in force until the retry task or the
+/// periodic reload succeeds.
 #[derive(Clone)]
 pub struct PipelineService {
     store: Arc<dyn PipelineStore>,

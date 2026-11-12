@@ -1891,7 +1891,7 @@ reconciler wake; their own limits apply (`HlsIngestLimits` in
 | `409` | Another publisher (RTMP, SRT, file) holds the input |
 | `413` | Over the limit: playlist 1 MiB, segment 64 MiB, fMP4 init 4 MiB |
 | `415` | Not `.m3u8`, `.ts`, `.mp4` or `.m4s`; a stream mixing MPEG-TS and fMP4; an fMP4 segment under a playlist without `EXT-X-MAP`; or an init whose codec is not H.264, HEVC or AAC |
-| `503` | The 512 MiB ingest buffer is full or the session ended with the object queued (both `Retry-After: 1`), or the session is unavailable |
+| `503` | The 512 MiB ingest buffer is full or the session ended with the object queued (both `Retry-After: 1`), the session is unavailable, or the key's stored input configuration is unreadable (no failure is counted against the client) |
 
 - fMP4 ingest carries H.264 or HEVC video and AAC-LC audio. The init segment
   is named by the playlist's `EXT-X-MAP` URI, not by extension.

@@ -783,7 +783,7 @@ Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
 | `409` | another publisher holds the input |
 | `413` | over a size bound |
 | `415` | unsupported extension, container or codec; fMP4 media without `EXT-X-MAP` |
-| `503` | session unavailable, or shared budget exhausted (`Retry-After: 1`) |
+| `503` | session unavailable, shared budget exhausted (`Retry-After: 1`), or the key's stored input configuration is unreadable (not counted toward a ban) |
 
 | Bound | Value |
 |---|---|

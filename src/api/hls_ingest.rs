@@ -123,6 +123,14 @@ pub(super) async fn hls_ingest_handler(
         Err(AuthorizeError::Forbidden) => {
             return (StatusCode::FORBIDDEN, "invalid stream key").into_response();
         }
+        // Not a bad credential: the stored input is broken until fixed.
+        Err(AuthorizeError::InputUnreadable) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the input's stored configuration is unreadable",
+            )
+                .into_response();
+        }
     };
     // Read the admission index rather than a credential cache: a catalog write
     // refreshes it before returning, so updates and clears apply to the very

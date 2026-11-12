@@ -33,7 +33,7 @@ struct OneKey;
 impl CatalogAuthSource for OneKey {
     fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            Ok(vec![
+            Ok(vec![Ok(
                 restream_domain::domain::pipeline_input::PipelineInput {
                     id: INPUT_ID.to_string(),
                     pipeline_id: PIPELINE_ID.to_string(),
@@ -42,7 +42,7 @@ impl CatalogAuthSource for OneKey {
                     selected: true,
                     ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
                 },
-            ])
+            )])
         })
     }
 }
