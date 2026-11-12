@@ -60,51 +60,60 @@ impl MediaEngine {
     }
 
     pub async fn stop_file_ingest_child(&self, ingest_id: &str) -> bool {
-        let mut children = self.file_ingests.children.write().await;
-        let Some(mut child) = children.remove(ingest_id) else {
+        let child = self.file_ingests.children.write().await.remove(ingest_id);
+        let Some(mut child) = child else {
             return false;
         };
-        drop(children);
         let _ = child.kill().await;
         let _ = child.wait().await;
         true
     }
 
     pub async fn is_file_ingest_running(&self, id: &str) -> bool {
-        let mut children = self.file_ingests.children.write().await;
-        if let Some(child) = children.get_mut(id) {
-            match child.try_wait() {
-                Ok(None) => {
-                    self.file_ingests
-                        .active
-                        .write()
-                        .await
-                        .insert(id.to_string());
-                    true
-                }
-                _ => {
+        // `children` is released before `active` is taken: the two are never
+        // held together (see `FileIngestRegistry`).
+        let child_running = {
+            let mut children = self.file_ingests.children.write().await;
+            match children.get_mut(id).map(tokio::process::Child::try_wait) {
+                None => None,
+                Some(Ok(None)) => Some(true),
+                Some(_) => {
                     children.remove(id);
-                    self.file_ingests.active.write().await.remove(id);
-                    false
+                    Some(false)
                 }
             }
-        } else {
-            self.file_ingests.active.read().await.contains(id)
+        };
+        match child_running {
+            Some(true) => {
+                self.file_ingests
+                    .active
+                    .write()
+                    .await
+                    .insert(id.to_string());
+                true
+            }
+            Some(false) => {
+                self.file_ingests.active.write().await.remove(id);
+                false
+            }
+            None => self.file_ingests.active.read().await.contains(id),
         }
     }
 
     pub async fn reap_file_ingests(&self) {
-        let mut children = self.file_ingests.children.write().await;
-        let mut stopped = Vec::new();
-        children.retain(|id, child| match child.try_wait() {
-            Ok(None) => true,
-            _ => {
-                info!("File ingest child process {} has exited/stopped", id);
-                stopped.push(id.clone());
-                false
-            }
-        });
-        drop(children);
+        let stopped = {
+            let mut children = self.file_ingests.children.write().await;
+            let mut stopped = Vec::new();
+            children.retain(|id, child| match child.try_wait() {
+                Ok(None) => true,
+                _ => {
+                    info!("File ingest child process {} has exited/stopped", id);
+                    stopped.push(id.clone());
+                    false
+                }
+            });
+            stopped
+        };
 
         if !stopped.is_empty() {
             let mut active = self.file_ingests.active.write().await;

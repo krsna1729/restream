@@ -328,6 +328,9 @@ impl HlsRegistry {
     }
 }
 
+/// `children` and `active` are never held together: each path releases one
+/// before it takes the other. Nested in opposite orders, they deadlocked the
+/// running check against the dependency snapshot.
 pub struct FileIngestRegistry {
     pub children: TokioRwLock<HashMap<String, tokio::process::Child>>,
     pub active: TokioRwLock<HashSet<String>>,
