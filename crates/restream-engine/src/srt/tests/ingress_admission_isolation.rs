@@ -14,7 +14,7 @@ use srt_transport::{CallerConfig, SocketOwnership};
 use crate::engine::MediaEngine;
 
 use super::super::ingress_test_support::*;
-use super::super::tokio_ingress::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_IP, MAX_ADMISSIONS_PER_KEY};
+use super::super::tokio_ingress::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_KEY};
 
 fn publish_id(key: &str) -> String {
     format!("#!::r={key},m=publish")
@@ -94,12 +94,15 @@ async fn a_stalled_pipeline_lookup_does_not_stall_another_tenants_publisher() {
     server.stop().await;
 }
 
+/// The encoder gives up on A while A's lookup is stalled and reconnects as B
+/// on the same key; A's lookup answers first. A must register nothing, so B
+/// is not refused as a duplicate of its own abandoned attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_admission_whose_peer_left_finishes_its_late_registration() {
-    let auth = GatedAuth::new(&["race-a", "race-b"], &["race-a"]);
+async fn a_reconnect_after_a_stalled_lookup_is_not_refused_as_a_duplicate() {
+    let auth = GatedAuth::new(&["rejoin"], &["rejoin"]);
     let server = TestServer::start_with_auth(
         auth.clone(),
-        vec![plain("race-a"), plain("race-b")],
+        vec![plain("rejoin")],
         Arc::new(MediaEngine::new()),
     )
     .await;
@@ -109,7 +112,7 @@ async fn an_admission_whose_peer_left_finishes_its_late_registration() {
     let leaver = auth.clone();
     let report = blocking(move || {
         run_caller(
-            direct(remote, &publish_id("race-a"), None),
+            direct(remote, &publish_id("rejoin"), None),
             Duration::from_secs(10),
             // The listener can admit before the caller sees its handshake
             // answer; leave only once both sides are connected.
@@ -124,46 +127,45 @@ async fn an_admission_whose_peer_left_finishes_its_late_registration() {
             owner.ingress_owner.snapshot().peers == 0
         })
         .await;
-    // Fence: one Owner's events reach Tokio in order, so B's registration
-    // proves the loop consumed A's Disconnected before the lookup answers.
+    // B reconnects on the key, from its own address so its registration is
+    // identifiable. One Owner's events reach Tokio in order, so B's lookup
+    // starting proves the loop consumed A's Disconnected.
     let stop = Arc::new(AtomicBool::new(false));
-    let b = hold(remote, "race-b", stop.clone());
+    let b = hold_attach(from_ip(remote, 30, "rejoin"), stop.clone());
     server
-        .wait_until("B registers", Duration::from_secs(5), || async {
-            server.ingest_active("pipeline-race-b").await
+        .wait_until("B's lookup started", Duration::from_secs(5), || async {
+            auth.entered() == 2
         })
         .await;
 
+    // A's lookup answers first, then B's.
     let attempts = server.engine.ingests.next_attempt_id.load(Ordering::SeqCst);
-    auth.open();
+    auth.release(1);
     server
-        .wait_until(
-            "A's late admission registers",
-            Duration::from_secs(5),
-            || async { server.engine.ingests.next_attempt_id.load(Ordering::SeqCst) > attempts },
-        )
+        .wait_until("A's lookup answered", Duration::from_secs(3), || async {
+            auth.completed() == 1
+        })
         .await;
+    auth.release(1);
     server
-        .wait_until(
-            "the abandoned registration is finished",
-            Duration::from_secs(3),
-            || async { !server.ingest_active("pipeline-race-a").await },
-        )
+        .wait_until("B registers on the key", Duration::from_secs(5), || async {
+            let active = server.engine.ingests.active.read().await;
+            active.get("pipeline-rejoin").is_some_and(|ingest| {
+                restream_sync::lock::read(&ingest.metadata)
+                    .remote_addr
+                    .as_deref()
+                    .is_some_and(|addr| addr.starts_with("127.0.0.30:"))
+            })
+        })
         .await;
-
-    // The key is free: a new publisher on A is not a duplicate.
-    let again = publish(direct(remote, &publish_id("race-a"), None), stop.clone());
-    server
-        .wait_until(
-            "a new publisher on A publishes",
-            Duration::from_secs(5),
-            || async { server.ring_progress("pipeline-race-a").await > 0 },
-        )
-        .await;
+    assert_eq!(
+        server.engine.ingests.next_attempt_id.load(Ordering::SeqCst),
+        attempts + 1,
+        "only B registered; the abandoned admission registered nothing"
+    );
     stop.store(true, Ordering::Release);
-    let again = again.await.unwrap();
-    assert!(again.connected, "{again:?}");
-    assert!(b.await.unwrap().connected);
+    let b = b.await.unwrap();
+    assert!(b.connected && !b.disconnected, "B was never refused: {b:?}");
     server.stop().await;
 }
 
@@ -212,36 +214,53 @@ async fn a_lookup_past_the_deadline_rejects_the_peer_and_the_loop_keeps_serving(
     server.stop().await;
 }
 
+/// The per-IP cap equals the Owner's own per-IP peer limit, so it only bites
+/// on admissions whose peer already left: a client that connects and leaves
+/// while lookups stall cannot pile up tasks beyond what it could hold open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admissions_per_ip_are_bounded_without_affecting_others() {
-    let keys: Vec<String> = (0..=MAX_ADMISSIONS_PER_IP)
-        .map(|index| format!("bound-{index}"))
-        .collect();
+    const PER_IP: usize = 4;
+    let keys: Vec<String> = (0..=PER_IP).map(|index| format!("bound-{index}")).collect();
     let gated: Vec<&str> = keys.iter().map(String::as_str).collect();
     let mut all = gated.clone();
     all.push("bound-other");
     let auth = GatedAuth::new(&all, &gated);
+    let mut config = crate::config::EngineConfig::from_env();
+    config.srt_max_peers_per_ip = PER_IP;
     let server = TestServer::start_with_auth(
         auth.clone(),
         all.iter().map(|key| plain(key)).collect(),
-        Arc::new(MediaEngine::new()),
+        Arc::new(MediaEngine::new_with_config(Arc::new(config))),
     )
     .await;
     let remote = server.remote;
-    let stop = Arc::new(AtomicBool::new(false));
-    let holders: Vec<_> = gated[..MAX_ADMISSIONS_PER_IP]
+
+    // PER_IP peers from one address connect, stall in the lookup and leave.
+    let leave = Arc::new(AtomicBool::new(false));
+    let leavers: Vec<_> = gated[..PER_IP]
         .iter()
-        .map(|key| hold(remote, key, stop.clone()))
+        .map(|key| hold(remote, key, leave.clone()))
         .collect();
     server
         .wait_until("the per-IP cap fills", Duration::from_secs(5), || async {
-            auth.entered() == MAX_ADMISSIONS_PER_IP
+            auth.entered() == PER_IP
+        })
+        .await;
+    leave.store(true, Ordering::Release);
+    for leaver in leavers {
+        assert!(leaver.await.unwrap().connected);
+    }
+    let owner = server.engine.listener_stats_handle();
+    server
+        .wait_until("the Owner retires them", Duration::from_secs(3), || async {
+            owner.ingress_owner.snapshot().peers == 0
         })
         .await;
 
-    // One more from the same IP is refused without a lookup, while a caller
-    // from another address is admitted.
-    let extra = publish_id(gated[MAX_ADMISSIONS_PER_IP]);
+    // The Owner admits one more from that address, but its abandoned
+    // admissions fill the cap: refused without a lookup, while a caller from
+    // another address is admitted.
+    let extra = publish_id(gated[PER_IP]);
     let extra = blocking(move || {
         run_caller(
             direct(remote, &extra, None),
@@ -249,6 +268,7 @@ async fn admissions_per_ip_are_bounded_without_affecting_others() {
             |ctx| ctx.report.disconnected,
         )
     });
+    let stop = Arc::new(AtomicBool::new(false));
     let other = hold_attach(from_ip(remote, 2, "bound-other"), stop.clone());
     let extra = extra.await;
     let (Some(up), Some(down)) = (extra.connected_at, extra.disconnected_at) else {
@@ -267,25 +287,37 @@ async fn admissions_per_ip_are_bounded_without_affecting_others() {
         .await;
     assert_eq!(
         auth.entered(),
-        MAX_ADMISSIONS_PER_IP,
+        PER_IP,
         "the over-cap peer never reached the lookup"
     );
 
+    // Once the stalled lookups answer, the abandoned admissions register
+    // nothing and free the address's slots.
     auth.open();
-    for key in &gated[..MAX_ADMISSIONS_PER_IP] {
-        let pipeline = format!("pipeline-{key}");
-        server
-            .wait_until(
-                "each capped admission registers",
-                Duration::from_secs(4),
-                || async { server.ingest_active(&pipeline).await },
-            )
-            .await;
+    server
+        .wait_until(
+            "the stalled lookups answer",
+            Duration::from_secs(3),
+            || async { auth.completed() == PER_IP },
+        )
+        .await;
+    let again = hold(remote, gated[PER_IP], stop.clone());
+    server
+        .wait_until(
+            "the address is admitted again",
+            Duration::from_secs(5),
+            || async {
+                server
+                    .ingest_active(&format!("pipeline-{}", gated[PER_IP]))
+                    .await
+            },
+        )
+        .await;
+    for key in &gated[..PER_IP] {
+        assert!(!server.ingest_active(&format!("pipeline-{key}")).await);
     }
     stop.store(true, Ordering::Release);
-    for holder in holders {
-        assert!(holder.await.unwrap().connected);
-    }
+    assert!(again.await.unwrap().connected);
     assert!(other.await.unwrap().connected);
     server.stop().await;
 }
@@ -313,9 +345,10 @@ async fn admissions_per_stream_key_are_bounded_across_ips() {
 
     // One more publisher on the key, from yet another address, is refused
     // without a lookup, while another key is admitted and a viewer burst on
-    // the same key (more readers than the per-key cap, one address, under
-    // the per-IP cap) is admitted in full: the cap counts publishers only.
-    const READERS: usize = MAX_ADMISSIONS_PER_KEY + 2;
+    // the same key from one address is admitted in full: more readers than
+    // the per-key cap (it counts publishers only) and than any small fixed
+    // per-IP cap (it is the Owner's own per-IP limit, 64 by default).
+    const READERS: usize = 9;
     let extra = blocking(move || {
         run_caller(
             from_ip(remote, 20, "churn"),
