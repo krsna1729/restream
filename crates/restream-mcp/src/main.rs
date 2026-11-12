@@ -124,7 +124,13 @@ fn main() {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let backend = restream_mcp::http::HttpAgentBackend::new(base_url, auth);
+        let backend = match restream_mcp::http::HttpAgentBackend::new(base_url, auth) {
+            Ok(backend) => backend,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
         let config = restream_mcp::TransportConfig {
             mode: if stdio {
                 restream_mcp::TransportMode::Stdio
@@ -135,10 +141,16 @@ fn main() {
             allowed_origins,
         };
 
-        let runtime = tokio::runtime::Builder::new_multi_thread()
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("Failed to build tokio runtime");
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("failed to build the tokio runtime: {error}");
+                std::process::exit(1);
+            }
+        };
         if compatibility_mode != CompatibilityMode::Off {
             match runtime.block_on(backend.verify_target_compatibility()) {
                 Ok(()) => {}
