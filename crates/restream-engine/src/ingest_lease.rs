@@ -5,18 +5,19 @@
 //! [`IngestLease`], the only handle that ends the attempt. An orderly teardown
 //! calls [`IngestLease::finish`]. A lease dropped without it (a panic unwinding
 //! the task or entity state that held it, a cancelled task, an early return)
-//! queues its attempt on the engine's release queue; the engine's release task
-//! records an abnormal end and unregisters it. No path can then leave a stream
-//! key locked as a duplicate publisher.
+//! cancels the attempt at once, which frees its input for the next publisher
+//! and stops its media, and queues it on the engine's release queue; the
+//! engine's release task records an abnormal end and unregisters it. No path
+//! can then leave a stream key locked as a duplicate publisher.
 //!
 //! The queue is engine-owned storage, not a channel a task owns: an attempt
 //! stays queued until a release has ended it, so a release task cancelled with
 //! its runtime loses nothing, and the next task started (or the shutdown's
 //! final pass) ends the backlog first.
 //!
-//! Every release is attempt-checked: a lease ends only its own attempt, so a
-//! stale lease dropped after a newer attempt registered on the same input
-//! leaves the newer one alone.
+//! Every release is attempt-checked: a lease ends only its own attempt (its
+//! own cancel token, its own session), so a stale lease dropped after a newer
+//! attempt registered on the same input leaves the newer one alone.
 //!
 //! Media state (an Owner's publisher, a ring pusher) holds only the attempt's
 //! identity ([`IngestRegistration`]), never the lease.
@@ -53,6 +54,9 @@ pub enum IngestEnd<'a> {
 pub(crate) struct AbandonedAttempt {
     pipeline_id: String,
     registration: IngestRegistration,
+    /// Whether to record the abandoned outcome: false once a cancelled
+    /// [`IngestLease::finish`] already recorded its own.
+    record: bool,
 }
 
 /// The engine's queue of dropped leases' attempts. Unbounded so a drop never
@@ -72,16 +76,24 @@ impl ReleaseQueue {
     }
 
     /// The oldest attempt not yet released; it stays queued until
-    /// [`Self::complete_front`].
-    pub(crate) fn front(&self) -> Option<AbandonedAttempt> {
+    /// [`Self::complete`].
+    fn front(&self) -> Option<AbandonedAttempt> {
         restream_sync::lock::lock(&self.pending).front().cloned()
     }
 
-    pub(crate) fn complete_front(&self) {
-        restream_sync::lock::lock(&self.pending).pop_front();
+    /// Removes `attempt` by its id, wherever it is now: a second pass that
+    /// released the same entry then removes nothing, never another entry.
+    fn complete(&self, attempt: &AbandonedAttempt) {
+        let mut pending = restream_sync::lock::lock(&self.pending);
+        if let Some(index) = pending
+            .iter()
+            .position(|queued| queued.registration.attempt_id == attempt.registration.attempt_id)
+        {
+            pending.remove(index);
+        }
     }
 
-    pub(crate) async fn woken(&self) {
+    async fn woken(&self) {
         self.wake.notified().await;
     }
 }
@@ -94,6 +106,8 @@ pub struct IngestLease {
     registration: IngestRegistration,
     engine: Weak<MediaEngine>,
     releases: Arc<ReleaseQueue>,
+    /// `finish` recorded its outcome; a drop then only releases.
+    recorded: bool,
     finished: bool,
 }
 
@@ -109,6 +123,7 @@ impl IngestLease {
             registration,
             engine: Arc::downgrade(engine),
             releases,
+            recorded: false,
             finished: false,
         }
     }
@@ -126,52 +141,77 @@ impl IngestLease {
     /// End the attempt in order: record `end` and unregister it, if it is
     /// still the input's current attempt.
     pub async fn finish(mut self, end: IngestEnd<'_>) {
-        if let Some(engine) = self.engine.upgrade() {
+        let Some(engine) = self.engine.upgrade() else {
+            self.finished = true;
+            return;
+        };
+        if let IngestEnd::Disconnected {
+            phase,
+            reason,
+            had_error,
+        } = end
+        {
             engine
-                .end_ingest_attempt(&self.pipeline_id, &self.registration, end)
+                .record_ingest_disconnect_if_current(
+                    &self.pipeline_id,
+                    &self.registration,
+                    Some(phase),
+                    Some(reason),
+                    had_error,
+                )
                 .await;
         }
-        // Only once it completed: a finish dropped midway leaves the release
-        // to `Drop`, and a second, attempt-checked release is harmless.
+        // Each step is marked only once it completed: a finish dropped
+        // midway leaves the rest to `Drop`, which neither records twice nor
+        // skips the release (and a repeated, attempt-checked release is
+        // harmless).
+        self.recorded = true;
+        engine
+            .unregister_ingest_if_current(&self.pipeline_id, &self.registration)
+            .await;
         self.finished = true;
     }
 }
 
 impl Drop for IngestLease {
-    /// Safe on any thread and during unwinding: one short push under a
-    /// poison-tolerant lock and a wake, no await, no panic.
+    /// Safe on any thread and during unwinding: a token cancel, one short
+    /// push under a poison-tolerant lock and a wake; no await, no panic.
     fn drop(&mut self) {
         if self.finished {
             return;
         }
+        // At once, before the release task runs: the duplicate check admits
+        // the next publisher on this input, and the attempt's media stops.
+        // The token is this attempt's own; a newer attempt has its own.
+        self.registration.cancel_token.cancel();
         self.releases.push(AbandonedAttempt {
             pipeline_id: std::mem::take(&mut self.pipeline_id),
             registration: self.registration.clone(),
+            record: !self.recorded,
         });
     }
 }
 
 /// Ends every queued attempt, oldest first. Each leaves the queue only once
-/// ended, so a pass cancelled midway leaves it for the next one (a repeated,
-/// attempt-checked release is harmless).
+/// ended, so a pass cancelled midway leaves it for the next one, and two
+/// passes over one queue release every entry.
 pub(crate) async fn release_backlog(engine: &MediaEngine, queue: &ReleaseQueue) {
-    while let Some(AbandonedAttempt {
-        pipeline_id,
-        registration,
-    }) = queue.front()
-    {
+    while let Some(attempt) = queue.front() {
+        if attempt.record {
+            engine
+                .record_ingest_disconnect_if_current(
+                    &attempt.pipeline_id,
+                    &attempt.registration,
+                    Some(ABANDONED_PHASE),
+                    Some(ABANDONED_REASON.to_string()),
+                    true,
+                )
+                .await;
+        }
         engine
-            .end_ingest_attempt(
-                &pipeline_id,
-                &registration,
-                IngestEnd::Disconnected {
-                    phase: ABANDONED_PHASE,
-                    reason: ABANDONED_REASON.to_string(),
-                    had_error: true,
-                },
-            )
+            .unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
             .await;
-        queue.complete_front();
+        queue.complete(&attempt);
     }
 }
 

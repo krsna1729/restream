@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::{
     ActiveIngest, IngestMetadata, IngestRegistration, MediaEngine, RecentIngestOutcome,
 };
-use crate::ingest_lease::{IngestEnd, IngestLease};
+use crate::ingest_lease::IngestLease;
 use crate::input_gate::InputForwardState;
 use crate::stage_metrics::StageMetrics;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
@@ -115,7 +115,8 @@ impl MediaEngine {
         };
         // Take every write guard before the first insert: no await may follow
         // it. Lock order: `cancel_tokens` -> `sessions` -> `selected_inputs` ->
-        // `active`, and every other path takes these locks one at a time.
+        // `active`; `unregister_ingest_if_current` takes the same order, and
+        // every other path takes these locks one at a time.
         // Tokio's `RwLock` write waits while a reader holds it (the input
         // status JSON reads `sessions`), so a caller whose future is dropped
         // at one of those awaits — a pull's cancel lands in this window —
@@ -211,33 +212,6 @@ impl MediaEngine {
             let _ = task.await;
         }
         crate::ingest_lease::release_backlog(self, &self.ingests.releases).await;
-    }
-
-    /// Ends one attempt, if it is still its input's current attempt: records
-    /// a `Disconnected` end, then unregisters it.
-    pub(crate) async fn end_ingest_attempt(
-        &self,
-        pipeline_id: &str,
-        registration: &IngestRegistration,
-        end: IngestEnd<'_>,
-    ) {
-        if let IngestEnd::Disconnected {
-            phase,
-            reason,
-            had_error,
-        } = end
-        {
-            self.record_ingest_disconnect_if_current(
-                pipeline_id,
-                registration,
-                Some(phase),
-                Some(reason),
-                had_error,
-            )
-            .await;
-        }
-        self.unregister_ingest_if_current(pipeline_id, registration)
-            .await;
     }
 
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
@@ -568,39 +542,37 @@ impl MediaEngine {
         }
     }
 
-    async fn unregister_ingest_if_current(
+    /// Unregisters one attempt, if it is still its input's current attempt.
+    /// Every write guard is taken first, in registration's lock order
+    /// (`cancel_tokens` -> `sessions` -> `active`), and no await follows the
+    /// first removal: a caller cancelled at an await leaves the attempt
+    /// either whole (a retry ends it) or gone with its token cancelled, never
+    /// a session removed with its token still live (the input then refused
+    /// as a duplicate forever, the retry finding nothing to end).
+    pub(crate) async fn unregister_ingest_if_current(
         &self,
         pipeline_id: &str,
         registration: &IngestRegistration,
     ) -> bool {
         let _selection = self.ingests.selection_lock.lock().await;
-        {
-            let mut sessions = self.ingests.sessions.write().await;
-            let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
-                ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
-            });
-            if !is_current {
-                return false;
-            }
-            sessions.remove(&registration.input_id);
+        let mut tokens = self.ingests.cancel_tokens.write().await;
+        let mut sessions = self.ingests.sessions.write().await;
+        let mut active = self.ingests.active.write().await;
+        let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
+            ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
+        });
+        if !is_current {
+            return false;
         }
-        if let Some(token) = self
-            .ingests
-            .cancel_tokens
-            .write()
-            .await
-            .remove(&registration.input_id)
-        {
+        sessions.remove(&registration.input_id);
+        if let Some(token) = tokens.remove(&registration.input_id) {
             token.cancel();
         }
-
-        let removed_selected = {
-            let mut active = self.ingests.active.write().await;
-            let is_selected = active
-                .get(pipeline_id)
-                .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
-            is_selected.then(|| active.remove(pipeline_id)).flatten()
-        };
+        let is_selected = active
+            .get(pipeline_id)
+            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
+        let removed_selected = is_selected.then(|| active.remove(pipeline_id)).flatten();
+        drop((tokens, sessions, active));
         let protocol = removed_selected
             .as_ref()
             .map(|ingest| ingest.protocol.clone())
