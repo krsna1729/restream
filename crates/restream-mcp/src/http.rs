@@ -48,7 +48,9 @@ fn transport_error(error: reqwest::Error) -> AgentError {
 }
 
 impl HttpAgentBackend {
-    pub fn new(base_url: impl Into<String>, auth: HttpAgentAuth) -> Self {
+    /// `Err` when the HTTP client cannot be built (its TLS backend fails to
+    /// initialize).
+    pub fn new(base_url: impl Into<String>, auth: HttpAgentAuth) -> Result<Self, AgentError> {
         Self::with_timeouts(base_url, auth, CONNECT_TIMEOUT, REQUEST_TIMEOUT)
     }
 
@@ -57,16 +59,17 @@ impl HttpAgentBackend {
         auth: HttpAgentAuth,
         connect: Duration,
         request: Duration,
-    ) -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(connect)
-                .timeout(request)
-                .build()
-                .expect("the reqwest client builds with the bundled TLS roots"),
+    ) -> Result<Self, AgentError> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(connect)
+            .timeout(request)
+            .build()
+            .map_err(|error| AgentError::Transport(format!("build the HTTP client: {error}")))?;
+        Ok(Self {
+            client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             auth,
-        }
+        })
     }
 
     pub async fn verify_target_compatibility(&self) -> Result<(), AgentError> {
@@ -342,7 +345,8 @@ mod tests {
             HttpAgentAuth::None,
             Duration::from_secs(1),
             Duration::from_millis(300),
-        );
+        )
+        .expect("client builds");
         let error = tokio::time::timeout(Duration::from_secs(5), backend.capabilities())
             .await
             .expect("the call ends at its deadline")
