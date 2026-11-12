@@ -258,6 +258,17 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
+    // Bounds how stale the admission index can get from a change no write
+    // reported; stopped with the projector at shutdown.
+    supervised_task::spawn_supervised("catalog_auth_reload", {
+        let (catalog, stop) = (catalog_auth.clone(), projector_stop.clone());
+        move || {
+            catalog.clone().reload_periodically(
+                crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL,
+                stop.clone(),
+            )
+        }
+    });
     supervised_task::spawn_supervised("runtime_state_projector", {
         let (hub, pool, engine, stop) = (
             state.runtime_state.clone(),

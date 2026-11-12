@@ -36,9 +36,9 @@ impl PipelineService {
         }
     }
 
-    /// Reloads the ingest admission index after a committed catalog write.
-    pub(crate) async fn refresh_catalog_auth(&self) {
-        self.catalog_auth.refresh().await;
+    /// The admission index every catalog write commits through.
+    pub(crate) fn catalog_auth(&self) -> &Arc<CatalogAuth> {
+        &self.catalog_auth
     }
 
     /// Builds the shared not-found error shape used when callers reference a
@@ -85,13 +85,24 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        let pipeline = self
-            .store
-            .create_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
+        let store = self.store.clone();
+        let (id, name, stream_key) = (id.to_owned(), name.to_owned(), stream_key.to_owned());
+        let input_source = input_source.map(str::to_owned);
+        let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
+        self.catalog_auth
+            .commit(async move {
+                store
+                    .create_pipeline(
+                        &id,
+                        &name,
+                        &stream_key,
+                        input_source.as_deref(),
+                        srt_ingest_policy.as_deref(),
+                    )
+                    .await
+            })
             .await
-            .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))?;
-        self.refresh_catalog_auth().await;
-        Ok(pipeline)
+            .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))
     }
 
     /// Updates the mutable fields of one persisted pipeline and normalizes a
@@ -104,24 +115,36 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        let updated = self
-            .store
-            .update_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
+        let store = self.store.clone();
+        let owned = (id.to_owned(), name.to_owned(), stream_key.to_owned());
+        let input_source = input_source.map(str::to_owned);
+        let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
+        self.catalog_auth
+            .commit(async move {
+                let (id, name, stream_key) = owned;
+                store
+                    .update_pipeline(
+                        &id,
+                        &name,
+                        &stream_key,
+                        input_source.as_deref(),
+                        srt_ingest_policy.as_deref(),
+                    )
+                    .await
+            })
             .await
-            .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?;
-        self.refresh_catalog_auth().await;
-        updated.ok_or_else(|| Self::pipeline_not_found(id))
+            .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?
+            .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
     /// Deletes one pipeline record from the persisted catalog.
     pub async fn delete_pipeline(&self, id: &str) -> ServiceResult<bool> {
-        let deleted = self
-            .store
-            .delete_pipeline(id)
+        let store = self.store.clone();
+        let id = id.to_owned();
+        self.catalog_auth
+            .commit(async move { store.delete_pipeline(&id).await })
             .await
-            .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))?;
-        self.refresh_catalog_auth().await;
-        Ok(deleted)
+            .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))
     }
 
     /// List all pipeline IDs (used by health and settings).

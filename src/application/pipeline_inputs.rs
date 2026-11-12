@@ -105,18 +105,22 @@ impl PipelineInputService {
                 "pipeline input limit is {MAX_PIPELINE_INPUTS}"
             )));
         }
+        let catalog_auth = self.pipelines.catalog_auth();
         for _ in 0..16 {
             let input_id = format!("input_{}", hex(&rand::random::<[u8; 8]>()));
             let stream_key = generated_stream_key();
-            match self
-                .store
-                .create(&input_id, pipeline_id, label, &stream_key, source.clone())
+            let store = self.store.clone();
+            let (pipeline_id, label) = (pipeline_id.to_owned(), label.to_owned());
+            let source = source.clone();
+            match catalog_auth
+                .commit(async move {
+                    store
+                        .create(&input_id, &pipeline_id, &label, &stream_key, source)
+                        .await
+                })
                 .await
             {
-                Ok(input) => {
-                    self.pipelines.refresh_catalog_auth().await;
-                    return Ok(input);
-                }
+                Ok(input) => return Ok(input),
                 Err(PipelineInputStoreError::Conflict(message))
                     if message.contains("pipeline input limit exceeded") =>
                 {
@@ -151,13 +155,23 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be disabled",
             ));
         }
-        let updated = self
-            .store
-            .update(pipeline_id, input_id, label, enabled, source)
+        let store = self.store.clone();
+        let owned = (
+            pipeline_id.to_owned(),
+            input_id.to_owned(),
+            label.to_owned(),
+        );
+        self.pipelines
+            .catalog_auth()
+            .commit(async move {
+                let (pipeline_id, input_id, label) = owned;
+                store
+                    .update(&pipeline_id, &input_id, &label, enabled, source)
+                    .await
+            })
             .await
-            .map_err(store_error)?;
-        self.pipelines.refresh_catalog_auth().await;
-        updated.ok_or_else(|| input_not_found(input_id))
+            .map_err(store_error)?
+            .ok_or_else(|| input_not_found(input_id))
     }
 
     pub async fn delete(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<bool> {
@@ -167,13 +181,13 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be deleted",
             ));
         }
-        let deleted = self
-            .store
-            .delete(pipeline_id, input_id)
+        let store = self.store.clone();
+        let owned = (pipeline_id.to_owned(), input_id.to_owned());
+        self.pipelines
+            .catalog_auth()
+            .commit(async move { store.delete(&owned.0, &owned.1).await })
             .await
-            .map_err(store_error)?;
-        self.pipelines.refresh_catalog_auth().await;
-        Ok(deleted)
+            .map_err(store_error)
     }
 
     pub async fn promote(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
@@ -181,13 +195,14 @@ impl PipelineInputService {
         if !current.enabled {
             return Err(ServiceError::conflict("disabled inputs cannot be promoted"));
         }
-        let promoted = self
-            .store
-            .promote(pipeline_id, input_id)
+        let store = self.store.clone();
+        let owned = (pipeline_id.to_owned(), input_id.to_owned());
+        self.pipelines
+            .catalog_auth()
+            .commit(async move { store.promote(&owned.0, &owned.1).await })
             .await
-            .map_err(store_error)?;
-        self.pipelines.refresh_catalog_auth().await;
-        promoted.ok_or_else(|| input_not_found(input_id))
+            .map_err(store_error)?
+            .ok_or_else(|| input_not_found(input_id))
     }
 
     pub async fn get(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
