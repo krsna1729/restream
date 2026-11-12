@@ -94,17 +94,21 @@ pub(super) async fn cleanup(
         .await
         .ok();
     }
-    // Every session is gone: end any attempt still queued before exit.
-    engine.stop_ingest_release_drain().await;
 
     pool.close().await;
 
     if !rtmp_handle.is_finished() {
         rtmp_handle.abort();
     }
+    let _ = rtmp_handle.await;
     if !srt_handle.is_finished() {
         let _ = srt_handle.await;
     }
+
+    // The listener threads (RTMP, SRT, MoQ) are joined and their tasks have
+    // ended, so no session is left to drop a lease: stop the release task
+    // and end any attempt still queued.
+    engine.stop_ingest_release_drain().await;
 
     info!(
         event_class = "lifecycle",

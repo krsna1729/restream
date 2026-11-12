@@ -42,22 +42,31 @@ async fn a_dropped_lease_releases_its_attempt_as_abandoned() {
     );
 
     drop(lease);
-    let again = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(lease) = register(&engine, "input").await {
-                break lease;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await;
-    assert!(again.is_ok(), "a dropped lease left its input registered");
+    wait_until_released(&engine, "input").await;
     let outcome = engine
         .recent_ingest_outcome(PIPELINE)
         .await
         .expect("the abandoned end is recorded");
     assert_eq!(outcome.failure_phase.as_deref(), Some(ABANDONED_PHASE));
     assert!(outcome.had_error);
+    assert!(register(&engine, "input").await.is_some());
+}
+
+async fn wait_until_released(engine: &Arc<MediaEngine>, input: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while engine.input_has_session(PIPELINE, input).await {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("a dropped lease's attempt is released");
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
 }
 
 /// A release task dies with its runtime (a secondary runtime faulting while
@@ -65,12 +74,6 @@ async fn a_dropped_lease_releases_its_attempt_as_abandoned() {
 /// release task started, on another runtime, ends it first.
 #[test]
 fn a_lease_dropped_while_no_release_task_runs_is_released_by_the_next_one() {
-    let runtime = || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-    };
     let engine = Arc::new(MediaEngine::new());
     let first = runtime();
     let lease = first
@@ -81,17 +84,129 @@ fn a_lease_dropped_while_no_release_task_runs_is_released_by_the_next_one() {
 
     runtime().block_on(async {
         engine.start_ingest_release_drain();
-        let released = tokio::time::timeout(Duration::from_secs(5), async {
-            while register(&engine, "input").await.is_none() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await;
-        assert!(
-            released.is_ok(),
-            "a lease dropped between release tasks leaked its input"
-        );
+        wait_until_released(&engine, "input").await;
     });
+}
+
+/// A dropped lease cancels its attempt at once: the next publisher on the
+/// input registers before any release task runs, and the dropped attempt's
+/// later release, its token being its own, leaves the newer attempt alone.
+#[test]
+fn a_dropped_lease_frees_its_input_before_its_release_runs() {
+    let engine = Arc::new(MediaEngine::new());
+    let first = runtime();
+    let lease = first
+        .block_on(register(&engine, "input"))
+        .expect("the attempt registers");
+    drop(first);
+    drop(lease);
+
+    runtime().block_on(async {
+        let current = register(&engine, "input")
+            .await
+            .expect("the dropped attempt's input admits the next publisher");
+        settle_releases(&engine).await;
+        assert_current(&engine, &current).await;
+    });
+}
+
+/// A finish cancelled after recording its outcome, before its release:
+/// the drop releases the attempt without recording a second outcome.
+#[tokio::test]
+async fn a_finish_cancelled_between_record_and_release_records_one_outcome() {
+    let engine = Arc::new(MediaEngine::new());
+    let lease = register(&engine, "input")
+        .await
+        .expect("the attempt registers");
+    // Holding the token map parks the release at its first write lock.
+    let tokens = engine.ingests.cancel_tokens.read().await;
+    let finish = tokio::spawn(lease.finish(IngestEnd::Disconnected {
+        phase: "disconnect",
+        reason: "the publisher left".to_string(),
+        had_error: false,
+    }));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while engine.recent_ingest_outcome(PIPELINE).await.is_none() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the finish records its outcome");
+    finish.abort();
+    let _ = finish.await;
+    drop(tokens);
+
+    wait_until_released(&engine, "input").await;
+    let outcome = engine
+        .recent_ingest_outcome(PIPELINE)
+        .await
+        .expect("the finish's outcome stays");
+    assert_eq!(outcome.failure_phase.as_deref(), Some("disconnect"));
+    assert_eq!(outcome.disconnect_count, 1, "one end, one outcome");
+    assert!(register(&engine, "input").await.is_some());
+}
+
+/// A release cancelled while it waits for a registry lock leaves the attempt
+/// whole, so the owner's later finish still ends it and frees the input.
+#[tokio::test]
+async fn a_release_cancelled_at_a_lock_leaves_its_attempt_whole() {
+    let engine = Arc::new(MediaEngine::new());
+    let lease = register(&engine, "input")
+        .await
+        .expect("the attempt registers");
+    let tokens = engine.ingests.cancel_tokens.read().await;
+    let release = tokio::spawn({
+        let engine = engine.clone();
+        let registration = lease.registration().clone();
+        async move {
+            engine
+                .unregister_ingest_if_current(PIPELINE, &registration)
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    release.abort();
+    let _ = release.await;
+    drop(tokens);
+
+    lease.finish(IngestEnd::Released).await;
+    assert!(
+        register(&engine, "input").await.is_some(),
+        "a cancelled release left the input refused as a duplicate"
+    );
+}
+
+/// Two release passes that both took the same front entry each complete it:
+/// the second completion must not remove the next, unreleased entry.
+#[tokio::test]
+async fn two_passes_over_one_queue_release_every_entry() {
+    let engine = Arc::new(MediaEngine::new());
+    let first = register(&engine, "first").await.expect("first registers");
+    let second = register(&engine, "second").await.expect("second registers");
+    let queue = ReleaseQueue::default();
+    for lease in [&first, &second] {
+        queue.push(AbandonedAttempt {
+            pipeline_id: PIPELINE.to_string(),
+            registration: lease.registration().clone(),
+            record: false,
+        });
+    }
+    let (pass_one, pass_two) = (queue.front(), queue.front());
+    for taken in [pass_one, pass_two] {
+        let taken = taken.expect("both passes see the first entry");
+        engine
+            .unregister_ingest_if_current(PIPELINE, &taken.registration)
+            .await;
+        queue.complete(&taken);
+    }
+    release_backlog(&engine, &queue).await;
+
+    assert!(queue.front().is_none());
+    assert!(!engine.input_has_session(PIPELINE, "first").await);
+    assert!(
+        !engine.input_has_session(PIPELINE, "second").await,
+        "the second entry was dropped unreleased"
+    );
 }
 
 /// The operator cancels an input and its replacement registers before the
