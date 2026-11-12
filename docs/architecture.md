@@ -545,16 +545,22 @@ SRT publish and read, HLS push including its per-object credential check, MoQ
 publish) reads an immutable stream-key index, `CatalogAuthSnapshot` in
 `src/application/catalog_auth.rs`, held in an `ArcSwap`. Startup loads it
 before any listener starts and exits if it cannot. `PipelineService` and
-`PipelineInputService` reload it after each committed write (pipeline create,
-update and delete; input create, update, delete and promote) before
-returning, so a rotated, disabled or deleted key is refused on the next
-connect. Reloads run one at a time and a refresh already covered by a running
-reload does not load again. A failed reload keeps the previous index, logs
-`restream.catalog_auth.reload_failed`, and one background task retries with
-backoff (100 ms doubling to 5 s) until it succeeds
-(`restream.catalog_auth.reload_recovered`). A stalled database therefore
-delays catalog writes, never connects. The index belongs to one process: a
-second process writing the same database file would not refresh it.
+`PipelineInputService` run each write (pipeline create, update and delete;
+input create, update, delete and promote) and the reload after it as one task
+(`CatalogAuth::commit`) that the request awaits but cannot cancel. The write
+returns after the reload, so a rotated, disabled or deleted key is refused on
+the next connect, and a request dropped after SQLite committed still lands
+its write. Reloads run one at a time and a refresh already covered by a
+running reload does not load again. A failed reload keeps the previous index,
+logs `restream.catalog_auth.reload_failed`, and one background task retries
+with backoff (100 ms doubling to 5 s) until it succeeds
+(`restream.catalog_auth.reload_recovered`). A periodic reload every 30 s
+(`PERIODIC_RELOAD_INTERVAL`, stopped at shutdown) bounds every other change,
+such as a row edited outside the services or a write task that panicked, to
+30 s plus one reload while SQLite answers. A stalled database therefore
+delays catalog writes, never connects. While it stays stalled, the last loaded
+index stays in force. The index belongs to one process; a second process
+writing the same database file is seen only at the next periodic reload.
 
 The HTTP listener binds `127.0.0.1` by default. A deployment that exposes it
 must supply TLS and the network boundary. See [Configuration](configuration.md).

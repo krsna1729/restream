@@ -5,15 +5,20 @@
 //! held in an `ArcSwap`, never against SQLite, so a stalled or failing
 //! database cannot stop an input from connecting.
 //!
-//! The index changes only through [`CatalogAuth::refresh`]. Each committed
-//! catalog write that can change admission (pipeline create, update and
-//! delete; input create, update, delete and promote) calls it before
-//! returning, so an API client that rotates or deletes a key sees it enforced
-//! on the next connect. A refresh reloads the whole index and swaps it in.
-//! Reloads run one at a time; a refresh that an already-started reload covers
-//! returns without loading again. A failed reload keeps the previous index,
-//! is logged as `restream.catalog_auth.reload_failed`, and leaves one
-//! background task retrying with bounded backoff until a reload succeeds.
+//! The index changes only through a reload. Each catalog write that can
+//! change admission (pipeline create, update and delete; input create,
+//! update, delete and promote) runs through [`CatalogAuth::commit`]: the
+//! write and the reload after it are one task its caller awaits but cannot
+//! cancel, so an API client that rotates or deletes a key sees it enforced on
+//! the next connect, and a dropped request still lands its committed write.
+//! A reload rebuilds the whole index and swaps it in. Reloads run one at a
+//! time; one that an already-started reload covers returns without loading
+//! again. A failed reload keeps the previous index, is logged as
+//! `restream.catalog_auth.reload_failed`, and leaves one background task
+//! retrying with bounded backoff until a reload succeeds. A periodic reload
+//! ([`CatalogAuth::reload_periodically`], every
+//! [`PERIODIC_RELOAD_INTERVAL`] in production) bounds staleness from any
+//! change no write reported.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -31,10 +36,35 @@ use restream_engine::ingest_auth::{
 use restream_engine::security::{IngestSecurityService, RateLimitScope};
 use tracing::{info, warn};
 
+use crate::application::pipeline_inputs::PipelineInputStoreError;
 use crate::application::ports::PipelineStoreError;
 
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
+/// How often production reloads the index whether or not a write asked.
+pub const PERIODIC_RELOAD_INTERVAL: Duration = Duration::from_secs(30);
+
+/// A catalog write task that ended without an answer (it panicked).
+#[derive(Debug)]
+pub struct WriteAborted(String);
+
+impl std::fmt::Display for WriteAborted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl From<WriteAborted> for PipelineStoreError {
+    fn from(error: WriteAborted) -> Self {
+        Self::new(error.0)
+    }
+}
+
+impl From<WriteAborted> for PipelineInputStoreError {
+    fn from(error: WriteAborted) -> Self {
+        Self::Internal(error.0)
+    }
+}
 
 pub type CatalogAuthLoadFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<PipelineInput>, PipelineStoreError>> + Send + 'a>>;
@@ -128,28 +158,72 @@ impl CatalogAuth {
         self.snapshot.load_full()
     }
 
-    /// Called after a catalog write committed. Returns once a reload that
-    /// started after the write has been swapped in, or once that reload failed
-    /// and the retry task owns it. The reload runs in its own task, so a
-    /// caller dropped meanwhile (a disconnected HTTP client) still lands the
-    /// write in the index.
-    pub async fn refresh(self: &Arc<Self>) {
-        let ticket = self.request();
+    /// Runs a catalog write and then a reload as one task, and returns the
+    /// write's answer once the reload is swapped in (or has failed and the
+    /// retry task owns it). The caller only awaits the task: dropping it (a
+    /// disconnected HTTP client) cancels neither half, so a write SQLite
+    /// committed always reaches the index.
+    pub async fn commit<T, E>(
+        self: &Arc<Self>,
+        write: impl Future<Output = Result<T, E>> + Send + 'static,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<WriteAborted> + Send + 'static,
+    {
         let catalog = Arc::clone(self);
-        let reload = tokio::spawn(async move { catalog.reload(ticket).await });
-        let error = match reload.await {
-            Ok(Ok(())) => return,
-            Ok(Err(error)) => error.to_string(),
-            Err(join) => format!("reload task failed: {join}"),
-        };
-        warn!(
-            event_class = "lifecycle",
-            event_type = "restream.catalog_auth.reload_failed",
-            %error,
-            "a committed catalog write is not yet in the ingest admission index; \
-             the previous index stays in force until a retry reloads it",
-        );
-        self.spawn_retry();
+        let unit = tokio::spawn(async move {
+            let answer = write.await;
+            // Reloaded whatever the store answered: an error after the commit
+            // (a lost reply) must not leave the write unenforced.
+            catalog.reload_or_retry().await;
+            answer
+        });
+        unit.await.unwrap_or_else(|join| {
+            Err(WriteAborted(format!("catalog write task failed: {join}")).into())
+        })
+    }
+
+    /// A reload with no write in front of it, on the same uncancellable path.
+    pub async fn refresh(self: &Arc<Self>) {
+        let _ = self
+            .commit(std::future::ready(Ok::<(), WriteAborted>(())))
+            .await;
+    }
+
+    /// Reloads every `interval` until `stop`. A change no write reported (a
+    /// row edited outside the services, a write task that panicked) is
+    /// enforced within one interval plus a reload. Takes a ticket like any
+    /// refresh, so it never runs beside another reload.
+    pub async fn reload_periodically(
+        self: Arc<Self>,
+        interval: Duration,
+        stop: tokio_util::sync::CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                () = stop.cancelled() => return,
+                () = tokio::time::sleep(interval) => {}
+            }
+            tokio::select! {
+                () = stop.cancelled() => return,
+                () = self.reload_or_retry() => {}
+            }
+        }
+    }
+
+    async fn reload_or_retry(self: &Arc<Self>) {
+        let ticket = self.request();
+        if let Err(error) = self.reload(ticket).await {
+            warn!(
+                event_class = "lifecycle",
+                event_type = "restream.catalog_auth.reload_failed",
+                %error,
+                "the ingest admission index could not reload; the previous index \
+                 stays in force until a retry reloads it",
+            );
+            self.spawn_retry();
+        }
     }
 
     fn request(&self) -> u64 {
@@ -292,6 +366,8 @@ impl PipelineAccessAuthenticator for CatalogIngestAuthenticator {
     }
 }
 
+#[cfg(test)]
+mod staleness_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -21,11 +21,11 @@ const ALL_MODES: [PipelineAccessMode; 6] = [
     PipelineAccessMode::MoqPublish,
 ];
 
-struct Catalog {
-    pool: sqlx::SqlitePool,
-    pipelines: PipelineService,
+pub(super) struct Catalog {
+    pub(super) pool: sqlx::SqlitePool,
+    pub(super) pipelines: PipelineService,
     inputs: PipelineInputService,
-    catalog: Arc<CatalogAuth>,
+    pub(super) catalog: Arc<CatalogAuth>,
     security: Arc<IngestSecurityService>,
     auth: CatalogIngestAuthenticator,
 }
@@ -33,7 +33,7 @@ struct Catalog {
 impl Catalog {
     /// Production wiring: one factory's services share the index that the
     /// authenticator reads, loaded as startup loads it.
-    async fn open(tag: &str) -> Self {
+    pub(super) async fn open(tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "restream-catalog-auth-{tag}-{}-{}",
             std::process::id(),
@@ -69,7 +69,11 @@ impl Catalog {
         }
     }
 
-    async fn admitted(&self, mode: PipelineAccessMode, key: &str) -> Option<AuthenticatedPipeline> {
+    pub(super) async fn admitted(
+        &self,
+        mode: PipelineAccessMode,
+        key: &str,
+    ) -> Option<AuthenticatedPipeline> {
         self.auth.authenticate(mode, key, CLIENT_IP).await.ok()
     }
 }
