@@ -23,7 +23,7 @@ use restream_sync::standby_gop::StandbyGopCache;
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
 use super::calls::CallSupervisor;
-use super::ingress_admission::ReceiverGroupId;
+use super::ingress_admission::{AUTH_FAILURE_CAPACITY, AdmissionGuard, ReceiverGroupId};
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use super::ingress_owner::{
     INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
@@ -120,10 +120,19 @@ impl SrtServer {
                 return;
             }
         };
+        // The guard lives as long as this loop, so the failure channel never
+        // disconnects under the select arm below.
+        let (auth_failures, auth_failure_rx) = flume::bounded(AUTH_FAILURE_CAPACITY);
+        let admission_guard = AdmissionGuard {
+            security: self.security.clone(),
+            failures: auth_failures,
+            stats: self.engine.listener_stats_handle(),
+        };
         let handle = match SrtIngressHandle::start(IngressConfig {
             bind,
             policy_store: self.ingest_policy_store.clone(),
             receiver_group: ReceiverGroupId::generate(),
+            admission_guard: admission_guard.clone(),
             stats: self.engine.listener_stats_handle(),
             command_capacity: INGRESS_COMMAND_CAPACITY,
             event_capacity: INGRESS_EVENT_CAPACITY,
@@ -186,6 +195,11 @@ impl SrtServer {
                         let _ = ingress.command(command);
                     }
                 }
+                Ok((scope, ip)) = auth_failure_rx.recv_async() => {
+                    if self.security.record_failure_for(scope, &ip.to_string()) {
+                        warn!(peer_ip = %ip, scope = scope.key(), "SRT caller banned after repeated unknown stream keys");
+                    }
+                }
                 sample = ingress.handle.telemetry.recv() => {
                     if let Some(sample) = sample {
                         self.fold_telemetry(&mut sessions, sample).await;
@@ -207,6 +221,8 @@ impl SrtServer {
             }
             ingress.flush_commands();
         }
+        // Held to here so the failure channel stayed open for the select.
+        drop(admission_guard);
 
         // Deliver the one already-accepted command before shutdown. Native
         // Owner shutdown closes all peers and flushes their last media.

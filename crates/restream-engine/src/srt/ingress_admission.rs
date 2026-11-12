@@ -2,11 +2,22 @@
 //!
 //! `srt_transport::compio::Owner::listen_with_resolver` calls this after cookie
 //! validation and before CONCLUSION is processed. It reads only the already
-//! populated [`SrtIngestPolicyStore`]; the asynchronous control-plane checks
-//! (pipeline authentication, IP bans, duplicate publishers) still happen in
-//! Tokio after the handshake and disconnect the real Owner peer on rejection.
+//! populated [`SrtIngestPolicyStore`] and a non-blocking IP-ban check; the
+//! asynchronous control-plane checks (pipeline authentication, the
+//! authoritative IP-ban check, duplicate publishers) still happen in Tokio
+//! after the handshake and disconnect the real Owner peer on rejection.
+//!
+//! A StreamID naming no configured key is a failed guess: it is reported to
+//! Tokio (never recorded here, so the Owner takes no write lock) and counts
+//! toward the caller IP's ban like any other failed SRT authentication. This
+//! relies on srt-rs answering INDUCTION statelessly behind a keyed SYN
+//! cookie: a CONCLUSION reaches the resolver only from an address that
+//! received this listener's INDUCTION response, so an off-path attacker
+//! cannot report failures for (and get banned) someone else's address.
 
+use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use srt_proto::handshake::{GroupExtensionData, GroupType};
@@ -15,10 +26,62 @@ use srt_transport::advanced::admission::{
 };
 use srt_transport::{GroupConfig, ListenerEncryptionConfig, ListenerPeerPolicy, PolicyOverride};
 
+use crate::security::{IngestSecurityService, RateLimitScope};
+use crate::snapshots::ListenerSocketStats;
 use crate::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 use restream_domain::domain::srt_ingest::ResolvedSrtCrypto;
 
 use super::srt_policy::SrtIngestPolicyStore;
+
+/// One failed SRT key guess, reported from an Owner's resolver to Tokio.
+pub(crate) type AuthFailure = (RateLimitScope, IpAddr);
+
+/// Failed guesses queued for Tokio, shared by every Owner. A full queue drops
+/// the report and counts it (`authFailuresDropped`).
+pub(crate) const AUTH_FAILURE_CAPACITY: usize = 256;
+
+/// The resolver's view of ingest security: a non-blocking ban check and a
+/// lossy, bounded report channel for failed guesses.
+#[derive(Clone)]
+pub(crate) struct AdmissionGuard {
+    pub(crate) security: Arc<IngestSecurityService>,
+    pub(crate) failures: flume::Sender<AuthFailure>,
+    pub(crate) stats: Arc<ListenerSocketStats>,
+}
+
+impl AdmissionGuard {
+    /// Banned in either SRT scope, as Tokio's authoritative check decides.
+    fn banned(&self, ip: IpAddr) -> bool {
+        let ip = ip.to_string();
+        [RateLimitScope::SrtPublish, RateLimitScope::SrtRead]
+            .into_iter()
+            .any(|scope| self.security.try_is_ip_banned_for(scope, &ip).is_some())
+    }
+
+    fn report(&self, scope: RateLimitScope, ip: IpAddr) {
+        if self.failures.try_send((scope, ip)).is_err() {
+            self.stats
+                .ingress_owner
+                .auth_failures_dropped
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(test)]
+impl AdmissionGuard {
+    /// Default security, no bans; reports go nowhere (counted as dropped).
+    pub(crate) fn detached(stats: Arc<ListenerSocketStats>) -> Self {
+        let (failures, _) = flume::bounded(1);
+        Self {
+            security: Arc::new(IngestSecurityService::new(
+                restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
+            )),
+            failures,
+            stats,
+        }
+    }
+}
 
 /// The identity Restream advertises as the RECEIVING group on every bonded leg
 /// this listener answers. It is distinct from any caller's GROUP id (which
@@ -50,8 +113,11 @@ impl ReceiverGroupId {
 pub(crate) fn ingress_resolver(
     store: Arc<SrtIngestPolicyStore>,
     receiver: ReceiverGroupId,
+    guard: AdmissionGuard,
 ) -> ListenerAdmissionResolver {
-    ListenerAdmissionResolver::new(move |request| resolve_ingress_policy(&store, receiver, request))
+    ListenerAdmissionResolver::new(move |request| {
+        resolve_ingress_policy(&store, receiver, &guard, request)
+    })
 }
 
 /// Restream's per-StreamID admission policy: mode validation, authorization
@@ -60,15 +126,18 @@ pub(crate) fn ingress_resolver(
 pub(crate) fn resolve_ingress_policy(
     store: &SrtIngestPolicyStore,
     receiver: ReceiverGroupId,
+    guard: &AdmissionGuard,
     request: &AdmissionRequest,
 ) -> AdmissionResolution {
     #[cfg(test)]
     if request.claimed_identity.stream_id.as_deref() == Some(INJECTED_RESOLVER_PANIC_STREAM_ID) {
         std::panic::resume_unwind(Box::new("injected SRT admission resolver panic"));
     }
-    resolve_policy(
+    resolve_guarded(
         store,
         receiver,
+        guard,
+        request.peer.ip(),
         request
             .claimed_identity
             .stream_id
@@ -76,6 +145,35 @@ pub(crate) fn resolve_ingress_policy(
             .unwrap_or_default(),
         request.handshake.get_group_extension(),
     )
+}
+
+/// A banned caller IP is refused before the policy lookup; a StreamID naming
+/// no configured key is reported as a failed guess for that IP.
+fn resolve_guarded(
+    store: &SrtIngestPolicyStore,
+    receiver: ReceiverGroupId,
+    guard: &AdmissionGuard,
+    peer: IpAddr,
+    stream_id: &str,
+    caller_group: Option<GroupExtensionData>,
+) -> AdmissionResolution {
+    if guard.banned(peer) {
+        return AdmissionResolution::Reject {
+            reason: RejectionReason::FORBIDDEN,
+        };
+    }
+    let resolution = resolve_policy(store, receiver, stream_id, caller_group);
+    if matches!(
+        resolution,
+        AdmissionResolution::Reject { reason } if reason == RejectionReason::UNAUTHORIZED
+    ) {
+        let scope = match parse_srt_stream_id(stream_id).mode {
+            SrtConnectionMode::Read => RateLimitScope::SrtRead,
+            SrtConnectionMode::Publish => RateLimitScope::SrtPublish,
+        };
+        guard.report(scope, peer);
+    }
+    resolution
 }
 
 /// The policy decision over the two request facts it depends on: the claimed
@@ -279,5 +377,115 @@ mod tests {
             resolve(&store, receiver, request("", None)),
             AdmissionResolution::Reject { reason } if reason == RejectionReason::BAD_MODE
         ));
+    }
+
+    fn guard(
+        failure_limit: i64,
+        capacity: usize,
+    ) -> (AdmissionGuard, flume::Receiver<AuthFailure>) {
+        let mut config = restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+        config.failure_limit = failure_limit;
+        let (failures, received) = flume::bounded(capacity);
+        let guard = AdmissionGuard {
+            security: Arc::new(IngestSecurityService::new(config)),
+            failures,
+            stats: Arc::new(ListenerSocketStats::default()),
+        };
+        (guard, received)
+    }
+
+    fn guarded(guard: &AdmissionGuard, peer: IpAddr, stream_id: &str) -> AdmissionResolution {
+        resolve_guarded(
+            &store(),
+            ReceiverGroupId::from_raw(RECEIVER),
+            guard,
+            peer,
+            stream_id,
+            None,
+        )
+    }
+
+    fn rejected_with(resolution: &AdmissionResolution, expected: RejectionReason) -> bool {
+        matches!(resolution, AdmissionResolution::Reject { reason } if *reason == expected)
+    }
+
+    /// Unknown stream keys count toward the caller's ban once Tokio records
+    /// them, and a banned caller is refused before any policy lookup, even
+    /// with a valid key.
+    #[test]
+    fn failed_key_guesses_ban_the_caller_ip() {
+        let (guard, received) = guard(3, AUTH_FAILURE_CAPACITY);
+        let attacker: IpAddr = "192.0.2.7".parse().unwrap();
+        let bystander: IpAddr = "192.0.2.8".parse().unwrap();
+        for guess in ["guess-1", "guess-2", "guess-3"] {
+            assert!(rejected_with(
+                &guarded(&guard, attacker, guess),
+                RejectionReason::UNAUTHORIZED
+            ));
+        }
+        let reported: Vec<_> = received.try_iter().collect();
+        assert_eq!(reported.len(), 3, "every unknown key is one failed guess");
+        assert!(
+            reported.iter().all(
+                |report| matches!(report, (RateLimitScope::SrtPublish, ip) if *ip == attacker)
+            )
+        );
+        // Tokio's side of the channel.
+        let banned = reported
+            .into_iter()
+            .map(|(scope, ip)| guard.security.record_failure_for(scope, &ip.to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(banned, [false, false, true]);
+
+        assert!(rejected_with(
+            &guarded(&guard, attacker, "live-key"),
+            RejectionReason::FORBIDDEN
+        ));
+        assert!(
+            received.is_empty(),
+            "a refused banned caller is not re-reported"
+        );
+        assert!(matches!(
+            guarded(&guard, bystander, "live-key"),
+            AdmissionResolution::Configure(_)
+        ));
+        // A valid key or a malformed request is not a guess.
+        assert!(rejected_with(
+            &guarded(&guard, bystander, ""),
+            RejectionReason::BAD_MODE
+        ));
+        assert!(received.is_empty());
+        // A read-mode guess counts in the read scope.
+        assert!(rejected_with(
+            &guarded(&guard, bystander, "#!::r=guess,m=request"),
+            RejectionReason::UNAUTHORIZED
+        ));
+        assert!(matches!(
+            received.try_recv(),
+            Ok((RateLimitScope::SrtRead, ip)) if ip == bystander
+        ));
+    }
+
+    /// A full report channel drops the report (counted) rather than block
+    /// the Owner thread; the rejection itself is unchanged.
+    #[test]
+    fn a_full_report_channel_counts_the_dropped_guess() {
+        let (guard, received) = guard(3, 1);
+        let attacker: IpAddr = "192.0.2.7".parse().unwrap();
+        for _ in 0..3 {
+            assert!(rejected_with(
+                &guarded(&guard, attacker, "guess"),
+                RejectionReason::UNAUTHORIZED
+            ));
+        }
+        assert_eq!(received.len(), 1);
+        assert_eq!(
+            guard
+                .stats
+                .ingress_owner
+                .auth_failures_dropped
+                .load(Ordering::Relaxed),
+            2
+        );
     }
 }

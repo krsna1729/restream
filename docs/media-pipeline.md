@@ -461,8 +461,15 @@ lifecycle and probe events (dotted).
 
 - **Admission.** The resolver runs on the owner
   (`crates/restream-engine/src/srt/ingress_admission.rs`).
-  An empty key is `BAD_MODE`, an unknown key `UNAUTHORIZED`, a bad crypto or
-  group mode `BAD_REQUEST`. It applies the input's latency and encryption.
+  A caller IP banned in either SRT scope is `FORBIDDEN` before any lookup
+  (a non-blocking check; a contended ban table answers "not banned"). An
+  empty key is `BAD_MODE`, an unknown key `UNAUTHORIZED`, a bad crypto or
+  group mode `BAD_REQUEST`. An unknown key is a failed guess: the owner
+  queues it (256, shared, lossy, `authFailuresDropped`) and Tokio records it
+  against the caller IP like any failed SRT authentication. That is safe
+  only because srt-rs answers INDUCTION statelessly behind a keyed SYN
+  cookie, so a CONCLUSION comes from an address that received the
+  listener's reply. It applies the input's latency and encryption.
   Tokio then checks IP bans, pipeline authentication, duplicate publishers and
   read targets; a rejection disconnects that peer.
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,

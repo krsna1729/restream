@@ -18,6 +18,7 @@ async fn native_peer() -> IngressPeer {
             &[plain("review-queue")],
         )),
         receiver_group: ReceiverGroupId::generate(),
+        admission_guard: AdmissionGuard::detached(Arc::new(ListenerSocketStats::default())),
         stats: Arc::new(ListenerSocketStats::default()),
         command_capacity: 2,
         event_capacity: 4,
