@@ -91,14 +91,17 @@ impl PipelineAccessAuthenticator for TestAuth {
     }
 }
 
-/// `TestAuth` whose answers for the gated keys wait until [`GatedAuth::open`]:
-/// the production shape of a stalled pipeline lookup (pool contention, a WAL
-/// checkpoint, a disk stall). `completed` counts gated lookups that returned,
-/// so a lookup dropped before the gate opened is distinguishable.
+/// `TestAuth` whose answers for the gated keys wait at a gate: the
+/// production shape of a stalled pipeline lookup (pool contention, a WAL
+/// checkpoint, a disk stall). [`GatedAuth::release`] lets waiting lookups
+/// through one at a time in arrival order; [`GatedAuth::open`] lets all
+/// through for good. `completed` counts gated lookups that returned, so a
+/// lookup dropped before the gate opened is distinguishable.
 pub(super) struct GatedAuth {
     inner: Arc<TestAuth>,
     gated: HashSet<String>,
-    open: tokio::sync::watch::Sender<bool>,
+    /// FIFO; closed means open.
+    gate: tokio::sync::Semaphore,
     entered: AtomicUsize,
     completed: AtomicUsize,
 }
@@ -108,14 +111,19 @@ impl GatedAuth {
         Arc::new(Self {
             inner: TestAuth::new(keys),
             gated: gated.iter().map(|key| (*key).to_string()).collect(),
-            open: tokio::sync::watch::Sender::new(false),
+            gate: tokio::sync::Semaphore::new(0),
             entered: AtomicUsize::new(0),
             completed: AtomicUsize::new(0),
         })
     }
 
     pub(super) fn open(&self) {
-        self.open.send_replace(true);
+        self.gate.close();
+    }
+
+    /// Let the `lookups` longest-waiting gated lookups answer.
+    pub(super) fn release(&self, lookups: usize) {
+        self.gate.add_permits(lookups);
     }
 
     pub(super) fn entered(&self) -> usize {
@@ -137,8 +145,9 @@ impl PipelineAccessAuthenticator for GatedAuth {
         Box::pin(async move {
             if self.gated.contains(stream_key) {
                 self.entered.fetch_add(1, Ordering::SeqCst);
-                let mut open = self.open.subscribe();
-                let _ = open.wait_for(|open| *open).await;
+                if let Ok(permit) = self.gate.acquire().await {
+                    permit.forget();
+                }
                 self.completed.fetch_add(1, Ordering::SeqCst);
             }
             self.inner.authenticate(mode, stream_key, client_ip).await

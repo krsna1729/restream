@@ -26,7 +26,7 @@ pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
 use admission::Admissions;
 #[cfg(test)]
-pub(super) use admission::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_IP, MAX_ADMISSIONS_PER_KEY};
+pub(super) use admission::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_KEY};
 
 use super::calls::CallSupervisor;
 use super::ingress_admission::{AUTH_FAILURE_CAPACITY, AdmissionGuard, ReceiverGroupId};
@@ -172,7 +172,7 @@ impl SrtServer {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
         let mut calls: CallSupervisor = CallSupervisor::new();
-        let mut admissions = Admissions::default();
+        let mut admissions = Admissions::new(self.engine.config.srt_max_peers_per_ip);
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;

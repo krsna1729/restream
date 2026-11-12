@@ -1,19 +1,28 @@
 //! Off-loop SRT admission. A connect's ban check, pipeline lookup and
 //! publisher/reader registration run as one task per peer, so a stalled
-//! lookup or a contended engine lock delays only that peer, never the shared
-//! session loop that serves every tenant's connects, disconnects, probe
-//! answers and telemetry.
+//! lookup or a contended registration delays only that peer's admission, not
+//! the shared session loop. Only these moved off the loop: probe
+//! application, `finish_publisher`, telemetry folding and deleted-pipeline
+//! checks still await engine locks on it (backlog Q-124).
 //!
 //! A task is never aborted: `start_publisher` registers the ingest before it
 //! returns, and an abort after that point would leave the key locked as a
-//! duplicate publisher. A peer that disconnects meanwhile is only unmarked;
-//! its task runs to completion and the loop finishes what it registered.
+//! duplicate publisher. A peer that disconnects meanwhile is marked as gone:
+//! its task registers nothing once its lookup returns, finishes a
+//! registration that raced the mark itself, and the loop finishes anything
+//! that raced even that, so a reconnect on the same key is not refused as a
+//! duplicate.
+//!
+//! Publishers and readers of one key are admitted concurrently, so a reader
+//! whose task overtakes its publisher's registration is refused with "no
+//! active ingest" and retries.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::task::{Id, JoinError, JoinSet};
@@ -29,14 +38,11 @@ use crate::srt_stream_id::{ParsedStreamId, SrtConnectionMode, parse_srt_stream_i
 /// Deadline for the pipeline lookup only: dropping it has no side effect.
 /// Registration is never timed (see the module docs).
 pub(in crate::srt) const AUTH_DEADLINE: Duration = Duration::from_secs(5);
-/// In-flight admissions per client IP, counting tasks whose peer already left.
-pub(in crate::srt) const MAX_ADMISSIONS_PER_IP: usize = 8;
 /// In-flight publish admissions per parsed stream key (one pipeline, the
-/// tenant), counted the same way: caps one pipeline's reconnect churn from
-/// many IPs. Readers are not counted, so a viewer burst on a key is admitted.
+/// tenant), counting tasks whose peer already left: caps one pipeline's
+/// reconnect churn from many IPs. Readers are not counted, so a viewer burst
+/// on a key is admitted.
 pub(in crate::srt) const MAX_ADMISSIONS_PER_KEY: usize = 4;
-/// In-flight admissions per listener, counted the same way.
-const MAX_ADMISSIONS: usize = 256;
 
 /// What an admission task produced, for the session loop to apply.
 pub(super) enum Admitted {
@@ -62,19 +68,47 @@ struct InFlight {
     publish_key: Option<String>,
 }
 
-#[derive(Default)]
+/// A still-connected admitting peer: its task, and the mark `abandon` sets.
+struct Pending {
+    task: Id,
+    gone: Arc<AtomicBool>,
+}
+
+/// In-flight admissions and their bounds. The caps bound tasks whose peer
+/// already left, the one thing the Owner's own peer limits cannot: while a
+/// peer is connected the Owner already counts it. So they equal those
+/// limits.
 pub(super) struct Admissions {
     tasks: JoinSet<Admitted>,
-    /// Admitting peers that are still connected, with their task. A
-    /// disconnect removes the entry; that is the only cancellation.
-    pending: HashMap<IngressPeer, Id>,
+    /// Admitting peers that are still connected. A disconnect removes the
+    /// entry and marks the task; that is the only cancellation.
+    pending: HashMap<IngressPeer, Pending>,
     /// Every unjoined task, including those whose peer already left.
     in_flight: HashMap<Id, InFlight>,
     per_ip: HashMap<IpAddr, usize>,
     per_publish_key: HashMap<String, usize>,
+    /// The Owner's peers per client IP (`RESTREAM_SRT_MAX_PEERS_PER_IP`).
+    max_per_ip: usize,
+    /// The Owner's peer table size (srt-rs `PeerTableConfig::max_peers`,
+    /// which the ingress listener leaves at its default).
+    max_total: usize,
 }
 
 impl Admissions {
+    pub(super) fn new(max_peers_per_ip: usize) -> Self {
+        let max_total = srt_transport::advanced::admission::PeerTableConfig::default().max_peers;
+        Self {
+            tasks: JoinSet::new(),
+            pending: HashMap::new(),
+            in_flight: HashMap::new(),
+            per_ip: HashMap::new(),
+            per_publish_key: HashMap::new(),
+            // The same clamp the listener applies to its own per-IP limit.
+            max_per_ip: max_peers_per_ip.clamp(1, max_total),
+            max_total,
+        }
+    }
+
     fn for_ip(&self, ip: &IpAddr) -> usize {
         self.per_ip.get(ip).copied().unwrap_or(0)
     }
@@ -84,9 +118,9 @@ impl Admissions {
     }
 
     fn has_room(&self, ip: &IpAddr, publish_key: Option<&str>) -> bool {
-        self.for_ip(ip) < MAX_ADMISSIONS_PER_IP
+        self.for_ip(ip) < self.max_per_ip
             && publish_key.is_none_or(|key| self.for_publish_key(key) < MAX_ADMISSIONS_PER_KEY)
-            && self.tasks.len() < MAX_ADMISSIONS
+            && self.tasks.len() < self.max_total
     }
 
     fn spawn(
@@ -94,16 +128,17 @@ impl Admissions {
         peer: IngressPeer,
         ip: IpAddr,
         publish_key: Option<String>,
+        gone: Arc<AtomicBool>,
         admission: impl Future<Output = Admitted> + Send + 'static,
     ) {
-        let id = self.tasks.spawn(admission).id();
-        self.pending.insert(peer, id);
+        let task = self.tasks.spawn(admission).id();
+        self.pending.insert(peer, Pending { task, gone });
         *self.per_ip.entry(ip).or_default() += 1;
         if let Some(key) = &publish_key {
             *self.per_publish_key.entry(key.clone()).or_default() += 1;
         }
         self.in_flight.insert(
-            id,
+            task,
             InFlight {
                 peer,
                 ip,
@@ -112,9 +147,12 @@ impl Admissions {
         );
     }
 
-    /// The peer disconnected: its task still completes, but nothing attaches.
+    /// The peer disconnected: its task still completes, but registers nothing
+    /// past this point and nothing attaches.
     pub(super) fn abandon(&mut self, peer: &IngressPeer) {
-        self.pending.remove(peer);
+        if let Some(pending) = self.pending.remove(peer) {
+            pending.gone.store(true, Ordering::Release);
+        }
     }
 
     /// The next finished task. Cancel safe: everything after the join is
@@ -145,7 +183,7 @@ impl Admissions {
             release(&mut self.per_publish_key, key);
         }
         match self.pending.entry(peer) {
-            Entry::Occupied(pending) if *pending.get() == id => Some(pending.remove_entry().0),
+            Entry::Occupied(pending) if pending.get().task == id => Some(pending.remove_entry().0),
             _ => None,
         }
     }
@@ -189,25 +227,27 @@ impl SrtServer {
             warn!(
                 peer = %peer,
                 in_flight_for_ip = admissions.for_ip(&ip),
-                in_flight_for_stream = admissions.for_publish_key(&parsed.stream_key),
+                in_flight_for_stream = publish_key.map(|key| admissions.for_publish_key(key)),
                 in_flight = admissions.tasks.len(),
                 "refusing SRT peer: too many admissions in flight"
             );
             return ingress.disconnect(logical_peer);
         }
         let publish_key = publish_key.cloned();
-        admissions.spawn(
-            logical_peer,
-            ip,
-            publish_key,
-            self.clone().admit(peer, parsed),
-        );
+        let gone = Arc::new(AtomicBool::new(false));
+        let admission = self.clone().admit(peer, parsed, gone.clone());
+        admissions.spawn(logical_peer, ip, publish_key, gone, admission);
         Ok(())
     }
 
     /// The admission task: IP bans, the pipeline lookup (under its deadline),
-    /// then publisher or reader registration.
-    async fn admit(self: Arc<Self>, peer: SocketAddr, parsed: ParsedStreamId) -> Admitted {
+    /// then publisher or reader registration, unless the peer is `gone`.
+    async fn admit(
+        self: Arc<Self>,
+        peer: SocketAddr,
+        parsed: ParsedStreamId,
+        gone: Arc<AtomicBool>,
+    ) -> Admitted {
         let client_ip = peer.ip().to_string();
         let access_mode = match parsed.mode {
             SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
@@ -242,12 +282,21 @@ impl SrtServer {
                 return Admitted::Rejected;
             }
         };
+        // A registration for a peer that already left is never needed, and
+        // until it is finished a reconnect on the key is a duplicate.
+        if gone.load(Ordering::Acquire) {
+            return Admitted::Rejected;
+        }
         match parsed.mode {
             SrtConnectionMode::Publish => {
                 match self
                     .start_publisher(peer, pipeline, parsed.stream_key)
                     .await
                 {
+                    Ok((session, _media)) if gone.load(Ordering::Acquire) => {
+                        self.finish_publisher(session).await;
+                        Admitted::Rejected
+                    }
                     Ok((session, media)) => Admitted::Publish(session, media),
                     Err(error) => {
                         warn!(peer = %peer, %error, "rejecting SRT publisher");

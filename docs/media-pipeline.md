@@ -471,23 +471,32 @@ lifecycle and probe events (dotted).
   cookie, so a CONCLUSION comes from an address that received the
   listener's reply. It applies the input's latency and encryption.
   Tokio then checks IP bans, pipeline authentication, duplicate publishers and
-  read targets; a rejection disconnects that peer. These run off the session
-  loop, one task per connecting peer
+  read targets; a rejection disconnects that peer. The lookup and the
+  registration run off the session loop, one task per connecting peer
   (`crates/restream-engine/src/srt/tokio_ingress/admission.rs`), so a slow
-  pipeline lookup or a contended engine lock delays only that peer, never
-  other tenants' connects, disconnects, probe answers or telemetry. The
-  lookup has a 5 s deadline (expiry disconnects the peer); registration has
-  none. At most 8 admissions per client IP, 4 publish admissions per stream
-  key (one pipeline: its reconnect churn from many IPs; readers are not
-  counted, so a viewer burst is admitted) and 256 per listener are in flight,
-  counting tasks whose peer already left; a peer over any bound is
-  disconnected at once without a lookup (logged at warn). A task is never
-  aborted, because registration precedes its result: a peer that disconnects
-  meanwhile is only unmarked, and the loop finishes whatever its task
-  registered. Listener exit waits for every in-flight admission and finishes
-  late registrations, so a restart on the same engine never finds the key
-  held as a duplicate publisher. A panicking admission task is counted as a
-  contained panic and its peer disconnected.
+  lookup or a contended registration delays only that peer's admission.
+  Probe application, publisher teardown (`finish_publisher`), telemetry
+  folding and deleted-pipeline checks still await engine locks on the loop
+  ([Q-124](backlog.md#q-124-correctness-opus-the-isolation-audit-covers-the-control-plane)).
+  The lookup has a 5 s deadline (expiry disconnects the peer); registration
+  has none. In flight are at most `RESTREAM_SRT_MAX_PEERS_PER_IP` admissions
+  per client IP and the Owner's peer table size (srt-rs `max_peers`, 4096)
+  per listener, the Owner's own peer limits, plus 4 publish admissions per
+  stream key (one pipeline: its reconnect churn from many IPs; readers are
+  not counted, so a viewer burst is admitted). Tasks whose peer already left
+  count, which is what the caps bound: a connected peer is already counted
+  by the Owner. A peer over any bound is disconnected at once without a
+  lookup (logged at warn). A task is never aborted, because registration
+  precedes its result. A peer that disconnects meanwhile is marked gone: its
+  task registers nothing once its lookup answers and finishes a registration
+  that raced the mark itself, and the loop finishes anything that raced even
+  that, so a reconnect on the same key is not refused as a duplicate.
+  Listener exit waits for every in-flight admission and finishes late
+  registrations, so a restart on the same engine never finds the key held as
+  a duplicate publisher. A panicking admission task is counted as a
+  contained panic and its peer disconnected. A reader admitted concurrently
+  with its publisher can overtake the publisher's registration; it is
+  refused with "no active ingest" and retries.
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
