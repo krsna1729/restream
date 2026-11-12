@@ -139,6 +139,10 @@ impl MediaEngine {
     /// optional probe fields. Selection, registration replacement and origin
     /// resolution share this lock: an old attempt can neither clear a new
     /// session's metadata nor resize/change its selected ring.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`selection_lock` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    )]
     pub(crate) async fn replace_ingest_session_tracks(
         &self,
         registration: &IngestRegistration,

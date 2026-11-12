@@ -7,6 +7,24 @@
 //! as stage or HLS lookups. Lifecycle paths that must touch more than one
 //! registry keep the critical section short and avoid calling out while guards
 //! are live.
+//!
+//! Tokio's `RwLock` is fair: once a writer waits, new readers queue behind it.
+//! A task that holds a guard and then asks for the same lock again, or for a
+//! lock some writer holds while it waits on the first, deadlocks with that
+//! writer. The few sections that must hold more than one guard take them in
+//! one order per registry, and never the reverse:
+//!
+//! - ingest: `selection_lock` -> `cancel_tokens` -> `sessions` ->
+//!   `selected_inputs` -> `active` (`ingests.active` is read inside egress
+//!   unregistration with `try_read` only);
+//! - egress: `retry` -> `cancel_tokens` -> `active`;
+//! - stage: `runtimes` -> `metrics` -> `lifecycles`;
+//! - file ingest: `ingests.sessions` -> one of `children`, `active`,
+//!   `positions`; `children` and `active` are never held together.
+//!
+//! `clippy::await_holding_invalid_type` (`clippy.toml`) flags every tokio
+//! guard held across an await; each such section carries an `#[expect]`
+//! naming its order.
 
 use arc_swap::ArcSwapOption;
 use std::collections::{HashMap, HashSet};

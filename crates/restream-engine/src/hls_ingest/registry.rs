@@ -608,6 +608,10 @@ impl HlsIngest {
             .map(|handle| (handle.attempt_id, handle.objects.clone()))
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the key's start lock serializes only this key's session start (re-authorization and registration, below); other keys start in parallel"
+    )]
     async fn session_for(
         self: &Arc<Self>,
         pipeline: &AuthenticatedPipeline,

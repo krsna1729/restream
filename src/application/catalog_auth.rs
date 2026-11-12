@@ -276,6 +276,10 @@ impl CatalogAuth {
     /// lock and before the query, so the load starts after every write counted
     /// up to it committed; a later ticket that `covered` already reaches needs
     /// no load of its own.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`reloads` serializes reloads across the inputs query by design; only the reload path takes it, connects read the snapshot"
+    )]
     async fn reload(&self, ticket: u64) -> Result<(), PipelineStoreError> {
         let _one_at_a_time = self.reloads.lock().await;
         if self.covered.load(Ordering::SeqCst) >= ticket {

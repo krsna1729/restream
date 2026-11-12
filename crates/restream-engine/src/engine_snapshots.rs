@@ -68,26 +68,40 @@ impl MediaEngine {
     }
 
     pub async fn hls_dependency_snapshot(&self, pipeline_id: &str) -> HlsDependencySnapshot {
-        let consumers = self.hls.consumers.read().await;
-        let stores = self.hls.preview_stores.read().await;
         let preview_key = hls_preview_registry_key(pipeline_id);
-
-        let consumer = consumers.get(&preview_key);
-        let store = stores.get(&preview_key);
+        // One map at a time, never nested (module docs of `engine_registries`).
+        let (active, persistent_consumers, last_access_age_ms) = {
+            let consumers = self.hls.consumers.read().await;
+            let consumer = consumers.get(&preview_key);
+            (
+                consumer.is_some_and(|consumer| !consumer.cancel_token.is_cancelled()),
+                consumer
+                    .map(crate::engine_hls::HlsConsumers::persistent_count)
+                    .unwrap_or(0),
+                consumer.map(|consumer| {
+                    let now = consumer.reference_instant.elapsed().as_millis() as u64;
+                    let last = consumer.last_access_ms.load(Ordering::Relaxed);
+                    now.saturating_sub(last)
+                }),
+            )
+        };
+        let (store_exists, segments, playlist_bytes) = {
+            let stores = self.hls.preview_stores.read().await;
+            let store = stores.get(&preview_key);
+            (
+                store.is_some(),
+                store.map(|store| store.segment_count()).unwrap_or(0),
+                store.map(|store| store.primary_playlist_len()).unwrap_or(0),
+            )
+        };
 
         HlsDependencySnapshot {
-            store_exists: store.is_some(),
-            active: consumer.is_some_and(|consumer| !consumer.cancel_token.is_cancelled()),
-            persistent_consumers: consumer
-                .map(crate::engine_hls::HlsConsumers::persistent_count)
-                .unwrap_or(0),
-            last_access_age_ms: consumer.map(|consumer| {
-                let now = consumer.reference_instant.elapsed().as_millis() as u64;
-                let last = consumer.last_access_ms.load(Ordering::Relaxed);
-                now.saturating_sub(last)
-            }),
-            segments: store.map(|store| store.segment_count()).unwrap_or(0),
-            playlist_bytes: store.map(|store| store.primary_playlist_len()).unwrap_or(0),
+            store_exists,
+            active,
+            persistent_consumers,
+            last_access_age_ms,
+            segments,
+            playlist_bytes,
         }
     }
 

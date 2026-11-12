@@ -81,6 +81,10 @@ impl MediaEngine {
         .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `cancel_tokens` -> `active` (module docs of `engine_registries`): the token and the entry are inserted under both guards"
+    )]
     pub async fn register_egress_attempt_with_meta(
         &self,
         output_id: &str,
@@ -191,38 +195,49 @@ impl MediaEngine {
         ids.into_iter().collect()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `cancel_tokens` -> `active` (module docs of `engine_registries`); both are released before the muxer and `recent` awaits"
+    )]
     pub async fn unregister_egress(&self, output_id: &str) {
         let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let mut tokens = self.egresses.cancel_tokens.write().await;
-        if let Some(token) = tokens.remove(output_id) {
-            token.cancel();
-        }
+        let (release_srt_muxer, pipeline_id, recent_outcome) = {
+            let mut tokens = self.egresses.cancel_tokens.write().await;
+            if let Some(token) = tokens.remove(output_id) {
+                token.cancel();
+            }
 
-        let mut egresses = self.egresses.active.write().await;
-        let release_srt_muxer = egresses.get(output_id).and_then(|egress| {
-            (egress.protocol == "srt").then(|| {
-                (
-                    egress.pipeline_id.clone(),
-                    egress.encoding.clone(),
-                    egress.attempt_id,
+            let mut egresses = self.egresses.active.write().await;
+            let release_srt_muxer = egresses.get(output_id).and_then(|egress| {
+                (egress.protocol == "srt").then(|| {
+                    (
+                        egress.pipeline_id.clone(),
+                        egress.encoding.clone(),
+                        egress.attempt_id,
+                    )
+                })
+            });
+            let pipeline_id = egresses
+                .get(output_id)
+                .map(|e| e.pipeline_id.clone())
+                .unwrap_or_default();
+            let recent_outcome = egresses.get(output_id).map(|egress| {
+                let has_ingest = self
+                    .ingests
+                    .active
+                    .try_read()
+                    .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
+                    .unwrap_or(false);
+                Self::build_recent_egress_outcome(
+                    previous_recent.as_ref(),
+                    egress,
+                    has_ingest,
+                    true,
                 )
-            })
-        });
-        let pipeline_id = egresses
-            .get(output_id)
-            .map(|e| e.pipeline_id.clone())
-            .unwrap_or_default();
-        let recent_outcome = egresses.get(output_id).map(|egress| {
-            let has_ingest = self
-                .ingests
-                .active
-                .try_read()
-                .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
-                .unwrap_or(false);
-            Self::build_recent_egress_outcome(previous_recent.as_ref(), egress, has_ingest, true)
-        });
-        egresses.remove(output_id);
-        drop(egresses);
+            });
+            egresses.remove(output_id);
+            (release_srt_muxer, pipeline_id, recent_outcome)
+        };
 
         if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
             self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
@@ -247,47 +262,53 @@ impl MediaEngine {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `cancel_tokens` -> `active` (module docs of `engine_registries`); both are released before the muxer and `recent` awaits"
+    )]
     pub async fn unregister_egress_if_current(
         &self,
         output_id: &str,
         registration: &EgressRegistration,
     ) -> bool {
         let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let mut tokens = self.egresses.cancel_tokens.write().await;
-        let mut egresses = self.egresses.active.write().await;
-        let Some(active) = egresses.get(output_id) else {
-            return false;
+        let (release_srt_muxer, pipeline_id, outcome) = {
+            let mut tokens = self.egresses.cancel_tokens.write().await;
+            let mut egresses = self.egresses.active.write().await;
+            let Some(active) = egresses.get(output_id) else {
+                return false;
+            };
+            if active.attempt_id != registration.attempt_id {
+                return false;
+            }
+
+            if let Some(token) = tokens.remove(output_id) {
+                token.cancel();
+            }
+
+            let release_srt_muxer = (active.protocol == "srt").then(|| {
+                (
+                    active.pipeline_id.clone(),
+                    active.encoding.clone(),
+                    active.attempt_id,
+                )
+            });
+            let pipeline_id = active.pipeline_id.clone();
+            let has_ingest = self
+                .ingests
+                .active
+                .try_read()
+                .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
+                .unwrap_or(false);
+            let outcome = Self::build_recent_egress_outcome(
+                previous_recent.as_ref(),
+                active,
+                has_ingest,
+                registration.cancel_token.is_cancelled(),
+            );
+            egresses.remove(output_id);
+            (release_srt_muxer, pipeline_id, outcome)
         };
-        if active.attempt_id != registration.attempt_id {
-            return false;
-        }
-
-        if let Some(token) = tokens.remove(output_id) {
-            token.cancel();
-        }
-
-        let release_srt_muxer = (active.protocol == "srt").then(|| {
-            (
-                active.pipeline_id.clone(),
-                active.encoding.clone(),
-                active.attempt_id,
-            )
-        });
-        let pipeline_id = active.pipeline_id.clone();
-        let has_ingest = self
-            .ingests
-            .active
-            .try_read()
-            .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
-            .unwrap_or(false);
-        let outcome = Self::build_recent_egress_outcome(
-            previous_recent.as_ref(),
-            active,
-            has_ingest,
-            registration.cancel_token.is_cancelled(),
-        );
-        egresses.remove(output_id);
-        drop(egresses);
 
         if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
             self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
@@ -468,6 +489,10 @@ impl MediaEngine {
         self.egresses.recent.read().await.get(output_id).cloned()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `retry` -> `active` (module docs of `engine_registries`), held across the active check on purpose (below)"
+    )]
     pub async fn update_egress_retry_state(
         &self,
         output_id: &str,
@@ -498,6 +523,10 @@ impl MediaEngine {
         );
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `retry` -> `active` (module docs of `engine_registries`), held across the current-attempt check on purpose (below)"
+    )]
     pub async fn update_egress_retry_state_if_current(
         &self,
         output_id: &str,

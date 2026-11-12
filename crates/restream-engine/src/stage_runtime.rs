@@ -77,52 +77,56 @@ impl StageRuntimeManager {
         let mut metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
 
         // Single write-lock acquisition to atomically check-and-insert, avoiding
-        // the TOCTOU race where two callers create duplicate stages.
-        let mut runtimes = self.engine.stages.runtimes.write().await;
-        if let Some(runtime) = runtimes.get(&key)
-            && !runtime.cancel.is_cancelled()
-            && let Some(ring) = runtime.ring.as_ref()
-            && let Some(lease) = StageLease::upgrade(&runtime.lease)
-        {
-            return (
-                StageHandle {
-                    key,
-                    ring: ring.clone(),
-                    cancel: runtime.cancel.clone(),
-                    lifecycle: runtime.lifecycle.clone(),
-                    metrics: runtime.metrics.clone(),
-                },
-                lease,
-                false,
-            );
-        }
+        // the TOCTOU race where two callers create duplicate stages. The
+        // guard is released before any await-heavy setup.
+        let (output_ring, cancel, lease) = {
+            let mut runtimes = self.engine.stages.runtimes.write().await;
+            if let Some(runtime) = runtimes.get(&key)
+                && !runtime.cancel.is_cancelled()
+                && let Some(ring) = runtime.ring.as_ref()
+                && let Some(lease) = StageLease::upgrade(&runtime.lease)
+            {
+                return (
+                    StageHandle {
+                        key,
+                        ring: ring.clone(),
+                        cancel: runtime.cancel.clone(),
+                        lifecycle: runtime.lifecycle.clone(),
+                        metrics: runtime.metrics.clone(),
+                    },
+                    lease,
+                    false,
+                );
+            }
 
-        if runtimes.contains_key(&key) {
-            // Replacing a stage that ended (or lost its last lease): the
-            // helpers above returned its lifecycle and metrics, which must
-            // not carry over to the new backend.
-            lifecycle = Arc::new(StageLifecycle::new_with_backend(
-                StagePhase::Registered,
-                backend_kind,
-            ));
-            metrics = Arc::new(StageMetrics::new());
-        }
-        let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
-        let cancel = CancellationToken::new();
-        let lease = StageLease::runtime(&self.engine, key.clone(), cancel.clone());
-        runtimes.insert(
-            key.clone(),
-            StageRuntime {
-                ring: Some(output_ring.clone()),
-                cancel: cancel.clone(),
-                lifecycle: lifecycle.clone(),
-                metrics: metrics.clone(),
-                pipe_metrics: None,
-                lease: lease.downgrade(),
-                lease_id: lease.id(),
-            },
-        );
-        drop(runtimes); // release write locks before any await-heavy setup
+            if runtimes.contains_key(&key) {
+                // Replacing a stage that ended (or lost its last lease): the
+                // helpers above returned its lifecycle and metrics, which must
+                // not carry over to the new backend.
+                lifecycle = Arc::new(StageLifecycle::new_with_backend(
+                    StagePhase::Registered,
+                    backend_kind,
+                ));
+                metrics = Arc::new(StageMetrics::new());
+            }
+            let output_ring =
+                Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
+            let cancel = CancellationToken::new();
+            let lease = StageLease::runtime(&self.engine, key.clone(), cancel.clone());
+            runtimes.insert(
+                key.clone(),
+                StageRuntime {
+                    ring: Some(output_ring.clone()),
+                    cancel: cancel.clone(),
+                    lifecycle: lifecycle.clone(),
+                    metrics: metrics.clone(),
+                    pipe_metrics: None,
+                    lease: lease.downgrade(),
+                    lease_id: lease.id(),
+                },
+            );
+            (output_ring, cancel, lease)
+        };
 
         self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
             .await;

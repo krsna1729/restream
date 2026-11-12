@@ -1,6 +1,8 @@
 //! End-to-end integration harness that drives RTMP, SRT, HLS, and API flows
 //! against a running restream instance for higher-level verification.
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
+// Unit tests park tasks behind held guards on purpose.
+#![cfg_attr(test, allow(clippy::await_holding_invalid_type))]
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, OriginalUri, State};

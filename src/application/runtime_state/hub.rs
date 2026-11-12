@@ -217,6 +217,10 @@ impl StateHub {
     }
 
     /// Rebuilds from the rows and the engine and publishes the change.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`refreshing` serializes rebuilds across the read transaction by design; only observability readers wait on it"
+    )]
     pub async fn refresh(&self, pool: &SqlitePool, engine: &MediaEngine) {
         let mut last = self.refreshing.lock().await;
         self.rebuild(&mut last, pool, engine).await;
@@ -226,6 +230,10 @@ impl StateHub {
     /// the last rebuild completed less than [`ON_DEMAND_REUSE`] ago and no
     /// change was marked since. Requests queued behind a rebuild find it
     /// fresh and return at once.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`refreshing` serializes rebuilds across the read transaction by design; only observability readers wait on it"
+    )]
     pub async fn refresh_on_demand(&self, pool: &SqlitePool, engine: &MediaEngine) {
         let mut last = self.refreshing.lock().await;
         if !last.covers(Instant::now(), self.changes.load(Ordering::Acquire)) {

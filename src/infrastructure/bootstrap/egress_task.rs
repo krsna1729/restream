@@ -917,6 +917,10 @@ impl EgressTask {
         input_lease.finish(IngestEnd::Released).await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `last_failed` -> engine egress registry: the failure is recorded under `last_failed` before the egress stop event can wake the reconciler; no I/O runs under it"
+    )]
     async fn reject_unsupported_url(&self) {
         let ended_at = chrono::Utc::now().to_rfc3339();
         let _ = crate::db::update_job(

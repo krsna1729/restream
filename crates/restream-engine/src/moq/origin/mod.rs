@@ -429,6 +429,10 @@ impl Origin {
     /// broadcast and closes the old one. A pipeline the engine does not know
     /// (deleted after the token was minted) is refused rather than given a
     /// new ring.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`attach_lock` (this origin's, order: before `selection_lock`) serializes generation changes across the pipeline resolution"
+    )]
     async fn attach(self: Rc<Self>, pipeline_id: &str) -> Result<Rc<Served>, String> {
         let _guard = self.attach_lock.lock().await;
         let (ring, startup) = resolve_pipeline(&self.engine, pipeline_id)
@@ -457,6 +461,10 @@ impl Origin {
     /// Re-resolve a generation's track set after its ring or the pipeline's
     /// media changed. A difference installs the next generation and closes
     /// this one; losing every track closes it without a replacement.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`attach_lock` (this origin's, order: before `selection_lock`) serializes generation changes across the pipeline resolution"
+    )]
     async fn revalidate(self: Rc<Self>, pipeline_id: &str, generation: u64) {
         let _guard = self.attach_lock.lock().await;
         let Some(current) = self.served.borrow().get(pipeline_id).cloned() else {
@@ -580,6 +588,10 @@ impl Origin {
 /// ingest but a session or disconnect record means nothing is feeding the
 /// ring, so no track survives. Same-session SRT PMT changes replace the ring's
 /// track metadata and clear removed decoder configurations.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "`selection_lock` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+)]
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,

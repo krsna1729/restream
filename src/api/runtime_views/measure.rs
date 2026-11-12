@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use super::telemetry::{delivery_input, feed_delivery};
 use restream_engine::engine::MediaEngine;
+use std::collections::HashSet;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,22 +63,30 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         .map(|ring| ring.payload_stats().payload_bytes as u64)
         .sum::<u64>();
     let (stages, active_transcoder_buffers, transcoder_ring_payload_bytes) = {
-        // One read of `runtimes` for every stage field, so they agree within
-        // a sample. `metrics` nests inside it; no writer takes them reversed.
-        let runtimes = engine.stages.runtimes.read().await;
-        let metrics = engine.stages.metrics.read().await;
-        let stages = runtimes.len()
-            + metrics
-                .keys()
-                .filter(|key| !runtimes.contains_key(*key))
-                .count();
-        drop(metrics);
-        let ring_bytes = runtimes
-            .values()
-            .filter_map(|runtime| runtime.ring.as_ref())
-            .map(|ring| ring.payload_stats().payload_bytes as u64)
-            .sum::<u64>();
-        (stages, runtimes.len(), ring_bytes)
+        // One map at a time, never nested. A stage counts once: by its
+        // runtime, or by its side-map metrics when it has no runtime.
+        let (runtime_keys, ring_bytes) = {
+            let runtimes = engine.stages.runtimes.read().await;
+            let ring_bytes = runtimes
+                .values()
+                .filter_map(|runtime| runtime.ring.as_ref())
+                .map(|ring| ring.payload_stats().payload_bytes as u64)
+                .sum::<u64>();
+            (runtimes.keys().cloned().collect::<HashSet<_>>(), ring_bytes)
+        };
+        let side_only = engine
+            .stages
+            .metrics
+            .read()
+            .await
+            .keys()
+            .filter(|key| !runtime_keys.contains(*key))
+            .count();
+        (
+            runtime_keys.len() + side_only,
+            runtime_keys.len(),
+            ring_bytes,
+        )
     };
     let ts_muxer_ring_payload_bytes = engine
         .stages

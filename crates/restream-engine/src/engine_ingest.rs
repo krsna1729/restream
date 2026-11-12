@@ -39,6 +39,10 @@ impl MediaEngine {
     /// Registers one attempt on `input_id`, unless a live attempt holds it.
     /// The returned lease ends the attempt: by `finish`, or on drop through
     /// the engine's release task.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `selection_lock` -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `engine_registries`); every write guard is taken before the first insert (below)"
+    )]
     pub async fn try_register_pipeline_input_attempt(
         self: &Arc<Self>,
         pipeline_id: &str,
@@ -214,6 +218,10 @@ impl MediaEngine {
         crate::ingest_lease::release_backlog(self, &self.ingests.releases).await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`selection_lock` serializes the selection; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    )]
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
         let _selection = self.ingests.selection_lock.lock().await;
         let previous = self.ingests.active.read().await.get(pipeline_id).cloned();
@@ -306,6 +314,10 @@ impl MediaEngine {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`preview_lock` serializes preview-ring creation; under it `sessions` and `preview_slots` are read one at a time"
+    )]
     pub async fn ensure_input_preview_ring(&self, input_id: &str) -> Option<Arc<RingBuffer>> {
         let _preview = self.ingests.preview_lock.lock().await;
         let ingest = self.ingests.sessions.read().await.get(input_id).cloned()?;
@@ -394,6 +406,10 @@ impl MediaEngine {
             .insert(pipeline_id.to_string(), snapshot);
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`selection_lock` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    )]
     pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
         pipeline_id: &str,
@@ -462,6 +478,10 @@ impl MediaEngine {
             .await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "`selection_lock` serializes the release; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    )]
     async fn release_ingest_sessions(
         &self,
         pipeline_id: &str,
@@ -549,6 +569,10 @@ impl MediaEngine {
     /// either whole (a retry ends it) or gone with its token cancelled, never
     /// a session removed with its token still live (the input then refused
     /// as a duplicate forever, the retry finding nothing to end).
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `selection_lock` -> `cancel_tokens` -> `sessions` -> `active` (module docs of `engine_registries`); every write guard is taken before the first removal (above)"
+    )]
     pub(crate) async fn unregister_ingest_if_current(
         &self,
         pipeline_id: &str,
