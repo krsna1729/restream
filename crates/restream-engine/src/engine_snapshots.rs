@@ -95,11 +95,18 @@ impl MediaEngine {
         &self,
         ingest_id: &str,
     ) -> FileIngestDependencySnapshot {
-        let active = self.file_ingests.active.read().await;
-        let children = self.file_ingests.children.read().await;
+        // One map at a time: `children` and `active` are never held together
+        // (see `FileIngestRegistry`).
+        let marked_active = self.file_ingests.active.read().await.contains(ingest_id);
+        let child_registered = self
+            .file_ingests
+            .children
+            .read()
+            .await
+            .contains_key(ingest_id);
         FileIngestDependencySnapshot {
-            marked_active: active.contains(ingest_id),
-            child_registered: children.contains_key(ingest_id),
+            marked_active,
+            child_registered,
         }
     }
 

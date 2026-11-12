@@ -241,3 +241,51 @@ async fn file_ingest_dependency_snapshot_reflects_active_and_child_state() {
     assert!(!snapshot.marked_active);
     assert!(!snapshot.child_registered);
 }
+
+/// The running check (`children` then `active`) and the dependency snapshot
+/// (`active` then `children`) once nested the two locks in opposite orders.
+/// The test parks the check on `children` and the snapshot on `active`
+/// behind two held write guards; releasing both hands each its first lock
+/// at once, so a check or snapshot that then waits on its second lock while
+/// holding the first deadlocks, and with it the reconciler's
+/// `reap_file_ingests` housekeeping.
+#[tokio::test]
+async fn file_ingest_running_check_and_snapshot_never_deadlock() {
+    let engine = Arc::new(MediaEngine::new());
+    let child = Command::new("sleep")
+        .arg("30")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn sleep child");
+    engine
+        .file_ingests
+        .children
+        .write()
+        .await
+        .insert("file-ingest".to_string(), child);
+
+    let children_writer = engine.file_ingests.children.write().await;
+    let active_writer = engine.file_ingests.active.write().await;
+    let running_engine = engine.clone();
+    let running =
+        tokio::spawn(async move { running_engine.is_file_ingest_running("file-ingest").await });
+    let snapshot_engine = engine.clone();
+    let snapshot = tokio::spawn(async move {
+        snapshot_engine
+            .file_ingest_dependency_snapshot("file-ingest")
+            .await
+    });
+    // Current-thread runtime: the yield runs both tasks until they park.
+    tokio::task::yield_now().await;
+    drop(children_writer);
+    drop(active_writer);
+
+    let (running, snapshot, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(running, snapshot, engine.reap_file_ingests())
+    })
+    .await
+    .expect("running check, dependency snapshot and reap deadlocked");
+    assert!(running.expect("running check task"));
+    assert!(snapshot.expect("snapshot task").child_registered);
+    assert!(engine.stop_file_ingest_child("file-ingest").await);
+}
