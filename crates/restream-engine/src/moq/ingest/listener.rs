@@ -150,6 +150,33 @@ fn run_thread(
             return;
         }
     };
+    // Thread-entry boundary: a panic outside a connection task (the accept
+    // loop, origin code it runs, compio's driver-error panic) is counted and
+    // reported instead of ending the thread unseen. compio's `block_on`
+    // clears its executor before re-raising, so no task is polled during
+    // this unwind.
+    let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serve(config, server, tokio, shutdown, ready, runtime);
+    }));
+    if let Err(payload) = served {
+        let panic = crate::panic_boundary::record_contained(payload.as_ref());
+        error!(
+            event_class = "lifecycle",
+            event_type = "restream.moq.ingest.faulted",
+            panic,
+            "MoQ listener panicked; MoQ ingest is stopped",
+        );
+    }
+}
+
+fn serve(
+    config: &MoqIngestConfig,
+    server: Arc<MoqIngestServer>,
+    tokio: tokio::runtime::Handle,
+    shutdown: CancellationToken,
+    ready: tokio::sync::oneshot::Sender<Result<SocketAddr, String>>,
+    runtime: compio::runtime::Runtime,
+) {
     runtime.block_on(async move {
         let endpoint = match bind(config).await {
             Ok(endpoint) => endpoint,
@@ -217,6 +244,10 @@ async fn accept_loop(endpoint: &Endpoint, listener: &Rc<Listener>, max_connectio
         let Some(incoming) = incoming else {
             return;
         };
+        #[cfg(test)]
+        if max_connections == INJECTED_PANIC_MAX_CONNECTIONS {
+            std::panic::resume_unwind(Box::new("injected MoQ listener panic"));
+        }
         if listener.capped.get() >= max_connections {
             debug!(
                 peer = %incoming.remote_address(),
@@ -308,6 +339,11 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
         "MoQ publisher session ended",
     );
 }
+
+/// A `max_connections` that makes the accept loop panic on its first
+/// connection, outside any connection task.
+#[cfg(test)]
+const INJECTED_PANIC_MAX_CONNECTIONS: usize = 7_919;
 
 #[cfg(test)]
 mod tests;
