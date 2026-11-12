@@ -569,7 +569,7 @@ pub async fn start_recording(
     let cancel_token_clone = cancel_token.clone();
     // Store the JoinHandle so we can join the thread on exit and detect panics.
     // Dropping the handle detaches the thread silently — any crash becomes invisible.
-    let muxer_handle = std::thread::spawn(move || {
+    let muxer_handle = spawn_ts_writer(&recording_id, move || {
         let _queue_guard = QueueCloseGuard(queue_clone.clone());
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_ts_writer(queue_clone, &file_path_clone, cancel_token_clone.clone())
@@ -583,35 +583,49 @@ pub async fn start_recording(
         result
     });
 
-    let feeder_result = crate::executor::run_with_class(
-        crate::executor::MediaService {
-            class: crate::executor::MediaServiceClass::Recording,
-            pipeline_id: pipeline_id.clone(),
-            stage: "recording".to_string(),
-        },
-        cancel_token.clone(),
-        feed_recording(
-            pipeline_name,
-            pipeline_id.clone(),
-            ring_buffer,
-            engine.clone(),
-            cancel_token.clone(),
-            service_metadata,
-            QueueCloseGuard(queue.clone()),
-            stage_metrics,
-        ),
-    )
-    .await;
+    let result = match muxer_handle {
+        // Thread or memory limits: fail this recording through the normal
+        // failure path (Failed reported, stage removed) instead of panicking
+        // the coordinator and leaving the stage and catalog row behind.
+        Err(error) => {
+            cancel_token.cancel();
+            Err(format!("TS writer thread could not start: {error}"))
+        }
+        Ok(muxer_handle) => {
+            let feeder_result = crate::executor::run_with_class(
+                crate::executor::MediaService {
+                    class: crate::executor::MediaServiceClass::Recording,
+                    pipeline_id: pipeline_id.clone(),
+                    stage: "recording".to_string(),
+                },
+                cancel_token.clone(),
+                feed_recording(
+                    pipeline_name,
+                    pipeline_id.clone(),
+                    ring_buffer,
+                    engine.clone(),
+                    cancel_token.clone(),
+                    service_metadata,
+                    QueueCloseGuard(queue.clone()),
+                    stage_metrics,
+                ),
+            )
+            .await;
 
-    queue.close();
+            queue.close();
 
-    // Join the muxer thread to ensure the file is fully flushed before we
-    // check the duration and potentially delete it.  Joining also surfaces
-    // any panic that escaped catch_unwind (shouldn't happen, but be explicit).
-    let writer_result = match tokio::task::spawn_blocking(move || muxer_handle.join()).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err("TS writer thread panicked".to_string()),
-        Err(e) => Err(format!("TS writer join task failed: {e}")),
+            // Join the muxer thread to ensure the file is fully flushed before
+            // we check the duration and potentially delete it. Joining also
+            // surfaces any panic that escaped catch_unwind (shouldn't happen,
+            // but be explicit).
+            let writer_result = match tokio::task::spawn_blocking(move || muxer_handle.join()).await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err("TS writer thread panicked".to_string()),
+                Err(e) => Err(format!("TS writer join task failed: {e}")),
+            };
+            writer_result.and(feeder_result).map(drop)
+        }
     };
 
     let duration = started_at.elapsed();
@@ -621,7 +635,7 @@ pub async fn start_recording(
         duration.as_secs_f64()
     );
 
-    if let Err(error) = writer_result.and(feeder_result) {
+    if let Err(error) = result {
         error!(filename = %filename, err = %error, "recording failed");
         lifecycle.record_error(error.clone());
         if let Some(metadata) = &metadata {
@@ -665,6 +679,29 @@ pub async fn start_recording(
             encoding: "recording".to_string(),
         });
 }
+
+/// Starts the TS writer thread; `Err` when the OS refuses a thread.
+fn spawn_ts_writer<F>(
+    recording_id: &str,
+    body: F,
+) -> std::io::Result<std::thread::JoinHandle<Result<(), String>>>
+where
+    F: FnOnce() -> Result<(), String> + Send + 'static,
+{
+    #[cfg(test)]
+    if recording_id == INJECTED_SPAWN_FAILURE_RECORDING_ID {
+        return Err(std::io::Error::other("injected thread spawn failure"));
+    }
+    #[cfg(not(test))]
+    let _ = recording_id;
+    std::thread::Builder::new()
+        .name("rec-ts-writer".to_string())
+        .spawn(body)
+}
+
+/// A recording whose TS writer thread fails to start.
+#[cfg(test)]
+const INJECTED_SPAWN_FAILURE_RECORDING_ID: &str = "restream-test-writer-spawn-failure";
 
 fn run_ts_writer(
     queue: Arc<restream_sync::byte_queue::MemoryQueue>,
