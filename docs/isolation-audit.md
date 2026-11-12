@@ -42,7 +42,7 @@ destination.
 
 | Resource | Shared by | Bound per entity | Bound in total | Proof |
 |---|---|---|---|---|
-| RTMP owner thread | all RTMP connections | panic boundary per connection | — | `a_panicking_connection_does_not_stop_the_listener` |
+| RTMP owner thread | all RTMP connections | panic boundary per connection; any other owner-thread panic is caught at the thread entry, counted and reported (`rtmp.listener.owner_panicked`), and stops only the RTMP listener, which the supervisor restarts | — | `a_panicking_connection_does_not_stop_the_listener`, `an_owner_thread_panic_is_contained_and_stops_the_listener_cleanly` |
 | RTMP accept loop | all RTMP clients | one accept in flight, never dropped | — | `clients_connecting_while_connections_end_are_all_accepted` |
 | RTMP connection slots | all RTMP clients | `RESTREAM_RTMP_MAX_CONNECTIONS_PER_IP` (default 64) per IPv4 address or IPv6 /64, across owners | `RESTREAM_RTMP_MAX_CONNECTIONS` (default 512) | `one_client_cannot_take_every_connection_slot`, `client_slots` tests |
 | RTMP time before publish | all RTMP clients (holds a slot) | handshake, then `RESTREAM_RTMP_PREAUTH_TIMEOUT_MS` (default 10 000) to publish | — | `a_client_that_never_publishes_is_closed_at_the_admission_deadline` |

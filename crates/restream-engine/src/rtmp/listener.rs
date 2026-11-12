@@ -263,63 +263,90 @@ fn spawn_compio_owner(
         .name(format!("restream-rtmp-compio-owner-{index}"))
         .spawn(move || {
             // A failed/panicked owner cancels its siblings, not just its own
-            // connections. The server's guard also covers control-task abort.
+            // connections; the listener task then returns and its supervisor
+            // restarts it. The server's guard also covers control-task abort.
             let _owner_guard = shutdown.clone().drop_guard();
-            let entries = rtmp_io_uring_entries(limits.connections);
-            let mut proactor = ProactorBuilder::new();
-            proactor
-                .driver_type(DriverType::IoUring)
-                .capacity(entries)
-                .cqsize(entries * 2);
-            let mut runtime_builder = RuntimeBuilder::new();
-            runtime_builder.with_proactor(proactor);
-            let runtime = match runtime_builder.build() {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    let _ = ready.send(Err(format!(
-                        "RTMP ingress requires Compio io_uring (entries={entries}): {error}"
-                    )));
-                    return;
-                }
-            };
-            if runtime.driver_type() != DriverType::IoUring {
-                let _ = ready.send(Err(format!(
-                    "RTMP ingress requires Compio io_uring, got {:?}",
-                    runtime.driver_type()
-                )));
-                return;
-            }
-            let owner_engine = engine.clone();
-            // SQ capacity batches operations; Compio submits/drains when full.
-            // Size it beyond the admitted socket count and keep CQ space for
-            // the corresponding completion burst; startup fails if unsupported.
-            let owner_result = runtime.block_on(async move {
-                let listener = match compio::net::TcpListener::from_std(listener) {
-                    Ok(listener) => listener,
-                    Err(error) => {
-                        let _ = ready.send(Err(format!(
-                            "failed to initialize RTMP Compio listener: {error}"
-                        )));
-                        return Err(error);
-                    }
-                };
-                let _ = ready.send(Ok(()));
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => return listener.close().await,
-                    _ = accepting.cancelled() => {}
-                }
-                run_compio_owner(listener, control_tx, shutdown, owner_engine, limits).await
-            });
-            if let Err(error) = owner_result {
-                report_listener_error(
-                    &engine,
-                    &error,
-                    "accept_failed",
-                    "RTMP Compio accept failed",
+            // Thread-entry boundary: a panic outside the per-connection one
+            // (accept loop, close, compio's driver-error panic) is counted
+            // and reported instead of unwinding the thread unseen. compio's
+            // `block_on` clears its executor before re-raising, so no task
+            // is polled during this unwind.
+            let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                serve_compio_owner(
+                    listener, control_tx, shutdown, accepting, &engine, ready, limits,
+                );
+            }));
+            if let Err(payload) = served {
+                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                error!(
+                    event_class = "lifecycle",
+                    event_type = "rtmp.listener.owner_panicked",
+                    owner = index,
+                    panic,
+                    "RTMP Compio owner panicked; the RTMP listener stops and restarts"
                 );
             }
         })
+}
+
+fn serve_compio_owner(
+    listener: std::net::TcpListener,
+    control_tx: mpsc::Sender<ControlSession>,
+    shutdown: CancellationToken,
+    accepting: CancellationToken,
+    engine: &Arc<MediaEngine>,
+    ready: oneshot::Sender<Result<(), String>>,
+    limits: OwnerLimits,
+) {
+    let entries = rtmp_io_uring_entries(limits.connections);
+    let mut proactor = ProactorBuilder::new();
+    proactor
+        .driver_type(DriverType::IoUring)
+        .capacity(entries)
+        .cqsize(entries * 2);
+    let mut runtime_builder = RuntimeBuilder::new();
+    runtime_builder.with_proactor(proactor);
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ready.send(Err(format!(
+                "RTMP ingress requires Compio io_uring (entries={entries}): {error}"
+            )));
+            return;
+        }
+    };
+    if runtime.driver_type() != DriverType::IoUring {
+        let _ = ready.send(Err(format!(
+            "RTMP ingress requires Compio io_uring, got {:?}",
+            runtime.driver_type()
+        )));
+        return;
+    }
+    let owner_engine = engine.clone();
+    // SQ capacity batches operations; Compio submits/drains when full.
+    // Size it beyond the admitted socket count and keep CQ space for
+    // the corresponding completion burst; startup fails if unsupported.
+    let owner_result = runtime.block_on(async move {
+        let listener = match compio::net::TcpListener::from_std(listener) {
+            Ok(listener) => listener,
+            Err(error) => {
+                let _ = ready.send(Err(format!(
+                    "failed to initialize RTMP Compio listener: {error}"
+                )));
+                return Err(error);
+            }
+        };
+        let _ = ready.send(Ok(()));
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return listener.close().await,
+            _ = accepting.cancelled() => {}
+        }
+        run_compio_owner(listener, control_tx, shutdown, owner_engine, limits).await
+    });
+    if let Err(error) = owner_result {
+        report_listener_error(engine, &error, "accept_failed", "RTMP Compio accept failed");
+    }
 }
 fn rtmp_io_uring_entries(connection_limit: usize) -> u32 {
     connection_limit
@@ -403,6 +430,9 @@ async fn run_compio_owner(
                 ));
                 connections.push(Box::pin(connection.catch_unwind().map(move |result| {
                     drop(client_slot);
+                    // Runs on the owner, outside the per-connection boundary.
+                    #[cfg(test)]
+                    super::ingest::injected_panics::owner_unwind_if_marked(peer_addr);
                     match result {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => warn!(%error, %peer_addr, "error handling RTMP client"),
