@@ -405,17 +405,28 @@ fn stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
     media.attach_publisher(1, publisher(ring.clone()), &stats);
     assert!(feed(&mut media, &topology_chunks(true, true, 0), &stats).is_some());
     let first = media.probe_identity(1).unwrap();
-    let removed = feed(&mut media, &topology_chunks(false, true, 1), &stats).unwrap();
-    assert!(removed.video.is_none());
-    let current = media.probe_identity(1).unwrap();
-    assert_ne!(current, first);
+    // The newer topology waits for the answer to the one in flight.
+    assert!(feed(&mut media, &topology_chunks(false, true, 1), &stats).is_none());
+    assert_eq!(media.probe_identity(1).unwrap(), first);
     assert!(media.held_bytes > 0);
 
-    media.probe_applied(1, first, Some(wrong_ring.clone()), &stats);
+    // The superseded answer neither releases nor redirects; it hands out
+    // the newer probe.
+    let (current, removed) = media
+        .probe_applied(1, first, Some(wrong_ring.clone()), &stats)
+        .expect("the queued probe follows the answer");
+    assert!(removed.video.is_none());
+    assert_ne!(current, first);
     assert!(Arc::ptr_eq(&media.publishers[&1].media.ring_buffer, &ring));
     assert!(media.publishers[&1].probe_pending);
     assert!(media.held_bytes > 0);
-    media.probe_applied(1, current, None, &stats);
+    // A repeated stale answer is ignored.
+    assert!(
+        media
+            .probe_applied(1, first, Some(wrong_ring.clone()), &stats)
+            .is_none()
+    );
+    assert!(media.probe_applied(1, current, None, &stats).is_none());
     assert_eq!(media.held_bytes, 0);
 
     // Reuse the addressable peer slot, but never its ingest attempt identity.
@@ -429,6 +440,38 @@ fn stale_probe_ack_cannot_release_or_redirect_a_newer_topology_or_session() {
     assert!(Arc::ptr_eq(&media.publishers[&1].media.ring_buffer, &ring));
     assert!(media.publishers[&1].probe_pending);
     media.probe_applied(1, replacement, None, &stats);
+    assert_eq!(media.held_bytes, 0);
+}
+
+/// A publisher churning its PMT (every change a new probe) has at most one
+/// probe in flight to Tokio; the newest one found meanwhile follows the
+/// answer, so the control-plane work per publisher stays bounded by Tokio's
+/// own pace, not the publisher's.
+#[test]
+fn pmt_churn_keeps_one_probe_in_flight_per_publisher() {
+    use super::super::ingress_test_support::topology_chunks;
+
+    let stats = SrtIngressOwnerStats::default();
+    let ring = Arc::new(RingBuffer::new(4096));
+    let mut media = IngressMedia::<u64>::default();
+    media.attach_publisher(1, publisher(ring), &stats);
+    let mut sent = 0;
+    for round in 0..20u8 {
+        for chunk in topology_chunks(round % 2 == 0, true, round % 32) {
+            if media.on_payload(1, chunk, &stats).is_some() {
+                sent += 1;
+            }
+        }
+    }
+    assert_eq!(sent, 1, "one probe in flight, whatever the churn");
+
+    let first = media.probe_identity(1).unwrap();
+    let (newest, probe) = media
+        .probe_applied(1, first, None, &stats)
+        .expect("the newest queued probe follows the answer");
+    // Round 19 (odd) has no video.
+    assert!(probe.video.is_none());
+    assert!(media.probe_applied(1, newest, None, &stats).is_none());
     assert_eq!(media.held_bytes, 0);
 }
 
@@ -469,7 +512,9 @@ fn reindexed_audio_does_not_replay_a_removed_pid_from_the_probe_hold() {
         &[first.audio_tracks[1].pid.unwrap()],
         1,
     );
-    let update = media.on_payload(1, pmt, &stats).unwrap();
+    let in_flight = media.probe_identity(1).unwrap();
+    assert!(media.on_payload(1, pmt, &stats).is_none());
+    let (_, update) = media.probe_applied(1, in_flight, None, &stats).unwrap();
     assert_eq!(update.audio_tracks.len(), 1);
     assert_eq!(update.audio_tracks[0].track_index, 0);
     assert_eq!(update.audio_tracks[0].pid, first.audio_tracks[1].pid);
@@ -501,9 +546,12 @@ fn hold_empty_topology_releases_batch_allocations_with_their_credits() {
     assert!(feed(&mut media, &topology_chunks(true, true, 0), &stats).is_some());
     assert!(!media.publishers[&1].held.is_empty());
     assert!(media.held_bytes > 0);
-    let update = media
-        .on_payload(1, topology_pmt(None, &[], 1), &stats)
-        .unwrap();
+    assert!(
+        media
+            .on_payload(1, topology_pmt(None, &[], 1), &stats)
+            .is_none()
+    );
+    let update = media.publishers[&1].queued.clone().unwrap();
     assert!(update.video.is_none() && update.audio_tracks.is_empty());
     assert_eq!(media.held_bytes, 0);
     assert_eq!(media.publishers[&1].held_bytes, 0);
@@ -531,13 +579,9 @@ fn hold_topology_updates_keep_the_outstanding_absolute_deadline() {
     // sleeping or adding a second clock/deadline implementation.
     media.publishers.get_mut(&1).unwrap().probe_sent_at =
         Some(Instant::now() - Duration::from_secs(60));
-    let update = media
-        .on_payload(
-            1,
-            topology_pmt(None, &[first.audio_tracks[0].pid.unwrap()], 1),
-            &stats,
-        )
-        .unwrap();
+    let pmt = topology_pmt(None, &[first.audio_tracks[0].pid.unwrap()], 1);
+    assert!(media.on_payload(1, pmt, &stats).is_none());
+    let update = media.publishers[&1].queued.clone().unwrap();
     assert!(update.video.is_none());
     assert!(
         media.held_bytes > 0,
@@ -618,7 +662,8 @@ fn coalesced_video_replacement_invalidates_held_media_and_standby_gop() {
             }
         }
         assert!(batch.len() <= CHUNK);
-        let latest = media.on_payload(1, Bytes::from(batch), &stats).unwrap();
+        assert!(media.on_payload(1, Bytes::from(batch), &stats).is_none());
+        let latest = media.publishers[&1].queued.clone().unwrap();
         assert_eq!(latest.video.unwrap().pid, Some(new_pid));
         let slot = &media.publishers[&1];
         assert!(
