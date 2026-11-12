@@ -6,46 +6,90 @@
 use super::telemetry_projection as api_view_models;
 use restream_domain::domain::stage::StageKey;
 use restream_engine::engine::MediaEngine;
-use restream_engine::pipe_metrics::PipeMetrics;
+use restream_engine::engine_registries::StageRuntime;
 use restream_engine::stage_metrics::StageMetrics;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-async fn stage_telemetry_keys(engine: &MediaEngine) -> Vec<StageKey> {
-    let mut keys = HashSet::new();
-    {
-        let runtimes = engine.stages.runtimes.read().await;
-        keys.extend(runtimes.keys().cloned());
-    }
-    {
-        let metrics = engine.stages.metrics.read().await;
-        keys.extend(metrics.keys().cloned());
-    }
-    let mut keys: Vec<_> = keys.into_iter().collect();
-    keys.sort_by_key(|key| key.to_string());
-    keys
+/// Owned copies of the stage maps the telemetry views read.
+///
+/// Every view here reads each engine registry into owned data and releases
+/// it before taking the next, never nested and never re-acquired: tokio's
+/// fair `RwLock` queues a reader behind any waiting writer, so a view still
+/// holding `runtimes` while it asks for `runtimes` again (or for another map
+/// a writer holds while waiting on `runtimes`) deadlocks with that writer.
+/// Ingest registration takes `ingests.active` under the engine-wide
+/// `selection_lock`, so such a stall would stop every ingest lifecycle.
+struct StageMaps {
+    runtimes: HashMap<StageKey, StageRuntime>,
+    metrics: HashMap<StageKey, Arc<StageMetrics>>,
 }
 
-async fn stage_metrics_for(engine: &MediaEngine, key: &StageKey) -> Option<Arc<StageMetrics>> {
-    if let Some(runtime) = engine.stages.runtimes.read().await.get(key).cloned() {
-        return Some(runtime.metrics);
+impl StageMaps {
+    /// The stages of `pipeline_id`, or every stage when `None`.
+    async fn read(engine: &MediaEngine, pipeline_id: Option<&str>) -> Self {
+        let wanted = |key: &StageKey| pipeline_id.is_none_or(|id| key.pipeline.as_str() == id);
+        let runtimes = engine
+            .stages
+            .runtimes
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| wanted(key))
+            .map(|(key, runtime)| (key.clone(), runtime.clone()))
+            .collect();
+        let metrics = engine
+            .stages
+            .metrics
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| wanted(key))
+            .map(|(key, metrics)| (key.clone(), metrics.clone()))
+            .collect();
+        Self { runtimes, metrics }
     }
-    engine.stages.metrics.read().await.get(key).cloned()
+
+    fn keys(&self) -> Vec<StageKey> {
+        let keys: HashSet<&StageKey> = self.runtimes.keys().chain(self.metrics.keys()).collect();
+        let mut keys: Vec<StageKey> = keys.into_iter().cloned().collect();
+        keys.sort_by_key(|key| key.to_string());
+        keys
+    }
+
+    /// A runtime's own metrics win over the side map's.
+    fn metrics_for(&self, key: &StageKey) -> Option<Arc<StageMetrics>> {
+        self.runtimes
+            .get(key)
+            .map(|runtime| runtime.metrics.clone())
+            .or_else(|| self.metrics.get(key).cloned())
+    }
+
+    fn pipe_metrics_json(&self, key: &StageKey) -> Option<serde_json::Value> {
+        self.runtimes
+            .get(key)
+            .and_then(|runtime| runtime.pipe_metrics.as_ref())
+            .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default())
+    }
 }
 
-async fn stage_pipe_metrics_for(engine: &MediaEngine, key: &StageKey) -> Option<Arc<PipeMetrics>> {
-    engine
-        .stages
-        .runtimes
-        .read()
-        .await
-        .get(key)
-        .and_then(|runtime| runtime.pipe_metrics.clone())
+async fn lifecycle_snapshots(
+    engine: &MediaEngine,
+    keys: &[StageKey],
+) -> HashMap<StageKey, restream_domain::runtime::stage::StageRuntimeSnapshot> {
+    let mut snapshots = HashMap::with_capacity(keys.len());
+    for key in keys {
+        if let Some(snapshot) = engine.stage_runtime_snapshot(key).await {
+            snapshots.insert(key.clone(), snapshot);
+        }
+    }
+    snapshots
 }
 
 pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value {
     let generated_at = chrono::Utc::now().to_rfc3339();
-    // Read and released before the other maps: no new lock nesting.
+    // One registry at a time, each guard released before the next await
+    // (see `StageMaps`).
     let input_arr: Vec<serde_json::Value> = engine
         .ingests
         .sessions
@@ -54,62 +98,74 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .values()
         .map(|session| api_view_models::input_telemetry_json(session))
         .collect();
-    let ingests = engine.ingests.active.read().await;
-    let egresses = engine.egresses.active.read().await;
-    let runtimes = engine.stages.runtimes.read().await;
-    let pipelines = engine.ingests.pipelines.read().await;
-    let ts_muxers = engine.stages.ts_muxers.read().await;
-    let stage_keys = stage_telemetry_keys(engine).await;
-
-    // Fetch lifecycle snapshots for all registered stages.
-    let mut lifecycle_snapshots = std::collections::HashMap::new();
-    for key in &stage_keys {
-        if let Some(snap) = engine.stage_runtime_snapshot(key).await {
-            lifecycle_snapshots.insert(key.clone(), snap);
-        }
-    }
-
-    let ingest_arr: Vec<serde_json::Value> = ingests
-        .iter()
-        .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
-        .collect();
-
-    let mut stage_arr = Vec::with_capacity(stage_keys.len());
-    for key in &stage_keys {
-        let Some(metrics) = stage_metrics_for(engine, key).await else {
-            continue;
-        };
-        let row = api_view_models::stage_telemetry_row_json(
-            key,
-            serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
-            runtimes
-                .get(key)
-                .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default()),
-            None,
-            None,
-            lifecycle_snapshots.get(key),
-        );
-        stage_arr.push(row);
-    }
-
-    let egress_arr: Vec<serde_json::Value> = egresses
+    let (ingest_arr, ingest_pipelines): (Vec<serde_json::Value>, HashSet<String>) = {
+        let ingests = engine.ingests.active.read().await;
+        (
+            ingests
+                .iter()
+                .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
+                .collect(),
+            ingests.keys().cloned().collect(),
+        )
+    };
+    let egress_arr: Vec<serde_json::Value> = engine
+        .egresses
+        .active
+        .read()
+        .await
         .values()
         .map(|egress| {
             api_view_models::egress_runtime_json(
                 egress,
                 true,
-                ingests.contains_key(egress.pipeline_id.as_str()),
+                ingest_pipelines.contains(egress.pipeline_id.as_str()),
                 None,
             )
         })
         .collect();
-
-    let source_rings: Vec<serde_json::Value> = pipelines
+    let source_rings: Vec<serde_json::Value> = engine
+        .ingests
+        .pipelines
+        .read()
+        .await
         .iter()
         .map(|(pipeline_id, ring)| api_view_models::source_ring_telemetry_json(pipeline_id, ring))
         .collect();
-    let transcoder_rings: Vec<serde_json::Value> = runtimes
+    let ts_muxer_rings: Vec<serde_json::Value> = engine
+        .stages
+        .ts_muxers
+        .read()
+        .await
+        .iter()
+        .map(|(stage_key, stage)| {
+            api_view_models::ts_muxer_ring_telemetry_json(
+                stage_key,
+                &stage.muxer.ring,
+                !stage.muxer.cancel.is_cancelled(),
+            )
+        })
+        .collect();
+    let stages = StageMaps::read(engine, None).await;
+    let stage_keys = stages.keys();
+    let lifecycle_snapshots = lifecycle_snapshots(engine, &stage_keys).await;
+
+    let stage_arr: Vec<serde_json::Value> = stage_keys
+        .iter()
+        .filter_map(|key| {
+            let metrics = stages.metrics_for(key)?;
+            Some(api_view_models::stage_telemetry_row_json(
+                key,
+                serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
+                stages.pipe_metrics_json(key),
+                None,
+                None,
+                lifecycle_snapshots.get(key),
+            ))
+        })
+        .collect();
+
+    let transcoder_rings: Vec<serde_json::Value> = stages
+        .runtimes
         .iter()
         .filter_map(|(key, runtime)| {
             runtime.ring.as_ref().map(|ring| {
@@ -119,16 +175,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
                     !runtime.cancel.is_cancelled(),
                 )
             })
-        })
-        .collect();
-    let ts_muxer_rings: Vec<serde_json::Value> = ts_muxers
-        .iter()
-        .map(|(stage_key, stage)| {
-            api_view_models::ts_muxer_ring_telemetry_json(
-                stage_key,
-                &stage.muxer.ring,
-                !stage.muxer.cancel.is_cancelled(),
-            )
         })
         .collect();
     let retained_payload_bytes = source_rings
@@ -144,7 +190,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         input_arr,
         stage_arr,
         egress_arr,
-        runtimes.len(),
+        stages.runtimes.len(),
         api_view_models::memory_accounting_json(
             retained_payload_bytes,
             source_rings,
@@ -159,49 +205,54 @@ pub(crate) async fn pipeline_telemetry(
     pipeline_id: &str,
 ) -> serde_json::Value {
     let generated_at = chrono::Utc::now().to_rfc3339();
-    let ingests = engine.ingests.active.read().await;
-    let egresses = engine.egresses.active.read().await;
-    let pipelines = engine.ingests.pipelines.read().await;
-    let runtimes = engine.stages.runtimes.read().await;
-    let stage_keys: Vec<_> = stage_telemetry_keys(engine)
+    // One registry at a time (see `StageMaps`).
+    let (ingest, has_ingest) = {
+        let ingests = engine.ingests.active.read().await;
+        let ingest = ingests.get(pipeline_id);
+        (
+            ingest.map(|ingest| api_view_models::pipeline_ingest_telemetry_json(ingest.as_ref())),
+            ingest.is_some(),
+        )
+    };
+    let ring_info = engine
+        .ingests
+        .pipelines
+        .read()
         .await
-        .into_iter()
-        .filter(|key| key.pipeline.as_str() == pipeline_id)
-        .collect();
-
-    // Pre-fetch lifecycle snapshots for stages belonging to this pipeline.
-    let mut lifecycle_snapshots = std::collections::HashMap::new();
-    for key in &stage_keys {
-        if let Some(snap) = engine.stage_runtime_snapshot(key).await {
-            lifecycle_snapshots.insert(key.clone(), snap);
-        }
-    }
-
-    let ingest = ingests
-        .get(pipeline_id)
-        .map(|ingest| api_view_models::pipeline_ingest_telemetry_json(ingest.as_ref()));
-
-    let ring_info = pipelines
         .get(pipeline_id)
         .map(|ring| api_view_models::pipeline_source_ring_json(ring));
+    let (pipeline_egresses, delivery): (Vec<serde_json::Value>, _) = {
+        let egresses = engine.egresses.active.read().await;
+        let pipeline_egresses = || {
+            egresses
+                .values()
+                .filter(|egress| egress.pipeline_id == pipeline_id)
+        };
+        (
+            pipeline_egresses()
+                .map(|egress| api_view_models::egress_runtime_json(egress, true, has_ingest, None))
+                .collect(),
+            feed_delivery(pipeline_egresses().map(delivery_input)),
+        )
+    };
+    let stage_maps = StageMaps::read(engine, Some(pipeline_id)).await;
+    let stage_keys = stage_maps.keys();
+    let lifecycle_snapshots = lifecycle_snapshots(engine, &stage_keys).await;
 
     let mut stages = Vec::with_capacity(stage_keys.len());
     for key in &stage_keys {
-        let Some(metrics) = stage_metrics_for(engine, key).await else {
+        let Some(metrics) = stage_maps.metrics_for(key) else {
             continue;
         };
         let mut val = api_view_models::stage_telemetry_row_json(
             key,
             serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
-            runtimes
-                .get(key)
-                .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default()),
+            stage_maps.pipe_metrics_json(key),
             None,
             None,
             lifecycle_snapshots.get(key),
         );
-        if let Some(runtime) = runtimes.get(key) {
+        if let Some(runtime) = stage_maps.runtimes.get(key) {
             val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
             if let Some(ring) = runtime.ring.as_ref() {
                 val["payloadStats"] = api_view_models::ring_payload_stats_json(ring);
@@ -216,25 +267,6 @@ pub(crate) async fn pipeline_telemetry(
         stages.push(val);
     }
 
-    let pipeline_egresses: Vec<serde_json::Value> = egresses
-        .values()
-        .filter(|egress| egress.pipeline_id == pipeline_id)
-        .map(|egress| {
-            api_view_models::egress_runtime_json(
-                egress,
-                true,
-                ingests.contains_key(pipeline_id),
-                None,
-            )
-        })
-        .collect();
-
-    let delivery = feed_delivery(
-        egresses
-            .values()
-            .filter(|egress| egress.pipeline_id == pipeline_id)
-            .map(delivery_input),
-    );
     let mut value = api_view_models::pipeline_telemetry_json(
         generated_at,
         pipeline_id,
@@ -327,14 +359,13 @@ pub(crate) async fn stage_telemetry_by_display(
     engine: &MediaEngine,
     display: &str,
 ) -> Option<serde_json::Value> {
-    let key = stage_telemetry_keys(engine)
-        .await
+    let stages = StageMaps::read(engine, None).await;
+    let key = stages
+        .keys()
         .into_iter()
         .find(|key| key.to_string() == display)?;
-    let metrics = stage_metrics_for(engine, &key).await?;
-    let pipe = stage_pipe_metrics_for(engine, &key)
-        .await
-        .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default());
+    let metrics = stages.metrics_for(&key)?;
+    let pipe = stages.pipe_metrics_json(&key);
 
     // Fetch lifecycle snapshot for detailed phase/capacity info.
     let lifecycle = engine.stage_runtime_snapshot(&key).await;
@@ -456,5 +487,84 @@ mod tests {
             .expect("runtime-backed stage should resolve by display key");
         assert_eq!(single["metrics"]["bytesOut"], 32);
         assert_eq!(single["lifecycle"]["phase"], "runningNoOutputYet");
+    }
+
+    /// A telemetry view parked on one stage map while another pipeline's
+    /// stage start (a `runtimes` writer) and an SRT publisher's registration
+    /// (an `ingests.active` writer, under `selection_lock`) queue up: all
+    /// three must finish. The test holds `stages.metrics` for writing, as an
+    /// in-flight metrics writer would, so the view parks at that read with
+    /// both writers queued behind it. A view that kept its earlier guards
+    /// and then read `runtimes` again would queue behind the stage start's
+    /// writer, which waits on the view: a deadlock that also froze every
+    /// ingest registration.
+    async fn assert_view_never_deadlocks_stage_and_ingest_writers<F, Fut>(view: F)
+    where
+        F: FnOnce(Arc<MediaEngine>) -> Fut,
+        Fut: Future<Output = serde_json::Value> + Send + 'static,
+    {
+        use restream_engine::stage_lifecycle::StageBackendKind;
+        use tokio_util::sync::CancellationToken;
+
+        let engine = Arc::new(MediaEngine::new());
+        let start_stage = |pipeline: &str| {
+            let engine = engine.clone();
+            let key = StageKey::new(pipeline, StageKind::hls());
+            async move {
+                engine
+                    .get_or_create_non_ring_stage_runtime(
+                        key,
+                        StagePhase::Registered,
+                        StageBackendKind::HlsSegmenter,
+                        CancellationToken::new(),
+                    )
+                    .await;
+            }
+        };
+        start_stage("pipe-1").await;
+
+        let metrics_writer = engine.stages.metrics.write().await;
+        let view = tokio::spawn(view(engine.clone()));
+        // Current-thread runtime: each yield runs the spawned tasks until
+        // they park on a lock.
+        tokio::task::yield_now().await;
+        let stage_start = tokio::spawn(start_stage("pipe-2"));
+        let ingest_engine = engine.clone();
+        let publisher = tokio::spawn(async move {
+            ingest_engine
+                .try_register_ingest("pipe-2", "key-2", "srt")
+                .await
+        });
+        tokio::task::yield_now().await;
+        drop(metrics_writer);
+
+        let (view, stage_start, publisher) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(view, stage_start, publisher)
+            })
+            .await
+            .expect("telemetry view, stage start and ingest registration deadlocked");
+        assert!(view.expect("view task").is_object());
+        stage_start.expect("stage start task");
+        let lease = publisher
+            .expect("registration task")
+            .expect("the publisher on pipe-2 registers");
+        drop(lease);
+    }
+
+    #[tokio::test]
+    async fn engine_telemetry_never_deadlocks_stage_and_ingest_writers() {
+        assert_view_never_deadlocks_stage_and_ingest_writers(|engine| async move {
+            engine_telemetry(&engine).await
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn pipeline_telemetry_never_deadlocks_stage_and_ingest_writers() {
+        assert_view_never_deadlocks_stage_and_ingest_writers(|engine| async move {
+            pipeline_telemetry(&engine, "pipe-1").await
+        })
+        .await;
     }
 }
