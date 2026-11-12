@@ -47,7 +47,7 @@ impl HttpStop {
 }
 
 impl RuntimeTasks {
-    pub async fn launch(launch: RuntimeLaunch) -> Self {
+    pub async fn launch(launch: RuntimeLaunch) -> Result<Self, String> {
         let RuntimeLaunch {
             config,
             state,
@@ -68,12 +68,9 @@ impl RuntimeTasks {
             .merge(crate::api::create_hls_ingest_router(hls_ingest, hls_inputs));
         let listener = tokio::net::TcpListener::bind(&http_addr)
             .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "Failed to bind TCP listener on port {}: {}",
-                    config.ports.http, error
-                )
-            });
+            .map_err(|error| {
+                format!("failed to bind the dashboard listener on {http_addr}: {error}")
+            })?;
         info!(
             event_class = "lifecycle",
             event_type = "restream.http.ready",
@@ -141,12 +138,12 @@ impl RuntimeTasks {
         let spawn_srt = move || tokio::spawn(Arc::clone(&srt_server).run(srt_port));
         let srt = SupervisedListener::new("srt", spawn_srt(), Box::new(spawn_srt), srt_restarts);
 
-        Self {
+        Ok(Self {
             http,
             http_stop,
             rtmp,
             srt,
-        }
+        })
     }
 
     pub async fn wait_for_reconcile_tick(

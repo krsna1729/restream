@@ -67,14 +67,24 @@ fn main() {
     restream_engine::ffmpeg_binary::init(config.ffmpeg_bin_path.clone());
     let worker_threads = config.tokio_runtime.worker_threads;
     let max_blocking_threads = config.tokio_runtime.max_blocking_threads;
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
         .max_blocking_threads(max_blocking_threads)
         .thread_name(TOKIO_THREAD_NAME)
         .enable_all()
         .build()
-        .expect("Failed to build tokio runtime")
-        .block_on(restream::run_app(config));
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("restream: failed to build the tokio runtime: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = runtime.block_on(restream::run_app(config)) {
+        tracing::error!(event_class = "lifecycle", event_type = "restream.startup.failed", %error, "startup failed");
+        eprintln!("restream: {error}");
+        std::process::exit(1);
+    }
 }
 
 fn print_usage_and_exit() -> ! {
