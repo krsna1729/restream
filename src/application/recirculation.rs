@@ -399,7 +399,14 @@ mod tests {
             .await
             .unwrap();
         }
-        let pipeline_service = PipelineService::with_store(Arc::new(PipelineCatalogStore));
+        let pipeline_service = PipelineService::with_store(
+            Arc::new(PipelineCatalogStore),
+            crate::application::catalog_auth::CatalogAuth::new(Arc::new(
+                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
+                    pool.clone(),
+                ),
+            )),
+        );
         let pipeline_input_service = PipelineInputService::with_store(
             Arc::new(ReadOnlyInputStore { inputs }),
             pipeline_service,

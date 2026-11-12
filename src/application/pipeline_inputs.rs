@@ -113,7 +113,10 @@ impl PipelineInputService {
                 .create(&input_id, pipeline_id, label, &stream_key, source.clone())
                 .await
             {
-                Ok(input) => return Ok(input),
+                Ok(input) => {
+                    self.pipelines.refresh_catalog_auth().await;
+                    return Ok(input);
+                }
                 Err(PipelineInputStoreError::Conflict(message))
                     if message.contains("pipeline input limit exceeded") =>
                 {
@@ -148,11 +151,13 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be disabled",
             ));
         }
-        self.store
+        let updated = self
+            .store
             .update(pipeline_id, input_id, label, enabled, source)
             .await
-            .map_err(store_error)?
-            .ok_or_else(|| input_not_found(input_id))
+            .map_err(store_error)?;
+        self.pipelines.refresh_catalog_auth().await;
+        updated.ok_or_else(|| input_not_found(input_id))
     }
 
     pub async fn delete(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<bool> {
@@ -162,10 +167,13 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be deleted",
             ));
         }
-        self.store
+        let deleted = self
+            .store
             .delete(pipeline_id, input_id)
             .await
-            .map_err(store_error)
+            .map_err(store_error)?;
+        self.pipelines.refresh_catalog_auth().await;
+        Ok(deleted)
     }
 
     pub async fn promote(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
@@ -173,11 +181,13 @@ impl PipelineInputService {
         if !current.enabled {
             return Err(ServiceError::conflict("disabled inputs cannot be promoted"));
         }
-        self.store
+        let promoted = self
+            .store
             .promote(pipeline_id, input_id)
             .await
-            .map_err(store_error)?
-            .ok_or_else(|| input_not_found(input_id))
+            .map_err(store_error)?;
+        self.pipelines.refresh_catalog_auth().await;
+        promoted.ok_or_else(|| input_not_found(input_id))
     }
 
     pub async fn get(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {

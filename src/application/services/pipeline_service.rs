@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::application::catalog_auth::CatalogAuth;
 use crate::application::ports::PipelineStore;
 use restream_domain::models::Pipeline;
 
@@ -16,16 +17,28 @@ use super::error::{ServiceError, ServiceResult};
 /// Depends on `PipelineStore` — a port trait — rather than `SqlitePool`
 /// directly. Infrastructure wiring provides the default SQLite constructor;
 /// tests can inject any implementation.
+///
+/// Every committed write refreshes the ingest admission index before it
+/// returns, so the next connect sees it.
 #[derive(Clone)]
 pub struct PipelineService {
     store: Arc<dyn PipelineStore>,
+    catalog_auth: Arc<CatalogAuth>,
 }
 
 impl PipelineService {
-    /// Create a service backed by any `PipelineStore` implementation.
-    /// Useful for tests with an in-memory or mock store.
-    pub fn with_store(store: Arc<dyn PipelineStore>) -> Self {
-        Self { store }
+    /// Create a service backed by any `PipelineStore` implementation, writing
+    /// through to the process's admission index.
+    pub fn with_store(store: Arc<dyn PipelineStore>, catalog_auth: Arc<CatalogAuth>) -> Self {
+        Self {
+            store,
+            catalog_auth,
+        }
+    }
+
+    /// Reloads the ingest admission index after a committed catalog write.
+    pub(crate) async fn refresh_catalog_auth(&self) {
+        self.catalog_auth.refresh().await;
     }
 
     /// Builds the shared not-found error shape used when callers reference a
@@ -72,10 +85,13 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        self.store
+        let pipeline = self
+            .store
             .create_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
             .await
-            .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))
+            .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))?;
+        self.refresh_catalog_auth().await;
+        Ok(pipeline)
     }
 
     /// Updates the mutable fields of one persisted pipeline and normalizes a
@@ -88,19 +104,24 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        self.store
+        let updated = self
+            .store
             .update_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
             .await
-            .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?
-            .ok_or_else(|| Self::pipeline_not_found(id))
+            .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?;
+        self.refresh_catalog_auth().await;
+        updated.ok_or_else(|| Self::pipeline_not_found(id))
     }
 
     /// Deletes one pipeline record from the persisted catalog.
     pub async fn delete_pipeline(&self, id: &str) -> ServiceResult<bool> {
-        self.store
+        let deleted = self
+            .store
             .delete_pipeline(id)
             .await
-            .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))?;
+        self.refresh_catalog_auth().await;
+        Ok(deleted)
     }
 
     /// List all pipeline IDs (used by health and settings).

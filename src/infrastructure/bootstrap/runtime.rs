@@ -22,7 +22,7 @@ pub(super) struct RuntimeLaunch {
     pub pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     pub srt_ingest_policy_store: Arc<SrtIngestPolicyStore>,
     pub hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
-    pub hls_inputs: Arc<dyn crate::application::ingest::PipelineInputLookup>,
+    pub hls_catalog: Arc<crate::application::catalog_auth::CatalogAuth>,
 }
 
 pub(super) struct RuntimeTasks {
@@ -56,7 +56,7 @@ impl RuntimeTasks {
             pipeline_access,
             srt_ingest_policy_store,
             hls_ingest,
-            hls_inputs,
+            hls_catalog,
         } = launch;
 
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
@@ -64,8 +64,10 @@ impl RuntimeTasks {
             listener: CancellationToken::new(),
             streams: state.runtime_state.clone(),
         };
-        let app = crate::api::create_router(state)
-            .merge(crate::api::create_hls_ingest_router(hls_ingest, hls_inputs));
+        let app = crate::api::create_router(state).merge(crate::api::create_hls_ingest_router(
+            hls_ingest,
+            hls_catalog,
+        ));
         let listener = tokio::net::TcpListener::bind(&http_addr)
             .await
             .map_err(|error| {

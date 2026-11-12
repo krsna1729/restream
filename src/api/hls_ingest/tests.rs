@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_util::StreamExt as _;
 use reqwest::StatusCode;
 
-use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
+use crate::application::catalog_auth::{CatalogAuth, CatalogAuthLoadFuture, CatalogAuthSource};
 use restream_domain::domain::pipeline_input::{PipelineInput, PushAuth};
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls_ingest::test_support::{
@@ -17,20 +17,30 @@ use restream_engine::hls_ingest::test_support::{
 };
 use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
 
+/// The catalog's one input; a test changes its credential, then refreshes
+/// the index as a catalog write does.
 struct Inputs(std::sync::RwLock<PushAuth>);
 
-impl PipelineInputLookup for Inputs {
-    fn get_by_stream_key<'a>(&'a self, key: &'a str) -> PipelineInputLookupFuture<'a> {
+impl CatalogAuthSource for Inputs {
+    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            Ok((key == STREAM_KEY).then(|| PipelineInput {
+            Ok(vec![PipelineInput {
                 id: INPUT_ID.to_string(),
                 pipeline_id: PIPELINE_ID.to_string(),
+                stream_key: STREAM_KEY.to_string(),
                 enabled: true,
                 push_auth: self.0.read().unwrap().clone(),
                 ..PipelineInput::keyed_default()
-            }))
+            }])
         })
     }
+}
+
+async fn catalog(auth: PushAuth) -> (Arc<Inputs>, Arc<CatalogAuth>) {
+    let inputs = Arc::new(Inputs(std::sync::RwLock::new(auth)));
+    let catalog = CatalogAuth::new(inputs.clone());
+    catalog.load().await.unwrap();
+    (inputs, catalog)
 }
 
 struct Server {
@@ -38,6 +48,14 @@ struct Server {
     base: String,
     _ingest: Arc<HlsIngest>,
     inputs: Arc<Inputs>,
+    catalog: Arc<CatalogAuth>,
+}
+
+impl Server {
+    async fn set_push_auth(&self, auth: PushAuth) {
+        *self.inputs.0.write().unwrap() = auth;
+        self.catalog.refresh().await;
+    }
 }
 
 async fn serve(limits: HlsIngestLimits) -> Server {
@@ -46,8 +64,8 @@ async fn serve(limits: HlsIngestLimits) -> Server {
 
 async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
     let (engine, ingest) = test_ingest(limits);
-    let inputs = Arc::new(Inputs(std::sync::RwLock::new(auth)));
-    let app = crate::api::create_hls_ingest_router(ingest.clone(), inputs.clone());
+    let (inputs, catalog) = catalog(auth).await;
+    let app = crate::api::create_hls_ingest_router(ingest.clone(), catalog.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(crate::api::http_server::serve(
@@ -63,6 +81,7 @@ async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
         base: format!("http://{address}/ingest/hls"),
         _ingest: ingest,
         inputs,
+        catalog,
     }
 }
 
@@ -151,8 +170,8 @@ async fn hls_push_basic_rejects_before_polling_body_including_delete() {
     use tower::ServiceExt;
 
     let (engine, ingest) = test_ingest(HlsIngestLimits::default());
-    let inputs = Arc::new(Inputs(std::sync::RwLock::new(basic_auth("secret").await)));
-    let app = crate::api::create_hls_ingest_router(ingest, inputs);
+    let (_inputs, catalog) = catalog(basic_auth("secret").await).await;
+    let app = crate::api::create_hls_ingest_router(ingest, catalog);
     for method in [Method::PUT, Method::POST, Method::DELETE] {
         for authorization in [
             None,
@@ -226,7 +245,7 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
         }
     }
     let replacement = basic_auth("replacement").await;
-    *server.inputs.0.write().unwrap() = replacement;
+    server.set_push_auth(replacement).await;
     assert_eq!(
         client
             .delete(url(&server, STREAM_KEY, "index0.ts"))
@@ -247,7 +266,7 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
             .status(),
         StatusCode::OK
     );
-    *server.inputs.0.write().unwrap() = PushAuth::None;
+    server.set_push_auth(PushAuth::None).await;
     assert_eq!(
         client
             .delete(url(&server, STREAM_KEY, "index0.ts"))

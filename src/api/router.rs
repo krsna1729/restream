@@ -676,13 +676,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// not a mutation the reconciler must converge.
 pub fn create_hls_ingest_router(
     ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
-    inputs: Arc<dyn crate::application::ingest::PipelineInputLookup>,
+    catalog: Arc<crate::application::catalog_auth::CatalogAuth>,
 ) -> Router {
     apply_security_headers(Router::new().route(
         "/ingest/hls/{stream_key}/{*path}",
         any(super::hls_ingest::hls_ingest_handler),
     ))
-    .with_state(super::hls_ingest::HlsIngestState { ingest, inputs })
+    .with_state(super::hls_ingest::HlsIngestState { ingest, catalog })
 }
 
 /// Every persisted change reaches the reconciler: it runs an output

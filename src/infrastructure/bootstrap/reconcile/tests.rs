@@ -69,13 +69,9 @@ async fn reconciler(catalog: Arc<dyn PipelineStore>) -> Reconciler {
     let hls_ingest = restream_engine::hls_ingest::HlsIngest::new(
         engine.clone(),
         Arc::new(
-            crate::application::ingest::PipelineStoreIngestAuthenticator::new(
-                catalog.clone(),
-                Arc::new(
-                    crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                        pool.clone(),
-                    ),
-                ),
+            crate::application::catalog_auth::CatalogIngestAuthenticator::new(
+                crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool)
+                    .catalog_auth(),
                 security.clone(),
             ),
         ),

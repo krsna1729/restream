@@ -1,5 +1,6 @@
 use sqlx::SqlitePool;
 
+use crate::application::catalog_auth::{CatalogAuthLoadFuture, CatalogAuthSource};
 use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
 use crate::application::pipeline_inputs::{
     InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
@@ -125,6 +126,16 @@ impl PipelineInputLookup for SqlitePipelineInputStore {
             })
             .await
             .map_err(|error| PipelineStoreError::new(error.to_string()))
+        })
+    }
+}
+
+impl CatalogAuthSource for SqlitePipelineInputStore {
+    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
+        Box::pin(async move {
+            crate::db::with_busy_retry(|| crate::db::list_all_pipeline_inputs(&self.pool))
+                .await
+                .map_err(|error| PipelineStoreError::new(error.to_string()))
         })
     }
 }

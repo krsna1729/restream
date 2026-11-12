@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::ordering::{Counters, MAX_RENDITIONS, SessionLimits};
 use super::session::{self, HlsObject, SessionContext, SessionEnd};
@@ -36,7 +36,6 @@ const INITIAL_BODY_CAPACITY: usize = 1024 * 1024;
 pub enum AuthorizeError {
     /// Unknown key, disabled input, or a banned client.
     Forbidden,
-    LookupFailed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -468,10 +467,6 @@ impl HlsIngest {
                 warn!(stream_key = %redact_secret(stream_key), "hls ingest stream key rejected");
                 Err(AuthorizeError::Forbidden)
             }
-            Err(PipelineAccessError::LookupFailed(error)) => {
-                error!(%error, "hls ingest stream key lookup failed");
-                Err(AuthorizeError::LookupFailed(error))
-            }
         }
     }
 
@@ -658,10 +653,6 @@ impl HlsIngest {
                 }
                 Err(AuthorizeError::Forbidden) => {
                     return Err(DispatchError::AuthorizationChanged);
-                }
-                Err(AuthorizeError::LookupFailed(error)) => {
-                    error!(%error, "hls ingest stream key lookup failed at session start");
-                    return Err(DispatchError::Unavailable);
                 }
             }
         }
