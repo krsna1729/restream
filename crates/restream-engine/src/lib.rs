@@ -11,6 +11,9 @@
 // Raw std lock access is disallowed in shipped code (clippy.toml, `restream_sync::lock`);
 // tests may poison and inspect locks directly.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
+// Tests park tasks behind held registry guards on purpose; shipped code may
+// hold a tokio guard across an await only under a documented `#[expect]`.
+#![cfg_attr(test, allow(clippy::await_holding_invalid_type))]
 
 // Per-entity fault domains (`panic_boundary`) contain a panic by unwinding.
 // With `panic = "abort"` every contained panic would end the process, so

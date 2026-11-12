@@ -163,13 +163,15 @@ impl MediaEngine {
     }
 
     pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
-        let mut consumers = self.hls.consumers.write().await;
-        let already_running = consumers.contains_key(pipeline_id);
-        if !already_running {
-            let token = CancellationToken::new();
-            consumers.insert(pipeline_id.to_string(), HlsConsumers::new(token));
-        }
-        drop(consumers);
+        let already_running = {
+            let mut consumers = self.hls.consumers.write().await;
+            let already_running = consumers.contains_key(pipeline_id);
+            if !already_running {
+                let token = CancellationToken::new();
+                consumers.insert(pipeline_id.to_string(), HlsConsumers::new(token));
+            }
+            already_running
+        };
 
         let store = self.get_or_create_hls_store(pipeline_id).await;
         (store, already_running)
@@ -189,19 +191,21 @@ impl MediaEngine {
         pipeline_id: &str,
     ) -> (Arc<Fmp4HlsStore>, bool, CancellationToken) {
         let preview_key = hls_preview_registry_key(pipeline_id);
-        let mut consumers = self.hls.consumers.write().await;
-        let already_running = consumers.contains_key(&preview_key);
-        let cancel_token = if already_running {
-            consumers
-                .get(&preview_key)
-                .map(|c| c.cancel_token.clone())
-                .unwrap_or_else(CancellationToken::new)
-        } else {
-            let token = CancellationToken::new();
-            consumers.insert(preview_key.clone(), HlsConsumers::new(token.clone()));
-            token
+        let (already_running, cancel_token) = {
+            let mut consumers = self.hls.consumers.write().await;
+            let already_running = consumers.contains_key(&preview_key);
+            let cancel_token = if already_running {
+                consumers
+                    .get(&preview_key)
+                    .map(|c| c.cancel_token.clone())
+                    .unwrap_or_else(CancellationToken::new)
+            } else {
+                let token = CancellationToken::new();
+                consumers.insert(preview_key.clone(), HlsConsumers::new(token.clone()));
+                token
+            };
+            (already_running, cancel_token)
         };
-        drop(consumers);
 
         let store = self.get_or_create_hls_preview_store(pipeline_id).await;
         (store, already_running, cancel_token)
@@ -229,24 +233,22 @@ impl MediaEngine {
 
     /// Shut down an idle HLS segmenter and clean up its store.
     pub async fn shutdown_hls_segmenter(&self, pipeline_id: &str) {
-        let mut consumers = self.hls.consumers.write().await;
-        if let Some(c) = consumers.remove(pipeline_id) {
+        if let Some(c) = self.hls.consumers.write().await.remove(pipeline_id) {
             c.cancel_token.cancel();
         }
-        drop(consumers);
         self.hls.stores.write().await.remove(pipeline_id);
     }
 
     pub async fn shutdown_hls_preview_segmenter(&self, pipeline_id: &str) {
         let preview_key = hls_preview_registry_key(pipeline_id);
-        let mut consumers = self.hls.consumers.write().await;
-        if let Some(c) = consumers.remove(&preview_key) {
-            c.cancel_token.cancel();
-        }
-        // The input's ring stays while its other preview form still plays.
-        let sibling_running =
-            consumers.contains_key(&hls_preview_registry_key(&sibling_preview_id(pipeline_id)));
-        drop(consumers);
+        let sibling_running = {
+            let mut consumers = self.hls.consumers.write().await;
+            if let Some(c) = consumers.remove(&preview_key) {
+                c.cancel_token.cancel();
+            }
+            // The input's ring stays while its other preview form still plays.
+            consumers.contains_key(&hls_preview_registry_key(&sibling_preview_id(pipeline_id)))
+        };
         self.hls.preview_stores.write().await.remove(&preview_key);
         if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
             && !sibling_running

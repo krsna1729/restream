@@ -4,3 +4,19 @@ disallowed-methods = [
   { path = "std::sync::RwLock::write", reason = "use restream_sync::lock::write (poison-tolerant)" },
   { path = "sqlx::Row::get", reason = "use Row::try_get with ?: a NULL or mistyped column (SQLite stores any type) must be an error, not a panic" },
 ]
+# `clippy::await_holding_invalid_type`: a tokio guard held across an await
+# (another lock's acquisition included) is how a registry read re-acquired
+# behind a queued writer, or two locks taken in opposite orders, deadlock the
+# control plane. Copy into owned data and release first; a section that must
+# hold more than one guard carries `#[expect(..., reason = "lock order ...")]`
+# in the order documented in `crates/restream-engine/src/engine_registries.rs`.
+await-holding-invalid-types = [
+  { path = "tokio::sync::RwLockReadGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::RwLockWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::RwLockMappedWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::MutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::MappedMutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::OwnedRwLockReadGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::OwnedRwLockWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::OwnedMutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+]

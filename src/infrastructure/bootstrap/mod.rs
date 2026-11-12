@@ -219,20 +219,12 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     // Mutex is not poisoned by the panicking holder.
     let event_rx = Arc::new(tokio::sync::Mutex::new(event_rx));
     supervised_task::spawn_supervised("runtime_event_consumer", move || {
-        let (event_rx, requests, runtime_state) =
-            (event_rx.clone(), requests.clone(), runtime_state.clone());
-        async move {
-            let mut event_rx = event_rx.lock().await;
-            while let Some(event) = event_rx.recv().await {
-                crate::application::topology::request_pass_for_event(
-                    &requests,
-                    &event.kind,
-                    disconnect_grace,
-                );
-                runtime_state.mark_changed();
-                events::persist_runtime_event(event);
-            }
-        }
+        consume_runtime_events(
+            event_rx.clone(),
+            requests.clone(),
+            runtime_state.clone(),
+            disconnect_grace,
+        )
     });
 
     // Created before the reconciler because the reconciler converges HLS
@@ -369,6 +361,32 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     let (http, http_stop, rtmp, srt) = runtime.into_handles();
     shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
     Ok(())
+}
+
+/// The one runtime-event consumer: wakes the reconciler, marks the runtime
+/// state changed, and persists each event.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the one consumer holds the receiver for its lifetime; the mutex exists only so a restart after a panic resumes the same channel"
+)]
+async fn consume_runtime_events(
+    event_rx: Arc<
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<restream_engine::events::Event>>,
+    >,
+    requests: Arc<crate::application::topology::ReconcileRequests>,
+    runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
+    disconnect_grace: std::time::Duration,
+) {
+    let mut event_rx = event_rx.lock().await;
+    while let Some(event) = event_rx.recv().await {
+        crate::application::topology::request_pass_for_event(
+            &requests,
+            &event.kind,
+            disconnect_grace,
+        );
+        runtime_state.mark_changed();
+        events::persist_runtime_event(event);
+    }
 }
 
 #[cfg(test)]

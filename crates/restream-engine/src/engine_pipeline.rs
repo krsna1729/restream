@@ -182,18 +182,20 @@ impl MediaEngine {
 
     /// Eagerly remove every shared stage owned by a deleted pipeline.
     pub async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
-        let mut runtimes = self.stages.runtimes.write().await;
-        let mut removed = Vec::new();
-        runtimes.retain(|key, runtime| {
-            if key.pipeline.as_str() == pipeline_id {
-                runtime.cancel.cancel();
-                removed.push(key.clone());
-                false
-            } else {
-                true
-            }
-        });
-        drop(runtimes);
+        let removed = {
+            let mut runtimes = self.stages.runtimes.write().await;
+            let mut removed = Vec::new();
+            runtimes.retain(|key, runtime| {
+                if key.pipeline.as_str() == pipeline_id {
+                    runtime.cancel.cancel();
+                    removed.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            removed
+        };
         self.remove_stage_artifacts(&removed).await;
     }
 
@@ -201,10 +203,14 @@ impl MediaEngine {
         if keys.is_empty() {
             return;
         }
-        let mut metrics = self.stages.metrics.write().await;
+        {
+            let mut metrics = self.stages.metrics.write().await;
+            for key in keys {
+                metrics.remove(key);
+            }
+        }
         let mut lifecycles = self.stages.lifecycles.write().await;
         for key in keys {
-            metrics.remove(key);
             lifecycles.remove(key);
         }
     }

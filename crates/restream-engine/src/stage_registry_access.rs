@@ -148,6 +148,10 @@ impl MediaEngine {
     }
 
     /// Last lease of a stage runtime dropped (its token is already cancelled).
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `runtimes` -> `metrics` -> `lifecycles` (module docs of `engine_registries`): held so a concurrent `ensure_stage` cannot adopt these (below)"
+    )]
     pub(crate) async fn release_stage_runtime(&self, key: &StageKey, lease_id: u64) {
         let mut runtimes = self.stages.runtimes.write().await;
         if runtimes
@@ -224,14 +228,16 @@ impl MediaEngine {
         }
 
         let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
-        let mut pools = self.stages.srt_muxer_shards.write().await;
-        let Some(pool) = pools.get_mut(&cohort_key) else {
-            return;
+        let result = {
+            let mut pools = self.stages.srt_muxer_shards.write().await;
+            let Some(pool) = pools.get_mut(&cohort_key) else {
+                return;
+            };
+            let Some(result) = pool.release(output_id, attempt_id) else {
+                return;
+            };
+            result
         };
-        let Some(result) = pool.release(output_id, attempt_id) else {
-            return;
-        };
-        drop(pools);
 
         if result.shard_empty {
             let stage_key = Self::srt_muxer_stage_key(encoding, result.shard_index);

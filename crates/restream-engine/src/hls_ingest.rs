@@ -190,6 +190,10 @@ pub struct ObjectBody {
 impl ObjectBody {
     /// Claim a segment's declared length from its key's share up front, in
     /// one acquire under the key's claim lock.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the key's own claim lock makes the claim one acquire from the key's share, so concurrent bodies of one key never hold partial claims; taken under no other lock"
+    )]
     pub(crate) async fn claim_declared(&mut self, declared: usize) -> Result<(), BodyError> {
         let Some(segment) = &self.segment else {
             return Ok(());

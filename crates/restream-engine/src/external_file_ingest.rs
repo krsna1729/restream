@@ -181,6 +181,10 @@ async fn stop_owned_child(runtime: &ExternalFileIngestRuntime, child_pid: Option
 
 /// Reaps the child and clears the file-ingest state of this attempt (not of
 /// a replacement); the lease releases the attempt itself.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "lock order `ingests.sessions` -> file-ingest `active`, then `positions`, one at a time (module docs of `engine_registries`); `sessions` is held so a newer generation cannot be cleared"
+)]
 async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<u32>) {
     stop_owned_child(runtime, child_pid).await;
     // Replacement registration needs sessions.write(): hold this guard
@@ -211,6 +215,33 @@ async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<
     }
 }
 
+/// Registers this attempt's FFmpeg child, unless a newer attempt holds the
+/// input; the child comes back then.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "lock order `ingests.sessions` -> file-ingest `children` (module docs of `engine_registries`): `sessions` is held so a replaced attempt registers no child"
+)]
+async fn register_current_child(
+    runtime: &ExternalFileIngestRuntime,
+    child: tokio::process::Child,
+) -> Result<(), tokio::process::Child> {
+    let sessions = runtime.engine.ingests.sessions.read().await;
+    if sessions
+        .get(&runtime.registration.input_id)
+        .is_none_or(|session| session.attempt_id != runtime.registration.attempt_id)
+    {
+        return Err(child);
+    }
+    runtime
+        .engine
+        .file_ingests
+        .children
+        .write()
+        .await
+        .insert(runtime.ingest_id.clone(), child);
+    Ok(())
+}
+
 async fn run_external_file_ingest(
     runtime: Arc<ExternalFileIngestRuntime>,
     mut spawned: SpawnedExternalFileIngest,
@@ -228,21 +259,9 @@ async fn run_external_file_ingest(
             .await;
         cleanup.child_pid = spawned.child.id();
         let child_pid = cleanup.child_pid;
-        {
-            let sessions = runtime.engine.ingests.sessions.read().await;
-            if sessions
-                .get(&runtime.registration.input_id)
-                .is_none_or(|session| session.attempt_id != runtime.registration.attempt_id)
-            {
-                break;
-            }
-            runtime
-                .engine
-                .file_ingests
-                .children
-                .write()
-                .await
-                .insert(runtime.ingest_id.clone(), spawned.child);
+        if let Err(child) = register_current_child(&runtime, spawned.child).await {
+            spawned.child = child;
+            break;
         }
 
         let stdout = async {
