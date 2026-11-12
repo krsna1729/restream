@@ -11,15 +11,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use restream::application::catalog_auth::{
+    CatalogAuth, CatalogAuthLoadFuture, CatalogAuthSource, CatalogIngestAuthenticator,
+};
 use restream_core::MediaType;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls_ingest::playlist::{self, MediaPlaylist, Playlist, SegmentEntry};
 use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
-use restream_engine::ingest_auth::{
-    AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
-    PipelineAccessMode,
-};
 use restream_engine::security::IngestSecurityService;
 use restream_sync::RingBuffer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,44 +27,22 @@ const STREAM_KEY: &str = "hls-key";
 const PIPELINE_ID: &str = "pipe-hls";
 const INPUT_ID: &str = "input-hls";
 
-/// Accepts only [`STREAM_KEY`], for HLS publish only.
+/// A catalog of one keyed input on [`STREAM_KEY`].
 struct OneKey;
 
-impl PipelineAccessAuthenticator for OneKey {
-    fn authenticate<'a>(
-        &'a self,
-        mode: PipelineAccessMode,
-        stream_key: &'a str,
-        _client_ip: &'a str,
-    ) -> PipelineAccessFuture<'a> {
+impl CatalogAuthSource for OneKey {
+    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            if mode == PipelineAccessMode::HlsPublish && stream_key == STREAM_KEY {
-                Ok(AuthenticatedPipeline {
-                    id: PIPELINE_ID.to_string(),
-                    input_id: INPUT_ID.to_string(),
-                    selected: true,
-                })
-            } else {
-                Err(PipelineAccessError::InvalidStreamKey)
-            }
-        })
-    }
-}
-
-impl restream::application::ingest::PipelineInputLookup for OneKey {
-    fn get_by_stream_key<'a>(
-        &'a self,
-        stream_key: &'a str,
-    ) -> restream::application::ingest::PipelineInputLookupFuture<'a> {
-        Box::pin(async move {
-            Ok((stream_key == STREAM_KEY).then(|| {
+            Ok(vec![
                 restream_domain::domain::pipeline_input::PipelineInput {
                     id: INPUT_ID.to_string(),
                     pipeline_id: PIPELINE_ID.to_string(),
+                    stream_key: STREAM_KEY.to_string(),
                     enabled: true,
+                    selected: true,
                     ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
-                }
-            }))
+                },
+            ])
         })
     }
 }
@@ -78,13 +55,19 @@ struct Server {
 
 async fn serve() -> Server {
     let engine = Arc::new(MediaEngine::new());
+    let catalog = CatalogAuth::new(Arc::new(OneKey));
+    catalog.load().await.unwrap();
+    let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let ingest = HlsIngest::new(
         engine.clone(),
-        Arc::new(OneKey),
-        Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
+        Arc::new(CatalogIngestAuthenticator::new(
+            catalog.clone(),
+            security.clone(),
+        )),
+        security,
         HlsIngestLimits::default(),
     );
-    let app = restream::api::create_hls_ingest_router(ingest.clone(), Arc::new(OneKey));
+    let app = restream::api::create_hls_ingest_router(ingest.clone(), catalog);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(restream::api::http_server::serve(

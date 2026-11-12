@@ -540,6 +540,22 @@ dashboard and API use cookie sessions. The initial admin password comes from
 `restream-initial-admin-password.txt` (mode 0600) beside the database. SQLite
 stores only its scrypt hash.
 
+Ingest admission never reads SQLite. Every connect (RTMP publish and play,
+SRT publish and read, HLS push including its per-object credential check, MoQ
+publish) reads an immutable stream-key index, `CatalogAuthSnapshot` in
+`src/application/catalog_auth.rs`, held in an `ArcSwap`. Startup loads it
+before any listener starts and exits if it cannot. `PipelineService` and
+`PipelineInputService` reload it after each committed write (pipeline create,
+update and delete; input create, update, delete and promote) before
+returning, so a rotated, disabled or deleted key is refused on the next
+connect. Reloads run one at a time and a refresh already covered by a running
+reload does not load again. A failed reload keeps the previous index, logs
+`restream.catalog_auth.reload_failed`, and one background task retries with
+backoff (100 ms doubling to 5 s) until it succeeds
+(`restream.catalog_auth.reload_recovered`). A stalled database therefore
+delays catalog writes, never connects. The index belongs to one process: a
+second process writing the same database file would not refresh it.
+
 The HTTP listener binds `127.0.0.1` by default. A deployment that exposes it
 must supply TLS and the network boundary. See [Configuration](configuration.md).
 

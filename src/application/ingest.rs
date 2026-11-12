@@ -1,5 +1,6 @@
-//! Application-layer ingest coordination that resolves pipelines, loads
-//! file-ingest context, and validates stream access before media processing begins.
+//! Application-layer ingest coordination that resolves pipelines and loads
+//! file-ingest context. Connect-time admission lives in
+//! [`crate::application::catalog_auth`].
 
 use crate::application::ports::{
     IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
@@ -8,12 +9,6 @@ use crate::application::ports::{
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
-use restream_engine::ingest_auth::{
-    AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
-    PipelineAccessMode,
-};
-use restream_engine::security::{IngestSecurityService, RateLimitScope};
-use std::sync::Arc;
 use std::{future::Future, pin::Pin};
 
 pub type PipelineInputLookupFuture<'a> =
@@ -21,141 +16,6 @@ pub type PipelineInputLookupFuture<'a> =
 
 pub trait PipelineInputLookup: Send + Sync {
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a>;
-}
-
-#[derive(Debug)]
-pub enum IngestAuthError {
-    InvalidStreamKey,
-    LookupFailed(PipelineStoreError),
-}
-
-pub struct PipelineStoreIngestAuthenticator {
-    pipeline_lookup: Arc<dyn PipelineStore>,
-    input_lookup: Arc<dyn PipelineInputLookup>,
-    security: Arc<IngestSecurityService>,
-}
-
-impl PipelineStoreIngestAuthenticator {
-    pub fn new(
-        pipeline_lookup: Arc<dyn PipelineStore>,
-        input_lookup: Arc<dyn PipelineInputLookup>,
-        security: Arc<IngestSecurityService>,
-    ) -> Self {
-        Self {
-            pipeline_lookup,
-            input_lookup,
-            security,
-        }
-    }
-}
-
-impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
-    fn authenticate<'a>(
-        &'a self,
-        mode: PipelineAccessMode,
-        stream_key: &'a str,
-        client_ip: &'a str,
-    ) -> PipelineAccessFuture<'a> {
-        Box::pin(async move {
-            let pipeline = match mode {
-                PipelineAccessMode::RtmpPublish => authenticate_publish_stream_key(
-                    self.pipeline_lookup.as_ref(),
-                    &self.security,
-                    stream_key,
-                    client_ip,
-                )
-                .await
-                .map_err(pipeline_access_error)?,
-                PipelineAccessMode::RtmpPlay => self
-                    .pipeline_lookup
-                    .get_pipeline_by_stream_key(stream_key)
-                    .await
-                    .map_err(|err| PipelineAccessError::LookupFailed(err.to_string()))?
-                    .ok_or(PipelineAccessError::InvalidStreamKey)?,
-                PipelineAccessMode::SrtPublish => authenticate_srt_stream_key(
-                    self.pipeline_lookup.as_ref(),
-                    &self.security,
-                    stream_key,
-                    client_ip,
-                    RateLimitScope::SrtPublish,
-                )
-                .await
-                .map_err(pipeline_access_error)?,
-                PipelineAccessMode::SrtRead => authenticate_srt_stream_key(
-                    self.pipeline_lookup.as_ref(),
-                    &self.security,
-                    stream_key,
-                    client_ip,
-                    RateLimitScope::SrtRead,
-                )
-                .await
-                .map_err(pipeline_access_error)?,
-                PipelineAccessMode::HlsPublish => authenticate_stream_key_for_scope(
-                    self.pipeline_lookup.as_ref(),
-                    &self.security,
-                    stream_key,
-                    client_ip,
-                    RateLimitScope::HlsPublish,
-                    true,
-                )
-                .await
-                .map_err(pipeline_access_error)?,
-                PipelineAccessMode::MoqPublish => authenticate_stream_key_for_scope(
-                    self.pipeline_lookup.as_ref(),
-                    &self.security,
-                    stream_key,
-                    client_ip,
-                    RateLimitScope::MoqPublish,
-                    true,
-                )
-                .await
-                .map_err(pipeline_access_error)?,
-            };
-
-            // A pull input has no listener of its own: it never accepts a
-            // push, so its key resolves only for reads. Publishing to it
-            // would otherwise race the pull task for the input's session.
-            //
-            // Exhaustive on purpose: a new publish mode must decide this
-            // question at compile time rather than inherit "not a publish"
-            // from a wildcard arm.
-            let pushing = match mode {
-                PipelineAccessMode::RtmpPublish
-                | PipelineAccessMode::SrtPublish
-                | PipelineAccessMode::HlsPublish
-                | PipelineAccessMode::MoqPublish => true,
-                PipelineAccessMode::RtmpPlay | PipelineAccessMode::SrtRead => false,
-            };
-            let input = self
-                .input_lookup
-                .get_by_stream_key(stream_key)
-                .await
-                .map_err(|error| PipelineAccessError::LookupFailed(error.to_string()))?
-                .filter(|input| {
-                    input.pipeline_id == pipeline.id
-                        && input.enabled
-                        && (!pushing
-                            || input.source_kind
-                                == restream_domain::domain::pipeline_input::PipelineInputSourceKind::Keyed)
-                })
-                .ok_or(PipelineAccessError::InvalidStreamKey)?;
-
-            Ok(AuthenticatedPipeline {
-                id: pipeline.id,
-                input_id: input.id,
-                selected: input.selected,
-            })
-        })
-    }
-}
-
-fn pipeline_access_error(error: IngestAuthError) -> PipelineAccessError {
-    match error {
-        IngestAuthError::InvalidStreamKey => PipelineAccessError::InvalidStreamKey,
-        IngestAuthError::LookupFailed(error) => {
-            PipelineAccessError::LookupFailed(error.to_string())
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -372,67 +232,6 @@ pub async fn remove_pipeline_file_ingest(
         .map_err(PersistFileIngestError::PipelineStore)?;
 
     Ok(())
-}
-
-pub async fn authenticate_publish_stream_key(
-    pipeline_lookup: &dyn PipelineStore,
-    security: &IngestSecurityService,
-    stream_key: &str,
-    client_ip: &str,
-) -> Result<Pipeline, IngestAuthError> {
-    authenticate_stream_key_for_scope(
-        pipeline_lookup,
-        security,
-        stream_key,
-        client_ip,
-        RateLimitScope::RtmpPublish,
-        false,
-    )
-    .await
-}
-
-pub async fn authenticate_srt_stream_key(
-    pipeline_lookup: &dyn PipelineStore,
-    security: &IngestSecurityService,
-    stream_key: &str,
-    client_ip: &str,
-    scope: RateLimitScope,
-) -> Result<Pipeline, IngestAuthError> {
-    authenticate_stream_key_for_scope(
-        pipeline_lookup,
-        security,
-        stream_key,
-        client_ip,
-        scope,
-        true,
-    )
-    .await
-}
-
-async fn authenticate_stream_key_for_scope(
-    pipeline_lookup: &dyn PipelineStore,
-    security: &IngestSecurityService,
-    stream_key: &str,
-    client_ip: &str,
-    scope: RateLimitScope,
-    clear_on_success: bool,
-) -> Result<Pipeline, IngestAuthError> {
-    match pipeline_lookup.get_pipeline_by_stream_key(stream_key).await {
-        Ok(Some(pipeline)) => {
-            if clear_on_success {
-                security.record_success_for(scope, client_ip);
-            }
-            Ok(pipeline)
-        }
-        Ok(None) => {
-            security.record_failure_for(scope, client_ip);
-            Err(IngestAuthError::InvalidStreamKey)
-        }
-        Err(err) => {
-            security.record_failure_for(scope, client_ip);
-            Err(IngestAuthError::LookupFailed(err))
-        }
-    }
 }
 
 #[cfg(test)]

@@ -161,8 +161,8 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
-    let auth_service =
-        crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).auth_service();
+    let services_factory = crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool);
+    let auth_service = services_factory.auth_service();
     auth::initialize_auth_with_bootstrap_file(
         &auth_service,
         &sessions,
@@ -178,12 +178,16 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     // Dropped ingest leases release on the main runtime, whichever runtime
     // (a listener thread's, a supervisor's) the attempt registered on.
     engine.start_ingest_release_drain();
-    let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
-        Arc::new(pipeline_store);
+    // Ingest admission reads this index, never SQLite; it is filled before
+    // any listener (or the HLS ingest registry) can authenticate a connect.
+    let catalog_auth = services_factory.catalog_auth();
+    catalog_auth
+        .load()
+        .await
+        .map_err(|error| format!("failed to load the ingest stream-key catalog: {error}"))?;
     let ingest_authenticator = Arc::new(
-        crate::application::ingest::PipelineStoreIngestAuthenticator::new(
-            pipeline_lookup,
-            Arc::new(pipeline_input_store.clone()),
+        crate::application::catalog_auth::CatalogIngestAuthenticator::new(
+            catalog_auth.clone(),
             security.clone(),
         ),
     );
@@ -195,8 +199,7 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     let sessions_for_reconciler = sessions.clone();
     let recording_metadata =
         crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(pool.clone());
-    let services =
-        crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
+    let services = services_factory.compose();
     let state = Arc::new(crate::api::AppState::new(
         services,
         pool.clone(),
@@ -344,7 +347,7 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         pipeline_access: ingest_authenticator,
         srt_ingest_policy_store,
         hls_ingest,
-        hls_inputs: Arc::new(pipeline_input_store),
+        hls_catalog: catalog_auth,
     })
     .await?;
     let shutdown = shutdown::spawn_signal_watcher();

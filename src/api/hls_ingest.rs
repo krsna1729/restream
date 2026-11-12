@@ -16,7 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::StreamExt;
 
-use crate::application::ingest::PipelineInputLookup;
+use crate::application::catalog_auth::CatalogAuth;
 use restream_domain::domain::pipeline_input::PushAuth;
 
 /// Bound queued/running password KDFs as well as their memory consumption.
@@ -28,7 +28,7 @@ const MAX_BASIC_HEADER: usize = 6 + MAX_BASIC_BYTES.div_ceil(3) * 4;
 #[derive(Clone)]
 pub(super) struct HlsIngestState {
     pub ingest: Arc<HlsIngest>,
-    pub inputs: Arc<dyn PipelineInputLookup>,
+    pub catalog: Arc<CatalogAuth>,
 }
 
 fn unauthorized() -> Response {
@@ -123,24 +123,19 @@ pub(super) async fn hls_ingest_handler(
         Err(AuthorizeError::Forbidden) => {
             return (StatusCode::FORBIDDEN, "invalid stream key").into_response();
         }
-        Err(AuthorizeError::LookupFailed(_)) => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "stream key lookup failed").into_response();
-        }
     };
-    // Reuse the persisted input lookup rather than a credential cache: updates
-    // and clears apply to the very next object, even in an existing session.
-    let auth = match state.inputs.get_by_stream_key(&stream_key).await {
-        Ok(Some(input))
-            if input.id == pipeline.input_id
-                && input.pipeline_id == pipeline.id
-                && input.enabled
-                && input.source_kind
-                    == restream_domain::domain::pipeline_input::PipelineInputSourceKind::Keyed =>
+    // Read the admission index rather than a credential cache: a catalog write
+    // refreshes it before returning, so updates and clears apply to the very
+    // next object, even in an existing session.
+    let auth = match state.catalog.snapshot().get(&stream_key) {
+        Some(grant)
+            if grant.input_id == pipeline.input_id
+                && grant.pipeline_id == pipeline.id
+                && grant.accepts_push =>
         {
-            input.push_auth
+            grant.push_auth.clone()
         }
-        Ok(_) => return StatusCode::FORBIDDEN.into_response(),
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        _ => return StatusCode::FORBIDDEN.into_response(),
     };
     if let Err(response) = require_push_auth(auth, &headers).await {
         return response;

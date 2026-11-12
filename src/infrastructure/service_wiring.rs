@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::api::AppServices;
+use crate::application::catalog_auth::CatalogAuth;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
@@ -19,13 +20,26 @@ use crate::infrastructure::sqlite_ports::{
 };
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
+///
+/// Every service it builds shares one ingest admission index, so a catalog
+/// write through any of them refreshes the index the ingest listeners read.
 pub struct SqliteServiceFactory<'pool> {
     db: &'pool SqlitePool,
+    catalog_auth: Arc<CatalogAuth>,
 }
 
 impl<'pool> SqliteServiceFactory<'pool> {
-    pub const fn new(db: &'pool SqlitePool) -> Self {
-        Self { db }
+    /// The index starts empty; production startup fills it with
+    /// [`CatalogAuth::load`] before any listener starts.
+    pub fn new(db: &'pool SqlitePool) -> Self {
+        Self {
+            db,
+            catalog_auth: CatalogAuth::new(Arc::new(SqlitePipelineInputStore::new(db.clone()))),
+        }
+    }
+
+    pub fn catalog_auth(&self) -> Arc<CatalogAuth> {
+        self.catalog_auth.clone()
     }
 
     /// Builds the complete service graph used by the API state.
@@ -54,7 +68,10 @@ impl<'pool> SqliteServiceFactory<'pool> {
     }
 
     pub fn pipeline_service(&self) -> PipelineService {
-        PipelineService::with_store(Arc::new(SqlitePipelineStore::new(self.db.clone())))
+        PipelineService::with_store(
+            Arc::new(SqlitePipelineStore::new(self.db.clone())),
+            self.catalog_auth.clone(),
+        )
     }
 
     pub fn pipeline_input_service(&self, pipelines: PipelineService) -> PipelineInputService {

@@ -1,8 +1,11 @@
 //! Protocol-facing ingest authentication contract.
 //!
-//! RTMP and SRT protocol loops need only to resolve an accepted stream key to a
-//! pipeline identifier. Application code owns the backing catalog lookup and
-//! rate-limit policy behind this small runtime contract.
+//! RTMP, SRT, HLS push and MoQ protocol loops need only to resolve an accepted
+//! stream key to a pipeline identifier. Application code owns the catalog and
+//! rate-limit policy behind this small runtime contract. The production
+//! implementation answers from an in-memory index and never waits on a
+//! dependency, so it has no lookup-failure outcome; the future shape lets the
+//! protocol loops keep their shutdown and deadline guards around it.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -26,8 +29,8 @@ pub struct AuthenticatedPipeline {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineAccessError {
+    /// Unknown or disabled key, or a push to an input that takes none.
     InvalidStreamKey,
-    LookupFailed(String),
 }
 
 pub type PipelineAccessFuture<'a> =

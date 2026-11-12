@@ -15,7 +15,7 @@ use rml_rtmp::sessions::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::engine::MediaEngine;
 use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode};
@@ -411,14 +411,6 @@ async fn authorize_publish(
                 error: "Invalid stream key",
             };
         }
-        Err(PipelineAccessError::LookupFailed(err)) => {
-            error!("publish stream key lookup failed: {}", err);
-            return PublishAuthorization::Rejected {
-                code: "NetStream.Publish.BadName",
-                description: "Invalid stream key",
-                error: "Invalid stream key",
-            };
-        }
     };
 
     // Every early return below drops the lease, which releases the attempt.
@@ -589,14 +581,6 @@ async fn authorize_play(
             description: "Invalid stream key",
             error: "Invalid stream key for play",
         },
-        Err(PipelineAccessError::LookupFailed(err)) => {
-            error!("play stream key lookup failed: {}", err);
-            PlayAuthorization::Rejected {
-                code: "NetStream.Play.StreamNotFound",
-                description: "Invalid stream key",
-                error: "Invalid stream key for play",
-            }
-        }
     }
 }
 

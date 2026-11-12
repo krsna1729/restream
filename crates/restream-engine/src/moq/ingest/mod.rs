@@ -167,14 +167,9 @@ impl MoqIngestServer {
             .pipeline_access
             .authenticate(PipelineAccessMode::MoqPublish, stream_key, &client_ip)
             .await
-            .map_err(|error| match error {
-                crate::ingest_auth::PipelineAccessError::InvalidStreamKey => {
-                    Rejection::Unauthorized
-                }
-                crate::ingest_auth::PipelineAccessError::LookupFailed(error) => {
-                    Rejection::Unavailable(format!("stream key lookup failed: {error}"))
-                }
-            })?;
+            .map_err(
+                |crate::ingest_auth::PipelineAccessError::InvalidStreamKey| Rejection::Unauthorized,
+            )?;
         let ring = self.engine.get_or_create_pipeline(&pipeline.id).await;
         // Every early return below drops the lease, which releases the
         // attempt.

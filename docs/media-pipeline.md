@@ -317,7 +317,7 @@ sequenceDiagram
     participant Enc as Encoder
     participant Own as restream-rtmp-compio-owner<br/>(ServerSession)
     participant Ctl as run_rtmp_control_session<br/>(Tokio)
-    participant Auth as PipelineStoreIngestAuthenticator
+    participant Auth as CatalogIngestAuthenticator
     participant Ring as source RingBuffer
     Enc->>Own: C0 + C1 (version 3, 1536 bytes)
     Own->>Enc: S0 + S1 + S2
@@ -346,7 +346,8 @@ media in the ring.
   app name is not part of the key. `releaseStream` and `FCPublish` are
   ignored.
 - **Authentication.** `authorize_publish` (`crates/restream-engine/src/rtmp/ingest.rs`)
-  requires an enabled input whose stream key matches exactly. A banned IP, a
+  requires an enabled input whose stream key matches exactly, read from the
+  in-memory catalog index (never SQLite). A banned IP, a
   bad key or a second publisher on the same input is rejected with
   `NetStream.Publish.BadName`. Restream then closes the connection; the
   rejection message is not sent to the encoder.
@@ -782,7 +783,7 @@ Sources: `src/api/hls_ingest.rs`, `crates/restream-engine/src/hls_ingest/`,
 | `409` | another publisher holds the input |
 | `413` | over a size bound |
 | `415` | unsupported extension, container or codec; fMP4 media without `EXT-X-MAP` |
-| `503` | key lookup unavailable, or shared budget exhausted (`Retry-After: 1`) |
+| `503` | session unavailable, or shared budget exhausted (`Retry-After: 1`) |
 
 | Bound | Value |
 |---|---|

@@ -2,6 +2,7 @@
 //! persistence-facing ports.
 
 pub mod capacity;
+pub mod catalog_auth;
 pub mod egress;
 pub(crate) mod egress_moq_fabric;
 pub mod egress_rtmp_fabric;
