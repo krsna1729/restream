@@ -3,6 +3,7 @@ pub mod hls_put;
 pub mod hls_put_shard;
 pub mod pipeline;
 pub mod pipeline_shard;
+pub(crate) mod resolve;
 pub mod rtmp;
 pub mod rtmp_handshake;
 pub mod rtmp_shard;
