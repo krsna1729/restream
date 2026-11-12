@@ -46,3 +46,39 @@ fn preset_for_probe_property(case: u8, audio_track_count: usize) -> String {
 
 include!("tests/arguments.rs");
 include!("tests/transcoding.rs");
+
+/// A panic while demuxing FFmpeg's stdout is counted and still ends the
+/// stage's output ring and cancels the stage, as FFmpeg closing stdout does.
+#[tokio::test]
+async fn a_panicking_output_reader_still_ends_the_stage_output() {
+    let mut child = tokio::process::Command::new("printf")
+        .arg(std::str::from_utf8(INJECTED_OUTPUT_READER_PANIC).unwrap())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn printf");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let ring = Arc::new(restream_sync::RingBuffer::new(16));
+    let output = crate::ffmpeg::stage_output::StageOutputNormalizer::new(
+        ring.clone(),
+        1,
+        Arc::new(crate::stage_metrics::StageMetrics::new()),
+    );
+    let cancel = CancellationToken::new();
+    let before = crate::panic_boundary::contained_panics();
+    let reader = spawn_external_stdout_reader(
+        stdout,
+        output,
+        Arc::new(PipeMetrics::default()),
+        cancel.clone(),
+    )
+    .expect("spawn reader");
+    tokio::task::spawn_blocking(move || reader.join())
+        .await
+        .unwrap()
+        .expect("no panic escapes the reader thread");
+    let _ = child.wait().await;
+
+    assert!(ring.is_end_of_stream(), "the output ring is ended");
+    assert!(cancel.is_cancelled());
+    assert!(crate::panic_boundary::contained_panics() > before);
+}

@@ -86,7 +86,7 @@ pub(super) fn spawn_external_stdout_reader(
     std::thread::Builder::new()
         .name("restream-ffout".to_string())
         .spawn(move || {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let demuxed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut demuxer = TsDemuxer::new();
                 let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
                 let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
@@ -99,6 +99,12 @@ pub(super) fn spawn_external_stdout_reader(
                         Ok(n) => {
                             if idle_us > super::PIPE_STALL_THRESHOLD_US {
                                 pipe_metrics.record_idle(idle_us);
+                            }
+                            #[cfg(test)]
+                            if buf[..n].starts_with(INJECTED_OUTPUT_READER_PANIC) {
+                                std::panic::resume_unwind(Box::new(
+                                    "injected FFmpeg output reader panic",
+                                ));
                             }
                             demuxer.feed(&buf[..n]);
                             demuxer.drain_into(&mut pkts);
@@ -113,11 +119,24 @@ pub(super) fn spawn_external_stdout_reader(
                 for pkt in pkts.drain(..) {
                     output.push(pkt);
                 }
-                output.mark_end_of_stream();
             }));
+            if let Err(payload) = demuxed {
+                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                error!(
+                    panic,
+                    "FFmpeg output reader panicked; ending this stage's output"
+                );
+            }
+            // Readers of the output ring see its end on a panic too, not only
+            // when FFmpeg closes stdout.
+            output.mark_end_of_stream();
             cancel.cancel();
         })
 }
+
+/// FFmpeg output that makes the stdout reader panic.
+#[cfg(test)]
+pub(super) const INJECTED_OUTPUT_READER_PANIC: &[u8] = b"restream-test-injected-panic";
 
 /// How long FFmpeg may take to exit after its input ended normally (it
 /// flushes the encoder and writes the tail).
