@@ -3,6 +3,7 @@
 //! `ingress_owner` for size; it is part of the same owner-thread state.
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
@@ -15,26 +16,51 @@ use tracing::warn;
 use super::{DEFERRED_PER_PEER, DEFERRED_TOTAL, OwnerLoop, READER_SENDS_PER_VISIT};
 
 /// Deferred read/play fragments, per peer, in arrival order.
-#[derive(Default)]
-pub(super) struct DeferredSends {
-    pub(super) per_peer: HashMap<LogicalPeerId, VecDeque<Bytes>>,
+pub(super) struct DeferredSends<K = LogicalPeerId> {
+    pub(super) per_peer: HashMap<K, VecDeque<Bytes>>,
     pub(super) total: usize,
 }
 
-impl DeferredSends {
-    pub(super) fn len_for(&self, peer: &LogicalPeerId) -> usize {
+impl<K> Default for DeferredSends<K> {
+    fn default() -> Self {
+        Self {
+            per_peer: HashMap::new(),
+            total: 0,
+        }
+    }
+}
+
+impl<K: Hash + Eq + Copy> DeferredSends<K> {
+    pub(super) fn len_for(&self, peer: &K) -> usize {
         self.per_peer.get(peer).map_or(0, VecDeque::len)
     }
 
-    pub(super) fn push(&mut self, peer: LogicalPeerId, payload: Bytes) {
+    pub(super) fn push(&mut self, peer: K, payload: Bytes) {
         self.per_peer.entry(peer).or_default().push_back(payload);
         self.total += 1;
     }
 
-    pub(super) fn forget(&mut self, peer: &LogicalPeerId) {
+    pub(super) fn forget(&mut self, peer: &K) {
         if let Some(queue) = self.per_peer.remove(peer) {
             self.total -= queue.len();
         }
+    }
+
+    /// The peer to disconnect as overloaded before `peer` may defer one more
+    /// fragment, if any: `peer` itself past its own limit; otherwise, once
+    /// the shared budget is spent, the peer with the largest backlog, so
+    /// readers that stopped draining cannot get a healthy newcomer shed.
+    pub(super) fn shed_for(&self, peer: &K) -> Option<K> {
+        if self.len_for(peer) >= DEFERRED_PER_PEER {
+            return Some(*peer);
+        }
+        if self.total < DEFERRED_TOTAL {
+            return None;
+        }
+        self.per_peer
+            .iter()
+            .max_by_key(|(_, queue)| queue.len())
+            .map(|(victim, _)| *victim)
     }
 }
 
@@ -131,20 +157,20 @@ impl OwnerLoop {
     }
 
     /// The peer's send window is closed: keep the fragment, bounded, or fail
-    /// the overloaded peer explicitly. Never a silent drop.
+    /// an overloaded peer explicitly. Never a silent drop.
     fn defer(&mut self, peer: LogicalPeerId, payload: Bytes, now: Timestamp) {
-        if self.deferred.len_for(&peer) >= DEFERRED_PER_PEER
-            || self.deferred.total >= DEFERRED_TOTAL
-        {
-            warn!(peer = ?peer, "SRT reader is not draining; disconnecting the overloaded peer");
+        if let Some(victim) = self.deferred.shed_for(&peer) {
+            warn!(peer = ?victim, "SRT reader is not draining; disconnecting the overloaded peer");
             self.stats
                 .ingress_owner
                 .overload_disconnects
                 .fetch_add(1, Ordering::Relaxed);
-            self.overloaded.insert(peer);
-            self.deferred.forget(&peer);
-            self.disconnect(SessionId::Peer(peer), now);
-            return;
+            self.overloaded.insert(victim);
+            self.deferred.forget(&victim);
+            self.disconnect(SessionId::Peer(victim), now);
+            if victim == peer {
+                return;
+            }
         }
         self.deferred.push(peer, payload);
         let stats = &self.stats.ingress_owner;
@@ -212,4 +238,39 @@ pub(super) enum SendOutcome {
     NoWindow,
     /// Nothing more can or should be delivered for this fragment.
     Dropped,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spent_shared_budget_sheds_the_largest_backlog_not_the_newcomer() {
+        let mut deferred = DeferredSends::<u64>::default();
+        // Readers that stopped draining, each just under its own limit.
+        let stalled = DEFERRED_TOTAL / (DEFERRED_PER_PEER - 1);
+        for peer in 0..stalled as u64 {
+            for _ in 0..DEFERRED_PER_PEER - 1 {
+                deferred.push(peer, Bytes::new());
+            }
+        }
+        let small = 1_000;
+        while deferred.total < DEFERRED_TOTAL {
+            deferred.push(small, Bytes::new());
+        }
+        assert!(deferred.len_for(&small) < DEFERRED_PER_PEER - 1);
+
+        let newcomer = 9_999;
+        let victim = deferred.shed_for(&newcomer).expect("the budget is spent");
+        assert_ne!(victim, newcomer);
+        assert_eq!(deferred.len_for(&victim), DEFERRED_PER_PEER - 1);
+        deferred.forget(&victim);
+        assert_eq!(deferred.shed_for(&newcomer), None);
+
+        // A peer past its own limit is always the one shed.
+        while deferred.len_for(&small) < DEFERRED_PER_PEER {
+            deferred.push(small, Bytes::new());
+        }
+        assert_eq!(deferred.shed_for(&small), Some(small));
+    }
 }

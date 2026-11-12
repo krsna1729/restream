@@ -488,6 +488,11 @@ lifecycle and probe events (dotted).
   has at most one `Probe` in flight to Tokio; a newer probe found meanwhile
   replaces any earlier queued one and is sent when Tokio answers, so PMT
   churn costs Tokio one probe application per round trip, not one per PMT.
+- **Reader deferral.** A read peer whose send window is closed defers up to
+  32 fragments, 1024 per owner. A peer past its own limit is disconnected as
+  overloaded (`overloadDisconnects`); when the owner budget is spent, the peer
+  with the largest backlog is, never a newcomer with a short one
+  (`crates/restream-engine/src/srt/ingress_owner_send.rs`).
 - **Retirement.** A locally closed peer retires after its terminal event or
   500 ms. Stale commands for a retired peer are counted (`staleCommands`).
 - **Fault.** An owner fault ends its thread. A panic on the owner thread
