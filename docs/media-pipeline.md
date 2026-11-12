@@ -471,14 +471,31 @@ lifecycle and probe events (dotted).
   cookie, so a CONCLUSION comes from an address that received the
   listener's reply. It applies the input's latency and encryption.
   Tokio then checks IP bans, pipeline authentication, duplicate publishers and
-  read targets; a rejection disconnects that peer.
+  read targets; a rejection disconnects that peer. These run off the session
+  loop, one task per connecting peer
+  (`crates/restream-engine/src/srt/tokio_ingress/admission.rs`), so a slow
+  pipeline lookup or a contended engine lock delays only that peer, never
+  other tenants' connects, disconnects, probe answers or telemetry. The
+  lookup has a 5 s deadline (expiry disconnects the peer); registration has
+  none. At most 8 admissions per client IP, 4 publish admissions per stream
+  key (one pipeline: its reconnect churn from many IPs; readers are not
+  counted, so a viewer burst is admitted) and 256 per listener are in flight,
+  counting tasks whose peer already left; a peer over any bound is
+  disconnected at once without a lookup (logged at warn). A task is never
+  aborted, because registration precedes its result: a peer that disconnects
+  meanwhile is only unmarked, and the loop finishes whatever its task
+  registered. Listener exit waits for every in-flight admission and finishes
+  late registrations, so a restart on the same engine never finds the key
+  held as a duplicate publisher. A panicking admission task is counted as a
+  contained panic and its peer disconnected.
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
   (`crates/restream-engine/src/srt/ingress_bridge.rs`). Tokio retains at most one deferred
-  command; a full Owner command bridge backpressures event consumption instead
-  of growing a reply queue behind another Owner's topology churn. Shutdown
-  delivers that accepted command before the native Owner's peer drain.
+  command; a full Owner command bridge backpressures event consumption, and
+  the application of finished admissions, instead of growing a reply queue
+  behind another Owner's topology churn. Shutdown delivers that accepted
+  command before the native Owner's peer drain.
 - **Payload work.** Messages stay in packet chunks. A 64-slot owner-local work
   list holds them; a visit consumes at most 64 chunks, 16 per message, and
   retires at most 64 actions. Events keep queue order, so a disconnect never

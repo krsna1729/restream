@@ -1,10 +1,10 @@
 //! Shared fixtures for the SRT ingress live tests: a real listener server, a real
 //! srt-rs caller on its own thread, and the checked MPEG-TS fixture.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -91,6 +91,61 @@ impl PipelineAccessAuthenticator for TestAuth {
     }
 }
 
+/// `TestAuth` whose answers for the gated keys wait until [`GatedAuth::open`]:
+/// the production shape of a stalled pipeline lookup (pool contention, a WAL
+/// checkpoint, a disk stall). `completed` counts gated lookups that returned,
+/// so a lookup dropped before the gate opened is distinguishable.
+pub(super) struct GatedAuth {
+    inner: Arc<TestAuth>,
+    gated: HashSet<String>,
+    open: tokio::sync::watch::Sender<bool>,
+    entered: AtomicUsize,
+    completed: AtomicUsize,
+}
+
+impl GatedAuth {
+    pub(super) fn new(keys: &[&str], gated: &[&str]) -> Arc<Self> {
+        Arc::new(Self {
+            inner: TestAuth::new(keys),
+            gated: gated.iter().map(|key| (*key).to_string()).collect(),
+            open: tokio::sync::watch::Sender::new(false),
+            entered: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+        })
+    }
+
+    pub(super) fn open(&self) {
+        self.open.send_replace(true);
+    }
+
+    pub(super) fn entered(&self) -> usize {
+        self.entered.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn completed(&self) -> usize {
+        self.completed.load(Ordering::SeqCst)
+    }
+}
+
+impl PipelineAccessAuthenticator for GatedAuth {
+    fn authenticate<'a>(
+        &'a self,
+        mode: PipelineAccessMode,
+        stream_key: &'a str,
+        client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            if self.gated.contains(stream_key) {
+                self.entered.fetch_add(1, Ordering::SeqCst);
+                let mut open = self.open.subscribe();
+                let _ = open.wait_for(|open| *open).await;
+                self.completed.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.authenticate(mode, stream_key, client_ip).await
+        })
+    }
+}
+
 pub(super) fn policy_entry(key: &str, policy: SrtPipelineIngestConfig) -> SrtIngestPolicyEntry {
     SrtIngestPolicyEntry::new(format!("pipeline-{key}"), key, policy)
 }
@@ -155,6 +210,14 @@ impl TestServer {
         entries: Vec<SrtIngestPolicyEntry>,
         engine: Arc<MediaEngine>,
     ) -> Self {
+        Self::start_with_auth(TestAuth::new(auth_keys), entries, engine).await
+    }
+
+    pub(super) async fn start_with_auth(
+        auth: Arc<dyn PipelineAccessAuthenticator>,
+        entries: Vec<SrtIngestPolicyEntry>,
+        engine: Arc<MediaEngine>,
+    ) -> Self {
         // `free_port` releases its probe socket before the server binds, so a
         // parallel test can take the port in between. A listener that exits
         // early is retried on a fresh port; `SrtServer::run` logs its own start
@@ -167,7 +230,7 @@ impl TestServer {
                 &entries,
             ));
             let server = Arc::new(SrtServer::new(
-                TestAuth::new(auth_keys),
+                auth.clone(),
                 engine.clone(),
                 Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
                 store,

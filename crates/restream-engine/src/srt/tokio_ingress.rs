@@ -1,7 +1,10 @@
 //! Tokio session lifecycle for srt-rs ingress: admission, publisher and reader
 //! registration, stream probes/topology updates, disconnect bookkeeping, receive
 //! quality and deletion checks. Media never passes through here: it runs to
-//! completion on the ingress Owner thread (`ingress_media`).
+//! completion on the ingress Owner thread (`ingress_media`). Admission runs off
+//! this loop, one task per connecting peer (`admission`).
+
+mod admission;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -11,16 +14,19 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use crate::engine::{IngestRegistration, MediaEngine};
-use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
+use crate::ingest_auth::PipelineAccessAuthenticator;
 use crate::input_gate::InputTimestampMapper;
-use crate::security::{IngestSecurityService, RateLimitScope};
-use crate::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
+use crate::security::IngestSecurityService;
 use crate::ts_chunk_ring::TsChunkReader;
 use restream_mpegts::DemuxProbe;
 use restream_sync::RingBuffer;
 use restream_sync::standby_gop::StandbyGopCache;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
+
+use admission::Admissions;
+#[cfg(test)]
+pub(super) use admission::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_IP, MAX_ADMISSIONS_PER_KEY};
 
 use super::calls::CallSupervisor;
 use super::ingress_admission::{AUTH_FAILURE_CAPACITY, AdmissionGuard, ReceiverGroupId};
@@ -166,6 +172,7 @@ impl SrtServer {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
         let mut calls: CallSupervisor = CallSupervisor::new();
+        let mut admissions = Admissions::default();
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;
@@ -179,7 +186,7 @@ impl SrtServer {
                         break;
                     }
                     Some(event) => {
-                        if self.handle_ingress_event(&mut ingress, &mut sessions, &mut calls, event).await.is_err() {
+                        if self.handle_ingress_event(&mut ingress, &mut sessions, &mut calls, &mut admissions, event).await.is_err() {
                             owner_fault = Some("SRT ingress command reservation exhausted".to_string());
                             break;
                         }
@@ -193,6 +200,14 @@ impl SrtServer {
                     if let Some(command) = calls.resolved(resolved, std::time::Instant::now()) {
                         // The slot is free (the guard above), so this is accepted.
                         let _ = ingress.command(command);
+                    }
+                }
+                // Completions are backpressured like events: applying one may
+                // issue a command, so it runs only with the slot free.
+                Some(joined) = admissions.join_next(), if ingress.pending_command.is_none() => {
+                    if self.apply_admission(&mut ingress, &mut sessions, joined).await.is_err() {
+                        owner_fault = Some("SRT ingress command reservation exhausted".to_string());
+                        break;
                     }
                 }
                 Ok((scope, ip)) = auth_failure_rx.recv_async() => {
@@ -235,6 +250,7 @@ impl SrtServer {
                 "SRT ingress owner did not reach quiescence at shutdown"
             );
         }
+        self.drain_admissions(&mut admissions).await;
         for (_logical_peer, session) in sessions.drain() {
             if let Session::Publish(publisher) = session {
                 self.finish_publisher(publisher).await;
@@ -268,10 +284,11 @@ impl SrtServer {
     }
 
     async fn handle_ingress_event(
-        &self,
+        self: &Arc<Self>,
         ingress: &mut Ingress,
         sessions: &mut HashMap<IngressPeer, Session>,
         calls: &mut CallSupervisor,
+        admissions: &mut Admissions,
         event: SrtIngressEvent,
     ) -> Result<(), IngressCommand> {
         match event {
@@ -287,8 +304,7 @@ impl SrtServer {
                             .await?;
                     }
                 } else {
-                    self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
-                        .await?;
+                    self.start_admission(ingress, admissions, peer, logical_peer, stream_id)?;
                 }
             }
             SrtIngressEvent::CallStarted {
@@ -329,87 +345,10 @@ impl SrtServer {
                 if let Some(Session::Publish(publisher)) = sessions.remove(&logical_peer) {
                     self.finish_publisher(publisher).await;
                 }
+                admissions.abandon(&logical_peer);
                 calls.disconnected(logical_peer, &reason, std::time::Instant::now());
                 info!(peer = %peer, %reason, "SRT peer disconnected");
             }
-        }
-        Ok(())
-    }
-
-    async fn handle_connected(
-        &self,
-        ingress: &mut Ingress,
-        sessions: &mut HashMap<IngressPeer, Session>,
-        peer: SocketAddr,
-        logical_peer: IngressPeer,
-        stream_id: String,
-    ) -> Result<(), IngressCommand> {
-        let parsed = parse_srt_stream_id(&stream_id);
-        let client_ip = peer.ip().to_string();
-        let access_mode = match parsed.mode {
-            SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
-            SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
-        };
-        if self
-            .security
-            .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
-            .or_else(|| {
-                self.security
-                    .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
-            })
-            .is_some()
-        {
-            return ingress.disconnect(logical_peer);
-        }
-        let pipeline = match self
-            .pipeline_access
-            .authenticate(access_mode, &parsed.stream_key, &client_ip)
-            .await
-        {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
-                return ingress.disconnect(logical_peer);
-            }
-        };
-        match parsed.mode {
-            SrtConnectionMode::Publish => {
-                match self
-                    .start_publisher(peer, pipeline, parsed.stream_key)
-                    .await
-                {
-                    Ok((session, media)) => {
-                        sessions.insert(logical_peer, Session::Publish(session));
-                        ingress.command(IngressCommand::AttachPublisher {
-                            logical_peer,
-                            media,
-                        })?;
-                    }
-                    Err(error) => {
-                        warn!(peer = %peer, %error, "rejecting SRT publisher");
-                        ingress.disconnect(logical_peer)?;
-                    }
-                }
-            }
-            SrtConnectionMode::Read => match self.start_reader(&pipeline.id).await {
-                Ok(reader) => {
-                    sessions.insert(
-                        logical_peer,
-                        Session::Read {
-                            pipeline_id: pipeline.id,
-                            closing: false,
-                        },
-                    );
-                    ingress.command(IngressCommand::AttachReader {
-                        logical_peer,
-                        reader: Box::new(reader),
-                    })?;
-                }
-                Err(error) => {
-                    warn!(peer = %peer, %error, "rejecting SRT reader");
-                    ingress.disconnect(logical_peer)?;
-                }
-            },
         }
         Ok(())
     }
