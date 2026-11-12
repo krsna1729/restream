@@ -17,6 +17,13 @@ use restream_engine::hls_ingest::test_support::{
 };
 use restream_engine::hls_ingest::{HlsIngest, HlsIngestLimits};
 
+/// A fresh password per call, so no credential is a literal in source.
+fn random_password() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    format!("{:016x}", hasher.finish())
+}
+
 /// The catalog's one input; a test changes its credential, then refreshes
 /// the index as a catalog write does.
 struct Inputs(std::sync::RwLock<PushAuth>);
@@ -170,13 +177,15 @@ async fn hls_push_basic_rejects_before_polling_body_including_delete() {
     use tower::ServiceExt;
 
     let (engine, ingest) = test_ingest(HlsIngestLimits::default());
-    let (_inputs, catalog) = catalog(basic_auth("secret").await).await;
+    let password = random_password();
+    let bearer = format!("Bearer {password}");
+    let (_inputs, catalog) = catalog(basic_auth(&password).await).await;
     let app = crate::api::create_hls_ingest_router(ingest, catalog);
     for method in [Method::PUT, Method::POST, Method::DELETE] {
         for authorization in [
             None,
             Some("Basic ZW5jb2Rlcjp3cm9uZw=="),
-            Some("Bearer secret"),
+            Some(bearer.as_str()),
             Some("Basic !!!!"),
             Some("Basic ZW5jb2Rlcg=="),
         ] {
@@ -213,20 +222,21 @@ async fn hls_push_basic_rejects_before_polling_body_including_delete() {
 
 #[tokio::test]
 async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
-    let server = serve_with_auth(HlsIngestLimits::default(), basic_auth("secret").await).await;
+    let password = random_password();
+    let server = serve_with_auth(HlsIngestLimits::default(), basic_auth(&password).await).await;
     let client = reqwest::Client::new();
     for method in [
         reqwest::Method::PUT,
         reqwest::Method::POST,
         reqwest::Method::DELETE,
     ] {
-        for password in [None, Some("wrong"), Some("secret")] {
+        for attempt in [None, Some("wrong"), Some(password.as_str())] {
             let mut request = client.request(method.clone(), url(&server, STREAM_KEY, "index0.ts"));
-            if let Some(password) = password {
-                request = request.basic_auth("encoder", Some(password));
+            if let Some(attempt) = attempt {
+                request = request.basic_auth("encoder", Some(attempt));
             }
             let response = request.body(vec![0x47u8; 188]).send().await.unwrap();
-            let expected = if password == Some("secret") {
+            let expected = if attempt == Some(password.as_str()) {
                 if method == reqwest::Method::DELETE {
                     StatusCode::OK
                 } else {
@@ -244,12 +254,13 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
             }
         }
     }
-    let replacement = basic_auth("replacement").await;
+    let replacement_password = random_password();
+    let replacement = basic_auth(&replacement_password).await;
     server.set_push_auth(replacement).await;
     assert_eq!(
         client
             .delete(url(&server, STREAM_KEY, "index0.ts"))
-            .basic_auth("encoder", Some("secret"))
+            .basic_auth("encoder", Some(&password))
             .send()
             .await
             .unwrap()
@@ -259,7 +270,7 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
     assert_eq!(
         client
             .delete(url(&server, STREAM_KEY, "index0.ts"))
-            .basic_auth("encoder", Some("replacement"))
+            .basic_auth("encoder", Some(&replacement_password))
             .send()
             .await
             .unwrap()
@@ -294,7 +305,7 @@ async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
 #[tokio::test]
 async fn hls_push_basic_bounds_headers_and_refuses_ambiguous_authorization() {
     use axum::http::{HeaderMap, HeaderValue};
-    let auth = basic_auth("secret").await;
+    let auth = basic_auth(&random_password()).await;
     let oversized = format!("Basic {}", "A".repeat(super::MAX_BASIC_HEADER));
     let mut headers = HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_str(&oversized).unwrap());
