@@ -478,7 +478,7 @@ lifecycle and probe events (dotted).
   lookup or a contended registration delays only that peer's admission.
   Probe application, publisher teardown (`finish_publisher`), telemetry
   folding and deleted-pipeline checks still await engine locks on the loop
-  ([Q-124](backlog.md#q-124-correctness-opus-the-isolation-audit-covers-the-control-plane)).
+  ([Q-130](backlog.md#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)).
   The lookup has a 5 s deadline (expiry disconnects the peer); registration
   has none. In flight are at most `RESTREAM_SRT_MAX_PEERS_PER_IP` admissions
   per client IP and the Owner's peer table size (srt-rs `max_peers`, 4096)

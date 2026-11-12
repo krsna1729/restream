@@ -17,10 +17,14 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
-- [Q-123 typed dependency deadlines](#q-123-correctness-opus-every-control-plane-dependency-wait-has-a-deadline)
-- [Q-124 control-plane isolation rows](#q-124-correctness-opus-the-isolation-audit-covers-the-control-plane)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
+- [Q-127 reconciler deadlines and listener supervision](#q-127-correctness-opus-the-reconciler-never-stalls-on-one-dependency-and-listeners-restart-without-it)
+- [Q-128 deadline-bounded DNS resolver](#q-128-correctness-opus-one-deadline-bounded-resolver-serves-every-lookup)
+- [Q-129 non-blocking stdout/stderr logging](#q-129-correctness-opus-logging-never-blocks-the-thread-that-logs)
+- [Q-130 SRT loop without engine-lock awaits](#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)
+- [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
+- [Q-132 SQLite deadline executor](#q-132-correctness-opus-shared-loops-reach-sqlite-only-through-a-deadline-executor)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -146,27 +150,6 @@ the [assurance roadmap](assurance-roadmap.md).
   (`INJECTED_PANIC_MAX_CONNECTIONS`) then publishes successfully to the same
   port after the restart; the listener thread still joins at shutdown.
 
-### Q-123 [correctness] [opus] Every control-plane dependency wait has a deadline
-- Goal: database, DNS and IPC waits in the control plane go through wrappers
-  that take a deadline. `clippy.toml` `disallowed-methods` bans the raw calls
-  outside those wrappers, as it already does for lock access. RTMP publish
-  and play authentication races only against shutdown today.
-- Gates: clippy `-D warnings` with the ban in place. A test for each
-  wrapper shows that a stalled dependency returns at the deadline.
-
-### Q-124 [correctness] [opus] The isolation audit covers the control plane
-- Goal: [isolation audit](isolation-audit.md) rows, each with a bound and a
-  test, for:
-  - the engine async locks (`ingests.pipelines`, `ingests.active` and the
-    rest), so that none is held across a dependency await;
-  - the awaits still left in the SRT Tokio loop: probe application,
-    `finish_publisher`, telemetry folding and engine-placed calls;
-  - the reconciler, the egress shard command loops and the SQLite pool.
-
-  One input or output must not stall lifecycle work for another.
-- Gates: for each finding, a test where one entity's stalled dependency
-  leaves a sibling's connect, disconnect and probe answer on time.
-
 ### Q-125 [correctness] [opus] The isolation audit covers HLS push and MoQ
 - Goal: close the audit's open scope. HLS push ingest and MoQ ingest/origin
   get shared-resource rows with per-entity bounds, total bounds and proofs,
@@ -184,6 +167,128 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
   Disabling an existing boundary, for example the per-peer SRT containment,
   must fail the matching mode.
+
+### Q-127 [correctness] [opus] The reconciler never stalls on one dependency, and listeners restart without it
+- Goal: one output's slow SQLite call or file read cannot hold the
+  reconciler pass for every pipeline, and a listener fault is handled while
+  a pass runs.
+  - RTMP/SRT `restart_if_due` and the HTTP-exit arm
+    (`src/infrastructure/bootstrap/runtime.rs`) are polled only between
+    passes (`bootstrap/reconcile.rs`), so a protocol whose listener faults
+    during a stalled pass stays down for the whole stall. Move them into
+    their own `spawn_supervised` task.
+  - The pass and housekeeping run back to back with no per-step deadline,
+    on the pool the API shares (10 connections, 30 s acquire, 30 s busy,
+    `with_busy_retry` up to 8×). Move `create_job` into `EgressTask::run`.
+    Put a deadline and a `wake_at` retry on `mark_output_retries_exhausted`
+    and each pass step. Replace housekeeping's 2N `get_meta` with one bulk
+    read, and run housekeeping (prune, recording/QA plans) in its own
+    supervised task, pruning `app_logs` in `LIMIT` batches. Pull, SRT-call
+    and key-state convergence also run when `list_outputs` fails.
+  - The MoQ CA file read (`egress_moq_fabric.rs`) is awaited in the pass;
+    move it to the per-output task or put a deadline on it.
+- Gates: with every pool connection held by API reads, another pipeline's
+  output starts within its deadline; a listener faulted while a pass is
+  stalled restarts within its 1–30 s backoff; an isolation-audit row for the
+  reconciler names both tests.
+
+### Q-128 [correctness] [opus] One deadline-bounded resolver serves every lookup
+- Goal: one `resolve(host, port, deadline)` wrapper, a bounded pool of
+  threads that are never joined with in-flight dedupe by key (generalize the
+  HLS PUT resolver in `hls_put_shard.rs`). `disallowed-methods` bans
+  `std::net::ToSocketAddrs::to_socket_addrs` and `tokio::net::lookup_host`
+  outside it.
+  - HLS pull's private-address check (`hls_pull.rs`, `hls_pull/fetch.rs`)
+    runs before the cancel `select!` with no deadline, and the reconciler
+    joins the pull task (`hls_ingest/registry.rs` `ensure_pull`,
+    `cancel_pulls`): a black-holed origin nameserver stalls the pass.
+  - RTMP egress (`rtmp_shard_resolve_runtime.rs`, `rtmp_shard.rs`): one
+    FIFO resolver thread per shard, no deadline, no dedupe; a pending connect
+    takes its deadline from `LeafPolicy.resolve_timeout`.
+  - SRT egress (`egress/backends/srt/resolve_runtime.rs`, `srt.rs`): the
+    same, plus bonded hosts resolved one after another, and `spawn_batch`
+    silently drops the rest of a batch after the first full `try_send`. Those
+    outputs stay in `pending_connects` holding leaf slots and never retry; a
+    failed submit must terminate and remove the output.
+  - `srt/calls.rs` and `moq/egress/leaf.rs` migrate to the wrapper.
+  - Teardown never joins a resolver: `shutdown()` leaves the Tokio worker
+    (`spawn_blocking`), and a panicked shard's `replace_with` under the
+    `fabric.<proto>` lock detaches as `shrink` does. Fabric runtimes and
+    trust roots are built outside that lock.
+- Gates: clippy `-D warnings` with the ban; one black-holed destination on a
+  shard leaves a sibling output on that shard connected within its deadline
+  (RTMP and SRT); a pull edited while its DNS is black-holed leaves a sibling
+  pipeline converging within one pass; an SRT batch past the queue capacity
+  leaves every output with a terminal state and no leaked leaf slot.
+
+### Q-129 [correctness] [opus] Logging never blocks the thread that logs
+- Goal: the stdout/stderr tracing writer (`SplitWriter` in
+  `src/logging/mod.rs`) is synchronous; only the file sink is
+  `non_blocking`. A stalled log collector fills the pipe and `write(2)`
+  blocks whichever thread logs next: the SRT Tokio loop (every disconnect
+  logs), the reconciler, the runtime-event consumer, Owner and shard
+  threads. Use `tracing_appender::non_blocking` in lossy mode with a drop
+  counter. Count the app-log `try_send` drops too, supervise that drain and
+  the recording-metadata writer, and bound the latter's queue.
+- Gates: with a stdout writer that never returns, an SRT publisher connects
+  and disconnects on time while the drop counter rises; a panicked drain
+  restarts; the isolation-audit catalog row stops relying on stdout.
+
+### Q-130 [correctness] [opus] The SRT lifecycle loop awaits no engine lock, and selection is per pipeline
+- Goal: the loop shared by every SRT peer (`srt/tokio_ingress.rs`) still
+  awaits engine locks inline: `start_caller` registers on the loop,
+  `apply_probe` and `finish_publisher` take `selection_lock` and the ingest
+  maps, `fold_telemetry` reads `sessions`, `close_deleted_sessions` reads
+  `pipelines`. Route `start_caller` through `Admissions`; run `apply_probe`
+  and `finish_publisher` in per-peer tasks that answer through a join set;
+  keep the `Arc<ActiveIngest>` in `PublisherSession` so telemetry writes
+  `metadata.quality` with no lock; `close_deleted_sessions` uses `try_read`
+  and skips a tick. `selection_lock` (`engine_registries.rs`) serializes
+  every pipeline's ingest lifecycle; key it by `pipeline_id`, keeping the
+  map order documented at `IngestRegistry`. Amortize the tracked-IP eviction
+  in `security.rs` that runs on the loop.
+- Gates: with one pipeline's selection held by a stuck registration, an SRT
+  publisher on another pipeline connects, gets its probe answer and
+  disconnects on time; with `ingests.sessions` held for writing, the loop
+  answers another peer's probe inside the Owner's 2 s probe hold.
+
+### Q-131 [correctness] [opus] Scheduler, recording and planning faults stay with their own entity
+- Goal:
+  - The scheduler awaits `run_occurrence` serially (`src/api/schedules.rs`):
+    a slow statement or a file-ingest stop's `kill` + `wait` pushes other
+    pipelines' occurrences past `RUN_GRACE_MS`, recorded as Skip. Spawn each
+    `Due::Run` with a deadline around `execute`.
+  - A failed meta lookup reads as "stop" (`application/recording.rs`,
+    `stream_qa.rs`), so one pool timeout stops every recording and QA
+    sampler it hits. Make the lookup tri-state and keep on error.
+  - The per-output egress planning loop (`application/egress.rs`) has no
+    panic boundary; one panicking output aborts the pass on every retry.
+    Wrap each iteration in `contained`.
+  - Child processes awaited from async code go through one
+    `reap(child, grace)` helper (from `reap_external_child`) and `run_tool`;
+    `disallowed-methods` bans `tokio::process::Child::{wait,
+    wait_with_output}` and `tokio::process::Command::output` elsewhere.
+- Gates: a stalled occurrence leaves another pipeline's due occurrence run,
+  not skipped; a pool timeout during housekeeping stops no recording or QA
+  sampler; an output whose planning panics leaves the later outputs started
+  and stopped as wanted in the same pass; clippy `-D warnings` with the ban.
+
+### Q-132 [correctness] [opus] Shared loops reach SQLite only through a deadline executor
+- Goal: a `Db::deadline(d)`-style executor in `src/db/`, applied outside
+  `with_busy_retry` (which multiplies the 30 s busy wait up to 8×).
+  `disallowed-methods` bans sqlx query execution (`execute`, `fetch*`) and
+  `Pool::{acquire, begin, connect_with}` outside `src/db/`. Repository
+  functions take a deadline: the shared loops (reconciler, topology, egress
+  start, housekeeping, recording/QA, scheduler, catalog reload, runtime-event
+  persistence) pass seconds with a `wake_at` retry, API handlers a long
+  default. Lifecycle work gets capacity API load cannot take (a small second
+  pool or a short acquire deadline). A session check that hits a pool error
+  keeps the cached session and answers 503 instead of logging the operator
+  out (`api/state.rs`).
+- Gates: clippy `-D warnings` with the ban; with every pool connection held
+  by API reads, each shared-loop call returns at its deadline and the next
+  pass retries, while another pipeline's connect, disconnect and probe answer
+  stay on time; a session survives a pool timeout.
 
 ## Not planned
 
