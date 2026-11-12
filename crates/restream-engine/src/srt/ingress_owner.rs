@@ -373,12 +373,18 @@ impl OwnerLoop {
                 identity,
                 ring,
             } => {
-                self.media.probe_applied(
+                if let Some((identity, probe)) = self.media.probe_applied(
                     logical_peer.id,
                     identity,
                     ring,
                     &self.stats.ingress_owner,
-                );
+                ) {
+                    self.pending_events.push_back(SrtIngressEvent::Probe {
+                        logical_peer,
+                        identity,
+                        probe: Box::new(probe),
+                    });
+                }
             }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer.id, now),
             IngressCommand::Call {

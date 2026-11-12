@@ -701,14 +701,20 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
         !Arc::ptr_eq(&original, &replacement),
         "the first probe must resize"
     );
-    let mut second = None;
+    // The newer topology waits for the answer to the first probe.
     for chunk in topology_chunks(false, true, 1) {
-        if let Some(probe) = media.on_payload(1, chunk, &stats) {
-            second = Some(probe);
-        }
+        assert!(media.on_payload(1, chunk, &stats).is_none());
     }
-    let second = second.unwrap();
-    let second_identity = media.probe_identity(1).unwrap();
+    let old_write = original.get_write_idx();
+    let new_write = replacement.get_write_idx();
+    let (second_identity, second) = media
+        .probe_applied(1, first_identity, first_handoff, &stats)
+        .expect("the queued probe follows the superseded answer");
+    assert_eq!(
+        replacement.get_write_idx(),
+        new_write,
+        "superseded ack cannot release held media"
+    );
     let second_handoff = server
         .server
         .apply_probe(&session, second_identity, second.clone())
@@ -716,14 +722,6 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
     assert!(
         Arc::ptr_eq(second_handoff.as_ref().unwrap(), &replacement),
         "a no-resize response must still carry the current shared ring"
-    );
-    let old_write = original.get_write_idx();
-    let new_write = replacement.get_write_idx();
-    media.probe_applied(1, first_identity, first_handoff, &stats);
-    assert_eq!(
-        replacement.get_write_idx(),
-        new_write,
-        "superseded ack cannot release held media"
     );
     media.probe_applied(1, second_identity, second_handoff, &stats);
     assert_eq!(original.get_write_idx(), old_write);

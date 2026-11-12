@@ -484,7 +484,10 @@ lifecycle and probe events (dotted).
   visit rather than adding a second Restream-side delivery scheduler.
 - **Probe hold.** Before attach, an owner holds up to 2.5 MB per peer and
   32 MiB in total. After the probe it holds up to 4 MiB per publisher, 64 MiB
-  per owner, for 2 s; overflow publishes to the current ring.
+  per owner, for 2 s; overflow publishes to the current ring. Each publisher
+  has at most one `Probe` in flight to Tokio; a newer probe found meanwhile
+  replaces any earlier queued one and is sent when Tokio answers, so PMT
+  churn costs Tokio one probe application per round trip, not one per PMT.
 - **Retirement.** A locally closed peer retires after its terminal event or
   500 ms. Stale commands for a retired peer are counted (`staleCommands`).
 - **Fault.** An owner fault ends its thread. A panic on the owner thread

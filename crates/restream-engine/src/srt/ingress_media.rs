@@ -148,6 +148,12 @@ struct PublisherSlot {
     held_bytes: usize,
     /// First outstanding probe's send time: absolute hold timeout and ack latency.
     probe_sent_at: Option<Instant>,
+    /// The revision sent to Tokio and not yet answered. At most one probe is
+    /// in flight per publisher, so PMT churn cannot flood the control plane.
+    in_flight: Option<u64>,
+    /// The newest probe found while one was in flight (a probe replaces the
+    /// whole track set, so only the newest matters); sent on the answer.
+    queued: Option<DemuxProbe>,
 }
 
 /// Identifies a container update within exactly one ingest attempt. A late
@@ -301,6 +307,11 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             slot.probe_sent_at = Some(Instant::now());
         }
         slot.probe_pending = true;
+        if slot.in_flight.is_some() {
+            slot.queued = Some(probe);
+            return None;
+        }
+        slot.in_flight = Some(slot.probe_revision);
         Some(probe)
     }
 
@@ -403,6 +414,8 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
                 held: VecDeque::new(),
                 held_bytes: 0,
                 probe_sent_at: None,
+                in_flight: None,
+                queued: None,
             })
             .into_mut();
         let mut probe = None;
@@ -425,30 +438,44 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         self.readers.insert(peer, reader);
     }
 
+    /// The identity of the probe last returned for `peer`: the one in
+    /// flight.
     pub(crate) fn probe_identity(&self, peer: K) -> Option<ProbeIdentity> {
         let slot = self.publishers.get(&peer)?;
         Some(ProbeIdentity {
             attempt_id: slot.media.registration.attempt_id,
-            revision: slot.probe_revision,
+            revision: slot.in_flight.unwrap_or(slot.probe_revision),
         })
     }
 
     /// Tokio applied the stream probe; `ring` replaces the publisher's ring.
-    /// Held packets flow in their original order.
+    /// Held packets flow in their original order. When a newer probe was
+    /// found meanwhile, the answer to the older one only clears the way: its
+    /// ring is superseded, packets stay held, and the newer probe is returned
+    /// for Tokio to apply next.
     pub(crate) fn probe_applied(
         &mut self,
         peer: K,
         identity: ProbeIdentity,
         ring: Option<Arc<RingBuffer>>,
         stats: &SrtIngressOwnerStats,
-    ) {
-        let Some(slot) = self.publishers.get_mut(&peer) else {
-            return;
-        };
+    ) -> Option<(ProbeIdentity, DemuxProbe)> {
+        let slot = self.publishers.get_mut(&peer)?;
         if identity.attempt_id != slot.media.registration.attempt_id
-            || identity.revision != slot.probe_revision
+            || slot.in_flight != Some(identity.revision)
         {
-            return;
+            return None;
+        }
+        slot.in_flight = None;
+        if identity.revision != slot.probe_revision
+            && let Some(next) = slot.queued.take()
+        {
+            slot.in_flight = Some(slot.probe_revision);
+            let next_identity = ProbeIdentity {
+                attempt_id: identity.attempt_id,
+                revision: slot.probe_revision,
+            };
+            return Some((next_identity, next));
         }
         if let Some(sent_at) = slot.probe_sent_at.take() {
             let waited = u64::try_from(sent_at.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -460,6 +487,7 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
             slot.media.ring_buffer = ring;
         }
         Self::release_held(slot, &mut self.held_bytes);
+        None
     }
 
     /// The peer ended: flush its publisher's media into the ring and drop
