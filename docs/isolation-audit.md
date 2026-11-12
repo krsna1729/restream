@@ -87,7 +87,11 @@ the RTMP admission deadline, lock poisoning, the `ts_demux` fuzz target).
   `clippy::arithmetic_side_effects` instead (F6), and new parsers take the F6
   deny list.
 - **Scope (open).** This audit covers RTMP, SRT and egress. HLS push ingest
-  and MoQ ingest/origin entities have no rows yet.
+  and MoQ ingest/origin entities have no rows yet, except that a MoQ listener
+  thread panic outside a connection task is caught at the thread entry and
+  reported (`restream.moq.ingest.faulted`, test
+  `an_accept_loop_panic_is_contained_at_the_thread_entry`); MoQ ingest then
+  stays stopped until restart, since nothing supervises it.
 
 ## Compile-time guards
 

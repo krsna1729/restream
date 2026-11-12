@@ -286,6 +286,49 @@ async fn an_admitted_viewer_leaves_the_connection_cap_to_publishers() {
     engine.shutdown_listeners();
 }
 
+/// A panic in the accept loop, outside every connection task, is caught at
+/// the thread entry: counted, and the thread ends without a panic escaping
+/// its join handle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_accept_loop_panic_is_contained_at_the_thread_entry() {
+    let (engine, addr) = listen(INJECTED_PANIC_MAX_CONNECTIONS, "panic").await;
+    let before = crate::panic_boundary::contained_panics();
+    tokio::task::spawn_blocking(move || {
+        run(async move {
+            let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
+            let tls = loopback_client_tls(transport::MOQ_ALPNS);
+            // The listener panics on this connection; the attempt only has
+            // to reach it.
+            let _ = compio::time::timeout(
+                Duration::from_secs(1),
+                transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls),
+            )
+            .await;
+        });
+    })
+    .await
+    .unwrap();
+
+    let threads = engine.drain_os_thread_handles();
+    assert_eq!(threads.len(), 1, "the listener registered its thread");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            threads
+                .into_iter()
+                .for_each(|thread| thread.join().expect("no panic escapes the thread"))
+        }),
+    )
+    .await
+    .expect("the faulted listener thread ends")
+    .unwrap();
+    assert!(
+        crate::panic_boundary::contained_panics() > before,
+        "the listener panic is counted"
+    );
+    engine.shutdown_listeners();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_publisher_feeds_a_moq_input_and_shutdown_joins_the_thread() {
     let (engine, addr) = listen(4, "publish").await;
