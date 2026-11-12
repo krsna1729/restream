@@ -37,14 +37,17 @@ async fn egress_with_delivery(
 #[tokio::test]
 async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
     let engine = Arc::new(MediaEngine::new());
+    let mut leases = Vec::new();
     for (pipeline, key) in [("pipe-a", "key-a"), ("pipe-b", "key-b")] {
         let ring = engine.get_or_create_pipeline(pipeline).await;
         ring.push(packet(1_000));
         ring.push(packet(500));
-        let _ = engine
-            .try_register_ingest_attempt(pipeline, key, "rtmp")
-            .await
-            .unwrap();
+        leases.push(
+            engine
+                .try_register_ingest(pipeline, key, "rtmp")
+                .await
+                .unwrap(),
+        );
     }
     egress_with_delivery(&engine, "a-ok", "pipe-a", Some((8e6, 1.0))).await;
     egress_with_delivery(&engine, "a-slow", "pipe-a", Some((2e6, 0.25))).await;

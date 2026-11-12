@@ -75,3 +75,96 @@ async fn an_owner_thread_panic_is_contained_and_stops_the_listener_cleanly() {
         "the owner panic is counted"
     );
 }
+
+/// Accepts every publish; a play lookup unwinds, as a bug in the control
+/// session would after the publisher registered.
+struct PanicOnPlayAuthenticator;
+
+impl PipelineAccessAuthenticator for PanicOnPlayAuthenticator {
+    fn authenticate<'a>(
+        &'a self,
+        mode: PipelineAccessMode,
+        stream_key: &'a str,
+        _client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            if mode == PipelineAccessMode::RtmpPlay {
+                std::panic::resume_unwind(Box::new("injected RTMP control panic"));
+            }
+            Ok(AuthenticatedPipeline {
+                id: "pipe-control-panic".to_string(),
+                input_id: stream_key.to_string(),
+                selected: true,
+            })
+        })
+    }
+}
+
+/// Spawn a control session and ask it to authorize a publish on `key`.
+async fn request_publish(
+    engine: &Arc<MediaEngine>,
+    key: &str,
+) -> (
+    tokio::sync::mpsc::Sender<super::ingest::RtmpControlCommand>,
+    tokio::task::JoinHandle<()>,
+    bool,
+) {
+    let (commands, receiver) = tokio::sync::mpsc::channel(1);
+    let session = tokio::spawn(super::ingest::run_rtmp_control_session(
+        receiver,
+        CancellationToken::new(),
+        Arc::new(PanicOnPlayAuthenticator),
+        Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
+        engine.clone(),
+    ));
+    let (reply, response) = tokio::sync::oneshot::channel();
+    commands
+        .send(super::ingest::RtmpControlCommand::PublishRequested {
+            stream_key: key.to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            client_addr: "127.0.0.1:1".to_string(),
+            reply,
+        })
+        .await
+        .unwrap();
+    let accepted = matches!(
+        response.await.unwrap(),
+        super::ingest::PublishAuthorization::Accepted(_)
+    );
+    (commands, session, accepted)
+}
+
+/// A publisher's control session that unwinds after registering must not
+/// keep the stream key: the next publisher on that key is accepted.
+#[tokio::test]
+async fn a_panicking_control_session_frees_its_stream_key() {
+    let engine = Arc::new(MediaEngine::new());
+    let (commands, session, accepted) = request_publish(&engine, "key-control-panic").await;
+    assert!(accepted, "the first publish is accepted");
+    let (reply, _response) = tokio::sync::oneshot::channel();
+    commands
+        .send(super::ingest::RtmpControlCommand::PlayRequested {
+            stream_key: "key-control-panic".to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            reply,
+        })
+        .await
+        .unwrap();
+    let ended = session.await.expect_err("the control session unwinds");
+    assert!(ended.is_panic());
+
+    let republished = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_commands, _session, accepted) = request_publish(&engine, "key-control-panic").await;
+            if accepted {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        republished.is_ok(),
+        "a panicked control session left its stream key registered"
+    );
+}

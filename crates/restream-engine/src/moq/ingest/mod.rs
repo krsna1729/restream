@@ -18,6 +18,7 @@ use tracing::warn;
 
 use crate::engine::{IngestRegistration, MediaEngine};
 use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use crate::security::{IngestSecurityService, RateLimitScope};
 use restream_sync::RingBuffer;
 
@@ -37,16 +38,43 @@ pub(crate) const MOQ_PROTOCOL: &str = "moq";
 /// any lookup.
 pub(crate) const MAX_STREAM_KEY_BYTES: usize = 512;
 
-/// What Tokio keeps about an admitted publisher: identity, never media.
+/// What the Owner keeps about an admitted publisher: identity, never the
+/// lease.
 #[derive(Clone)]
 pub(crate) struct PublisherSession {
     pub(crate) pipeline_id: String,
     pub(crate) registration: IngestRegistration,
 }
 
-/// An admitted publisher: Tokio's bookkeeping half and the media half the
-/// Owner runs.
+/// The Owner's handle to end its attempt in order: the reason goes to the
+/// Tokio task that holds the attempt's lease ([`hold_admission`]). Dropped
+/// without one, that task drops the lease, which releases the attempt as
+/// abandoned.
+pub(crate) struct AttemptEnd(tokio::sync::oneshot::Sender<String>);
+
+impl AttemptEnd {
+    pub(crate) fn new() -> (Self, tokio::sync::oneshot::Receiver<String>) {
+        let (end, ended) = tokio::sync::oneshot::channel();
+        (Self(end), ended)
+    }
+
+    /// Never blocks: the Owner thread calls it.
+    pub(crate) fn finish(self, reason: String) {
+        let _ = self.0.send(reason);
+    }
+}
+
+/// An admitted publisher as the Owner gets it: its identity, the media half
+/// it runs and the handle that ends the attempt.
 pub(crate) struct Admission {
+    pub(crate) session: PublisherSession,
+    pub(crate) media: PublisherMedia,
+    pub(crate) end: AttemptEnd,
+}
+
+/// An admitted publisher as Tokio registered it; the lease stays on Tokio.
+pub(crate) struct Registered {
+    pub(crate) lease: IngestLease,
     pub(crate) session: PublisherSession,
     pub(crate) media: PublisherMedia,
 }
@@ -126,7 +154,7 @@ impl MoqIngestServer {
         &self,
         peer: SocketAddr,
         stream_key: &str,
-    ) -> Result<Admission, Rejection> {
+    ) -> Result<Registered, Rejection> {
         let client_ip = peer.ip().to_string();
         if self
             .security
@@ -148,7 +176,9 @@ impl MoqIngestServer {
                 }
             })?;
         let ring = self.engine.get_or_create_pipeline(&pipeline.id).await;
-        let registration = self
+        // Every early return below drops the lease, which releases the
+        // attempt.
+        let lease = self
             .engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
@@ -162,19 +192,15 @@ impl MoqIngestServer {
         self.engine
             .update_ingest_session_meta(
                 &pipeline.id,
-                &registration,
+                lease.registration(),
                 None,
                 None,
                 Some(peer.to_string()),
             )
             .await;
-        let session = PublisherSession {
-            pipeline_id: pipeline.id,
-            registration,
-        };
         let Some(counters) = self
             .engine
-            .with_ingest_session(&session.registration, |ingest| PublisherCounters {
+            .with_ingest_session(lease.registration(), |ingest| PublisherCounters {
                 bytes_received: ingest.bytes_received.clone(),
                 first_media_ms: ingest.first_media_ms.clone(),
                 ingest_metrics: ingest.metrics.clone(),
@@ -183,12 +209,13 @@ impl MoqIngestServer {
             })
             .await
         else {
-            self.engine
-                .unregister_ingest_if_current(&session.pipeline_id, &session.registration)
-                .await;
             return Err(Rejection::Unavailable(
                 "the ingest session disappeared during registration".to_string(),
             ));
+        };
+        let session = PublisherSession {
+            pipeline_id: pipeline.id,
+            registration: lease.registration().clone(),
         };
         let media = PublisherMedia::new(
             session.registration.clone(),
@@ -196,7 +223,11 @@ impl MoqIngestServer {
             counters,
             self.probe_hold,
         );
-        Ok(Admission { session, media })
+        Ok(Registered {
+            lease,
+            session,
+            media,
+        })
     }
 
     /// Record a publisher's stream probe and adapt the pipeline ring when
@@ -254,18 +285,13 @@ impl MoqIngestServer {
     }
 
     /// Ingest bookkeeping after the Owner flushed the publisher's media.
-    pub(crate) async fn finish(&self, session: PublisherSession, reason: String) {
-        self.engine
-            .record_ingest_disconnect_if_current(
-                &session.pipeline_id,
-                &session.registration,
-                Some("disconnect"),
-                Some(reason),
-                false,
-            )
-            .await;
-        self.engine
-            .unregister_ingest_if_current(&session.pipeline_id, &session.registration)
+    pub(crate) async fn finish(&self, lease: IngestLease, reason: String) {
+        lease
+            .finish(IngestEnd::Disconnected {
+                phase: "disconnect",
+                reason,
+                had_error: false,
+            })
             .await;
     }
 }
@@ -280,7 +306,7 @@ pub(crate) trait Lifecycle {
         probe: MoqProbe,
     ) -> Option<Arc<RingBuffer>>;
     /// Fire and forget: the media is already flushed.
-    fn finish(&self, session: PublisherSession, reason: String);
+    fn finish(&self, end: AttemptEnd, reason: String);
 }
 
 /// The production bridge: each request runs as a Tokio task and answers
@@ -303,8 +329,12 @@ impl Lifecycle for TokioLifecycle {
         let server = self.server.clone();
         let stream_key = stream_key.to_string();
         self.runtime.spawn(async move {
-            let result = server.admit(peer, &stream_key).await;
-            deliver_admission(&server, answer, result).await;
+            match server.admit(peer, &stream_key).await {
+                Ok(registered) => hold_admission(&server, answer, registered).await,
+                Err(rejection) => {
+                    let _ = answer.send(Err(rejection));
+                }
+            }
         });
         answered
             .await
@@ -325,32 +355,46 @@ impl Lifecycle for TokioLifecycle {
         answered.await.ok().flatten()
     }
 
-    fn finish(&self, session: PublisherSession, reason: String) {
-        let server = self.server.clone();
-        self.runtime
-            .spawn(async move { server.finish(session, reason).await });
+    fn finish(&self, end: AttemptEnd, reason: String) {
+        end.finish(reason);
     }
 }
 
-/// Hand an admission to the connection that asked for it. A connection that
-/// went away meanwhile cannot take it, so the registration is released here
-/// rather than left holding the input.
-async fn deliver_admission(
+/// Hand an admission to the connection that asked for it, then hold its
+/// lease on Tokio until the connection ends the attempt. A connection that
+/// went away meanwhile cannot take it, so the attempt is released here. One
+/// whose `AttemptEnd` drops without a reason (its session unwound, its
+/// listener was torn down) lets the lease drop here, which releases the
+/// attempt as abandoned.
+async fn hold_admission(
     server: &MoqIngestServer,
     answer: tokio::sync::oneshot::Sender<Result<Admission, Rejection>>,
-    result: Result<Admission, Rejection>,
+    Registered {
+        lease,
+        session,
+        media,
+    }: Registered,
 ) {
-    if let Err(Ok(admission)) = answer.send(result) {
+    let (end, ended) = AttemptEnd::new();
+    if answer
+        .send(Ok(Admission {
+            session,
+            media,
+            end,
+        }))
+        .is_err()
+    {
         warn!(
-            pipeline_id = %admission.session.pipeline_id,
+            pipeline_id = %lease.pipeline_id(),
             "MoQ publisher left during admission; releasing its input"
         );
         server
-            .finish(
-                admission.session,
-                "MoQ publisher left during admission".to_string(),
-            )
+            .finish(lease, "MoQ publisher left during admission".to_string())
             .await;
+        return;
+    }
+    if let Ok(reason) = ended.await {
+        server.finish(lease, reason).await;
     }
 }
 

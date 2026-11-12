@@ -13,7 +13,7 @@ use super::*;
 /// a session with no owner.
 #[tokio::test]
 async fn a_registration_dropped_at_a_write_guard_leaves_nothing_behind() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let held = engine.ingests.sessions.read().await;
     let mut attempt =
         Box::pin(engine.try_register_pipeline_input_attempt("pipe", "input", "key", "hls", true));
@@ -45,8 +45,8 @@ async fn a_registration_dropped_at_a_write_guard_leaves_nothing_behind() {
 /// forwarding as it was, not registered and silent.
 #[tokio::test]
 async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_pipeline_input_attempt("pipe", "first", "key-1", "hls", true)
         .await
         .expect("the first input registers");
@@ -97,7 +97,7 @@ async fn a_registration_dropped_after_the_demote_restores_the_previous_input() {
 async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     use restream_core::metadata::{AudioMeta, VideoMeta};
 
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline("pipe").await;
     let first = engine
         .try_register_pipeline_input_attempt("pipe", "first", "key1", "srt", true)
@@ -118,11 +118,17 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
         ..AudioMeta::default()
     };
     engine
-        .replace_ingest_session_tracks(&first, Some(video), vec![audio.clone()], 1, None)
+        .replace_ingest_session_tracks(
+            first.registration(),
+            Some(video),
+            vec![audio.clone()],
+            1,
+            None,
+        )
         .await;
     ring.set_video_parameter_sets(vec![1, 2, 3]);
     engine
-        .replace_ingest_session_tracks(&backup, None, vec![audio], 0, None)
+        .replace_ingest_session_tracks(backup.registration(), None, vec![audio], 0, None)
         .await;
     assert_eq!(
         ring.codec_hint_str(),
@@ -138,14 +144,14 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     );
     assert!(ring.video_config().is_none());
     assert!(ring.audio_tracks().is_some());
-    backup.cancel_token.cancel();
+    backup.registration().cancel_token.cancel();
     let replacement = engine
         .try_register_pipeline_input_attempt("pipe", "backup", "key3", "srt", true)
         .await
         .unwrap();
     engine
         .replace_ingest_session_tracks(
-            &replacement,
+            replacement.registration(),
             Some(VideoMeta {
                 codec: "h264".to_string(),
                 ..VideoMeta::default()
@@ -157,11 +163,11 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
         .await;
     // A late old-session removal must not erase the replacement's video.
     engine
-        .replace_ingest_session_tracks(&backup, None, Vec::new(), 0, None)
+        .replace_ingest_session_tracks(backup.registration(), None, Vec::new(), 0, None)
         .await;
     assert_eq!(ring.codec_hint_str(), "h264");
     let metadata = engine
-        .with_ingest_session(&replacement, |ingest| ingest.metadata())
+        .with_ingest_session(replacement.registration(), |ingest| ingest.metadata())
         .await
         .unwrap();
     assert!(metadata.video.is_some());
@@ -171,19 +177,20 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
 
 #[tokio::test]
 async fn authoritative_snapshot_clears_an_obsolete_sequence_header() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine.get_or_create_pipeline("pipe").await;
-    let registration = engine
+    let lease = engine
         .try_register_pipeline_input_attempt("pipe", "input", "key", "srt", true)
         .await
         .unwrap();
+    let registration = lease.registration();
     let video = |codec: &str| restream_core::metadata::VideoMeta {
         codec: codec.to_string(),
         ..Default::default()
     };
     engine
         .replace_ingest_session_tracks(
-            &registration,
+            registration,
             Some(video("h264")),
             Vec::new(),
             1,
@@ -192,17 +199,17 @@ async fn authoritative_snapshot_clears_an_obsolete_sequence_header() {
         .await;
     assert!(
         engine
-            .get_ingest_session_sequence_headers(&registration)
+            .get_ingest_session_sequence_headers(registration)
             .await
             .0
             .is_some()
     );
     engine
-        .replace_ingest_session_tracks(&registration, Some(video("hevc")), Vec::new(), 1, None)
+        .replace_ingest_session_tracks(registration, Some(video("hevc")), Vec::new(), 1, None)
         .await;
     assert!(
         engine
-            .get_ingest_session_sequence_headers(&registration)
+            .get_ingest_session_sequence_headers(registration)
             .await
             .0
             .is_none()

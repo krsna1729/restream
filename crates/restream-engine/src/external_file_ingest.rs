@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tracing::{error, warn};
 
 use crate::engine::{IngestRegistration, MediaEngine};
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use restream_sync::RingBuffer;
 
 use crate::ingest_publisher::IngestTimestamps;
@@ -70,64 +71,80 @@ pub struct ExternalFileIngestRuntime {
     pub pipeline_id: String,
     pub source: ExternalFileIngestSource,
     pub ring_buffer: Arc<RingBuffer>,
+    /// The attempt's identity; its lease is the coordinator's.
     pub registration: IngestRegistration,
 }
 
-/// Spawns and supervises one registered external file-ingest attempt.
-///
-/// The caller remains responsible for rolling back its registration when the
-/// initial FFmpeg process cannot be spawned.
-pub fn start_external_file_ingest(runtime: ExternalFileIngestRuntime) -> Result<(), String> {
-    let spawned = process::spawn_child(&runtime.source, 0, true)?;
+/// Spawns and supervises one registered external file-ingest attempt, which
+/// `lease` ends. A failed first spawn releases the attempt before returning.
+pub async fn start_external_file_ingest(
+    runtime: ExternalFileIngestRuntime,
+    lease: IngestLease,
+) -> Result<(), String> {
+    let spawned = match process::spawn_child(&runtime.source, 0, true) {
+        Ok(spawned) => spawned,
+        Err(error) => {
+            lease.finish(IngestEnd::Released).await;
+            return Err(error);
+        }
+    };
     let runtime = Arc::new(runtime);
-    let cleanup = CoordinatorCleanup::new(runtime.clone(), spawned.child.id());
+    let cleanup = CoordinatorCleanup::new(runtime.clone(), lease, spawned.child.id());
     tokio::spawn(run_external_file_ingest(runtime, spawned, cleanup));
     Ok(())
 }
 
-/// Even an aborted supervisor must reap its child and remove its registration
-/// on CONTROL. Constructed before spawn to cover an abort before the first poll.
+/// Even an aborted supervisor must reap its child and clear its file-ingest
+/// state on CONTROL, and its dropped lease releases the attempt. Constructed
+/// before spawn to cover an abort before the first poll.
 struct CoordinatorCleanup {
     runtime: Arc<ExternalFileIngestRuntime>,
+    lease: Option<IngestLease>,
     control: tokio::runtime::Handle,
-    armed: bool,
     child_pid: Option<u32>,
 }
 
 impl CoordinatorCleanup {
-    fn new(runtime: Arc<ExternalFileIngestRuntime>, child_pid: Option<u32>) -> Self {
+    fn new(
+        runtime: Arc<ExternalFileIngestRuntime>,
+        lease: IngestLease,
+        child_pid: Option<u32>,
+    ) -> Self {
         Self {
             runtime,
+            lease: Some(lease),
             control: tokio::runtime::Handle::current(),
-            armed: true,
             child_pid,
         }
     }
 
+    /// The run loop already recorded how the attempt ended (end of input,
+    /// an FFmpeg exit, a reader failure).
     async fn finish(&mut self) {
-        cleanup_runtime(&self.runtime, self.child_pid).await;
-        self.armed = false;
+        self.end(IngestEnd::Released).await;
     }
 
     async fn fail(&mut self, error: String) {
         self.runtime.registration.cancel_token.cancel();
-        self.runtime
-            .engine
-            .record_ingest_disconnect_if_current(
-                &self.runtime.pipeline_id,
-                &self.runtime.registration,
-                Some("media-executor"),
-                Some(error),
-                true,
-            )
-            .await;
-        self.finish().await;
+        self.end(IngestEnd::Disconnected {
+            phase: "media-executor",
+            reason: error,
+            had_error: true,
+        })
+        .await;
+    }
+
+    async fn end(&mut self, end: IngestEnd<'_>) {
+        cleanup_runtime(&self.runtime, self.child_pid).await;
+        if let Some(lease) = self.lease.take() {
+            lease.finish(end).await;
+        }
     }
 }
 
 impl Drop for CoordinatorCleanup {
     fn drop(&mut self) {
-        if !self.armed {
+        if self.lease.is_none() {
             return;
         }
         self.runtime.registration.cancel_token.cancel();
@@ -162,40 +179,36 @@ async fn stop_owned_child(runtime: &ExternalFileIngestRuntime, child_pid: Option
     }
 }
 
+/// Reaps the child and clears the file-ingest state of this attempt (not of
+/// a replacement); the lease releases the attempt itself.
 async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<u32>) {
     stop_owned_child(runtime, child_pid).await;
+    // Replacement registration needs sessions.write(): hold this guard
+    // through active removal so a newer generation cannot be cleared.
+    // Never nest children and active guards (snapshots take active first).
+    let sessions = runtime.engine.ingests.sessions.read().await;
+    if sessions
+        .get(&runtime.registration.input_id)
+        .is_none_or(|session| {
+            session.pipeline_id == runtime.pipeline_id
+                && session.attempt_id == runtime.registration.attempt_id
+        })
     {
-        // Replacement registration needs sessions.write(): hold this guard
-        // through active removal so a newer generation cannot be cleared.
-        // Never nest children and active guards (snapshots take active first).
-        let sessions = runtime.engine.ingests.sessions.read().await;
-        if sessions
-            .get(&runtime.registration.input_id)
-            .is_none_or(|session| {
-                session.pipeline_id == runtime.pipeline_id
-                    && session.attempt_id == runtime.registration.attempt_id
-            })
-        {
-            runtime
-                .engine
-                .file_ingests
-                .active
-                .write()
-                .await
-                .remove(&runtime.ingest_id);
-            runtime
-                .engine
-                .file_ingests
-                .positions
-                .write()
-                .await
-                .remove(&runtime.ingest_id);
-        }
+        runtime
+            .engine
+            .file_ingests
+            .active
+            .write()
+            .await
+            .remove(&runtime.ingest_id);
+        runtime
+            .engine
+            .file_ingests
+            .positions
+            .write()
+            .await
+            .remove(&runtime.ingest_id);
     }
-    runtime
-        .engine
-        .unregister_ingest_if_current(&runtime.pipeline_id, &runtime.registration)
-        .await;
 }
 
 async fn run_external_file_ingest(
@@ -415,16 +428,16 @@ mod tests {
     use restream_mpegts::{TsDemuxer, TsMuxer};
     use restream_sync::PublishWake;
 
-    async fn registered_runtime(name: &str) -> Arc<ExternalFileIngestRuntime> {
+    async fn registered_runtime(name: &str) -> (Arc<ExternalFileIngestRuntime>, IngestLease) {
         let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
             crate::config::EngineConfig::default(),
         )));
         let ring_buffer = engine.get_or_create_pipeline(name).await;
-        let registration = engine
-            .try_register_ingest_attempt(name, name, "file")
+        let lease = engine
+            .try_register_ingest(name, name, "file")
             .await
             .expect("register file ingest");
-        Arc::new(ExternalFileIngestRuntime {
+        let runtime = Arc::new(ExternalFileIngestRuntime {
             engine,
             ingest_id: name.to_string(),
             pipeline_id: name.to_string(),
@@ -436,8 +449,9 @@ mod tests {
                 target_gop_seconds: 4,
             },
             ring_buffer,
-            registration,
-        })
+            registration: lease.registration().clone(),
+        });
+        (runtime, lease)
     }
 
     fn stdout_pair() -> (ChildStdout, UnixStream) {
@@ -489,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn media_file_pump_publishes_with_control_blocked_and_preserves_retry_timestamps() {
-        let runtime = registered_runtime("file-media-progress").await;
+        let (runtime, _lease) = registered_runtime("file-media-progress").await;
         let (published, publication) = mpsc::channel();
         runtime
             .ring_buffer
@@ -538,7 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn media_file_pump_cancels_pending_read_with_control_blocked() {
-        let runtime = registered_runtime("file-media-cancel").await;
+        let (runtime, _lease) = registered_runtime("file-media-cancel").await;
         let (stdout, mut writer) = stdout_pair();
         writer
             .set_read_timeout(Some(Duration::from_secs(3)))
@@ -562,7 +576,7 @@ mod tests {
     }
 
     async fn assert_coordinator_cleanup(abort: bool) {
-        let runtime = registered_runtime(if abort {
+        let (runtime, lease) = registered_runtime(if abort {
             "file-control-abort"
         } else {
             "file-control-cancel"
@@ -585,7 +599,7 @@ mod tests {
             stderr: child.stderr.take().expect("stderr"),
             child,
         };
-        let cleanup = CoordinatorCleanup::new(runtime.clone(), Some(pid));
+        let cleanup = CoordinatorCleanup::new(runtime.clone(), lease, Some(pid));
         let coordinator = tokio::spawn(run_external_file_ingest(runtime.clone(), spawned, cleanup));
         tokio::time::timeout(Duration::from_secs(3), async {
             while !runtime
@@ -653,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_clears_active_marker_after_session_removal() {
-        let runtime = registered_runtime("file-removed-session").await;
+        let (runtime, _lease) = registered_runtime("file-removed-session").await;
         runtime
             .engine
             .mark_file_ingest_running(&runtime.ingest_id)
@@ -671,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_preserves_replacement_session_active_marker() {
-        let runtime = registered_runtime("file-replacement-session").await;
+        let (runtime, _lease) = registered_runtime("file-replacement-session").await;
         runtime
             .engine
             .mark_file_ingest_running(&runtime.ingest_id)
@@ -679,11 +693,7 @@ mod tests {
         runtime.engine.unregister_ingest(&runtime.pipeline_id).await;
         let replacement = runtime
             .engine
-            .try_register_ingest_attempt(
-                &runtime.pipeline_id,
-                &runtime.registration.input_id,
-                "file",
-            )
+            .try_register_ingest(&runtime.pipeline_id, &runtime.registration.input_id, "file")
             .await
             .expect("replacement registration");
         cleanup_runtime(&runtime, None).await;
@@ -697,11 +707,11 @@ mod tests {
         assert!(
             runtime
                 .engine
-                .with_ingest_session(&replacement, |_| ())
+                .with_ingest_session(replacement.registration(), |_| ())
                 .await
                 .is_some()
         );
-        assert!(!replacement.cancel_token.is_cancelled());
+        assert!(!replacement.registration().cancel_token.is_cancelled());
         runtime.engine.unregister_ingest(&runtime.pipeline_id).await;
         runtime
             .engine

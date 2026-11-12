@@ -2,11 +2,12 @@ use super::*;
 
 #[tokio::test]
 async fn unregister_ingest_cancels_token() {
-    let engine = MediaEngine::new();
-    let token = engine
+    let engine = Arc::new(MediaEngine::new());
+    let lease = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
+    let token = &lease.registration().cancel_token;
     assert!(!token.is_cancelled());
 
     engine.unregister_ingest("p1").await;
@@ -15,8 +16,8 @@ async fn unregister_ingest_cancels_token() {
 
 #[tokio::test]
 async fn unregister_ingest_idempotent() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -27,7 +28,7 @@ async fn unregister_ingest_idempotent() {
 
 #[tokio::test]
 async fn egress_register_and_cancel() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let token = engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
         .await;
@@ -39,7 +40,7 @@ async fn egress_register_and_cancel() {
 
 #[tokio::test]
 async fn egress_unregister_idempotent() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
         .await;
@@ -49,7 +50,7 @@ async fn egress_unregister_idempotent() {
 
 #[tokio::test]
 async fn stale_egress_unregister_cannot_clobber_replacement_attempt() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
 
     let first = engine
         .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one", None)
@@ -77,7 +78,7 @@ async fn stale_egress_unregister_cannot_clobber_replacement_attempt() {
 
 #[tokio::test]
 async fn egress_registration_stores_terminal_stage_key() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
     let reg = engine
         .register_egress_attempt(
@@ -180,7 +181,7 @@ async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
 
 #[tokio::test]
 async fn egress_bytes_counter() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
         .await;
@@ -195,7 +196,7 @@ async fn egress_bytes_counter() {
 
 #[tokio::test]
 async fn egress_failure_event_survives_unregister() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
         .await;
@@ -218,7 +219,7 @@ async fn egress_failure_event_survives_unregister() {
 
 #[tokio::test]
 async fn egress_has_recorded_progress_only_after_progress_update() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
         .await;
@@ -232,7 +233,7 @@ async fn egress_has_recorded_progress_only_after_progress_update() {
 
 #[tokio::test]
 async fn egress_attribution_is_a_no_op_for_an_unregistered_output() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
 
     // Must not panic when the output was never registered (or was already
     // unregistered by the time the caller's fabric-routing decision lands).

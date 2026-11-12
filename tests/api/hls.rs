@@ -148,7 +148,7 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     let cookie = login(&app).await;
 
     // Register active ingest and preview consumer/store.
-    engine
+    let _ingest = engine
         .try_register_ingest("test_blocked_pipe", "stream-key", "rtmp")
         .await
         .unwrap();

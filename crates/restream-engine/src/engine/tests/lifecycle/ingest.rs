@@ -3,9 +3,9 @@ use super::*;
 #[tokio::test]
 async fn unprobed_media_opens_the_start_gate_only_after_the_probe_grace_from_its_first_byte() {
     use std::sync::atomic::Ordering;
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     assert_eq!(engine.ingest_tracks_ready("p1").await, None);
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "srt")
         .await
         .unwrap();
@@ -44,7 +44,7 @@ async fn unprobed_media_opens_the_start_gate_only_after_the_probe_grace_from_its
 
 #[tokio::test]
 async fn recent_ingest_disconnect_respects_grace_window() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let now_ms = MediaEngine::now_epoch_ms();
 
     engine.ingests.recent.write().await.insert(
@@ -125,7 +125,7 @@ fn build_recent_ingest_outcome_resets_flap_streak_outside_window() {
 
 #[tokio::test]
 async fn double_register_ingest_rejected() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let first = engine.try_register_ingest("p1", "key", "rtmp").await;
     assert!(first.is_some());
 

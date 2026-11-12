@@ -440,9 +440,7 @@ async fn an_input_held_by_another_publisher_is_a_conflict() {
         .expect("RTMP publisher registers");
     let response = put(&server, STREAM_KEY, "index0.ts", vec![0x47u8; 188]).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    server
-        .engine
-        .unregister_ingest_if_current(PIPELINE_ID, &rtmp)
+    rtmp.finish(restream_engine::ingest_lease::IngestEnd::Released)
         .await;
 }
 

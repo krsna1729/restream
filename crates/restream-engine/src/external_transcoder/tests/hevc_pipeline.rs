@@ -6,10 +6,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
 
     let _ = tracing_subscriber::fmt::try_init();
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-preview", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-preview", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-preview",
@@ -112,10 +109,7 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-preview-chain", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-preview-chain", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-preview-chain",
@@ -265,10 +259,7 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
     let pipeline_id = "pipe-ext-scaled-audio-routes";
     let engine = Arc::new(MediaEngine::new());
     let _ = tracing_subscriber::fmt::try_init();
-    engine
-        .try_register_ingest(pipeline_id, "stream-key", "file")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest(pipeline_id, "stream-key", "file").await.unwrap();
     engine
         .update_ingest_meta(
             pipeline_id,
@@ -429,10 +420,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-hevc-preview-input", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-hevc-preview-input", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-hevc-preview-input",
@@ -523,10 +511,7 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-hevc-video-only", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-hevc-video-only", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta("pipe-hevc-video-only", Some(video), None, None)
         .await;

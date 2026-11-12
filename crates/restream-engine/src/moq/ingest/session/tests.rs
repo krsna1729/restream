@@ -37,7 +37,7 @@ impl Lifecycle for Recorder {
     async fn admit(&self, _peer: SocketAddr, key: &str) -> Result<Admission, Rejection> {
         let ring = self.ring.clone().ok_or(Rejection::Unauthorized)?;
         self.admitted.borrow_mut().push(key.to_string());
-        Ok(admission(ring))
+        Ok(admission(ring).0)
     }
 
     async fn apply_probe(
@@ -48,12 +48,13 @@ impl Lifecycle for Recorder {
         None
     }
 
-    fn finish(&self, _session: PublisherSession, reason: String) {
+    fn finish(&self, _end: AttemptEnd, reason: String) {
         self.finished.borrow_mut().push(reason);
     }
 }
 
-fn admission(ring: Arc<RingBuffer>) -> Admission {
+/// An admission, and what its Tokio half would see of the attempt's end.
+fn admission(ring: Arc<RingBuffer>) -> (Admission, tokio::sync::oneshot::Receiver<String>) {
     let registration = IngestRegistration {
         cancel_token: CancellationToken::new(),
         attempt_id: 1,
@@ -69,13 +70,16 @@ fn admission(ring: Arc<RingBuffer>) -> Admission {
         last_progress_ms: Arc::new(AtomicU64::new(0)),
         keyframe_times: Arc::new(Mutex::new(Vec::new())),
     };
-    Admission {
+    let (end, ended) = AttemptEnd::new();
+    let admission = Admission {
         session: PublisherSession {
             pipeline_id: "pipe-moq".to_string(),
             registration: registration.clone(),
         },
         media: PublisherMedia::new(registration, ring, counters, ProbeHoldLimits::default()),
-    }
+        end,
+    };
+    (admission, ended)
 }
 
 fn audio_tracks() -> TrackSet {
@@ -133,7 +137,7 @@ fn annexb(nalus: &[&[u8]]) -> Vec<u8> {
 fn ingest(ring: &Arc<RingBuffer>, limits: SessionLimits) -> (Ingest<Recorder>, Recorder) {
     let recorder = Recorder::default();
     (
-        Ingest::new(recorder.clone(), admission(ring.clone()), limits),
+        Ingest::new(recorder.clone(), admission(ring.clone()).0, limits),
         recorder,
     )
 }
@@ -304,17 +308,23 @@ fn a_run_of_malformed_frames_ends_the_session_and_a_good_one_resets_it() {
     );
 }
 
+/// A session dropped unfinished (its task unwound, the listener was torn
+/// down) flushes its media and drops its attempt end without a reason, so
+/// Tokio releases the attempt as abandoned.
 #[test]
-fn a_dropped_session_releases_its_input_exactly_once() {
+fn a_dropped_session_flushes_and_leaves_its_attempt_to_the_lease() {
     let ring = Arc::new(RingBuffer::new(16));
-    let (mut ingest, recorder) = ingest(&ring, SessionLimits::default());
+    let recorder = Recorder::default();
+    let (admission, mut ended) = admission(ring.clone());
+    let mut ingest = Ingest::new(recorder.clone(), admission, SessionLimits::default());
     ingest.set_tracks(audio_tracks()).unwrap();
     ingest.ready_probe();
     ingest.frame(0, legacy(0, &[0x21])).unwrap();
     drop(ingest);
+    assert!(recorder.finished.borrow().is_empty());
     assert_eq!(
-        *recorder.finished.borrow(),
-        ["the MoQ ingest listener stopped"]
+        ended.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
     );
     assert_eq!(
         ring.get_write_idx(),

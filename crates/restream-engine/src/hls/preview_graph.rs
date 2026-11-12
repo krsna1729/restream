@@ -197,7 +197,7 @@ mod tests {
 
     async fn engine_with_pipeline(pipeline_id: &str) -> Arc<MediaEngine> {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest(pipeline_id, "stream-key", "rtmp")
             .await
             .unwrap();
@@ -305,7 +305,7 @@ mod tests {
     #[tokio::test]
     async fn an_input_passthrough_preview_shares_the_ring_and_starts_no_stage() {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_pipeline_input_attempt("pipe", "input-a", "key", "srt", true)
             .await
             .expect("register input");

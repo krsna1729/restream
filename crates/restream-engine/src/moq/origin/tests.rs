@@ -594,15 +594,16 @@ fn test_audio_meta() -> AudioMeta {
 }
 
 /// Register a live ingest for the pipeline with the requested track presence,
-/// exactly as an elected input reports its probe.
+/// exactly as an elected input reports its probe. It stays live while the
+/// returned lease does.
 async fn register_live_ingest(
-    engine: &MediaEngine,
+    engine: &Arc<MediaEngine>,
     pipeline_id: &str,
     stream_key: &str,
     video: bool,
     audio: bool,
-) {
-    let registration = engine
+) -> crate::ingest_lease::IngestLease {
+    let lease = engine
         .try_register_pipeline_input_attempt(pipeline_id, stream_key, stream_key, "rtmp", true)
         .await
         .expect("an ingest slot");
@@ -615,14 +616,25 @@ async fn register_live_ingest(
     });
     let audio_meta = audio.then(test_audio_meta);
     engine
-        .update_ingest_session_meta(pipeline_id, &registration, video_meta, audio_meta, None)
+        .update_ingest_session_meta(
+            pipeline_id,
+            lease.registration(),
+            video_meta,
+            audio_meta,
+            None,
+        )
         .await;
     if audio {
         engine
-            .update_ingest_session_audio_tracks(pipeline_id, &registration, vec![test_audio_meta()])
+            .update_ingest_session_audio_tracks(
+                pipeline_id,
+                lease.registration(),
+                vec![test_audio_meta()],
+            )
             .await;
     }
     engine.select_pipeline_input(pipeline_id, stream_key).await;
+    lease
 }
 
 /// A viewer on the current generation, with its session kept alive by the
@@ -692,7 +704,7 @@ fn continuous_publication_does_not_starve_a_media_loss() {
     let (origin, engine, tokio) = origin(8);
     let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-loss"));
     ring.set_video_parameter_sets(PARAMETER_SETS.to_vec());
-    tokio.block_on(register_live_ingest(
+    let _ingest = tokio.block_on(register_live_ingest(
         &engine,
         "pipe-loss",
         "key",

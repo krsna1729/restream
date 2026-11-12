@@ -477,3 +477,49 @@ async fn listener_exit_finishes_a_late_admission_and_a_restart_reuses_the_key() 
     assert!(again.await.unwrap().connected);
     restarted.stop().await;
 }
+
+/// An admission that unwinds after `start_publisher` registered the input
+/// attempt must not keep the stream key: the panic ends only that peer, and
+/// the next publisher on the key is admitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admission_panic_after_registration_frees_the_stream_key() {
+    let server = TestServer::start(&["admit-panic"], vec![plain("admit-panic")]).await;
+    let remote = server.remote;
+    let before = crate::panic_boundary::contained_panics();
+    super::super::tokio_ingress::injected_panics::mark("admit-panic");
+    let doomed = blocking(move || {
+        run_caller(
+            direct(remote, &publish_id("admit-panic"), None),
+            Duration::from_secs(10),
+            |ctx| ctx.report.disconnected,
+        )
+    })
+    .await;
+    assert!(
+        doomed.disconnected,
+        "the panicked admission's peer is disconnected: {doomed:?}"
+    );
+    server
+        .wait_until(
+            "the admission panic is contained",
+            Duration::from_secs(5),
+            || async { crate::panic_boundary::contained_panics() > before },
+        )
+        .await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let again = publish(
+        direct(remote, &publish_id("admit-panic"), None),
+        stop.clone(),
+    );
+    server
+        .wait_until(
+            "the next publisher on the key reaches its ring",
+            Duration::from_secs(5),
+            || async { server.ring_progress("pipeline-admit-panic").await > 0 },
+        )
+        .await;
+    stop.store(true, Ordering::Release);
+    assert!(again.await.unwrap().connected);
+    server.stop().await;
+}

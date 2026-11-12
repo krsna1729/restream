@@ -465,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn prepare_output_ring_routes_hevc_rtmp_through_shared_h264_stage() {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest("pipe-hevc", "stream-key", "rtmp")
             .await
             .unwrap();
@@ -513,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn prepare_output_ring_shares_legacy_rtmp_h264_preset_before_audio_selection() {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest("pipe-hevc-audio", "stream-key", "srt")
             .await
             .unwrap();
@@ -578,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn h265_srt_and_legacy_rtmp_presets_use_separate_codec_stages() {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest("pipe-hevc-mixed", "stream-key", "file")
             .await
             .unwrap();
@@ -736,7 +736,7 @@ mod tests {
 
         let pipeline_id = "pipe-hevc-selected-audio-progress";
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest(pipeline_id, "stream-key", "file")
             .await
             .unwrap();

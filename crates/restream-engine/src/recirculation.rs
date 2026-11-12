@@ -6,6 +6,7 @@ use crate::egress::journal::{FeedEpoch, RingFeed};
 use crate::egress::visit::live_start_cursor;
 use crate::engine::IngestRegistration;
 use crate::engine::{EgressRegistration, MediaEngine};
+use crate::ingest_lease::IngestEnd;
 use crate::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use restream_core::{MediaPacket, MediaType};
 use restream_sync::standby_gop::StandbyGopCache;
@@ -124,7 +125,9 @@ pub async fn start_pipeline_recirculation(
     engine: Arc<MediaEngine>,
     egress_registration: EgressRegistration,
 ) {
-    let Some(input_registration) = engine
+    // Dropped with this task (an abort, its runtime stopping), the lease
+    // releases the claimed target input.
+    let Some(input_lease) = engine
         .try_register_pipeline_input_attempt(
             &target_pipeline_id,
             &target_input_id,
@@ -162,7 +165,7 @@ pub async fn start_pipeline_recirculation(
     loop {
         tokio::select! {
             _ = egress_registration.cancel_token.cancelled() => break,
-            _ = input_registration.cancel_token.cancelled() => break,
+            _ = input_lease.registration().cancel_token.cancelled() => break,
             _ = wake_reader.wait_for_data() => {
                 drive_recirculation_until_blocked(
                     RecirculationDriver {
@@ -171,7 +174,7 @@ pub async fn start_pipeline_recirculation(
                         engine: &engine,
                         feed: &feed,
                         target_ring: &target_ring,
-                        input_registration: &input_registration,
+                        input_registration: input_lease.registration(),
                         cursor: &mut cursor,
                         publisher: &mut publisher,
                     }
@@ -182,9 +185,7 @@ pub async fn start_pipeline_recirculation(
         }
     }
 
-    engine
-        .unregister_ingest_if_current(&target_pipeline_id, &input_registration)
-        .await;
+    input_lease.finish(IngestEnd::Released).await;
 }
 
 struct RecirculationDriver<'a> {
@@ -586,6 +587,63 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        engine.unregister_egress("out-pipeline").await;
+    }
+
+    /// A recirculation task cancelled mid-feed (an abort, its runtime
+    /// stopping) must not keep the target input it claimed.
+    #[tokio::test]
+    async fn an_aborted_recirculation_releases_its_target_input() {
+        let engine = Arc::new(MediaEngine::new());
+        let source_ring = engine.get_or_create_pipeline("pipe-source").await;
+        let egress_registration = engine
+            .register_egress_attempt(
+                "out-pipeline",
+                "pipe-source",
+                "pipeline://pipe-target/input-backup",
+                None,
+            )
+            .await;
+        let task = tokio::spawn(start_pipeline_recirculation(
+            "out-pipeline".to_string(),
+            source_ring,
+            "pipe-target".to_string(),
+            "input-backup".to_string(),
+            engine.clone(),
+            egress_registration,
+        ));
+        timeout(Duration::from_secs(1), async {
+            while engine.connected_input_count("pipe-target").await == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        let reclaimed = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(claim) = engine
+                    .try_register_pipeline_input_attempt(
+                        "pipe-target",
+                        "input-backup",
+                        "pipeline:other",
+                        "pipeline",
+                        false,
+                    )
+                    .await
+                {
+                    break claim;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            reclaimed.is_ok(),
+            "an aborted recirculation left its target input claimed"
+        );
         engine.unregister_egress("out-pipeline").await;
     }
 }

@@ -1,21 +1,24 @@
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_engine::engine::MediaEngine;
+use restream_engine::ingest_lease::IngestEnd;
 use restream_engine::input_gate::{InputForwardState, InputPacketBoundary};
 use std::sync::Arc;
 
 #[tokio::test]
 async fn pipeline_accepts_selected_and_standby_input_sessions() {
-    let engine = MediaEngine::new();
-    let primary = engine
+    let engine = Arc::new(MediaEngine::new());
+    let primary_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "primary-key", "rtmp", true)
         .await
         .expect("primary registration");
+    let primary = primary_lease.registration();
 
-    let backup = engine
+    let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "backup-key", "srt", false)
         .await
         .expect("backup registration");
+    let backup = backup_lease.registration();
 
     assert_eq!(primary.gate.state(), InputForwardState::Active);
     assert_eq!(backup.gate.state(), InputForwardState::Standby);
@@ -26,15 +29,17 @@ async fn pipeline_accepts_selected_and_standby_input_sessions() {
 
 #[tokio::test]
 async fn promotion_hands_writer_lease_to_backup_at_keyframe() {
-    let engine = MediaEngine::new();
-    let primary = engine
+    let engine = Arc::new(MediaEngine::new());
+    let primary_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("primary registration");
-    let backup = engine
+    let primary = primary_lease.registration();
+    let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "rtmp", false)
         .await
         .expect("backup registration");
+    let backup = backup_lease.registration();
 
     let connected = engine.select_pipeline_input("pipeline", "backup").await;
 
@@ -53,49 +58,48 @@ async fn promotion_hands_writer_lease_to_backup_at_keyframe() {
 
 #[tokio::test]
 async fn stale_disconnect_cannot_unregister_promoted_replacement() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let primary = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("primary registration");
-    let backup = engine
+    let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "srt", false)
         .await
         .expect("backup registration");
     assert!(engine.select_pipeline_input("pipeline", "backup").await);
 
-    let removed = engine
-        .unregister_ingest_if_current("pipeline", &primary)
-        .await;
+    primary.finish(IngestEnd::Released).await;
 
-    assert!(removed);
+    assert_eq!(engine.connected_input_count("pipeline").await, 1);
     let selected = engine
         .with_active_ingest("pipeline", |ingest| ingest.input_id.clone())
         .await;
     assert_eq!(selected.as_deref(), Some("backup"));
-    assert_eq!(backup.gate.state(), InputForwardState::AwaitingKeyframe);
+    assert_eq!(
+        backup_lease.registration().gate.state(),
+        InputForwardState::AwaitingKeyframe
+    );
 }
 
 #[tokio::test]
 async fn selected_reconnect_waits_for_keyframe_when_pipeline_timeline_exists() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let first = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("first registration");
     first
+        .registration()
         .last_forwarded_dts
         .store(4_000, std::sync::atomic::Ordering::Release);
-    assert!(
-        engine
-            .unregister_ingest_if_current("pipeline", &first)
-            .await
-    );
+    first.finish(IngestEnd::Released).await;
 
-    let second = engine
+    let second_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("second registration");
+    let second = second_lease.registration();
 
     assert_eq!(second.gate.state(), InputForwardState::AwaitingKeyframe);
     assert!(second.gate.try_enter(InputPacketBoundary::Other).is_none());
@@ -103,11 +107,12 @@ async fn selected_reconnect_waits_for_keyframe_when_pipeline_timeline_exists() {
 
 #[tokio::test]
 async fn input_preview_ring_exists_only_while_preview_is_requested() {
-    let engine = MediaEngine::new();
-    let registration = engine
+    let engine = Arc::new(MediaEngine::new());
+    let lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "srt", false)
         .await
         .expect("backup registration");
+    let registration = lease.registration();
     assert!(registration.preview_ring.load_full().is_none());
 
     let ring = engine
@@ -123,16 +128,17 @@ async fn input_preview_ring_exists_only_while_preview_is_requested() {
 
 #[tokio::test]
 async fn standby_metadata_does_not_replace_selected_input_metadata() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipeline_ring = engine.get_or_create_pipeline("pipeline").await;
-    let primary = engine
+    let primary_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("primary registration");
-    let backup = engine
+    let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "file", false)
         .await
         .expect("backup registration");
+    let (primary, backup) = (primary_lease.registration(), backup_lease.registration());
     let primary_video = VideoMeta {
         codec: "h264".to_string(),
         width: 1920,
@@ -153,18 +159,12 @@ async fn standby_metadata_does_not_replace_selected_input_metadata() {
     };
 
     engine
-        .update_ingest_session_meta(
-            "pipeline",
-            &primary,
-            Some(primary_video.clone()),
-            None,
-            None,
-        )
+        .update_ingest_session_meta("pipeline", primary, Some(primary_video.clone()), None, None)
         .await;
     engine
         .update_ingest_session_meta(
             "pipeline",
-            &backup,
+            backup,
             Some(backup_video.clone()),
             Some(backup_audio),
             None,
@@ -176,7 +176,7 @@ async fn standby_metadata_does_not_replace_selected_input_metadata() {
         .await
         .expect("selected ingest metadata");
     let standby = engine
-        .with_ingest_session(&backup, |ingest| ingest.metadata())
+        .with_ingest_session(backup, |ingest| ingest.metadata())
         .await
         .expect("standby ingest metadata");
     let selected_video = selected.video.expect("selected video metadata");

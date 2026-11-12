@@ -18,8 +18,8 @@ async fn test_hls_consumers_monotonic_idle() {
 
 #[tokio::test]
 async fn runtime_helpers_expose_registered_ingest_and_egress() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-runtime", "stream-key", "rtmp")
         .await
         .expect("register ingest");
@@ -59,7 +59,7 @@ async fn runtime_helpers_expose_registered_ingest_and_egress() {
 
 #[tokio::test]
 async fn hls_dependency_snapshot_reflects_store_and_consumer_state() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let (store, already_running, _cancel_token) = engine
         .ensure_hls_preview_segmenter("pipe-hls-snapshot")
         .await;
@@ -79,8 +79,8 @@ async fn hls_dependency_snapshot_reflects_store_and_consumer_state() {
 
 #[tokio::test]
 async fn active_hls_preview_stage_keys_include_hevc_preview_codec_edge() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-preview-hevc", "stream-key", "srt")
         .await
         .unwrap();
@@ -113,8 +113,8 @@ async fn active_hls_preview_stage_keys_include_hevc_preview_codec_edge() {
 
 #[tokio::test]
 async fn active_hls_preview_stage_keys_include_h264_segmenter() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-preview-h264", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -146,12 +146,14 @@ async fn active_hls_preview_stage_keys_include_h264_segmenter() {
 async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
     use crate::stage_lifecycle::{StageBackendKind, StagePhase};
 
-    let engine = MediaEngine::new_with_config(Arc::new(crate::config::EngineConfig {
-        external_ffmpeg_permits: 3,
-        ..Default::default()
-    }));
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+        crate::config::EngineConfig {
+            external_ffmpeg_permits: 3,
+            ..Default::default()
+        },
+    )));
     let pipeline_id = "pipe-preview-blocked";
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "stream-key", "rtmp")
         .await
         .unwrap();
@@ -206,7 +208,7 @@ async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
 
 #[tokio::test]
 async fn file_ingest_dependency_snapshot_reflects_active_and_child_state() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .mark_file_ingest_running("file-ingest-snapshot")
         .await;

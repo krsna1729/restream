@@ -104,13 +104,13 @@ fn the_stream_key_is_the_last_broadcast_segment_without_catalog_suffix() {
 #[tokio::test]
 async fn an_admitted_publisher_holds_a_moq_session_until_it_finishes() {
     let fixture = fixture();
-    let admission = fixture
+    let admitted = fixture
         .server
         .admit(peer(), STREAM_KEY)
         .await
         .unwrap_or_else(|rejection| panic!("admitted, got {rejection:?}"));
-    assert_eq!(admission.session.pipeline_id, PIPELINE_ID);
-    assert_eq!(admission.session.registration.input_id, INPUT_ID);
+    assert_eq!(admitted.session.pipeline_id, PIPELINE_ID);
+    assert_eq!(admitted.session.registration.input_id, INPUT_ID);
     assert_eq!(
         session_protocol(&fixture.engine).await,
         Some(("moq".to_string(), Some(peer().to_string())))
@@ -123,7 +123,7 @@ async fn an_admitted_publisher_holds_a_moq_session_until_it_finishes() {
 
     fixture
         .server
-        .finish(admission.session, "test end".to_string())
+        .finish(admitted.lease, "test end".to_string())
         .await;
     assert_eq!(session_protocol(&fixture.engine).await, None);
     let outcome = fixture
@@ -166,7 +166,7 @@ async fn a_banned_client_is_refused_before_any_lookup() {
 #[tokio::test]
 async fn the_probe_records_tracks_and_metadata_on_the_session() {
     let fixture = fixture();
-    let admission = fixture.server.admit(peer(), STREAM_KEY).await.ok().unwrap();
+    let admitted = fixture.server.admit(peer(), STREAM_KEY).await.ok().unwrap();
     let probe = MoqProbe {
         video: Some(VideoMeta {
             codec: "h264".to_string(),
@@ -182,11 +182,11 @@ async fn the_probe_records_tracks_and_metadata_on_the_session() {
             ..AudioMeta::default()
         }],
     };
-    fixture.server.apply_probe(&admission.session, probe).await;
+    fixture.server.apply_probe(&admitted.session, probe).await;
 
     let (metadata, audio_tracks) = fixture
         .engine
-        .with_ingest_session(&admission.session.registration, |ingest| {
+        .with_ingest_session(&admitted.session.registration, |ingest| {
             (
                 ingest.metadata(),
                 restream_sync::lock::lock(&ingest.audio_tracks).clone(),
@@ -210,16 +210,47 @@ async fn the_probe_records_tracks_and_metadata_on_the_session() {
 #[tokio::test]
 async fn an_admission_nobody_receives_is_released() {
     let fixture = fixture();
-    let admission = fixture.server.admit(peer(), STREAM_KEY).await;
+    let admitted = fixture.server.admit(peer(), STREAM_KEY).await.ok().unwrap();
     assert!(session_protocol(&fixture.engine).await.is_some());
     let (answer, answered) = tokio::sync::oneshot::channel();
     drop(answered);
-    deliver_admission(&fixture.server, answer, admission).await;
+    hold_admission(&fixture.server, answer, admitted).await;
     assert_eq!(session_protocol(&fixture.engine).await, None);
 }
 
+/// Admit through the production bridge from a Compio runtime, as the Owner
+/// thread does; `owner` runs there with the admission.
+async fn admit_on_owner<T: Send + 'static>(
+    lifecycle: TokioLifecycle,
+    owner: impl FnOnce(TokioLifecycle, Admission) -> T + Send + 'static,
+) -> T {
+    tokio::task::spawn_blocking(move || {
+        let runtime = compio::runtime::Runtime::new().expect("compio runtime");
+        runtime.block_on(async move {
+            let admission = lifecycle
+                .admit(peer(), STREAM_KEY)
+                .await
+                .unwrap_or_else(|rejection| panic!("admitted, got {rejection:?}"));
+            owner(lifecycle, admission)
+        })
+    })
+    .await
+    .expect("owner thread")
+}
+
+async fn wait_until_released(engine: &MediaEngine) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while session_protocol(engine).await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the input is released");
+}
+
 /// The Owner thread awaits Tokio from its own Compio runtime: admission and
-/// the probe answer across runtimes without blocking either.
+/// the probe answer across runtimes without blocking either, and the reason
+/// it ends with is recorded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owner_awaits_admission_from_its_own_runtime() {
     let fixture = fixture();
@@ -238,16 +269,51 @@ async fn the_owner_awaits_admission_from_its_own_runtime() {
                 audio_tracks: Vec::new(),
             };
             let _ring = lifecycle.apply_probe(&admission.session, probe).await;
-            admission.session
+            admission.end
         })
     });
-    let session = owner.await.expect("owner thread");
+    let end = owner.await.expect("owner thread");
     assert_eq!(
         session_protocol(&fixture.engine)
             .await
             .map(|(protocol, _)| protocol),
         Some("moq".to_string())
     );
-    fixture.server.finish(session, "done".to_string()).await;
-    assert_eq!(session_protocol(&fixture.engine).await, None);
+    end.finish("done".to_string());
+    wait_until_released(&fixture.engine).await;
+    let outcome = fixture.engine.recent_ingest_outcome(PIPELINE_ID).await;
+    assert_eq!(
+        outcome.and_then(|outcome| outcome.reason).as_deref(),
+        Some("done")
+    );
+}
+
+/// An Owner session dropped without finishing (its Compio task unwound, the
+/// listener was torn down mid-session) still frees the stream key: the Tokio
+/// half drops the attempt's lease, and the next publisher is admitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unfinished_owner_session_frees_its_stream_key() {
+    let fixture = fixture();
+    let lifecycle = TokioLifecycle::new(tokio::runtime::Handle::current(), fixture.server.clone());
+    admit_on_owner(lifecycle.clone(), |lifecycle, admission| {
+        drop(session::Ingest::new(
+            lifecycle,
+            admission,
+            session::SessionLimits::default(),
+        ));
+    })
+    .await;
+    wait_until_released(&fixture.engine).await;
+    let outcome = fixture
+        .engine
+        .recent_ingest_outcome(PIPELINE_ID)
+        .await
+        .expect("the abandoned end is recorded");
+    assert_eq!(
+        outcome.failure_phase.as_deref(),
+        Some(crate::ingest_lease::ABANDONED_PHASE)
+    );
+    let end = admit_on_owner(lifecycle, |_, admission| admission.end).await;
+    end.finish("done".to_string());
+    wait_until_released(&fixture.engine).await;
 }

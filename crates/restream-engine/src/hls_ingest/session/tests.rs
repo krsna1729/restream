@@ -18,23 +18,25 @@ use tokio::sync::{mpsc, oneshot};
 use super::*;
 use crate::engine::MediaEngine;
 use crate::hls_ingest::ordering::{Payload, SessionLimits};
+use crate::ingest_lease::IngestLease;
 
 /// A live media playlist with no `EXT-X-ENDLIST`, so the session stays up
 /// waiting for its next object instead of finishing.
 const PLAYLIST: &[u8] = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n\
 #EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.000,\nsegment-0.ts\n";
 
-async fn context() -> SessionContext {
+/// A session context for the test's only attempt, and the attempt's lease.
+async fn context() -> (SessionContext, IngestLease) {
     let engine = Arc::new(MediaEngine::new());
-    let registration = engine
+    let lease = engine
         .try_register_pipeline_input_attempt("pipe", "input", "key", "hls", true)
         .await
         .expect("the test's only attempt registers");
     let ring = engine.get_or_create_pipeline("pipe").await;
-    SessionContext {
+    let context = SessionContext {
         engine,
         pipeline_id: "pipe".to_string(),
-        registration,
+        registration: lease.registration().clone(),
         ring,
         lead_ms: Arc::new(AtomicU64::new(0)),
         limits: SessionLimits {
@@ -44,7 +46,8 @@ async fn context() -> SessionContext {
         },
         max_init_bytes: 1 << 20,
         init: Arc::new(Mutex::new(Default::default())),
-    }
+    };
+    (context, lease)
 }
 
 /// The replies the session has answered, in total: a oneshot receiver yields
@@ -99,7 +102,8 @@ fn poll_once<F: Future>(future: &mut std::pin::Pin<&mut F>) -> Poll<F::Output> {
 #[tokio::test]
 async fn one_poll_applies_at_most_one_object() {
     let (_sender, receiver, mut answers) = queue(3).await;
-    let mut session = pin!(run(context().await, receiver));
+    let (context, _lease) = context().await;
+    let mut session = pin!(run(context, receiver));
 
     assert!(
         poll_once(&mut session).is_pending(),
@@ -128,7 +132,8 @@ async fn one_poll_applies_at_most_one_object() {
 #[tokio::test]
 async fn a_poll_that_receives_nothing_applies_nothing() {
     let (_sender, receiver, mut answers) = queue(0).await;
-    let mut session = pin!(run(context().await, receiver));
+    let (context, _lease) = context().await;
+    let mut session = pin!(run(context, receiver));
 
     assert!(poll_once(&mut session).is_pending());
     assert_eq!(answers.count(), 0);
@@ -154,7 +159,8 @@ async fn a_turn_applies_the_parsed_playlist_without_parsing_the_bytes() {
         })
         .await
         .expect("the queue has room");
-    let mut session = pin!(run(context().await, receiver));
+    let (context, _lease) = context().await;
+    let mut session = pin!(run(context, receiver));
 
     assert!(poll_once(&mut session).is_pending());
     assert_eq!(
@@ -179,7 +185,7 @@ async fn each_publish_unit_converts_at_most_one_fmp4_step() {
         media.len() <= PUBLISH_CHUNK_BYTES,
         "one chunk releases every sample"
     );
-    let context = context().await;
+    let (context, _lease) = context().await;
     let ring = context.ring.clone();
     let shared_init = context.init.clone();
     let target = PublishTarget::open(

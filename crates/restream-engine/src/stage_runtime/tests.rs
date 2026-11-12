@@ -279,8 +279,8 @@ async fn wait_for_stage_metadata_resolves_once_ingest_metadata_becomes_ready() {
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-race";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "rtmp")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
 
@@ -335,8 +335,8 @@ async fn wait_for_stage_metadata_eager_parameter_sets_waits_for_ring_data() {
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-eager";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "srt")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "srt")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
     engine
@@ -394,8 +394,8 @@ async fn wait_for_stage_metadata_gates_on_audio_track_readiness() {
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-audio-gate";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "rtmp")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
     engine
@@ -450,8 +450,8 @@ async fn wait_for_stage_metadata_backfills_bandwidth_from_observed_ring_bitrate(
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-bw";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "rtmp")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
     engine
@@ -509,8 +509,8 @@ async fn wait_for_stage_metadata_starts_video_only_after_audio_absence_grace() {
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-video-only-grace";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "rtmp")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
     engine
@@ -561,8 +561,8 @@ async fn wait_for_stage_metadata_still_prefers_late_audio_before_grace() {
     let cancel = CancellationToken::new();
     let pipeline_id = "pipe-late-audio";
 
-    engine
-        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "key", "rtmp")
         .await
         .expect("first registration for a fresh pipeline id must succeed");
     engine
@@ -612,14 +612,14 @@ async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_ses
     let source = Arc::new(RingBuffer::new(16));
     let cancel = CancellationToken::new();
     // A standby input: a session that is not the pipeline's live ingest.
-    let registration = engine
+    let lease = engine
         .try_register_pipeline_input_attempt("pipe-standby", "standby", "key", "srt", false)
         .await
         .expect("register standby input");
     engine
         .update_ingest_session_meta(
             "pipe-standby",
-            &registration,
+            lease.registration(),
             Some(ready_video_meta("hevc")),
             None,
             None,

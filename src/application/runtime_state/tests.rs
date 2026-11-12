@@ -291,7 +291,7 @@ async fn a_resume_from_another_server_run_resyncs_even_below_its_revision() {
 
 #[tokio::test]
 async fn projection_derives_convergence_from_desired_and_runtime() {
-    let engine = MediaEngine::new();
+    let engine = std::sync::Arc::new(MediaEngine::new());
     let mut exhausted = output("exhausted", DesiredOutputState::Running);
     exhausted.retries_exhausted = true;
     let outputs = [
@@ -311,7 +311,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
         Some(restream_health::diagnosis::Cause::NoPublisher)
     );
 
-    engine
+    let _ingest = engine
         .try_register_ingest("pipe", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -369,7 +369,7 @@ async fn projection_derives_convergence_from_desired_and_runtime() {
 /// shared stages from the projection instead of polling every pipeline.
 #[tokio::test]
 async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
-    let engine = MediaEngine::new();
+    let engine = std::sync::Arc::new(MediaEngine::new());
     let pipelines = [crate::db::PipelineRecord {
         id: "pipe".to_string(),
         name: "pipe".to_string(),
@@ -386,11 +386,11 @@ async fn projection_reports_standby_recording_bonding_and_the_output_stage() {
     assert_eq!((pipe.standby_inputs, pipe.recording), (0, false));
     assert_eq!(pipe.ingest, None);
 
-    engine
+    let _ingest = engine
         .try_register_pipeline_input_attempt("pipe", "main", "k-main", "srt", true)
         .await
         .expect("main input registers");
-    engine
+    let _ingest = engine
         .try_register_pipeline_input_attempt("pipe", "backup", "k-backup", "srt", false)
         .await
         .expect("backup input registers");

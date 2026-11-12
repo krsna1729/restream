@@ -1,5 +1,5 @@
-//! How a session ends: whatever ends one — here a panic — ends only that
-//! session and releases its input.
+//! How a session ends: whatever ends one (a panic, a cancelled supervisor)
+//! ends only that session and releases its input.
 
 use super::super::*;
 use crate::hls_ingest::test_support::test_ingest;
@@ -21,7 +21,7 @@ async fn a_panic_in_one_session_ends_only_that_session_and_releases_its_input() 
 
     ingest
         .clone()
-        .supervise_session("pipe-a".to_string(), panicking, async {
+        .supervise_session(panicking, async {
             crate::test_support::with_expected_panic_suppressed(|| {
                 panic!("a session bug");
             })
@@ -42,4 +42,39 @@ async fn a_panic_in_one_session_ends_only_that_session_and_releases_its_input() 
         engine.input_has_session("pipe-b", "input-b").await,
         "another pipeline's ingest is untouched"
     );
+}
+
+/// A supervisor cancelled mid-session (an abort, its runtime stopping) must
+/// release its input, not leave it shown as connected until another attempt
+/// overwrites it.
+#[tokio::test]
+async fn a_cancelled_supervisor_releases_its_input() {
+    let (engine, ingest) = test_ingest(HlsIngestLimits::default());
+    let attempt = engine
+        .try_register_pipeline_input_attempt("pipe-a", "input-a", "key-a", "hls", true)
+        .await
+        .expect("the first attempt registers");
+    let supervisor = tokio::spawn(
+        ingest
+            .clone()
+            .supervise_session(attempt, std::future::pending::<(SessionEnd, Counters)>()),
+    );
+    tokio::task::yield_now().await;
+    supervisor.abort();
+    assert!(supervisor.await.unwrap_err().is_cancelled());
+
+    let released = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while engine.input_has_session("pipe-a", "input-a").await {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        released.is_ok(),
+        "a cancelled supervisor left its input registered"
+    );
+    let _next = engine
+        .try_register_pipeline_input_attempt("pipe-a", "input-a", "key-a", "hls", true)
+        .await
+        .expect("the next attempt on the input registers");
 }

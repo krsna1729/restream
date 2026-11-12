@@ -60,6 +60,7 @@ pub mod hls_ingest;
 pub mod hls_pull;
 pub mod host_capacity;
 pub mod ingest_auth;
+pub mod ingest_lease;
 pub mod input_gate;
 pub mod moq;
 #[doc(hidden)]

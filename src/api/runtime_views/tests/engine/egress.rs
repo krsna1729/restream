@@ -2,8 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn stale_egress_error_cannot_poison_replacement_attempt() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-1", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -86,8 +86,8 @@ async fn health_snapshot_drops_egress_registry_before_stage_blocked_lookup() {
 async fn health_snapshot_includes_blocked_by_for_waiting_terminal_stage() {
     use restream_engine::stage_lifecycle::{StageBackendKind, StagePhase};
 
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-1", "stream-key", "srt")
         .await
         .unwrap();
@@ -111,8 +111,8 @@ async fn health_snapshot_includes_blocked_by_for_waiting_terminal_stage() {
 
 #[tokio::test]
 async fn health_snapshot_exposes_egress_progress_and_error_state() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-1", "stream-key", "srt")
         .await
         .unwrap();

@@ -24,7 +24,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
         let output = handle.ring.clone();
         let cancel = handle.cancel.clone();
 
-        engine
+        let _ingest = engine
             .try_register_ingest("rtmp-h264", "stream-key", "rtmp")
             .await
             .unwrap();

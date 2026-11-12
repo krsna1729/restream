@@ -737,7 +737,7 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
     assert!(engine.select_pipeline_input(PIPELINE, "backup").await);
     engine
         .replace_ingest_session_tracks(
-            &backup,
+            backup.registration(),
             Some(VideoMeta {
                 codec: "h264".into(),
                 fps: 600.0,

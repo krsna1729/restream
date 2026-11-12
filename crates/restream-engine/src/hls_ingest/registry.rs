@@ -16,12 +16,13 @@ use super::session::{self, HlsObject, SessionContext, SessionEnd};
 use super::{
     BodyError, HlsIngestLimits, KeyCharge, ObjectBody, ObjectKind, ObjectOutcome, SegmentShare,
 };
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::executor::{MediaService, MediaServiceClass};
 use crate::hls_pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
 use crate::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use crate::secret_display::redact_secret;
 use crate::security::{IngestSecurityService, RateLimitScope};
 
@@ -241,64 +242,6 @@ impl RunningPull {
             finished: self.task.is_finished(),
             end: self.task.end(),
             retry_at: self.retry_at,
-        }
-    }
-}
-
-/// Releases an ingest attempt whose `session_for` future is dropped before a
-/// session owner takes it over.
-///
-/// `session_for` registers the attempt and then awaits the pipeline and its
-/// metadata before spawning the owner. A cancellation that lands in that window
-/// drops the future: without this guard the engine keeps an attempt nothing
-/// will end (a disabled input still shown as connected), and a session opened
-/// for an input another source is about to own. The guard is disarmed once the
-/// owner is spawned; the owner then releases the attempt itself.
-struct RegistrationGuard {
-    engine: Arc<MediaEngine>,
-    pipeline_id: String,
-    registration: IngestRegistration,
-    armed: bool,
-}
-
-impl RegistrationGuard {
-    fn new(
-        engine: &Arc<MediaEngine>,
-        pipeline_id: &str,
-        registration: &IngestRegistration,
-    ) -> Self {
-        Self {
-            engine: Arc::clone(engine),
-            pipeline_id: pipeline_id.to_string(),
-            registration: registration.clone(),
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for RegistrationGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let (engine, pipeline_id, registration) = (
-            Arc::clone(&self.engine),
-            self.pipeline_id.clone(),
-            self.registration.clone(),
-        );
-        // Drop cannot await. The attempt-scoped release runs on its own task,
-        // so it cannot end a registration that replaced this one; outside a
-        // runtime there is nothing to release.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                engine
-                    .unregister_ingest_if_current(&pipeline_id, &registration)
-                    .await;
-            });
         }
     }
 }
@@ -723,7 +666,7 @@ impl HlsIngest {
             }
         }
         let engine = &self.engine;
-        let registration = engine
+        let lease = engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
                 &pipeline.input_id,
@@ -733,12 +676,11 @@ impl HlsIngest {
             )
             .await
             .ok_or(DispatchError::PublisherActive)?;
-        // From here until the owner is spawned below, the attempt has no owner:
-        // a caller that drops this future in that window (a pull's cancel lands
-        // in it) must release the registration, or the engine keeps an attempt
-        // nothing will end — a disabled input still shown as connected — and the
-        // ring is recreated under it.
-        let mut guard = RegistrationGuard::new(engine, &pipeline.id, &registration);
+        let registration = lease.registration().clone();
+        // Until the owner is spawned below, this future holds the lease: a
+        // caller that drops it in that window (a pull's cancel lands in it)
+        // drops the lease, which releases the attempt, so no attempt is left
+        // that nothing will end (a disabled input still shown as connected).
         let ring = engine.get_or_create_pipeline(&pipeline.id).await;
         engine
             .update_ingest_session_meta(
@@ -773,8 +715,7 @@ impl HlsIngest {
             max_init_bytes: self.limits.max_init_bytes,
             init: key.init.clone(),
         };
-        tokio::spawn(Arc::clone(self).supervise(context, receiver));
-        guard.disarm();
+        tokio::spawn(Arc::clone(self).supervise(context, receiver, lease));
         Ok((attempt_id, objects))
     }
 
@@ -832,15 +773,15 @@ impl HlsIngest {
 
     /// Runs the session on MEDIA and, whatever ends it (ENDLIST, idle,
     /// cancellation, a failure or a panic, which the executor contains),
-    /// reports the disconnect and releases the input attempt.
+    /// reports the disconnect and releases the input attempt. A supervisor
+    /// cancelled itself drops the lease, which releases the attempt.
     async fn supervise(
         self: Arc<Self>,
         context: SessionContext,
         objects: mpsc::Receiver<HlsObject>,
+        lease: IngestLease,
     ) {
-        let pipeline_id = context.pipeline_id.clone();
-        let registration: IngestRegistration = context.registration.clone();
-        self.supervise_session(pipeline_id, registration, session::run(context, objects))
+        self.supervise_session(lease, session::run(context, objects))
             .await;
     }
 
@@ -848,18 +789,23 @@ impl HlsIngest {
     /// a contained MEDIA service, then report and release whatever ended it.
     async fn supervise_session(
         self: Arc<Self>,
-        pipeline_id: String,
-        registration: IngestRegistration,
+        lease: IngestLease,
         session: impl Future<Output = (SessionEnd, Counters)> + Send + 'static,
     ) {
+        let pipeline_id = lease.pipeline_id().to_string();
+        let input_id = lease.registration().input_id.clone();
+        let attempt_id = lease.registration().attempt_id;
         let service = MediaService {
             class: MediaServiceClass::HlsIngest,
             pipeline_id: pipeline_id.clone(),
-            stage: format!("hls-ingest:{}", registration.input_id),
+            stage: format!("hls-ingest:{input_id}"),
         };
-        let result =
-            crate::executor::run_with_class(service, registration.cancel_token.clone(), session)
-                .await;
+        let result = crate::executor::run_with_class(
+            service,
+            lease.registration().cancel_token.clone(),
+            session,
+        )
+        .await;
         let (phase, reason, had_error) = match &result {
             Ok((SessionEnd::Ended, _)) => ("eof", "HLS playlist ended".to_string(), false),
             Ok((SessionEnd::Idle, _)) => ("idle", "HLS publisher went idle".to_string(), false),
@@ -878,19 +824,14 @@ impl HlsIngest {
                 "[hls] Ingest session ended"
             );
         }
-        self.engine
-            .record_ingest_disconnect_if_current(
-                &pipeline_id,
-                &registration,
-                Some(phase),
-                Some(reason),
+        lease
+            .finish(IngestEnd::Disconnected {
+                phase,
+                reason,
                 had_error,
-            )
+            })
             .await;
-        self.engine
-            .unregister_ingest_if_current(&pipeline_id, &registration)
-            .await;
-        self.forget(&registration.input_id, registration.attempt_id);
+        self.forget(&input_id, attempt_id);
     }
 }
 

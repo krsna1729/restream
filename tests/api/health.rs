@@ -56,7 +56,7 @@ async fn health_shows_registered_egress() {
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
     // Register an ingest + egress in the engine (simulates reconciler start with active publisher)
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13081", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -114,7 +114,7 @@ async fn output_status_and_health_preserve_recent_egress_failure_after_unregiste
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13082", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -196,7 +196,7 @@ async fn active_output_status_ignores_stale_retry_state_after_restart() {
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13084", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -289,7 +289,7 @@ async fn recovered_output_surfaces_flapping_after_repeated_sink_failures() {
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13085", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -422,7 +422,7 @@ async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13081", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -570,7 +570,7 @@ async fn health_endpoint_clears_recent_disconnect_details_after_reconnect() {
     let pipe = body_json(resp).await;
     let pid = pipe["pipeline"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13082", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -606,7 +606,7 @@ async fn health_endpoint_clears_recent_disconnect_details_after_reconnect() {
             .is_some_and(|remaining| remaining > 0 && remaining <= 5_000)
     );
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13082", "srt")
         .await
         .expect("reconnect registration should succeed");
@@ -654,7 +654,7 @@ async fn health_endpoint_surfaces_repeated_transient_disconnects_as_flapping() {
     let pid = pipe["pipeline"]["id"].as_str().unwrap().to_string();
 
     for _ in 0..2 {
-        engine
+        let _ingest = engine
             .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13083", "rtmp")
             .await
             .expect("ingest registration should succeed");
@@ -669,7 +669,7 @@ async fn health_endpoint_surfaces_repeated_transient_disconnects_as_flapping() {
         engine.unregister_ingest(&pid).await;
     }
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13083", "rtmp")
         .await
         .expect("reconnect registration should succeed");

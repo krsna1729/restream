@@ -2,9 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn matrix_routing_ingest_to_source_reader() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline("matrix-pipe").await;
-    engine
+    let _ingest = engine
         .try_register_ingest("matrix-pipe", "key", "rtmp")
         .await
         .unwrap();
@@ -26,7 +26,7 @@ async fn matrix_routing_ingest_to_source_reader() {
 
 #[tokio::test]
 async fn matrix_routing_flv_and_raw_format_dispatch() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline("fmt-pipe").await;
 
     ring.push(MediaPacket {
@@ -57,7 +57,7 @@ async fn matrix_routing_flv_and_raw_format_dispatch() {
 
 #[tokio::test]
 async fn matrix_routing_multi_reader_fan_out() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline("fanout-pipe").await;
 
     ring.push(test_video_packet(0, 0, true));

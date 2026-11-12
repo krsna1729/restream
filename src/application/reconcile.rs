@@ -629,8 +629,8 @@ mod tests {
 
     #[tokio::test]
     async fn output_runtime_snapshot_reads_active_ingest_and_codec() {
-        let engine = MediaEngine::new();
-        engine
+        let engine = std::sync::Arc::new(MediaEngine::new());
+        let _ingest = engine
             .try_register_ingest("pipe", "stream-key", "rtmp")
             .await
             .unwrap();
@@ -669,7 +669,7 @@ mod tests {
     /// grace) is not gated.
     #[tokio::test]
     async fn output_runtime_snapshot_gates_the_start_on_the_source_probe() {
-        let engine = MediaEngine::new();
+        let engine = std::sync::Arc::new(MediaEngine::new());
         let unprobed = restream_domain::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
@@ -684,7 +684,7 @@ mod tests {
         let snapshot = load_output_runtime_snapshot(&engine, &unprobed, 0).await;
         assert!(snapshot.ingest_tracks_ready, "no ingest: not gated");
 
-        engine
+        let _ingest = engine
             .try_register_ingest("pipe", "stream-key", "hls")
             .await
             .unwrap();
@@ -717,8 +717,8 @@ mod tests {
 
     #[tokio::test]
     async fn output_runtime_snapshot_honors_recent_disconnect_grace() {
-        let engine = MediaEngine::new();
-        engine
+        let engine = std::sync::Arc::new(MediaEngine::new());
+        let _ingest = engine
             .try_register_ingest("pipe", "stream-key", "rtmp")
             .await
             .unwrap();
@@ -836,8 +836,8 @@ mod tests {
 
     #[tokio::test]
     async fn recording_reconcile_plan_starts_enabled_pipeline_with_ingest() {
-        let engine = MediaEngine::new();
-        engine
+        let engine = std::sync::Arc::new(MediaEngine::new());
+        let _ingest = engine
             .try_register_ingest("pipeline-1", "stream-one", "rtmp")
             .await
             .unwrap();

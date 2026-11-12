@@ -30,13 +30,11 @@ async fn wait_for_no_viewers(served: &Served) {
 fn a_promoted_pipeline_input_with_unknown_metadata_keeps_and_replaces_the_generation() {
     let (origin, engine, tokio) = origin(8);
     let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-recirc"));
-    tokio.block_on(register_live_ingest(
-        &engine,
-        "pipe-recirc",
-        "primary",
-        false,
-        true,
-    ));
+    let _ingest = tokio.block_on(register_live_ingest(&engine,
+    "pipe-recirc",
+    "primary",
+    false,
+    true,));
 
     run(async {
         let loopback = Loopback::new().await;
@@ -145,9 +143,7 @@ fn a_promoted_pipeline_input_with_unknown_metadata_keeps_and_replaces_the_genera
 fn a_selection_switch_installs_the_new_inputs_tracks() {
     let (origin, engine, tokio) = origin(8);
     let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-sel"));
-    tokio.block_on(register_live_ingest(
-        &engine, "pipe-sel", "audio", false, true,
-    ));
+    let _ingest = tokio.block_on(register_live_ingest(&engine, "pipe-sel", "audio", false, true,));
 
     run(async {
         let loopback = Loopback::new().await;
@@ -184,7 +180,7 @@ fn a_selection_switch_installs_the_new_inputs_tracks() {
         engine
             .update_ingest_session_meta(
                 "pipe-sel",
-                &video_input,
+                video_input.registration(),
                 Some(VideoMeta {
                     codec: "h264".to_string(),
                     width: 640,
