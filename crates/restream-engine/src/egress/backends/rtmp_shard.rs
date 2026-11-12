@@ -152,7 +152,7 @@ pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr
     if let Ok(addr) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(addr, port));
     }
-    (host, port).to_socket_addrs().ok()?.next()
+    super::resolve::contained_lookup(host, || (host, port).to_socket_addrs().ok()?.next())
 }
 
 struct RtmpFabricLeaf {

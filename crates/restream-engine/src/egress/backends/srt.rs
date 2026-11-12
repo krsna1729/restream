@@ -156,10 +156,10 @@ fn resolve_srt_peer_hosts(
         })
 }
 
-fn resolve_srt_peer_host(host: &str) -> Option<SocketAddr> {
+pub(crate) fn resolve_srt_peer_host(host: &str) -> Option<SocketAddr> {
     host.parse::<SocketAddr>()
         .ok()
-        .or_else(|| host.to_socket_addrs().ok()?.next())
+        .or_else(|| super::resolve::contained_lookup(host, || host.to_socket_addrs().ok()?.next()))
 }
 
 impl SrtResolveCompletionQueue {
