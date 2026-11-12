@@ -116,9 +116,13 @@ const CLOSING_GRACE: Duration = Duration::from_millis(500);
 const CLOSING_CHECKS_PER_VISIT: usize = 32;
 
 /// Listener transfers (forwarded handshakes, relocated bonded legs) accepted
-/// per visit. srt-rs bounds what each sender has outstanding, not how fast the
-/// inbox refills, so the drain is capped like the command drain; the busy
-/// predicate's `!inbox.is_empty()` runs the next visit without parking.
+/// per visit. srt-rs bounds forwarded handshakes to 256 per target member
+/// (each holds a credit until this Owner accepts or drops it; further
+/// forwards are dropped at their source and the caller retries), and
+/// relocated legs by the sessions that exist. The unbounded inbox therefore
+/// stays bounded as long as every transfer is accepted promptly, which this
+/// capped drain does; the busy predicate's `!inbox.is_empty()` runs the next
+/// visit without parking.
 const TRANSFERS_PER_VISIT: usize = 32;
 
 /// Receive-quality sampling: each live peer is sampled about once per interval,
