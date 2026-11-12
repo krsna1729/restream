@@ -19,7 +19,7 @@ use restream_sync::RingBuffer;
 async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
     let engine = Arc::new(MediaEngine::new());
     let pipeline_id = "app-hls-preview-blocked";
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "stream-key", "rtmp")
         .await
         .unwrap();

@@ -17,8 +17,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode};
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use crate::input_gate::InputTimestampMapper;
 use crate::secret_display::redact_secret;
 use crate::security::IngestSecurityService;
@@ -171,7 +172,9 @@ pub(super) async fn run_rtmp_control_session(
     security: Arc<IngestSecurityService>,
     engine: Arc<MediaEngine>,
 ) {
-    let mut active_ingest: Option<RtmpIngestSession> = None;
+    // The publisher's lease: dropped with this task, it releases the input
+    // attempt even when the task unwinds or is cancelled.
+    let mut active_ingest: Option<IngestLease> = None;
     let mut playback: Option<(String, Reader, Vec<Arc<MediaPacket>>)> = None;
     let mut disconnect = None;
     let mut finish_reply = None;
@@ -230,7 +233,7 @@ pub(super) async fn run_rtmp_control_session(
             RtmpControlCommand::EncoderDeclared(declared) => {
                 if let Some(active) = active_ingest.as_ref() {
                     engine
-                        .update_ingest_session_declared(&active.registration, declared)
+                        .update_ingest_session_declared(active.registration(), declared)
                         .await;
                 }
             }
@@ -325,7 +328,7 @@ pub(super) async fn run_rtmp_control_session(
                 if let Some(active) = active_ingest.as_ref() {
                     tokio::select! {
                         _ = shutdown.cancelled() => break 'actor,
-                        _ = engine.update_ingest_session_quality(&active.registration, *quality) => {}
+                        _ = engine.update_ingest_session_quality(active.registration(), *quality) => {}
                     }
                 }
             }
@@ -342,7 +345,7 @@ pub(super) async fn run_rtmp_control_session(
         }
     }
 
-    if let Some(active) = &active_ingest {
+    if let Some(active) = active_ingest {
         let (phase, reason, had_error) = disconnect.unwrap_or_else(|| {
             if shutdown.is_cancelled() {
                 (
@@ -358,18 +361,13 @@ pub(super) async fn run_rtmp_control_session(
                 )
             }
         });
-        info!(pipeline = %active.pipeline_id, "[rtmp] Publisher disconnected");
-        engine
-            .record_ingest_disconnect_if_current(
-                &active.pipeline_id,
-                &active.registration,
-                Some(&phase),
-                Some(reason),
+        info!(pipeline = %active.pipeline_id(), "[rtmp] Publisher disconnected");
+        active
+            .finish(IngestEnd::Disconnected {
+                phase: &phase,
+                reason,
                 had_error,
-            )
-            .await;
-        engine
-            .unregister_ingest_if_current(&active.pipeline_id, &active.registration)
+            })
             .await;
     }
     if let Some(reply) = finish_reply {
@@ -386,10 +384,10 @@ struct PublishContext<'a> {
 async fn authorize_publish(
     pipeline_access: &dyn PipelineAccessAuthenticator,
     security: &IngestSecurityService,
-    engine: &MediaEngine,
+    engine: &Arc<MediaEngine>,
     shutdown: &CancellationToken,
     context: PublishContext<'_>,
-    active_ingest: &mut Option<RtmpIngestSession>,
+    active_ingest: &mut Option<IngestLease>,
 ) -> PublishAuthorization {
     if security.is_ip_banned(context.client_ip).is_some() {
         return PublishAuthorization::Rejected {
@@ -423,18 +421,19 @@ async fn authorize_publish(
         }
     };
 
-    let registration = tokio::select! {
+    // Every early return below drops the lease, which releases the attempt.
+    let lease = tokio::select! {
         biased;
-        registration = engine.try_register_pipeline_input_attempt(
+        lease = engine.try_register_pipeline_input_attempt(
             &pipeline.id,
             &pipeline.input_id,
             context.stream_key,
             "rtmp",
             pipeline.selected,
-        ) => registration,
+        ) => lease,
         _ = shutdown.cancelled() => return PublishAuthorization::Cancelled,
     };
-    let Some(registration) = registration else {
+    let Some(lease) = lease else {
         return PublishAuthorization::Rejected {
             code: "NetStream.Publish.BadName",
             description: "Input already has an active publisher",
@@ -442,23 +441,15 @@ async fn authorize_publish(
         };
     };
     if shutdown.is_cancelled() {
-        engine
-            .unregister_ingest_if_current(&pipeline.id, &registration)
-            .await;
         return PublishAuthorization::Cancelled;
     }
 
     let ring = tokio::select! {
         ring = engine.get_or_create_pipeline(&pipeline.id) => ring,
-        _ = shutdown.cancelled() => {
-            engine
-                .unregister_ingest_if_current(&pipeline.id, &registration)
-                .await;
-            return PublishAuthorization::Cancelled;
-        }
+        _ = shutdown.cancelled() => return PublishAuthorization::Cancelled,
     };
     let ingest = tokio::select! {
-        ingest = engine.with_ingest_session(&registration, |ingest| {
+        ingest = engine.with_ingest_session(lease.registration(), |ingest| {
             (
                 ingest.bytes_received.clone(),
                 ingest.first_media_ms.clone(),
@@ -469,12 +460,7 @@ async fn authorize_publish(
                 ingest.audio_sequence_header.clone(),
             )
         }) => ingest,
-        _ = shutdown.cancelled() => {
-            engine
-                .unregister_ingest_if_current(&pipeline.id, &registration)
-                .await;
-            return PublishAuthorization::Cancelled;
-        }
+        _ = shutdown.cancelled() => return PublishAuthorization::Cancelled,
     };
     let Some((
         bytes_received,
@@ -486,9 +472,6 @@ async fn authorize_publish(
         audio_sequence_header,
     )) = ingest
     else {
-        engine
-            .unregister_ingest_if_current(&pipeline.id, &registration)
-            .await;
         return PublishAuthorization::Rejected {
             code: "NetStream.Publish.BadName",
             description: "Input already has an active publisher",
@@ -498,22 +481,15 @@ async fn authorize_publish(
     tokio::select! {
         _ = engine.update_ingest_session_meta(
             &pipeline.id,
-            &registration,
+            lease.registration(),
             None,
             None,
             Some(context.client_addr.to_string()),
         ) => {}
-        _ = shutdown.cancelled() => {
-            engine
-                .unregister_ingest_if_current(&pipeline.id, &registration)
-                .await;
-            return PublishAuthorization::Cancelled;
-        }
+        _ = shutdown.cancelled() => return PublishAuthorization::Cancelled,
     };
-    *active_ingest = Some(RtmpIngestSession {
-        pipeline_id: pipeline.id.clone(),
-        registration: registration.clone(),
-    });
+    let registration = lease.registration().clone();
+    *active_ingest = Some(lease);
     info!(pipeline = %pipeline.id, "[rtmp] Ingest registered");
     PublishAuthorization::Accepted(Box::new(RtmpPublisherMedia {
         registration,
@@ -534,11 +510,7 @@ async fn authorize_publish(
 
 /// Record a publisher's one-time stream probe as ingest metadata; the audio
 /// tracks land before the metadata that opens an output's start gate.
-async fn record_media_probe(
-    engine: &MediaEngine,
-    active: &RtmpIngestSession,
-    event: RtmpMediaEvent,
-) {
+async fn record_media_probe(engine: &MediaEngine, active: &IngestLease, event: RtmpMediaEvent) {
     match event {
         RtmpMediaEvent::Video(meta) => {
             info!(
@@ -547,8 +519,8 @@ async fn record_media_probe(
             );
             engine
                 .update_ingest_session_meta(
-                    &active.pipeline_id,
-                    &active.registration,
+                    active.pipeline_id(),
+                    active.registration(),
                     Some(meta),
                     None,
                     None,
@@ -562,15 +534,15 @@ async fn record_media_probe(
             );
             engine
                 .update_ingest_session_audio_tracks(
-                    &active.pipeline_id,
-                    &active.registration,
+                    active.pipeline_id(),
+                    active.registration(),
                     vec![meta.clone()],
                 )
                 .await;
             engine
                 .update_ingest_session_meta(
-                    &active.pipeline_id,
-                    &active.registration,
+                    active.pipeline_id(),
+                    active.registration(),
                     None,
                     Some(meta),
                     None,
@@ -579,7 +551,7 @@ async fn record_media_probe(
         }
     }
     engine
-        .note_ingest_session_probed(&active.registration)
+        .note_ingest_session_probed(active.registration())
         .await;
 }
 
@@ -628,12 +600,6 @@ async fn authorize_play(
     }
 }
 
-/// What the Tokio control session keeps about a publisher: identity for
-/// bookkeeping; its media state runs on the owner.
-pub(super) struct RtmpIngestSession {
-    pub(super) pipeline_id: String,
-    pub(super) registration: IngestRegistration,
-}
 fn set_tcp_socket_buffers(socket: std::os::fd::BorrowedFd<'_>, size: usize) {
     use rustix::net::sockopt;
     if sockopt::set_socket_recv_buffer_size(socket, size).is_err() {

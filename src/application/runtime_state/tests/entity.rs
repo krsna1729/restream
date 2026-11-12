@@ -69,7 +69,7 @@ async fn deltas_after(hub: &StateHub, held: &RuntimeState) -> Vec<std::sync::Arc
 #[tokio::test]
 async fn inputs_follow_rows_and_sessions_but_not_counters() {
     let pool = database().await;
-    let engine = MediaEngine::new();
+    let engine = std::sync::Arc::new(MediaEngine::new());
     let hub = StateHub::new(ports(), max_retries());
     crate::db::create_pipeline(&pool, "pipe", "P", "key-main", None, None)
         .await
@@ -122,7 +122,7 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
     assert_eq!(held.graphs.len(), 1, "one graph per pipeline");
 
     // A publisher connects on the primary: only that input changes.
-    engine
+    let _ingest = engine
         .try_register_pipeline_input_attempt("pipe", &primary_id, "key-main", "srt", true)
         .await
         .expect("the primary registers");
@@ -244,7 +244,7 @@ async fn a_deleted_pipeline_takes_its_inputs_and_graph_with_it() {
 /// leaves the graph as it was.
 #[tokio::test]
 async fn the_graph_is_the_running_structure_without_counters() {
-    let engine = MediaEngine::new();
+    let engine = std::sync::Arc::new(MediaEngine::new());
     let pipelines = [crate::db::PipelineRecord {
         id: "pipe".to_string(),
         name: "pipe".to_string(),
@@ -277,7 +277,7 @@ async fn the_graph_is_the_running_structure_without_counters() {
             .any(|edge| edge.from == "pipe_source_rb" && edge.to == "pipe_output_out")
     );
 
-    engine
+    let _ingest = engine
         .try_register_ingest("pipe", "k", "rtmp")
         .await
         .expect("the ingest registers");

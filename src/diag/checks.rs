@@ -689,7 +689,7 @@ mod tests {
 
     async fn transport_check(quality: PublisherQuality) -> DiagResult {
         let engine = Arc::new(MediaEngine::new());
-        engine
+        let _ingest = engine
             .try_register_ingest("pipe-1", "stream-key", "srt")
             .await
             .unwrap();

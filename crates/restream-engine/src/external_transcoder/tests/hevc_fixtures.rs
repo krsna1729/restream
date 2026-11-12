@@ -5,10 +5,7 @@ async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() 
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-hevc-single-audio", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-hevc-single-audio", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-hevc-single-audio",
@@ -102,10 +99,7 @@ async fn external_h264_stage_emits_live_packets_for_single_audio_hevc_fixture() 
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-hevc-source-h264", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-hevc-source-h264", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-hevc-source-h264",
@@ -204,10 +198,7 @@ async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixtu
         .collect::<Vec<_>>();
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-hevc-prebuffered", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-hevc-prebuffered", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-hevc-prebuffered",
@@ -284,10 +275,7 @@ async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
             .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-preview-long", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-preview-long", "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-preview-long",

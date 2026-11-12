@@ -238,8 +238,8 @@ async fn repeated_late_retry_updates_cannot_poison_newest_output_attempt() {
 
 #[tokio::test]
 async fn health_snapshot_surfaces_flapping_after_repeated_egress_recoveries() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-1", "key01_recent_egress_flapping", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -280,8 +280,8 @@ async fn health_snapshot_surfaces_flapping_after_repeated_egress_recoveries() {
 
 #[tokio::test]
 async fn output_status_surfaces_retry_backoff_after_failure() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipe-1", "key01_retry_engine", "rtmp")
         .await
         .expect("ingest registration should succeed");

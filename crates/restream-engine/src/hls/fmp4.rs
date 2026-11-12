@@ -77,8 +77,8 @@ mod tests {
 
     #[tokio::test]
     async fn input_preview_resolves_late_join_sequence_headers_from_input_session() {
-        let engine = MediaEngine::new();
-        let registration = engine
+        let engine = std::sync::Arc::new(MediaEngine::new());
+        let lease = engine
             .try_register_pipeline_input_attempt(
                 "pipeline",
                 "standby-input",
@@ -90,7 +90,7 @@ mod tests {
             .expect("register standby input");
         let expected = Bytes::from(high_profile_sequence_header());
         engine
-            .cache_ingest_session_sequence_header(&registration, true, expected.clone())
+            .cache_ingest_session_sequence_header(lease.registration(), true, expected.clone())
             .await;
         let resource_id = crate::engine_hls::input_hls_preview_resource_id("standby-input");
 

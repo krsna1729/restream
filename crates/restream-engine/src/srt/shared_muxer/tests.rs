@@ -43,7 +43,7 @@ async fn shared_muxer_packages_media_while_control_thread_is_blocked() {
     let pipeline_id = "mux-control-isolation";
     let (video, audio, packets) =
         crate::test_fixtures::primary_av_packets_for_codec("h264").unwrap();
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "mux-isolation", "rtmp")
         .await
         .unwrap();

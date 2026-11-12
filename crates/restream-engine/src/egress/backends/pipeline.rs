@@ -100,9 +100,9 @@ impl ProtocolEngine for PipelineEngine<RingFeed> {
     }
 
     fn close(&mut self, _transport: &mut PipelineTransport, _reason: CloseReason) {
-        // Releasing the claimed target input is an async engine call
-        // (`unregister_ingest_if_current`) the application layer owns —
-        // see `EgressTask::run_pipeline_fabric` — the same split RTMP uses
+        // The claimed target input's lease is held by the application layer
+        // (`EgressTask::run_pipeline_fabric`), which releases it; the shard
+        // thread holds only the attempt's identity, the same split RTMP uses
         // for its publish-startup snapshot rather than reaching back into
         // `MediaEngine` from a shard thread.
     }

@@ -27,7 +27,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
         let output = handle.ring.clone();
         let cancel = handle.cancel.clone();
 
-        engine
+        let _ingest = engine
             .try_register_ingest("rtmp-hevc", "stream-key", "rtmp")
             .await
             .unwrap();

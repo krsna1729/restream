@@ -33,7 +33,7 @@ fn bench_control_plane_lookup(c: &mut Criterion) {
 fn bench_ingest_hot_handle(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let engine = Arc::new(MediaEngine::new());
-    runtime
+    let _ingest = runtime
         .block_on(engine.try_register_ingest("hot-ingest-bench", "key", "rtmp"))
         .expect("register benchmark ingest");
     let cached_ring = runtime.block_on(engine.get_or_create_pipeline("hot-ingest-bench"));
@@ -221,7 +221,7 @@ fn bench_egress_progress_hot_handle(c: &mut Criterion) {
 fn bench_keyframe_record(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio");
     let engine = std::sync::Arc::new(MediaEngine::new());
-    runtime
+    let _ingest = runtime
         .block_on(engine.try_register_ingest("kf-bench", "key", "srt"))
         .expect("register");
 

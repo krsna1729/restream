@@ -9,18 +9,20 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::{
     ActiveIngest, IngestMetadata, IngestRegistration, MediaEngine, RecentIngestOutcome,
 };
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use crate::input_gate::InputForwardState;
 use crate::stage_metrics::StageMetrics;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_sync::RingBuffer;
 
 impl MediaEngine {
-    pub async fn try_register_ingest_attempt(
-        &self,
+    /// Registers the pipeline's only publisher, unless one is active.
+    pub async fn try_register_ingest(
+        self: &Arc<Self>,
         pipeline_id: &str,
         stream_key: &str,
         protocol: &str,
-    ) -> Option<IngestRegistration> {
+    ) -> Option<IngestLease> {
         if self.ingests.active.read().await.contains_key(pipeline_id) {
             return None;
         }
@@ -34,14 +36,17 @@ impl MediaEngine {
         .await
     }
 
+    /// Registers one attempt on `input_id`, unless a live attempt holds it.
+    /// The returned lease ends the attempt: by `finish`, or on drop through
+    /// the engine's release task.
     pub async fn try_register_pipeline_input_attempt(
-        &self,
+        self: &Arc<Self>,
         pipeline_id: &str,
         input_id: &str,
         stream_key: &str,
         protocol: &str,
         selected: bool,
-    ) -> Option<IngestRegistration> {
+    ) -> Option<IngestLease> {
         let _selection = self.ingests.selection_lock.lock().await;
         let mut tokens = self.ingests.cancel_tokens.write().await;
         if let Some(existing) = tokens.get(input_id)
@@ -169,7 +174,70 @@ impl MediaEngine {
                 protocol: protocol.to_string(),
                 stream_key: stream_key.to_string(),
             });
-        Some(registration)
+        self.start_ingest_release_drain();
+        Some(IngestLease::new(
+            self,
+            self.ingests.releases.clone(),
+            pipeline_id,
+            registration,
+        ))
+    }
+
+    /// Starts the task that ends dropped ingest leases' attempts on the
+    /// current Tokio runtime, unless one runs; it first empties the backlog.
+    /// Bootstrap starts it on the main runtime. A registration starts it when
+    /// none runs (tests, or a task whose runtime stopped): an attempt queued
+    /// meanwhile stays queued until then.
+    pub fn start_ingest_release_drain(self: &Arc<Self>) {
+        let mut drain = restream_sync::lock::lock(&self.ingests.release_drain);
+        if drain.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        *drain = Some(runtime.spawn(crate::ingest_lease::drain_releases(
+            Arc::downgrade(self),
+            self.ingests.releases.clone(),
+        )));
+    }
+
+    /// Shutdown, once no session remains: stops the release task, then ends
+    /// the backlog it left.
+    pub async fn stop_ingest_release_drain(&self) {
+        let task = restream_sync::lock::lock(&self.ingests.release_drain).take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        crate::ingest_lease::release_backlog(self, &self.ingests.releases).await;
+    }
+
+    /// Ends one attempt, if it is still its input's current attempt: records
+    /// a `Disconnected` end, then unregisters it.
+    pub(crate) async fn end_ingest_attempt(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+        end: IngestEnd<'_>,
+    ) {
+        if let IngestEnd::Disconnected {
+            phase,
+            reason,
+            had_error,
+        } = end
+        {
+            self.record_ingest_disconnect_if_current(
+                pipeline_id,
+                registration,
+                Some(phase),
+                Some(reason),
+                had_error,
+            )
+            .await;
+        }
+        self.unregister_ingest_if_current(pipeline_id, registration)
+            .await;
     }
 
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
@@ -321,17 +389,6 @@ impl MediaEngine {
         }
     }
 
-    pub async fn try_register_ingest(
-        &self,
-        pipeline_id: &str,
-        stream_key: &str,
-        protocol: &str,
-    ) -> Option<CancellationToken> {
-        self.try_register_ingest_attempt(pipeline_id, stream_key, protocol)
-            .await
-            .map(|registration| registration.cancel_token)
-    }
-
     pub async fn record_ingest_disconnect(
         &self,
         pipeline_id: &str,
@@ -363,7 +420,7 @@ impl MediaEngine {
             .insert(pipeline_id.to_string(), snapshot);
     }
 
-    pub async fn record_ingest_disconnect_if_current(
+    pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
         pipeline_id: &str,
         registration: &IngestRegistration,
@@ -511,7 +568,7 @@ impl MediaEngine {
         }
     }
 
-    pub async fn unregister_ingest_if_current(
+    async fn unregister_ingest_if_current(
         &self,
         pipeline_id: &str,
         registration: &IngestRegistration,

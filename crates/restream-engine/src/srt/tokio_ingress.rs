@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use tracing::{error, info, warn};
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_auth::PipelineAccessAuthenticator;
+use crate::ingest_lease::{IngestEnd, IngestLease};
 use crate::input_gate::InputTimestampMapper;
 use crate::security::IngestSecurityService;
 use crate::ts_chunk_ring::TsChunkReader;
@@ -96,8 +97,9 @@ enum Session {
 }
 
 pub(super) struct PublisherSession {
-    pipeline_id: String,
-    registration: IngestRegistration,
+    /// Dropped with the session (a panicking admission, a listener torn
+    /// down), it releases the input attempt.
+    lease: IngestLease,
     closing: bool,
     /// Tracks the last Owner observation, so rates use Owner-to-Owner intervals.
     quality_fold: QualityFold,
@@ -279,7 +281,7 @@ impl SrtServer {
             return;
         };
         self.engine
-            .update_ingest_session_quality(&publisher.registration, quality)
+            .update_ingest_session_quality(publisher.lease.registration(), quality)
             .await;
     }
 
@@ -392,7 +394,9 @@ impl SrtServer {
         stream_key: String,
     ) -> Result<(PublisherSession, Box<SrtPublisherMedia>), String> {
         let ring_buffer = self.engine.get_or_create_pipeline(&pipeline.id).await;
-        let registration = self
+        // Every early return and unwind below drops the lease, which
+        // releases the attempt.
+        let lease = self
             .engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
@@ -403,10 +407,12 @@ impl SrtServer {
             )
             .await
             .ok_or_else(|| "duplicate SRT publisher".to_string())?;
+        #[cfg(test)]
+        injected_panics::unwind_if_marked(&stream_key);
         self.engine
             .update_ingest_session_meta(
                 &pipeline.id,
-                &registration,
+                lease.registration(),
                 None,
                 None,
                 Some(peer.to_string()),
@@ -420,7 +426,7 @@ impl SrtServer {
             keyframe_times,
         )) = self
             .engine
-            .with_ingest_session(&registration, |ingest| {
+            .with_ingest_session(lease.registration(), |ingest| {
                 (
                     ingest.bytes_received.clone(),
                     ingest.first_media_ms.clone(),
@@ -431,13 +437,10 @@ impl SrtServer {
             })
             .await
         else {
-            self.engine
-                .unregister_ingest_if_current(&pipeline.id, &registration)
-                .await;
             return Err("SRT ingest session disappeared during registration".to_string());
         };
         let media = Box::new(SrtPublisherMedia {
-            registration: registration.clone(),
+            registration: lease.registration().clone(),
             ring_buffer,
             demuxer: restream_mpegts::TsDemuxer::new(),
             timestamp_mapper: InputTimestampMapper::default(),
@@ -450,8 +453,7 @@ impl SrtServer {
             last_progress_ms,
         });
         let session = PublisherSession {
-            pipeline_id: pipeline.id,
-            registration,
+            lease,
             closing: false,
             quality_fold: QualityFold::default(),
         };
@@ -468,22 +470,21 @@ impl SrtServer {
         identity: super::ingress_media::ProbeIdentity,
         probe: DemuxProbe,
     ) -> Option<Arc<RingBuffer>> {
-        if publisher.registration.attempt_id != identity.attempt_id {
+        let registration = publisher.lease.registration();
+        if registration.attempt_id != identity.attempt_id {
             return None;
         }
         let ring = self
             .engine
             .replace_ingest_session_tracks(
-                &publisher.registration,
+                registration,
                 probe.video,
                 probe.audio_tracks,
                 probe.video_track_count,
                 probe.video_sequence_header,
             )
             .await;
-        self.engine
-            .note_ingest_session_probed(&publisher.registration)
-            .await;
+        self.engine.note_ingest_session_probed(registration).await;
         ring
     }
 
@@ -511,17 +512,13 @@ impl SrtServer {
 
     /// Ingest bookkeeping after the Owner has flushed the publisher's media.
     pub(super) async fn finish_publisher(&self, publisher: PublisherSession) {
-        self.engine
-            .record_ingest_disconnect_if_current(
-                &publisher.pipeline_id,
-                &publisher.registration,
-                Some("disconnect"),
-                Some("SRT peer disconnected".to_string()),
-                false,
-            )
-            .await;
-        self.engine
-            .unregister_ingest_if_current(&publisher.pipeline_id, &publisher.registration)
+        publisher
+            .lease
+            .finish(IngestEnd::Disconnected {
+                phase: "disconnect",
+                reason: "SRT peer disconnected".to_string(),
+                had_error: false,
+            })
             .await;
     }
 }
@@ -543,11 +540,11 @@ async fn close_deleted_sessions(
     let live_pipelines = engine.ingests.pipelines.read().await;
     for (peer, session) in sessions.iter_mut() {
         let (pipeline_id, closing) = match session {
-            Session::Publish(publisher) => (&publisher.pipeline_id, &mut publisher.closing),
+            Session::Publish(publisher) => (publisher.lease.pipeline_id(), &mut publisher.closing),
             Session::Read {
                 pipeline_id,
                 closing,
-            } => (&*pipeline_id, closing),
+            } => (pipeline_id.as_str(), closing),
         };
         if !*closing && !live_pipelines.contains_key(pipeline_id) {
             if ingress.disconnect(*peer).is_ok() {
@@ -556,6 +553,32 @@ async fn close_deleted_sessions(
             if ingress.pending_command.is_some() {
                 break;
             }
+        }
+    }
+}
+
+/// Test-only fault point: `start_publisher` for a marked stream key unwinds
+/// right after it registered the input attempt, as a bug there would.
+/// `resume_unwind` skips the panic hook, so logs stay quiet.
+#[cfg(test)]
+pub(super) mod injected_panics {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    static MARKED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+    pub(in crate::srt) fn mark(stream_key: &str) {
+        restream_sync::lock::lock(&MARKED)
+            .get_or_insert_with(HashSet::new)
+            .insert(stream_key.to_string());
+    }
+
+    pub(super) fn unwind_if_marked(stream_key: &str) {
+        let marked = restream_sync::lock::lock(&MARKED)
+            .as_mut()
+            .is_some_and(|marked| marked.remove(stream_key));
+        if marked {
+            std::panic::resume_unwind(Box::new("injected SRT start_publisher panic"));
         }
     }
 }

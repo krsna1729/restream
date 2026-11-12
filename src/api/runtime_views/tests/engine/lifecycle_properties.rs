@@ -11,16 +11,20 @@ proptest! {
             .expect("tokio runtime");
 
         runtime.block_on(async move {
-            let engine = MediaEngine::new();
+            let engine = Arc::new(MediaEngine::new());
             let pipeline_id = "pipe-1".to_string();
             let mut model = IngestLifecycleModel::default();
+            // The model ends attempts only through the engine's
+            // pipeline-wide calls, so every lease is held to the end.
+            let mut leases = Vec::new();
 
             for action in actions {
                 match action {
                     IngestLifecycleAction::Register { protocol } => {
                         let registered =
                             engine.try_register_ingest("pipe-1", "prop-ingest-key", protocol).await;
-                        if registered.is_some() {
+                        if let Some(lease) = registered {
+                            leases.push(lease);
                             model.active = true;
                             model.protocol = Some(protocol);
                             model.remote_addr = None;
@@ -124,8 +128,8 @@ proptest! {
             .expect("tokio runtime");
 
         runtime.block_on(async move {
-            let engine = MediaEngine::new();
-            engine
+            let engine = Arc::new(MediaEngine::new());
+            let _ingest = engine
                 .try_register_ingest("pipe-1", "prop-egress-key", "rtmp")
                 .await
                 .expect("ingest registration should succeed");

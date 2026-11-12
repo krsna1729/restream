@@ -180,8 +180,8 @@ async fn clearing_the_file_source_releases_only_the_file_session() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(file.cancel_token.is_cancelled());
-    assert!(!live.cancel_token.is_cancelled());
+    assert!(file.registration().cancel_token.is_cancelled());
+    assert!(!live.registration().cancel_token.is_cancelled());
     assert_eq!(engine.connected_input_count("p1").await, 1);
 }
 

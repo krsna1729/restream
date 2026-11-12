@@ -162,17 +162,6 @@ impl FileIngestService {
         .map_err(|err| ServiceError::internal(format!("{error_context}: {err:?}")))
     }
 
-    /// Best-effort rollback for a start attempt that already registered runtime
-    /// state before a later spawn step failed.
-    async fn clear_started_ingest_on_failure(
-        engine: &Arc<MediaEngine>,
-        ingest_id: &str,
-        pipeline_id: &str,
-    ) {
-        engine.clear_file_ingest_running(ingest_id).await;
-        engine.unregister_ingest(pipeline_id).await;
-    }
-
     /// Deletes one stored ingest after clearing any runtime state tied to its
     /// stream key, so the engine does not keep a stale file-ingest session.
     pub async fn delete_ingest_with_runtime_cleanup(
@@ -268,7 +257,7 @@ impl FileIngestService {
             .ok_or(FileIngestStartError::MissingPipelineForStreamKey)?;
 
         let ring_buffer = engine.get_or_create_pipeline(&pipeline.id).await;
-        let Some(registration) = engine
+        let Some(lease) = engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
                 &input.id,
@@ -295,10 +284,12 @@ impl FileIngestService {
                 target_gop_seconds: ingest.target_gop_seconds,
             },
             ring_buffer,
-            registration,
+            registration: lease.registration().clone(),
         };
-        if let Err(err) = start_external_file_ingest(runtime) {
-            Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
+        // A failed spawn has released this attempt only, never another
+        // input's publisher on the pipeline.
+        if let Err(err) = start_external_file_ingest(runtime, lease).await {
+            engine.clear_file_ingest_running(&ingest.id).await;
             return Err(FileIngestStartError::Spawn(err));
         }
 

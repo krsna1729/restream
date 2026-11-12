@@ -140,7 +140,7 @@ async fn setup_matrix_path(
     let source_ring = engine.get_or_create_pipeline("pipe").await;
 
     // Register active ingest
-    engine
+    let _ingest = engine
         .try_register_ingest("pipe", "key", ingest)
         .await
         .unwrap();

@@ -175,6 +175,9 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
         config.engine.clone(),
     )));
+    // Dropped ingest leases release on the main runtime, whichever runtime
+    // (a listener thread's, a supervisor's) the attempt registered on.
+    engine.start_ingest_release_drain();
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
     let ingest_authenticator = Arc::new(

@@ -74,7 +74,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
     .await
     .unwrap();
 
-    engine
+    let _ingest = engine
         .try_register_ingest("pipe-graph-life", "graph-life-key", "rtmp")
         .await
         .unwrap();
@@ -292,7 +292,7 @@ async fn diagnostics_supports_active_file_ingest() {
     )
     .unwrap();
 
-    engine
+    let _ingest = engine
         .try_register_ingest("pipe-file-diag", "file-diag-key", "file")
         .await
         .expect("file ingest should register");

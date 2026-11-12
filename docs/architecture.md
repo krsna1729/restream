@@ -492,6 +492,7 @@ many entities, so each entity has a panic boundary where its bytes enter:
 | RTMP ingest connection | Connection future in `rtmp::listener::run_compio_owner` | That connection closes. Its parser charge and gate lease drop with it |
 | SRT ingest peer | `srt::ingress_owner::OwnerLoop::contain_peer_media` | That peer's media state is discarded without flush and the peer is disconnected. Its Owner byte budget share returns |
 | RTMP and SRT listener | `bootstrap::listener_supervisor` | A listener that ends without shutdown restarts after 1 s, doubling to 30 s; the delay resets after 60 s of healthy running |
+| Ingest attempt, any protocol | `ingest_lease::IngestLease` drop | The attempt ends as `abandoned` and its stream key is free for the next publisher. Other attempts on the pipeline keep running |
 
 This diagram shows what a contained panic ends and what keeps running.
 
@@ -510,6 +511,12 @@ Rules for code behind a boundary:
 - Shared state must stay valid after an unwind: atomics, poison-tolerant
   locks, RAII guards, per-entity state dropped with the entity. Insert
   per-entity state into its owning map before work that can unwind.
+- An input attempt's registration is an `IngestLease` (`ingest_lease`), held
+  by that attempt's session state. Orderly teardown calls `finish`; any other
+  end (a panic, a cancelled task, an early return) drops it, and the engine's
+  release task ends that attempt as `abandoned`. Releases are attempt-checked,
+  and the release queue is engine-owned, so no exit path leaves a stream key
+  locked as a duplicate publisher. Never unregister an attempt by hand.
 - Never drop a pending Compio I/O future in a losing `select!` branch. Its
   completion (an accepted socket, received bytes) is lost with it. Keep the
   operation in flight until it completes.

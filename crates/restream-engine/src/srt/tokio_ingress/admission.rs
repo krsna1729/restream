@@ -5,13 +5,13 @@
 //! application, `finish_publisher`, telemetry folding and deleted-pipeline
 //! checks still await engine locks on it (backlog Q-124).
 //!
-//! A task is never aborted: `start_publisher` registers the ingest before it
-//! returns, and an abort after that point would leave the key locked as a
-//! duplicate publisher. A peer that disconnects meanwhile is marked as gone:
-//! its task registers nothing once its lookup returns, finishes a
-//! registration that raced the mark itself, and the loop finishes anything
-//! that raced even that, so a reconnect on the same key is not refused as a
-//! duplicate.
+//! A task is never aborted, so a registration it made ends in order: a
+//! panicking task drops its ingest lease, which releases the attempt as
+//! abandoned (`crate::ingest_lease`). A peer that disconnects meanwhile is
+//! marked as gone: its task registers nothing once its lookup returns,
+//! finishes a registration that raced the mark itself, and the loop finishes
+//! anything that raced even that, so a reconnect on the same key is not
+//! refused as a duplicate.
 //!
 //! Publishers and readers of one key are admitted concurrently, so a reader
 //! whose task overtakes its publisher's registration is refused with "no

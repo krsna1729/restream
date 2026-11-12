@@ -17,7 +17,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
-- [Q-121 per-attempt ingest lease](#q-121-correctness-opus-an-ingest-registration-cannot-outlive-its-input-attempt)
 - [Q-122 no database on a connect path](#q-122-correctness-opus-ingest-admission-reads-an-in-memory-catalog-snapshot)
 - [Q-123 typed dependency deadlines](#q-123-correctness-opus-every-control-plane-dependency-wait-has-a-deadline)
 - [Q-124 control-plane isolation rows](#q-124-correctness-opus-the-isolation-audit-covers-the-control-plane)
@@ -147,18 +146,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: a test that injects the accept-loop panic
   (`INJECTED_PANIC_MAX_CONNECTIONS`) then publishes successfully to the same
   port after the restart; the listener thread still joins at shutdown.
-
-### Q-121 [correctness] [opus] An ingest registration cannot outlive its input attempt
-- Goal: `IngestRegistration` becomes a lease the session owns, one per
-  input attempt. Dropping it, after a disconnect, a panic, a cancelled task
-  or a listener exit, unregisters that attempt. No code path can then leave
-  a key locked as a duplicate publisher. Today each protocol calls
-  `unregister_ingest_if_current` by hand, and a panic inside SRT
-  `start_publisher` after registration still leaks it.
-- Gates: every protocol gets a test that drops the lease without the
-  explicit finish and then registers again on the same key. Removing the
-  drop path must make that test fail. The hand-written finish calls are
-  deleted.
 
 ### Q-122 [correctness] [opus] Ingest admission reads an in-memory catalog snapshot
 - Goal: the RTMP, SRT, HLS push and MoQ connect paths authenticate against an

@@ -691,9 +691,9 @@ async fn clear_stream_key_file_ingests_unregisters_pipeline_and_clears_running_s
         pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
         error: None,
     };
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let _registration = engine
-        .try_register_ingest_attempt(&pipeline.id, &pipeline.stream_key, "file")
+        .try_register_ingest(&pipeline.id, &pipeline.stream_key, "file")
         .await
         .expect("pipeline should register");
     engine.mark_file_ingest_running(&ingest.id).await;

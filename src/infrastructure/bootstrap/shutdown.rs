@@ -94,6 +94,8 @@ pub(super) async fn cleanup(
         .await
         .ok();
     }
+    // Every session is gone: end any attempt still queued before exit.
+    engine.stop_ingest_release_drain().await;
 
     pool.close().await;
 

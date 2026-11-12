@@ -1,10 +1,7 @@
 #[tokio::test]
 async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-stage-meta", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-stage-meta", "stream-key", "srt").await.unwrap();
 
     let ingest_audio = vec![
         restream_core::metadata::AudioMeta {
@@ -94,10 +91,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
 #[tokio::test]
 async fn stage_metadata_waits_for_complete_audio_tracks() {
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-stage-audio-ready", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-stage-audio-ready", "stream-key", "srt").await.unwrap();
 
     engine
         .update_ingest_meta(
@@ -194,10 +188,7 @@ async fn stage_metadata_waits_for_complete_audio_tracks() {
 #[tokio::test]
 async fn stage_metadata_waits_for_raw_parameter_sets_on_srt_inputs() {
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-stage-params", "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-stage-params", "stream-key", "srt").await.unwrap();
 
     let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
@@ -276,10 +267,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_srt_inputs() {
 #[tokio::test]
 async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-stage-file-params", "stream-key", "file")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-stage-file-params", "stream-key", "file").await.unwrap();
 
     let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),
@@ -360,10 +348,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
 #[tokio::test]
 async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages() {
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-stage-codec-edge", "stream-key", "file")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-stage-codec-edge", "stream-key", "file").await.unwrap();
 
     let ready_audio = restream_core::metadata::AudioMeta {
         codec: "aac".to_string(),

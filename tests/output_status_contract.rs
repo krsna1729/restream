@@ -126,7 +126,7 @@ async fn active_output_status_matches_health_runtime_fields() {
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13086", "rtmp")
         .await
         .expect("ingest registration should succeed");
@@ -225,7 +225,7 @@ async fn stalled_output_status_matches_health_runtime_fields() {
     let out = body_json(resp).await;
     let oid = out["output"]["id"].as_str().unwrap().to_string();
 
-    engine
+    let _ingest = engine
         .try_register_ingest(&pid, "key01_6c71124cde80358ca7c13087", "rtmp")
         .await
         .expect("ingest registration should succeed");

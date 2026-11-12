@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use super::publisher::PublisherMedia;
-use super::{Admission, Lifecycle, PublisherSession, Rejection, stream_key_from_path};
+use super::{Admission, AttemptEnd, Lifecycle, PublisherSession, Rejection, stream_key_from_path};
 use crate::moq::ingest::media::{MoqProbe, TrackSet};
 use crate::moq::transport;
 use restream_core::MediaPacket;
@@ -106,11 +106,14 @@ pub(crate) fn stream_key(connection_path: &str, broadcast: &str) -> Option<Strin
 }
 
 /// An admitted publisher's media: track conversion, the probe and the ring
-/// push. Ends the input registration exactly once, when finished or dropped
-/// (a listener torn down mid-session still releases the input).
+/// push. Ends the input attempt in order once, when finished; dropped
+/// unfinished (its task unwound, the listener was torn down mid-session) it
+/// still flushes its media, and its dropped [`AttemptEnd`] lets Tokio
+/// release the attempt as abandoned.
 pub(crate) struct Ingest<L: Lifecycle> {
     lifecycle: L,
-    session: Option<PublisherSession>,
+    session: PublisherSession,
+    end: Option<AttemptEnd>,
     media: PublisherMedia,
     tracks: TrackSet,
     limits: SessionLimits,
@@ -123,7 +126,8 @@ impl<L: Lifecycle> Ingest<L> {
     pub(crate) fn new(lifecycle: L, admission: Admission, limits: SessionLimits) -> Self {
         Self {
             lifecycle,
-            session: Some(admission.session),
+            session: admission.session,
+            end: Some(admission.end),
             media: admission.media,
             tracks: TrackSet::default(),
             limits,
@@ -170,7 +174,7 @@ impl<L: Lifecycle> Ingest<L> {
         let probe = self.tracks.probe()?;
         self.probe_sent = true;
         self.media.begin_probe();
-        Some((self.session.clone()?, probe))
+        Some((self.session.clone(), probe))
     }
 
     pub(crate) fn probe_applied(&mut self, ring: Option<Arc<RingBuffer>>) {
@@ -221,22 +225,21 @@ impl<L: Lifecycle> Ingest<L> {
         Ok(probe)
     }
 
-    /// Flush the media and end the input registration with `reason`.
+    /// Flush the media and end the input attempt with `reason`.
     pub(crate) fn finish(mut self, reason: String) {
-        self.release(reason);
-    }
-
-    fn release(&mut self, reason: String) {
-        if let Some(session) = self.session.take() {
+        if let Some(end) = self.end.take() {
             self.media.flush();
-            self.lifecycle.finish(session, reason);
+            self.lifecycle.finish(end, reason);
         }
     }
 }
 
 impl<L: Lifecycle> Drop for Ingest<L> {
     fn drop(&mut self) {
-        self.release("the MoQ ingest listener stopped".to_string());
+        if let Some(end) = self.end.take() {
+            self.media.flush();
+            drop(end);
+        }
     }
 }
 

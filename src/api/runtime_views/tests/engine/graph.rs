@@ -119,9 +119,9 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
 
 #[tokio::test]
 async fn processing_graph_shows_recirculation_target_input_edge() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipeline_id = "pipeline-recirc-source";
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "recirc-source-key", "rtmp")
         .await
         .expect("source ingest should register");
@@ -190,9 +190,9 @@ async fn processing_graph_shows_recirculation_target_input_edge() {
 
 #[tokio::test]
 async fn processing_graph_marks_failed_egress_inactive() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipeline_id = "pipeline-failed-output-graph";
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "stream-key", "rtmp")
         .await
         .unwrap();
@@ -231,7 +231,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
 async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it() {
     let engine = std::sync::Arc::new(MediaEngine::new());
     let pipeline_id = "pipeline-graph-stale-codec";
-    engine
+    let _ingest = engine
         .try_register_ingest(pipeline_id, "stream-key", "file")
         .await
         .unwrap();

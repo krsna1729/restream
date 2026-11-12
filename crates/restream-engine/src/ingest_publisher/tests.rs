@@ -11,18 +11,30 @@ use super::*;
 use restream_sync::RingBuffer;
 
 /// The publication harness file ingest uses: an engine, a registered input
-/// attempt, its ring and the target over them.
-pub(super) async fn harness(name: &str) -> (Arc<MediaEngine>, PublishTarget, Arc<RingBuffer>) {
+/// attempt, its ring and the target over them, and the attempt's lease.
+pub(super) async fn harness(
+    name: &str,
+) -> (
+    Arc<MediaEngine>,
+    PublishTarget,
+    Arc<RingBuffer>,
+    crate::ingest_lease::IngestLease,
+) {
     let engine = Arc::new(MediaEngine::new());
     let ring = engine.get_or_create_pipeline(name).await;
-    let registration = engine
-        .try_register_ingest_attempt(name, name, "file")
+    let lease = engine
+        .try_register_ingest(name, name, "file")
         .await
         .expect("the ingest attempt registers");
-    let target = PublishTarget::open(engine.clone(), name.to_string(), registration, ring.clone())
-        .await
-        .expect("the publish target opens");
-    (engine, target, ring)
+    let target = PublishTarget::open(
+        engine.clone(),
+        name.to_string(),
+        lease.registration().clone(),
+        ring.clone(),
+    )
+    .await
+    .expect("the publish target opens");
+    (engine, target, ring, lease)
 }
 
 /// Deterministic bytes, so a failure is replayable.
@@ -77,7 +89,7 @@ fn fixture() -> Vec<u8> {
 /// publish path answers `Ok` for all of it, and nothing bogus is published.
 #[tokio::test]
 async fn garbage_never_fails_the_ts_publish_path() {
-    let (_engine, target, ring) = harness("publish-garbage").await;
+    let (_engine, target, ring, _lease) = harness("publish-garbage").await;
     let fixture = fixture();
 
     let mut truncated = fixture[..188 * 40].to_vec();
@@ -148,7 +160,7 @@ async fn garbage_never_fails_the_ts_publish_path() {
 /// not stop the rest of the stream from publishing.
 #[tokio::test]
 async fn a_corrupt_stretch_still_publishes_the_rest() {
-    let (_engine, target, ring) = harness("publish-corrupt-stretch").await;
+    let (_engine, target, ring, _lease) = harness("publish-corrupt-stretch").await;
     let fixture = fixture();
     let mut publisher = SegmentPublisher::new(Container::Ts.demux(), IngestTimestamps::default());
     let start = ring.get_write_idx();
@@ -186,7 +198,7 @@ async fn a_corrupt_stretch_still_publishes_the_rest() {
 /// a keyframe carries the configuration generation its sets started.
 #[tokio::test]
 async fn published_keyframes_carry_the_in_band_configuration() {
-    let (_engine, target, ring) = harness("publish-records-config").await;
+    let (_engine, target, ring, _lease) = harness("publish-records-config").await;
     let mut publisher = SegmentPublisher::new(Container::Ts.demux(), IngestTimestamps::default());
     let start = ring.get_write_idx();
     for chunk in fixture().chunks(PUBLISH_CHUNK_BYTES) {

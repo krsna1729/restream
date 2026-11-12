@@ -119,7 +119,7 @@ fn on_ring(ring: &RingBuffer, start: usize) -> Vec<(MediaType, i64)> {
 
 #[tokio::test]
 async fn two_renditions_reach_the_ring_merged_in_dts_order() {
-    let (engine, target, ring) = harness("renditions-merged").await;
+    let (engine, target, ring, _lease) = harness("renditions-merged").await;
     let start = ring.get_write_idx();
     let mut publisher = SegmentPublisher::new(variant(), IngestTimestamps::default());
     publisher.interleave(2, Duration::from_secs(10), &target);
@@ -174,7 +174,7 @@ async fn a_segment_after_a_dropped_one_publishes_no_interframe_before_its_keyfra
         is_keyframe,
         ..packet(media_type, dts)
     };
-    let (_engine, target, ring) = harness("dropped-segment").await;
+    let (_engine, target, ring, _lease) = harness("dropped-segment").await;
     let mut publisher = SegmentPublisher::new(
         Box::new(Scripted {
             batches: VecDeque::from([
@@ -222,7 +222,7 @@ async fn a_segment_after_a_dropped_one_publishes_no_interframe_before_its_keyfra
 /// missing rendition is absent and nothing waits for it again.
 #[tokio::test]
 async fn a_missing_rendition_holds_the_variant_for_the_window_only() {
-    let (engine, target, ring) = harness("renditions-window").await;
+    let (engine, target, ring, _lease) = harness("renditions-window").await;
     let start = ring.get_write_idx();
     let demux = Box::new(Scripted {
         batches: VecDeque::from([video(0), video(2_000), video(4_000)]),
@@ -275,7 +275,7 @@ fn audio(from: i64) -> Vec<MediaPacket> {
 /// clock), so the two stay aligned and neither has a gap.
 #[tokio::test]
 async fn a_discontinuity_crossed_by_both_renditions_keeps_them_aligned() {
-    let (_engine, target, ring) = harness("renditions-discontinuity").await;
+    let (_engine, target, ring, _lease) = harness("renditions-discontinuity").await;
     let start = ring.get_write_idx();
     // Old timeline 0..4 s, then the restarted encoder from 0 again.
     let variant = Box::new(Scripted {
@@ -339,7 +339,7 @@ async fn a_discontinuity_crossed_by_both_renditions_keeps_them_aligned() {
 /// generation.
 #[tokio::test]
 async fn a_sub_window_forward_jump_at_a_timeline_break_leaves_no_gap() {
-    let (_engine, target, ring) = harness("renditions-timeline-break").await;
+    let (_engine, target, ring, _lease) = harness("renditions-timeline-break").await;
     let start = ring.get_write_idx();
     let variant = Box::new(Scripted {
         batches: VecDeque::from([video(0), video(5_000)]),
@@ -400,7 +400,7 @@ async fn a_sub_window_forward_jump_at_a_timeline_break_leaves_no_gap() {
 /// it, so the two stay aligned even though the switch jumped ahead.
 #[tokio::test]
 async fn a_variant_switch_keeps_the_renditions_aligned() {
-    let (_engine, target, ring) = harness("renditions-variant-switch").await;
+    let (_engine, target, ring, _lease) = harness("renditions-variant-switch").await;
     let start = ring.get_write_idx();
     let variant = Box::new(Scripted {
         batches: VecDeque::from([video(0), video(3_000)]),

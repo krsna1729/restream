@@ -2,13 +2,13 @@ use super::*;
 
 #[tokio::test]
 async fn health_input_on_after_register_off_after_unregister() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
     let snap = test_health_snapshot(&engine, &pipelines, &HashMap::new()).await;
     assert_eq!(snap["pipelines"]["p1"]["input"]["status"], "off");
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -22,10 +22,10 @@ async fn health_input_on_after_register_off_after_unregister() {
 
 #[tokio::test]
 async fn health_snapshot_preserves_recent_ingest_disconnect_details_after_unregister() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -61,10 +61,10 @@ async fn health_snapshot_preserves_recent_ingest_disconnect_details_after_unregi
 
 #[tokio::test]
 async fn health_snapshot_exposes_disconnect_grace_window_fields() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -100,11 +100,11 @@ async fn health_snapshot_exposes_disconnect_grace_window_fields() {
 
 #[tokio::test]
 async fn health_snapshot_surfaces_flapping_after_repeated_reconnects() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
     for protocol in ["rtmp", "rtmp"] {
-        engine
+        let _ingest = engine
             .try_register_ingest("p1", "key", protocol)
             .await
             .expect("ingest registration should succeed");
@@ -126,7 +126,7 @@ async fn health_snapshot_surfaces_flapping_after_repeated_reconnects() {
     assert_eq!(off_input["recentDisconnectCount"], 2);
     assert_eq!(off_input["flapping"], true);
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .expect("reconnect registration should succeed");
@@ -145,10 +145,10 @@ async fn health_snapshot_surfaces_flapping_after_repeated_reconnects() {
 
 #[tokio::test]
 async fn unregister_ingest_preserves_recent_snapshot_without_explicit_error() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -182,10 +182,10 @@ async fn unregister_ingest_preserves_recent_snapshot_without_explicit_error() {
 
 #[tokio::test]
 async fn re_register_ingest_clears_recent_disconnect_details() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
@@ -206,7 +206,7 @@ async fn re_register_ingest_clears_recent_disconnect_details() {
         "connection reset by peer"
     );
 
-    engine
+    let _ingest = engine
         .try_register_ingest("p1", "key", "srt")
         .await
         .unwrap();
@@ -223,7 +223,7 @@ async fn re_register_ingest_clears_recent_disconnect_details() {
 
 #[tokio::test]
 async fn re_register_ingest_after_unregister() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let pipelines = vec!["p1".to_string()];
 
     let t1 = engine
@@ -231,7 +231,7 @@ async fn re_register_ingest_after_unregister() {
         .await
         .unwrap();
     engine.unregister_ingest("p1").await;
-    assert!(t1.is_cancelled());
+    assert!(t1.registration().cancel_token.is_cancelled());
 
     let snap = test_health_snapshot(&engine, &pipelines, &HashMap::new()).await;
     assert_eq!(snap["pipelines"]["p1"]["input"]["status"], "off");

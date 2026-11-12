@@ -18,8 +18,8 @@ async fn health_snapshot_marks_outputs_stopped_without_ingest() {
 
 #[tokio::test]
 async fn health_snapshot_marks_failed_egress_status_when_input_is_live() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-1", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -42,8 +42,8 @@ async fn health_snapshot_marks_failed_egress_status_when_input_is_live() {
 
 #[tokio::test]
 async fn health_snapshot_marks_live_output_stalled_without_progress() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-1", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -71,8 +71,8 @@ async fn health_snapshot_marks_live_output_stalled_without_progress() {
 
 #[tokio::test]
 async fn health_snapshot_keeps_local_hls_segmenter_running_without_bytes_out() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-1", "stream-key", "rtmp")
         .await
         .unwrap();
@@ -101,8 +101,8 @@ async fn health_snapshot_keeps_local_hls_segmenter_running_without_bytes_out() {
 
 #[tokio::test]
 async fn health_snapshot_includes_all_ingest_audio_tracks() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-audio", "stream-key", "srt")
         .await
         .unwrap();
@@ -150,8 +150,8 @@ async fn health_snapshot_includes_all_ingest_audio_tracks() {
 
 #[tokio::test]
 async fn health_snapshot_reports_probe_readiness() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-probe", "stream-key", "srt")
         .await
         .unwrap();
@@ -279,13 +279,13 @@ async fn health_and_graph_expose_reader_lag_overflow_and_packet_age() {
 
 #[tokio::test]
 async fn health_snapshot_exposes_bonding_and_member_telemetry() {
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     engine
         .runtime
         .listener_stats
         .bonding_available
         .store(true, Ordering::Relaxed);
-    engine
+    let _ingest = engine
         .try_register_ingest("pipeline-bond", "stream-key", "srt")
         .await
         .unwrap();

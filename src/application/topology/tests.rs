@@ -210,7 +210,7 @@ async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
 #[tokio::test]
 async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() {
     let pool = pool().await;
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     for (id, key) in [("pipe-gone", "key-gone"), ("pipe-kept", "key-kept")] {
         crate::db::create_pipeline(&pool, id, id, key, None, None)
             .await
@@ -222,11 +222,11 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
         .register_egress("out-gone", "pipe-gone", "rtmp://a")
         .await;
     let gone_ingest = engine
-        .try_register_ingest_attempt("pipe-gone", "key-gone", "rtmp")
+        .try_register_ingest("pipe-gone", "key-gone", "rtmp")
         .await
         .unwrap();
     let kept_ingest = engine
-        .try_register_ingest_attempt("pipe-kept", "key-kept", "rtmp")
+        .try_register_ingest("pipe-kept", "key-kept", "rtmp")
         .await
         .unwrap();
     // An input preview can key a ring; it is not a pipeline.
@@ -240,9 +240,9 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
     );
     converge_topology(&pool, &engine, &outputs(&pool).await).await;
 
-    assert!(gone_ingest.cancel_token.is_cancelled());
+    assert!(gone_ingest.registration().cancel_token.is_cancelled());
     assert!(egress.is_cancelled(), "the output row cascaded away");
-    assert!(!kept_ingest.cancel_token.is_cancelled());
+    assert!(!kept_ingest.registration().cancel_token.is_cancelled());
     assert_eq!(
         engine.runtime_pipeline_ids().await,
         HashSet::from(["pipe-kept".to_string()])
@@ -253,7 +253,7 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
 #[tokio::test]
 async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
     let pool = pool().await;
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     let requests = ReconcileRequests::new();
     crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
         .await
@@ -295,7 +295,10 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
         forwarded_input(&engine, "pipe").as_deref(),
         Some("input-backup")
     );
-    assert!(!primary.cancel_token.is_cancelled(), "demoted, not dropped");
+    assert!(
+        !primary.registration().cancel_token.is_cancelled(),
+        "demoted, not dropped"
+    );
 }
 
 #[tokio::test]
@@ -303,12 +306,12 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
     // File ingests and legacy publishers register under the stream key, so
     // the engine's selected id differs from the persisted input row id.
     let pool = pool().await;
-    let engine = MediaEngine::new();
+    let engine = Arc::new(MediaEngine::new());
     crate::db::create_pipeline(&pool, "pipe", "P", "key-p", None, None)
         .await
         .unwrap();
     let file_ingest = engine
-        .try_register_ingest_attempt("pipe", "key-p", "file")
+        .try_register_ingest("pipe", "key-p", "file")
         .await
         .unwrap();
 
@@ -316,7 +319,7 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
     converge_topology(&pool, &engine, &[]).await;
 
     assert_eq!(forwarded_input(&engine, "pipe").as_deref(), Some("key-p"));
-    assert!(!file_ingest.cancel_token.is_cancelled());
+    assert!(!file_ingest.registration().cancel_token.is_cancelled());
 }
 
 #[test]

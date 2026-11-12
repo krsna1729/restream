@@ -17,10 +17,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
     let audio_tracks = probe.audio_tracks;
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-h264-marker", "stream-key", "file")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-h264-marker", "stream-key", "file").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-h264-marker",
@@ -139,10 +136,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
 
     let pipeline_id = "pipe-ext-h264-marker-live";
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest(pipeline_id, "stream-key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest(pipeline_id, "stream-key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             pipeline_id,
@@ -253,10 +247,7 @@ async fn external_1080p_stage_remuxes_marker_fixture_with_monotone_dts() {
     let audio_tracks = probe.audio_tracks;
 
     let engine = Arc::new(MediaEngine::new());
-    engine
-        .try_register_ingest("pipe-ext-h264-marker-1080p", "stream-key", "file")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest("pipe-ext-h264-marker-1080p", "stream-key", "file").await.unwrap();
     engine
         .update_ingest_meta(
             "pipe-ext-h264-marker-1080p",

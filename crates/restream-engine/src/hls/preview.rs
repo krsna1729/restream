@@ -110,7 +110,7 @@ mod tests {
     async fn ensure_hls_preview_runtime_creates_and_reuses_runtime_store() {
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-hls-preview-runtime";
-        engine
+        let _ingest = engine
             .try_register_ingest(pipeline_id, "stream-key", "rtmp")
             .await
             .unwrap();
@@ -146,7 +146,7 @@ mod tests {
     async fn ensure_hls_preview_runtime_survives_concurrent_shutdown_race() {
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-hls-preview-race";
-        engine
+        let _ingest = engine
             .try_register_ingest(pipeline_id, "stream-key", "rtmp")
             .await
             .unwrap();

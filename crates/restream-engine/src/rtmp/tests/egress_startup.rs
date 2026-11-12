@@ -34,11 +34,8 @@ fn startup_video_sequence_header_builds_enhanced_hevc_header() {
 
 #[tokio::test]
 async fn rtmp_metadata_uses_terminal_ring_codec_for_hevc_codec_edge() {
-    let engine = MediaEngine::new();
-    engine
-        .try_register_ingest("p-codec-edge", "key", "srt")
-        .await
-        .unwrap();
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine.try_register_ingest("p-codec-edge", "key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "p-codec-edge",
@@ -80,11 +77,8 @@ async fn rtmp_metadata_uses_terminal_ring_codec_for_hevc_codec_edge() {
 
 #[tokio::test]
 async fn rtmp_metadata_advertises_unconverted_hevc_as_hvc1_fourcc() {
-    let engine = MediaEngine::new();
-    engine
-        .try_register_ingest("p-hevc-source", "key", "srt")
-        .await
-        .unwrap();
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine.try_register_ingest("p-hevc-source", "key", "srt").await.unwrap();
     engine
         .update_ingest_meta(
             "p-hevc-source",
@@ -125,11 +119,8 @@ async fn rtmp_metadata_advertises_unconverted_hevc_as_hvc1_fourcc() {
 
 #[tokio::test]
 async fn detects_h265_from_ingest_video_meta() {
-    let engine = MediaEngine::new();
-    engine
-        .try_register_ingest("p1", "key", "srt")
-        .await
-        .unwrap();
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine.try_register_ingest("p1", "key", "srt").await.unwrap();
 
     // No video meta yet → not H.265
     {
@@ -213,10 +204,7 @@ async fn h265_detection_waits_for_probe_meta() {
     let engine_clone = engine.clone();
     let pipeline_id = "p2".to_string();
 
-    engine
-        .try_register_ingest(&pipeline_id, "key", "srt")
-        .await
-        .unwrap();
+    let _ingest = engine.try_register_ingest(&pipeline_id, "key", "srt").await.unwrap();
 
     // Spawn a task that sets the video meta after a delay (simulating probe arrival)
     let delayed_engine = engine.clone();
@@ -272,11 +260,8 @@ async fn h265_detection_waits_for_probe_meta() {
 
 #[tokio::test]
 async fn resolved_output_audio_tracks_falls_back_when_ring_metadata_is_empty() {
-    let engine = MediaEngine::new();
-    engine
-        .try_register_ingest("pipe-audio", "key", "srt")
-        .await
-        .unwrap();
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine.try_register_ingest("pipe-audio", "key", "srt").await.unwrap();
     engine
         .update_ingest_audio_tracks(
             "pipe-audio",

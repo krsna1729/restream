@@ -46,6 +46,10 @@ pub struct IngestRegistry {
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
     /// The `srt_call` inputs the SRT server dials.
     pub srt_calls: restream_srt::calls::SrtCallInputs,
+    /// Dropped ingest leases' attempts awaiting release
+    /// ([`crate::ingest_lease`]), and the task releasing them.
+    pub(crate) releases: Arc<crate::ingest_lease::ReleaseQueue>,
+    pub(crate) release_drain: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Default for IngestRegistry {
@@ -69,6 +73,8 @@ impl IngestRegistry {
             active: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
             srt_calls: Default::default(),
+            releases: Arc::default(),
+            release_drain: std::sync::Mutex::new(None),
         }
     }
 }

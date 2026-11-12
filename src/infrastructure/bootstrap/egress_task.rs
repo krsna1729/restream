@@ -21,6 +21,7 @@ use restream_domain::models::JobStatus;
 use restream_engine::egress::journal::{RingFeed, TsFeed};
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
 use restream_engine::engine::MediaEngine;
+use restream_engine::ingest_lease::IngestEnd;
 use restream_engine::secret_display::redact_url;
 use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
@@ -794,8 +795,9 @@ impl EgressTask {
 
         // Claiming the target input is async and fallible — must land
         // before `Add`, and cannot happen on a shard thread (see
-        // `PipelineTargetSource`'s doc comment).
-        let Some(input_registration) = self
+        // `PipelineTargetSource`'s doc comment). Dropped with this task, the
+        // lease releases the claimed target input.
+        let Some(input_lease) = self
             .engine
             .try_register_pipeline_input_attempt(
                 &fabric.target_pipeline_id,
@@ -845,7 +847,7 @@ impl EgressTask {
                 fabric.spec.id.clone(),
                 restream_engine::egress::backends::pipeline::PipelineTarget {
                     target_ring,
-                    input_registration: input_registration.clone(),
+                    input_registration: input_lease.registration().clone(),
                 },
             )
             .await;
@@ -874,9 +876,7 @@ impl EgressTask {
                     .engine
                     .release_pipeline_fabric_runtime(&fabric.feed_id)
                     .await;
-                self.engine
-                    .unregister_ingest_if_current(&fabric.target_pipeline_id, &input_registration)
-                    .await;
+                input_lease.finish(IngestEnd::Released).await;
                 let (phase, message) = match error.refused() {
                     Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
                     None => ("pipeline_fabric_dispatch", format!("{error:?}")),
@@ -914,9 +914,7 @@ impl EgressTask {
             .engine
             .release_pipeline_fabric_runtime(&fabric.feed_id)
             .await;
-        self.engine
-            .unregister_ingest_if_current(&fabric.target_pipeline_id, &input_registration)
-            .await;
+        input_lease.finish(IngestEnd::Released).await;
     }
 
     async fn reject_unsupported_url(&self) {

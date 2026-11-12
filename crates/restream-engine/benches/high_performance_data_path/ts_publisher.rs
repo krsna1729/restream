@@ -21,15 +21,21 @@ fn bench_ts_publisher(c: &mut Criterion) {
         .build()
         .unwrap_or_else(|e| panic!("runtime: {e}"));
     let engine = std::sync::Arc::new(MediaEngine::new());
-    let target = runtime.block_on(async {
-        let registration = engine
+    let (target, _lease) = runtime.block_on(async {
+        let lease = engine
             .try_register_pipeline_input_attempt("bench", "bench-input", "bench-key", "hls", true)
             .await
             .unwrap_or_else(|| panic!("bench input registers"));
         let ring = engine.get_or_create_pipeline("bench").await;
-        PublishTarget::open(engine.clone(), "bench".to_string(), registration, ring)
-            .await
-            .unwrap_or_else(|e| panic!("{e}"))
+        let target = PublishTarget::open(
+            engine.clone(),
+            "bench".to_string(),
+            lease.registration().clone(),
+            ring,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        (target, lease)
     });
 
     let mut group = c.benchmark_group("data_path/ts_publisher");

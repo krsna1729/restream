@@ -42,12 +42,12 @@ fn pipe_metrics_snapshot_correctness() {
 /// ingest must not inflate the listener's stream number.
 #[tokio::test]
 async fn srt_listener_diag_counts_only_srt_ingests() {
-    let engine = MediaEngine::new();
-    engine
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = engine
         .try_register_ingest("pipeline-rtmp", "rtmp-key", "rtmp")
         .await
         .unwrap();
-    engine
+    let _ingest = engine
         .try_register_ingest("pipeline-srt", "srt-key", "srt")
         .await
         .unwrap();

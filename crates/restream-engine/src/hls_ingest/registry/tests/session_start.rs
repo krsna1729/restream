@@ -5,10 +5,10 @@ use super::super::*;
 use crate::hls_ingest::test_support::{PIPELINE_ID, STREAM_KEY, test_ingest};
 
 /// A dispatch dropped after it registered the attempt, but before the owner
-/// that would release it is spawned, must release the attempt itself. Without
-/// the guard the engine keeps an ingest nothing will ever end — a disabled
-/// input still shown as connected — and the ring is recreated under it, which
-/// is the state a cancelled pull used to leave behind.
+/// that would release it is spawned, must release the attempt itself. It
+/// does by dropping its ingest lease; otherwise the engine keeps an ingest
+/// nothing will ever end (a disabled input still shown as connected) and the
+/// ring is recreated under it, the state a cancelled pull used to leave.
 #[tokio::test]
 async fn a_dispatch_dropped_before_its_owner_spawns_releases_the_attempt() {
     let (engine, ingest) = test_ingest(HlsIngestLimits::default());
@@ -60,8 +60,8 @@ async fn a_dispatch_dropped_before_its_owner_spawns_releases_the_attempt() {
     dispatching.abort();
     drop(held);
 
-    // The release runs on its own task (a drop cannot await), so allow it to
-    // land before asserting.
+    // The release runs on the engine's release task (a drop cannot await),
+    // so allow it to land before asserting.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while engine
             .input_has_session(PIPELINE_ID, &pipeline.input_id)
