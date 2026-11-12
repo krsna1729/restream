@@ -48,17 +48,21 @@ use crate::config::AppConfig;
 use crate::db;
 use restream_engine::engine::MediaEngine;
 
-pub async fn run_app(config: Arc<AppConfig>) {
+/// Runs the server until shutdown. Startup failures (runtime layout,
+/// database, dashboard bind, initial password) return an error for `main`
+/// to report and exit with, rather than panicking.
+pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     layout::set_rlimit(config.tuning.nofile_limit);
-    layout::ensure_runtime_layout(&config).expect("Failed to create Restream runtime layout");
+    layout::ensure_runtime_layout(&config)
+        .map_err(|error| format!("failed to create the Restream runtime layout: {error}"))?;
 
     let db_url = format!("sqlite:{}?mode=rwc", config.db_path);
     let pool = db::create_pool(&db_url)
         .await
-        .expect("Failed to connect to SQLite database");
+        .map_err(|error| format!("failed to connect to the SQLite database: {error}"))?;
     db::setup_database_schema(&pool)
         .await
-        .expect("Failed to set up SQLite schema");
+        .map_err(|error| format!("failed to set up the SQLite schema: {error}"))?;
 
     let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color);
     info!(
@@ -111,7 +115,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
     db::reset_running_jobs(&pool, &chrono::Utc::now().to_rfc3339())
         .await
-        .expect("Failed to reset stale running jobs");
+        .map_err(|error| format!("failed to reset stale running jobs: {error}"))?;
 
     let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
     let sec_config =
@@ -165,7 +169,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         Some(&bootstrap_password_path),
         config.initial_admin_password.as_deref(),
     )
-    .await;
+    .await?;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
 
     let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
@@ -339,7 +343,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         hls_ingest,
         hls_inputs: Arc::new(pipeline_input_store),
     })
-    .await;
+    .await?;
     let shutdown = shutdown::spawn_signal_watcher();
 
     reconciler.run(&mut runtime, &shutdown).await;
@@ -347,6 +351,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
     let (http, http_stop, rtmp, srt) = runtime.into_handles();
     shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
+    Ok(())
 }
 
 #[cfg(test)]

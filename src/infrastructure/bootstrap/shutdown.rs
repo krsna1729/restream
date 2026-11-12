@@ -16,16 +16,25 @@ pub(super) fn spawn_signal_watcher() -> CancellationToken {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to install SIGTERM handler");
-            tokio::select! {
-                res = tokio::signal::ctrl_c() => {
-                    if let Err(error) = res {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut sigterm) => {
+                    tokio::select! {
+                        res = tokio::signal::ctrl_c() => {
+                            if let Err(error) = res {
+                                warn!(err = %error, "Ctrl+C error");
+                            }
+                        }
+                        _ = sigterm.recv() => {}
+                    }
+                }
+                // Without a SIGTERM handler, still stop on Ctrl+C rather
+                // than leaving the process stoppable only by SIGKILL.
+                Err(error) => {
+                    warn!(err = %error, "failed to install the SIGTERM handler; stopping on Ctrl+C only");
+                    if let Err(error) = tokio::signal::ctrl_c().await {
                         warn!(err = %error, "Ctrl+C error");
                     }
                 }
-                _ = sigterm.recv() => {}
             }
         }
         #[cfg(not(unix))]

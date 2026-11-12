@@ -18,18 +18,18 @@ pub(super) async fn initialize_auth_with_bootstrap_file(
     sessions: &RwLock<HashSet<String>>,
     bootstrap_password_file: Option<&Path>,
     initial_admin_password: Option<&str>,
-) {
+) -> Result<(), String> {
     if matches!(auth_service.get_password_hash().await, Ok(None)) {
         let (password, generated) =
             select_initial_admin_password(initial_admin_password.map(str::to_string));
         let admin_hash = hash_password(&password);
         if let Err(error) = auth_service.ensure_password_hash(&admin_hash).await {
-            panic!("failed to initialize dashboard password: {error}");
+            return Err(format!("failed to initialize dashboard password: {error}"));
         }
         if generated {
             if let Some(path) = bootstrap_password_file {
                 write_bootstrap_password_file(path, &password)
-                    .unwrap_or_else(|error| panic!("failed to write bootstrap password: {error}"));
+                    .map_err(|error| format!("failed to write bootstrap password: {error}"))?;
                 info!(
                     path = %path.display(),
                     "generated initial dashboard password; read it from this local file"
@@ -65,6 +65,7 @@ pub(super) async fn initialize_auth_with_bootstrap_file(
             warn!(err = %error, "Failed to load active sessions from SQLite");
         }
     }
+    Ok(())
 }
 
 pub async fn initialize_auth_for_test(
@@ -83,7 +84,9 @@ pub async fn initialize_auth_for_test(
             BOOTSTRAP_PROMPT_DISMISSED,
         )
         .await;
-    initialize_auth_with_bootstrap_file(&auth_service, sessions, None, None).await;
+    initialize_auth_with_bootstrap_file(&auth_service, sessions, None, None)
+        .await
+        .expect("test auth initializes");
 }
 
 fn select_initial_admin_password(configured_password: Option<String>) -> (String, bool) {
