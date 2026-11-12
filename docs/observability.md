@@ -304,7 +304,8 @@ withdraws its gauges, so `owners` counts running Owners. The full set:
 - TX capacity, in flight, high water, exhaustions, packets, completions,
   failures;
 - RX packets, bytes, ring depth, ring drops, buffer exhaustion, truncation;
-- peers, admission policy telemetry, command and event bridge depth high
+- peers, admission policy telemetry, failed-guess reports dropped on a full
+  queue (`authFailuresDropped`), command and event bridge depth high
   water, event-bridge-full visits, dropped telemetry samples, deferred read
   sends, stale commands, overload disconnects, send failures.
 

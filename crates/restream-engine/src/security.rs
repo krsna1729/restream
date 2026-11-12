@@ -113,18 +113,35 @@ impl IngestSecurityService {
         // Read lock only — no mutations. Cleanup of stale entries happens
         // lazily in record_failure, keeping this hot check lock-free under
         // concurrent ban lookups (e.g., flood from many IPs).
-        let state = restream_sync::lock::read(&self.state);
-        let key = Self::scoped_key(scope, ip);
-        let record = state.get(&key)?;
-        let now = Instant::now();
+        Self::ban_remaining(&restream_sync::lock::read(&self.state), scope, ip)
+    }
 
-        if let Some(banned_until) = record.banned_until
-            && banned_until > now
-        {
-            return Some(banned_until.duration_since(now));
+    /// [`Self::is_ip_banned_for`] for threads that must never block (SRT
+    /// Owner threads): a contended lock answers "not banned", so the caller
+    /// needs a later authoritative check.
+    pub fn try_is_ip_banned_for(&self, scope: RateLimitScope, ip: &str) -> Option<Duration> {
+        if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
+            return None;
         }
+        let state = match self.state.try_read() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Self::ban_remaining(&state, scope, ip)
+    }
 
-        None
+    fn ban_remaining(
+        state: &HashMap<String, FailureRecord>,
+        scope: RateLimitScope,
+        ip: &str,
+    ) -> Option<Duration> {
+        let record = state.get(&Self::scoped_key(scope, ip))?;
+        let now = Instant::now();
+        record
+            .banned_until
+            .filter(|banned_until| *banned_until > now)
+            .map(|banned_until| banned_until.duration_since(now))
     }
 
     pub fn record_failure(&self, ip: &str) -> bool {

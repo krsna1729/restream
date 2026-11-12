@@ -170,7 +170,11 @@ pub(super) fn build(
             std::num::NonZeroUsize::new(CALLS_IN_FLIGHT).expect("non-zero call capacity"),
         )
         .map_err(|error| format!("failed to size the SRT ingress caller pool: {error}"))?;
-    let resolver = ingress_resolver(config.policy_store, config.receiver_group);
+    let resolver = ingress_resolver(
+        config.policy_store,
+        config.receiver_group,
+        config.admission_guard,
+    );
     runtime
         .block_on(async { owner.listen_planned(&plan, Some(resolver)) })
         .map_err(|error| format!("failed to attach srt-rs listener: {error}"))?;

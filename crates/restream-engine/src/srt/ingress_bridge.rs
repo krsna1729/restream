@@ -171,6 +171,8 @@ pub(crate) struct IngressConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) policy_store: Arc<SrtIngestPolicyStore>,
     pub(crate) receiver_group: ReceiverGroupId,
+    /// IP bans and failed-guess reporting for the admission resolver.
+    pub(crate) admission_guard: super::ingress_admission::AdmissionGuard,
     pub(crate) stats: Arc<ListenerSocketStats>,
     pub(crate) command_capacity: usize,
     pub(crate) event_capacity: usize,

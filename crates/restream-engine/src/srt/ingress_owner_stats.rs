@@ -170,7 +170,7 @@ mod tests {
 
     use tokio::sync::mpsc;
 
-    use super::super::super::ingress_admission::ReceiverGroupId;
+    use super::super::super::ingress_admission::{AdmissionGuard, ReceiverGroupId};
     use super::super::super::tokio_ingress::SrtIngestPolicyStore;
     use super::super::lifecycle::{build, listener_plans};
     use super::super::{IngressConfig, OwnerSeat};
@@ -187,6 +187,7 @@ mod tests {
                 &[],
             )),
             receiver_group: ReceiverGroupId::generate(),
+            admission_guard: AdmissionGuard::detached(stats.clone()),
             stats: stats.clone(),
             command_capacity: 1,
             event_capacity: 1,

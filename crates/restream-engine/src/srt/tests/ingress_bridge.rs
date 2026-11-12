@@ -9,7 +9,7 @@ use srt_transport::compio::Owner;
 
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
-use super::super::ingress_admission::ReceiverGroupId;
+use super::super::ingress_admission::{AdmissionGuard, ReceiverGroupId};
 use super::super::ingress_owner::{
     IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle,
 };
@@ -37,6 +37,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
+        admission_guard: AdmissionGuard::detached(stats.clone()),
         stats: stats.clone(),
         command_capacity: 2,
         event_capacity: 1,
@@ -143,6 +144,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
             bind: SocketAddr::new(process_loopback().into(), port),
             policy_store: store.clone(),
             receiver_group: ReceiverGroupId::generate(),
+            admission_guard: AdmissionGuard::detached(stats.clone()),
             stats: stats.clone(),
             command_capacity: 64,
             event_capacity: 256,
@@ -306,6 +308,7 @@ async fn start_quality_owner(
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
+        admission_guard: AdmissionGuard::detached(stats.clone()),
         stats: stats.clone(),
         command_capacity: 16,
         event_capacity: 256,
