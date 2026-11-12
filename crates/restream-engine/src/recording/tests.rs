@@ -639,6 +639,54 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
     std::fs::remove_file(media_dir).expect("remove invalid media directory");
 }
 
+/// A TS writer thread the OS refuses (thread or memory limits) fails that
+/// recording through the normal failure path instead of panicking the
+/// coordinator and leaving its stage runtime and catalog row behind.
+#[tokio::test]
+async fn a_writer_thread_that_cannot_start_reports_failed_and_removes_the_stage() {
+    let media_dir =
+        std::env::temp_dir().join(format!("recording-spawn-failure-{}", rand::random::<u64>()));
+    let engine = Arc::new(MediaEngine::new());
+    let ring = Arc::new(RingBuffer::new(512));
+    let cancel = CancellationToken::new();
+    let stage_key = StageKey::new(
+        "spawn-failure",
+        restream_domain::domain::stage::StageKind::Recording,
+    );
+    let (metadata_tx, mut metadata_rx) = mpsc::unbounded_channel();
+    let coordinator = tokio::spawn(start_recording(
+        RecordingStart {
+            recording_id: super::INJECTED_SPAWN_FAILURE_RECORDING_ID.to_string(),
+            pipeline_name: "spawn-failure".to_string(),
+            pipeline_id: "spawn-failure".to_string(),
+            input_source: None,
+            media_dir: media_dir.to_string_lossy().into_owned(),
+            settings: RecordingSettings::default(),
+            stage_key: stage_key.clone(),
+            metadata: Some(RecordingMetadataReporter::new(metadata_tx)),
+        },
+        ring.clone(),
+        engine.clone(),
+        cancel.clone(),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), coordinator)
+        .await
+        .expect("the coordinator finishes")
+        .expect("the coordinator does not panic");
+
+    assert!(matches!(
+        metadata_rx.try_recv(),
+        Ok(RecordingMetadataEvent::Started { .. })
+    ));
+    let Ok(RecordingMetadataEvent::Failed { error, .. }) = metadata_rx.try_recv() else {
+        panic!("a writer that cannot start must report Failed");
+    };
+    assert!(error.contains("could not start"), "{error}");
+    assert!(cancel.is_cancelled());
+    assert!(!engine.stages.runtimes.read().await.contains_key(&stage_key));
+    let _ = std::fs::remove_dir_all(media_dir);
+}
+
 fn drain_test_packet() -> MediaPacket {
     MediaPacket {
         media_type: MediaType::Video,
