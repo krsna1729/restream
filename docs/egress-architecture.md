@@ -472,7 +472,8 @@ socket buffers.
   caller UDP socket, a caller pool and a fixed TX pool. No output has its own
   runtime, task, socket or Owner.
 - DNS runs on the process resolver as for RTMP; a bond's hosts resolve
-  concurrently under one deadline and answer as one completion.
+  concurrently under one deadline and answer as one completion: every
+  address, or the first failing leg at once, without waiting for the rest.
 - `Owner::connect` and `connect_bonded` return `Admitted`, `Queued` or `Full`.
   The caller pool (`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, default 64,
   with an equal queue) bounds in-flight handshakes. Each output's

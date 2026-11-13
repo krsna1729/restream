@@ -5,14 +5,16 @@
 //!
 //! - `getaddrinfo` blocks, so it runs on a pool of dedicated OS threads,
 //!   never on a Tokio worker, a Compio `Owner` or an egress shard. The pool
-//!   keeps [`RESOLVER_THREADS`] threads *available*: when a request's
-//!   deadline passes while its lookup is still inside `getaddrinfo`, that
-//!   thread is marked hung and a replacement starts, up to
+//!   keeps [`RESOLVER_THREADS`] threads *available*: a lookup still inside
+//!   `getaddrinfo` after the slow threshold ([`SLOW_LOOKUP_THRESHOLD`], or
+//!   half the time its earliest caller had left when it started, if
+//!   shorter) marks its thread hung, and a replacement starts, up to
 //!   [`RESOLVER_MAX_THREADS`] in total. A hung thread exits when its lookup
 //!   returns if the pool has its full complement without it. So distinct
 //!   names that hang (a tenant's own name server can produce any number)
-//!   never starve other names until the cap; at the cap, names wait in the
-//!   queue until their deadline, counted as `cap_reached`.
+//!   delay a name queued behind them by at most the slow threshold, and
+//!   never starve it, until the cap; at the cap, names wait in the queue
+//!   until their deadline, counted as `cap_reached`.
 //! - Concurrent requests for one `(host, port)` share one `getaddrinfo` call.
 //!   A request made while that call is still running joins it, so a retrying
 //!   output never stacks lookups of its hung name.
@@ -38,13 +40,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Lookup threads the pool keeps available (not stuck in a lookup past its
-/// deadline).
+/// Lookup threads the pool keeps available (not stuck in a lookup past the
+/// slow threshold).
 pub(crate) const RESOLVER_THREADS: usize = 16;
 /// Hard cap on lookup threads, hung ones included: each costs a thread
 /// stack, and a name server can hold `getaddrinfo` for its full retry
 /// schedule (resolv.conf `timeout` x `attempts`, tens of seconds).
 pub(crate) const RESOLVER_MAX_THREADS: usize = 128;
+/// A lookup running this long (or half the time its earliest caller had
+/// left when it started, if shorter) holds a hung thread: a replacement
+/// starts. Healthy lookups answer well within it.
+pub(crate) const SLOW_LOOKUP_THRESHOLD: Duration = Duration::from_millis(500);
 /// Distinct names that may wait for a lookup thread.
 pub(crate) const RESOLVER_QUEUE_CAPACITY: usize = 1024;
 /// The deadline of a lookup whose caller has no per-output resolve timeout
@@ -103,7 +109,7 @@ pub struct ResolverStats {
     pub overflows: u64,
     /// Live lookup threads, hung ones included (gauge).
     pub threads: u64,
-    /// Live lookup threads still inside a lookup past a request's deadline
+    /// Live lookup threads still inside a lookup past its slow threshold
     /// (gauge).
     pub hung_threads: u64,
     /// Times a hung thread could not be replaced because the pool was at
@@ -113,6 +119,7 @@ pub struct ResolverStats {
 
 struct Waiter {
     name: Name,
+    deadline: Instant,
     deliver: Deliver,
 }
 
@@ -121,11 +128,20 @@ struct Waiter {
 struct Pending {
     /// The requests waiting on it.
     ids: Vec<u64>,
-    /// A thread is inside the lookup.
-    running: bool,
-    /// A request's deadline passed while it ran: its thread is not
-    /// counted as available, and a replacement was started.
+    /// A thread is inside the lookup, which started as this run.
+    running: Option<u64>,
+    /// It ran past the slow threshold: its thread is not counted as
+    /// available, and a replacement was started.
     hung: bool,
+}
+
+/// What the timer thread does at an instant.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Timer {
+    /// Answer request `id` with `TimedOut` if it still waits.
+    Deadline(u64),
+    /// Mark run `run` of lookup `name` hung if it still runs.
+    Slow { run: u64, name: Name },
 }
 
 #[derive(Default)]
@@ -136,7 +152,7 @@ struct State {
     /// returns (or a thread dequeues it with nobody left waiting), so a
     /// later request for the name joins it.
     names: HashMap<Name, Pending>,
-    deadlines: BinaryHeap<Reverse<(Instant, u64)>>,
+    timers: BinaryHeap<Reverse<(Instant, Timer)>>,
     next_id: u64,
     /// Live lookup threads, hung ones included.
     workers: usize,
@@ -319,17 +335,31 @@ impl Resolver {
             };
             state.names.insert(name.clone(), pending);
         }
-        state.waiters.insert(id, Waiter { name, deliver });
-        let earliest = state
-            .deadlines
-            .peek()
-            .is_none_or(|Reverse((first, _))| deadline < *first);
-        state.deadlines.push(Reverse((deadline, id)));
+        state.waiters.insert(
+            id,
+            Waiter {
+                name,
+                deadline,
+                deliver,
+            },
+        );
+        let earliest = schedule(&mut state, deadline, Timer::Deadline(id));
         drop(state);
         if earliest {
             self.shared.timer_wake.notify_one();
         }
     }
+}
+
+/// Queues a timer entry; returns whether it is now the earliest (the timer
+/// thread must be woken to shorten its wait).
+fn schedule(state: &mut State, at: Instant, timer: Timer) -> bool {
+    let earliest = state
+        .timers
+        .peek()
+        .is_none_or(|Reverse((first, _))| at < *first);
+    state.timers.push(Reverse((at, timer)));
+    earliest
 }
 
 /// Starts threads until `threads` are available (hung ones do not count) or
@@ -375,19 +405,10 @@ fn run_worker(shared: &Shared) {
     // uncounted itself.
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         while let Ok(name) = shared.queue.recv() {
-            {
-                let mut state = shared.state();
-                if state.closed {
-                    return false;
-                }
-                match state.names.get_mut(&name) {
-                    Some(pending) if !pending.ids.is_empty() => pending.running = true,
-                    _ => {
-                        // Everyone waiting gave up while it queued.
-                        state.names.remove(&name);
-                        continue;
-                    }
-                }
+            match start_lookup(shared, &name) {
+                Dequeued::Closed => return false,
+                Dequeued::Skip => continue,
+                Dequeued::Run => {}
             }
             shared.lookups.fetch_add(1, Ordering::Relaxed);
             let resolution = contained_lookup(shared, &name);
@@ -448,8 +469,51 @@ fn contained_lookup(shared: &Shared, (host, port): &Name) -> Resolution {
     }
 }
 
-/// Answers each request at its deadline, and everyone once the resolver
-/// is dropped.
+enum Dequeued {
+    Run,
+    Skip,
+    Closed,
+}
+
+/// A thread dequeued `name`: mark it running and schedule its slow check
+/// at [`SLOW_LOOKUP_THRESHOLD`], or half the time its earliest caller has
+/// left if shorter, so a replacement starts before that caller gives up.
+fn start_lookup(shared: &Shared, name: &Name) -> Dequeued {
+    let mut state = shared.state();
+    if state.closed {
+        return Dequeued::Closed;
+    }
+    let earliest = state.names.get(name).and_then(|pending| {
+        pending
+            .ids
+            .iter()
+            .filter_map(|id| state.waiters.get(id))
+            .map(|waiter| waiter.deadline)
+            .min()
+    });
+    let Some(earliest) = earliest else {
+        // Everyone waiting gave up while it queued.
+        state.names.remove(name);
+        return Dequeued::Skip;
+    };
+    let run = state.next_id;
+    state.next_id = state.next_id.wrapping_add(1);
+    if let Some(pending) = state.names.get_mut(name) {
+        pending.running = Some(run);
+    }
+    let now = Instant::now();
+    let slow_at = now + SLOW_LOOKUP_THRESHOLD.min(earliest.saturating_duration_since(now) / 2);
+    let name = name.clone();
+    let earliest_timer = schedule(&mut state, slow_at, Timer::Slow { run, name });
+    drop(state);
+    if earliest_timer {
+        shared.timer_wake.notify_one();
+    }
+    Dequeued::Run
+}
+
+/// Answers each request at its deadline, marks lookups past their slow
+/// threshold hung, and answers everyone once the resolver is dropped.
 fn run_timer(shared: &Arc<Shared>) {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let mut state = shared.state();
@@ -461,7 +525,7 @@ fn run_timer(shared: &Arc<Shared>) {
                     .map(|(_, waiter)| waiter.deliver)
                     .collect();
                 state.names.clear();
-                state.deadlines.clear();
+                state.timers.clear();
                 drop(state);
                 for deliver in waiting {
                     answer(deliver, Err(ResolveError::Unavailable));
@@ -470,15 +534,25 @@ fn run_timer(shared: &Arc<Shared>) {
             }
             let now = Instant::now();
             let mut expired = Vec::new();
-            while let Some(&Reverse((at, id))) = state.deadlines.peek() {
-                if at > now {
+            while state
+                .timers
+                .peek()
+                .is_some_and(|Reverse((at, _))| *at <= now)
+            {
+                let Some(Reverse((_, timer))) = state.timers.pop() else {
                     break;
-                }
-                state.deadlines.pop();
-                // An id already answered by its lookup is gone: skip it.
-                if let Some(waiter) = state.waiters.remove(&id) {
-                    mark_hung(shared, &mut state, &waiter.name, id);
-                    expired.push(waiter.deliver);
+                };
+                match timer {
+                    // An id already answered by its lookup is gone: skip it.
+                    Timer::Deadline(id) => {
+                        if let Some(waiter) = state.waiters.remove(&id) {
+                            if let Some(pending) = state.names.get_mut(&waiter.name) {
+                                pending.ids.retain(|waiting| *waiting != id);
+                            }
+                            expired.push(waiter.deliver);
+                        }
+                    }
+                    Timer::Slow { run, name } => mark_hung(shared, &mut state, &name, run),
                 }
             }
             if !expired.is_empty() {
@@ -492,7 +566,7 @@ fn run_timer(shared: &Arc<Shared>) {
                 state = shared.state();
                 continue;
             }
-            let next = state.deadlines.peek().map(|Reverse((at, _))| *at);
+            let next = state.timers.peek().map(|Reverse((at, _))| *at);
             state = match next {
                 Some(at) => {
                     shared
@@ -518,15 +592,14 @@ fn run_timer(shared: &Arc<Shared>) {
     }
 }
 
-/// Request `id` for `name` passed its deadline. If a thread is inside that
-/// lookup and not yet marked, it is hung: uncount it and start a
+/// Run `run` of lookup `name` passed its slow threshold. If it still runs
+/// and is not yet marked, its thread is hung: uncount it and start a
 /// replacement, so other names keep their `threads` available ones.
-fn mark_hung(shared: &Arc<Shared>, state: &mut State, name: &Name, id: u64) {
+fn mark_hung(shared: &Arc<Shared>, state: &mut State, name: &Name, run: u64) {
     let Some(pending) = state.names.get_mut(name) else {
         return;
     };
-    pending.ids.retain(|waiting| *waiting != id);
-    if !pending.running || pending.hung {
+    if pending.running != Some(run) || pending.hung {
         return;
     }
     pending.hung = true;

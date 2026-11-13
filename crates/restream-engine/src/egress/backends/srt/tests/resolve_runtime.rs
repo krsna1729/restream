@@ -156,6 +156,35 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
     );
 }
 
+/// A bond fails on its first failing leg: it never waits for a leg whose
+/// lookup hangs.
+#[test]
+fn a_bond_fails_on_its_first_failing_leg() {
+    let dns = FakeDns::new();
+    let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
+    let (bond, failed) = spec_resolving_within(
+        "bond",
+        1,
+        "srt://hung.test:9000?streamid=publish%3Akey&bond=fail.test:9001",
+        Duration::from_secs(5),
+    );
+    let started = Instant::now();
+    backend.on_command(EgressCommand::Add(bond));
+    assert!(
+        tick_until(&mut backend, Duration::from_secs(2), |inner| {
+            inner.pending_connects.is_empty()
+        }),
+        "the bond failed on its failing leg after {:?}",
+        started.elapsed()
+    );
+    assert!(failed.load(Ordering::Relaxed));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
 /// More outputs than the resolver's queue holds: every one reaches a
 /// terminal state (refused at once, or timed out at its deadline), none is
 /// left pending holding a leaf slot.
@@ -163,7 +192,9 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
 fn every_output_past_the_resolver_queue_gets_a_terminal_state() {
     let dns = FakeDns::with_pool(1, 4);
     let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
-    let timeout = Duration::from_millis(300);
+    // Long enough that no queued output times out before the refused ones
+    // are counted below.
+    let timeout = Duration::from_secs(1);
     let (hung, hung_flag) = spec_resolving_within(
         "hung",
         1,
@@ -183,23 +214,27 @@ fn every_output_past_the_resolver_queue_gets_a_terminal_state() {
         backend.on_command(EgressCommand::Add(spec));
         flags.push(flag);
     }
-    backend.on_media_tick();
+    let failed = |flags: &[Arc<AtomicBool>]| {
+        flags
+            .iter()
+            .filter(|flag| flag.load(Ordering::Relaxed))
+            .count()
+    };
+    assert!(
+        tick_until(&mut backend, Duration::from_millis(500), |_| failed(&flags)
+            >= 16),
+        "the refused outputs failed at once"
+    );
     assert_eq!(
         dns.resolver.stats().overflows,
         16,
         "four names fit the queue"
     );
-    assert_eq!(
-        flags
-            .iter()
-            .filter(|flag| flag.load(Ordering::Relaxed))
-            .count(),
-        16,
-        "the refused outputs failed at once"
-    );
+    assert_eq!(failed(&flags), 16, "only the refused outputs failed so far");
+    assert_eq!(backend.inner_backend().pending_connects.len(), 5);
 
     assert!(
-        tick_until(&mut backend, Duration::from_secs(2), |inner| {
+        tick_until(&mut backend, Duration::from_secs(3), |inner| {
             inner.pending_connects.is_empty()
         }),
         "every output was answered"

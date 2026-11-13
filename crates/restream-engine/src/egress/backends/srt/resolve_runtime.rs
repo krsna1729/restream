@@ -1,9 +1,10 @@
 //! Decorator that resolves each SRT `Add`/`Update`'s peer hosts (one, or a
 //! bond's several, concurrently) on the process resolver
 //! (`crate::resolver`), with the output's `LeafPolicy::resolve_timeout` as
-//! the deadline. Each request gets exactly one completion (addresses, or the
-//! first failure, timeout or full resolver queue) in the wrapped backend's
-//! queue, which it drains on its media tick; a failure fails that output
+//! the deadline. Each request gets exactly one completion (every address,
+//! or the first failure, timeout or full resolver queue of any leg, without
+//! waiting for the others) in the wrapped backend's queue, which it drains
+//! on its media tick; a failure fails that output
 //! alone and its egress task retries it. The shard owns no resolver thread,
 //! so its teardown never waits on DNS.
 
@@ -59,35 +60,37 @@ struct SrtResolveRequest {
     deadline: Instant,
 }
 
-/// One output's answers, one slot per peer host; the last answer in sends
-/// the completion.
+/// One output's answers, one slot per peer host. The first failure, or the
+/// last address in, sends the one completion; later answers are ignored.
 struct PeerAnswers {
     output_id: OutputId,
     generation: u64,
     remaining: usize,
     peers: Vec<Option<SocketAddr>>,
-    failure: Option<ResolveError>,
+    completed: bool,
     completions: Sender<SrtResolvedConnect>,
 }
 
 impl PeerAnswers {
     fn record(&mut self, index: usize, resolution: Resolution) {
-        match resolution
-            .and_then(|addresses| addresses.first().copied().ok_or(ResolveError::NoAddress))
-        {
-            Ok(address) => self.peers[index] = Some(address),
-            Err(error) => {
-                self.failure.get_or_insert(error);
-            }
-        }
-        self.remaining -= 1;
-        if self.remaining > 0 {
+        if self.completed {
             return;
         }
-        let peers = match self.failure.take() {
-            Some(error) => Err(error),
-            None => Ok(self.peers.iter().flatten().copied().collect()),
+        let peers = match resolution
+            .and_then(|addresses| addresses.first().copied().ok_or(ResolveError::NoAddress))
+        {
+            Ok(address) => {
+                self.peers[index] = Some(address);
+                self.remaining -= 1;
+                if self.remaining > 0 {
+                    return;
+                }
+                Ok(self.peers.iter().flatten().copied().collect())
+            }
+            // One failing leg fails the bond: never wait for the others.
+            Err(error) => Err(error),
         };
+        self.completed = true;
         // The receiver goes only with the shard, when no answer matters.
         let _ = self.completions.send(SrtResolvedConnect {
             output_id: self.output_id.clone(),
@@ -113,7 +116,7 @@ fn resolve_peers(
         generation,
         remaining: peer_hosts.len(),
         peers: vec![None; peer_hosts.len()],
-        failure: None,
+        completed: false,
         completions,
     }));
     for (index, peer) in peer_hosts.iter().enumerate() {

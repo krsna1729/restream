@@ -246,7 +246,7 @@ struct NameResolverHealthJson {
     overflows: u64,
     /// Live lookup threads, hung ones included.
     threads: u64,
-    /// Lookup threads still inside a lookup past its caller's deadline.
+    /// Lookup threads still inside a lookup past its slow threshold.
     hung_threads: u64,
     /// Hung threads left unreplaced because the pool was at its cap.
     cap_reached: u64,

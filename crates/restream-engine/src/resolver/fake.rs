@@ -1,5 +1,5 @@
 //! A production [`Resolver`] whose injected lookup is scripted by name, for
-//! tests that need a name server that hangs, answers slowly or panics.
+//! tests that need a name server that hangs, fails or panics.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,8 +9,8 @@ use std::time::Duration;
 use super::{RESOLVER_MAX_THREADS, RESOLVER_QUEUE_CAPACITY, RESOLVER_THREADS, Resolver};
 
 /// Names starting with `hung` block until [`FakeDns::release_hung`] or this
-/// value drops; `slow` ones answer after [`FakeDns::SLOW`]; `panic` ones
-/// panic; `fail` ones fail; every other name answers 127.0.0.1.
+/// value drops; `panic` ones panic; `fail` ones fail; every other name
+/// answers 127.0.0.1.
 pub(crate) struct FakeDns {
     pub(crate) resolver: Arc<Resolver>,
     calls: Arc<AtomicUsize>,
@@ -18,8 +18,6 @@ pub(crate) struct FakeDns {
 }
 
 impl FakeDns {
-    pub(crate) const SLOW: Duration = Duration::from_millis(200);
-
     /// The production pool: sizes, cap and queue.
     pub(crate) fn new() -> Self {
         Self::build(
@@ -35,7 +33,7 @@ impl FakeDns {
         Self::build(threads, threads, queue_capacity)
     }
 
-    pub(crate) fn build(threads: usize, max_threads: usize, queue_capacity: usize) -> Self {
+    fn build(threads: usize, max_threads: usize, queue_capacity: usize) -> Self {
         let (release, released) = flume::bounded::<()>(0);
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&calls);
@@ -45,9 +43,6 @@ impl FakeDns {
                 // Disconnects when the `FakeDns` drops.
                 let _ = released.recv_timeout(Duration::from_secs(60));
                 return Err(std::io::Error::other("released"));
-            }
-            if host.starts_with("slow") {
-                std::thread::sleep(Self::SLOW);
             }
             if host.starts_with("panic") {
                 // `resume_unwind` skips the panic hook: test logs stay quiet.
