@@ -41,7 +41,7 @@ impl MediaEngine {
     /// the engine's release task.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `selection_lock` -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `engine_registries`); every write guard is taken before the first insert (below)"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `engine_registries`); no engine-wide guard is held across the gate wait, and every write guard is taken before the first insert (below)"
     )]
     pub async fn try_register_pipeline_input_attempt(
         self: &Arc<Self>,
@@ -51,11 +51,8 @@ impl MediaEngine {
         protocol: &str,
         selected: bool,
     ) -> Option<IngestLease> {
-        let _selection = self.ingests.selection_lock.lock().await;
-        let mut tokens = self.ingests.cancel_tokens.write().await;
-        if let Some(existing) = tokens.get(input_id)
-            && !existing.is_cancelled()
-        {
+        let _selection = self.ingests.selection.lock(pipeline_id).await;
+        if live_attempt(self.ingests.cancel_tokens.read().await.get(input_id)) {
             return None;
         }
 
@@ -127,6 +124,13 @@ impl MediaEngine {
         // would otherwise leave a token nothing cancels and a session with no
         // owner: the input shows as connected until the next registration
         // overwrites it.
+        let mut tokens = self.ingests.cancel_tokens.write().await;
+        // Checked again under the write guard: the gate wait above holds only
+        // this pipeline's selection, and another pipeline may name this input
+        // id. A refusal here restores the demoted gate (`demoted`'s drop).
+        if live_attempt(tokens.get(input_id)) {
+            return None;
+        }
         let mut sessions = self.ingests.sessions.write().await;
         let mut selected_inputs = if selected {
             Some(self.ingests.selected_inputs.write().await)
@@ -220,10 +224,10 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`selection_lock` serializes the selection; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` serializes the selection; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
     )]
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
-        let _selection = self.ingests.selection_lock.lock().await;
+        let _selection = self.ingests.selection.lock(pipeline_id).await;
         let previous = self.ingests.active.read().await.get(pipeline_id).cloned();
         if previous
             .as_ref()
@@ -408,7 +412,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`selection_lock` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
     )]
     pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
@@ -418,7 +422,7 @@ impl MediaEngine {
         reason: Option<String>,
         had_error: bool,
     ) -> bool {
-        let _selection = self.ingests.selection_lock.lock().await;
+        let _selection = self.ingests.selection.lock(pipeline_id).await;
         let ingest = self
             .ingests
             .sessions
@@ -480,7 +484,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`selection_lock` serializes the release; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` (module docs of `engine_registries`); the later maps are taken one at a time"
     )]
     async fn release_ingest_sessions(
         &self,
@@ -488,23 +492,21 @@ impl MediaEngine {
         release: impl Fn(&ActiveIngest) -> bool,
         forget_selection: bool,
     ) {
-        let _selection = self.ingests.selection_lock.lock().await;
-        let removed_sessions = {
+        let _selection = self.ingests.selection.lock(pipeline_id).await;
+        // A session and its input's token leave together: between two
+        // separate sections another pipeline naming the same input id could
+        // register, and this release would then cancel that attempt's token.
+        {
+            let mut tokens = self.ingests.cancel_tokens.write().await;
             let mut sessions = self.ingests.sessions.write().await;
             let input_ids = sessions
                 .values()
                 .filter(|ingest| ingest.pipeline_id == pipeline_id && release(ingest))
                 .map(|ingest| ingest.input_id.clone())
                 .collect::<Vec<_>>();
-            input_ids
-                .iter()
-                .filter_map(|input_id| sessions.remove(input_id))
-                .collect::<Vec<_>>()
-        };
-        {
-            let mut tokens = self.ingests.cancel_tokens.write().await;
-            for ingest in &removed_sessions {
-                if let Some(token) = tokens.remove(&ingest.input_id) {
+            for input_id in input_ids {
+                sessions.remove(&input_id);
+                if let Some(token) = tokens.remove(&input_id) {
                     token.cancel();
                 }
             }
@@ -571,14 +573,14 @@ impl MediaEngine {
     /// as a duplicate forever, the retry finding nothing to end).
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `selection_lock` -> `cancel_tokens` -> `sessions` -> `active` (module docs of `engine_registries`); every write guard is taken before the first removal (above)"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `active` (module docs of `engine_registries`); every write guard is taken before the first removal (above)"
     )]
     pub(crate) async fn unregister_ingest_if_current(
         &self,
         pipeline_id: &str,
         registration: &IngestRegistration,
     ) -> bool {
-        let _selection = self.ingests.selection_lock.lock().await;
+        let _selection = self.ingests.selection.lock(pipeline_id).await;
         let mut tokens = self.ingests.cancel_tokens.write().await;
         let mut sessions = self.ingests.sessions.write().await;
         let mut active = self.ingests.active.write().await;
@@ -635,6 +637,11 @@ impl MediaEngine {
     pub async fn recent_ingest_outcome(&self, pipeline_id: &str) -> Option<RecentIngestOutcome> {
         self.ingests.recent.read().await.get(pipeline_id).cloned()
     }
+}
+
+/// Whether an input's token belongs to an attempt that still holds it.
+fn live_attempt(token: Option<&CancellationToken>) -> bool {
+    token.is_some_and(|token| !token.is_cancelled())
 }
 
 /// A gate this registration demoted, with the state it had. Dropped while

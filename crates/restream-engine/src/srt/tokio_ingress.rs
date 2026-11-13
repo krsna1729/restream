@@ -462,8 +462,9 @@ impl SrtServer {
 
     /// Apply an authoritative container snapshot and adapt the selected ring.
     /// The engine serializes the attempt/selection check and complete metadata
-    /// replacement with selection and origin resolution. Resize precedes the
-    /// metadata that opens the output start gate.
+    /// replacement with the pipeline's selection and origin resolution, and
+    /// reports the probe recorded. Resize precedes the metadata that opens
+    /// the output start gate.
     pub(super) async fn apply_probe(
         &self,
         publisher: &PublisherSession,
@@ -474,18 +475,17 @@ impl SrtServer {
         if registration.attempt_id != identity.attempt_id {
             return None;
         }
-        let ring = self
-            .engine
+        let ingest = self.engine.current_ingest_session(registration).await?;
+        self.engine
             .replace_ingest_session_tracks(
+                &ingest,
                 registration,
                 probe.video,
                 probe.audio_tracks,
                 probe.video_track_count,
                 probe.video_sequence_header,
             )
-            .await;
-        self.engine.note_ingest_session_probed(registration).await;
-        ring
+            .await
     }
 
     async fn start_reader(&self, pipeline_id: &str) -> Result<SrtReaderMedia, String> {

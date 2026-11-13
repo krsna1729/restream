@@ -297,10 +297,12 @@ pub(crate) struct Origin {
     /// The current generation of each served pipeline. A replaced generation
     /// stays alive only through its viewers' `Rc`s, and closes with them.
     served: RefCell<HashMap<String, Rc<Served>>>,
-    /// Serializes attaches and track-set re-resolutions, whose pipeline
-    /// lookup yields: two racing viewers must not replace each other with
-    /// stale startup snapshots.
-    attach_lock: tokio::sync::Mutex<()>,
+    /// Serializes one pipeline's attaches and track-set re-resolutions,
+    /// whose pipeline lookup yields: two racing viewers must not replace each
+    /// other with stale startup snapshots. Keyed by pipeline id, so a
+    /// pipeline whose resolution waits (its selection held) delays no
+    /// viewer of another pipeline.
+    attach_locks: restream_sync::keyed_lock::KeyedLock,
     /// Generation numbers handed out, never reused.
     generations: Cell<u64>,
 }
@@ -311,7 +313,7 @@ impl Origin {
             engine,
             slots: ViewerSlots::new(max_viewers),
             served: RefCell::default(),
-            attach_lock: tokio::sync::Mutex::new(()),
+            attach_locks: restream_sync::keyed_lock::KeyedLock::new(),
             generations: Cell::new(0),
         })
     }
@@ -431,10 +433,10 @@ impl Origin {
     /// new ring.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`attach_lock` (this origin's, order: before `selection_lock`) serializes generation changes across the pipeline resolution"
+        reason = "this pipeline's attach lock (order: before its `selection`) serializes generation changes across the pipeline resolution"
     )]
     async fn attach(self: Rc<Self>, pipeline_id: &str) -> Result<Rc<Served>, String> {
-        let _guard = self.attach_lock.lock().await;
+        let _guard = self.attach_locks.lock(pipeline_id).await;
         let (ring, startup) = resolve_pipeline(&self.engine, pipeline_id)
             .await
             .ok_or("no such pipeline")?;
@@ -463,10 +465,10 @@ impl Origin {
     /// this one; losing every track closes it without a replacement.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`attach_lock` (this origin's, order: before `selection_lock`) serializes generation changes across the pipeline resolution"
+        reason = "this pipeline's attach lock (order: before its `selection`) serializes generation changes across the pipeline resolution"
     )]
     async fn revalidate(self: Rc<Self>, pipeline_id: &str, generation: u64) {
-        let _guard = self.attach_lock.lock().await;
+        let _guard = self.attach_locks.lock(pipeline_id).await;
         let Some(current) = self.served.borrow().get(pipeline_id).cloned() else {
             return;
         };
@@ -579,8 +581,8 @@ impl Origin {
 
 /// The pipeline's current ring and publish startup, read on the listener
 /// task; the engine's async state is runtime-agnostic and does not need a
-/// Tokio task. The selection lock is held across the read so startup and
-/// presence describe one selected input, never a mixture of two.
+/// Tokio task. The pipeline's selection lock is held across the read so
+/// startup and presence describe one selected input, never a mixture of two.
 ///
 /// Per-track presence comes from the ring's current track set (what the
 /// broadcast serves, including a recirculation input whose engine metadata is
@@ -590,13 +592,13 @@ impl Origin {
 /// track metadata and clear removed decoder configurations.
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "`selection_lock` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
 )]
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,
 ) -> Option<(Arc<restream_sync::RingBuffer>, MoqPublishStartup)> {
-    let _selection = engine.ingests.selection_lock.lock().await;
+    let _selection = engine.ingests.selection.lock(pipeline_id).await;
     let ring = engine
         .ingests
         .pipelines

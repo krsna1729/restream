@@ -178,14 +178,12 @@ the [assurance roadmap](assurance-roadmap.md).
   and `finish_publisher` in per-peer tasks that answer through a join set;
   keep the `Arc<ActiveIngest>` in `PublisherSession` so telemetry writes
   `metadata.quality` with no lock; `close_deleted_sessions` uses `try_read`
-  and skips a tick. `selection_lock` (`engine_registries.rs`) serializes
-  every pipeline's ingest lifecycle; key it by `pipeline_id`, keeping the
-  map order in the `engine_registries.rs` module docs. Amortize the
-  tracked-IP eviction in `security.rs` that runs on the loop.
-- Gates: with one pipeline's selection held by a stuck registration, an SRT
-  publisher on another pipeline connects, gets its probe answer and
-  disconnects on time; with `ingests.sessions` held for writing, the loop
-  answers another peer's probe inside the Owner's 2 s probe hold.
+  and skips a tick. Amortize the tracked-IP eviction in `security.rs` that
+  runs on the loop. (Selection is already per pipeline: `ingests.selection`.)
+- Gates: with one peer's probe application stalled on an engine lock, the
+  loop answers another peer's probe and finishes its disconnect on time; with
+  `ingests.sessions` held for writing, the loop answers another peer's probe
+  inside the Owner's 2 s probe hold.
 
 ### Q-131 [correctness] [opus] Scheduler, recording and planning faults stay with their own entity
 - Goal:

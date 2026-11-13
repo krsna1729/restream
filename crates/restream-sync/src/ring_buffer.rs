@@ -43,11 +43,12 @@
 //!
 //! `push()` is not exclusive in the type system: a second caller compiles. The
 //! ingest contract is runtime discipline. The application's `InputPacketGate`
-//! plus selection serialized by `MediaEngine` (`select_pipeline_input`,
-//! `selection_lock`) ensure only the selected input forwards into a pipeline
-//! ring. HTTP promotion persists the choice and calls the engine directly; it
-//! does not wait for the reconciler. Monotonic `write_idx` orders slots for
-//! readers; it does not prove a unique producer.
+//! plus selection serialized per pipeline by `MediaEngine`
+//! (`select_pipeline_input`, `ingests.selection`) ensure only the selected
+//! input forwards into a pipeline ring. HTTP promotion persists the choice
+//! and calls the engine directly; it does not wait for the reconciler.
+//! Monotonic `write_idx` orders slots for readers; it does not prove a unique
+//! producer.
 //!
 //! # Frame units
 //!

@@ -14,23 +14,35 @@
 //! writer. The few sections that must hold more than one guard take them in
 //! one order per registry, and never the reverse:
 //!
-//! - ingest: `selection_lock` -> `cancel_tokens` -> `sessions` ->
+//! - ingest: `selection` (one pipeline's) -> `cancel_tokens` -> `sessions` ->
 //!   `selected_inputs` -> `active` (`ingests.active` is read inside egress
-//!   unregistration with `try_read` only);
+//!   unregistration with `try_read` only). A MoQ origin's per-pipeline
+//!   attach lock comes before that pipeline's `selection`;
 //! - egress: `retry` -> `cancel_tokens` -> `active`;
 //! - stage: `runtimes` -> `metrics` -> `lifecycles`;
 //! - file ingest: `ingests.sessions` -> `children` -> `active` -> `positions`
 //!   (any subsequence); `active` is never held while taking `children`.
 //!
+//! `ingests.selection` is a [`KeyedLock`] keyed by pipeline id: it serializes
+//! one pipeline's ingest lifecycle (registration replacement, selection,
+//! track replacement with ring adaptation, origin resolution, disconnect
+//! outcomes, release), so a holder stuck on one pipeline delays no other.
+//! No section holds two pipelines' selections. The engine-wide ingest maps
+//! under it are never held across a wait on media (a gate going idle), and
+//! the maps keyed by input id (`cancel_tokens`, `sessions`) are checked and
+//! changed under one write guard set, so two pipelines naming one input id
+//! cannot interleave a check and its change.
+//!
 //! `clippy::await_holding_invalid_type` (`clippy.toml`) flags a tokio guard
-//! bound directly to a local across an await; each such section carries an
-//! `#[expect]` naming its order. It does not see a guard inside an `Option`,
-//! a tuple or a struct field: today the `selected_inputs` and `active`
-//! guards of `try_register_pipeline_input_attempt` (already under an
-//! `#[expect]`) and `ObjectBody`'s `segment.growing` claim lock in
-//! `hls_ingest.rs`.
+//! or a [`restream_sync::keyed_lock::KeyedGuard`] bound directly to a local
+//! across an await; each such section carries an `#[expect]` naming its
+//! order. It does not see a guard inside an `Option`, a tuple or a struct
+//! field: today the `selected_inputs` and `active` guards of
+//! `try_register_pipeline_input_attempt` (already under an `#[expect]`) and
+//! `ObjectBody`'s `segment.growing` claim lock in `hls_ingest.rs`.
 
 use arc_swap::ArcSwapOption;
+use restream_sync::keyed_lock::KeyedLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
@@ -62,7 +74,9 @@ pub struct IngestRegistry {
     pub selected_inputs: TokioRwLock<HashMap<String, String>>,
     pub timelines: TokioRwLock<HashMap<String, Arc<AtomicI64>>>,
     pub preview_slots: TokioRwLock<HashMap<String, Arc<ArcSwapOption<RingBuffer>>>>,
-    pub selection_lock: TokioMutex<()>,
+    /// One lock per pipeline id over that pipeline's ingest lifecycle
+    /// (module docs).
+    pub selection: KeyedLock,
     pub preview_lock: TokioMutex<()>,
     pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
@@ -90,7 +104,7 @@ impl IngestRegistry {
             selected_inputs: TokioRwLock::new(HashMap::new()),
             timelines: TokioRwLock::new(HashMap::new()),
             preview_slots: TokioRwLock::new(HashMap::new()),
-            selection_lock: TokioMutex::new(()),
+            selection: KeyedLock::new(),
             preview_lock: TokioMutex::new(()),
             active: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),

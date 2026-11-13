@@ -18,8 +18,8 @@ use std::sync::Arc;
 /// fair `RwLock` queues a reader behind any waiting writer, so a view still
 /// holding `runtimes` while it asks for `runtimes` again (or for another map
 /// a writer holds while waiting on `runtimes`) deadlocks with that writer.
-/// Ingest registration takes `ingests.active` under the engine-wide
-/// `selection_lock`, so such a stall would stop every ingest lifecycle.
+/// Ingest registration takes the engine-wide `ingests.active` under its
+/// pipeline's selection, so such a stall would stop every ingest lifecycle.
 struct StageMaps {
     runtimes: HashMap<StageKey, StageRuntime>,
     metrics: HashMap<StageKey, Arc<StageMetrics>>,
@@ -491,7 +491,7 @@ mod tests {
 
     /// A telemetry view parked on one stage map while another pipeline's
     /// stage start (a `runtimes` writer) and an SRT publisher's registration
-    /// (an `ingests.active` writer, under `selection_lock`) run: all three
+    /// (an `ingests.active` writer, under its pipeline's selection) run: all three
     /// must finish. The test holds `stages.metrics` for writing, as an
     /// in-flight metrics writer would, so the view parks at that read. A
     /// view that holds nothing there lets both writers through at once. One
