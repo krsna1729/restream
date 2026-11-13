@@ -18,6 +18,7 @@ use super::error::ApiError;
 use super::state::{AppState, require_authenticated, to_hex};
 use crate::application::schedules::{self, Due, Schedule, ScheduleAction, ScheduleDraft};
 use crate::application::team::AuditEntry;
+use crate::db::DeadlineDb;
 use restream_domain::domain::role::Role;
 
 /// How often the scheduler looks for due events: well inside the grace.
@@ -135,26 +136,53 @@ async fn audit_run(state: &AppState, schedule: &Schedule, ok: bool) {
 }
 
 /// Runs, records and audits one occurrence.
-async fn run_occurrence(state: &AppState, schedule: &Schedule, occurrence_ms: i64) {
-    // Recorded first: a slow action must not be started twice.
-    let _ = schedules::record_run(&state.db, &schedule.id, occurrence_ms, "running").await;
+async fn run_occurrence(
+    state: &AppState,
+    db: &DeadlineDb,
+    schedule: &Schedule,
+    occurrence_ms: i64,
+) {
+    // Recorded first: a slow action must not be started twice. Unrecorded
+    // (a database past its deadline), it is not started: the next tick
+    // re-reads the row and runs it then, unless the late write landed.
+    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, "running".to_string()).await {
+        warn!(schedule = %schedule.id, err = %error, "could not record a schedule run; retried next tick");
+        return;
+    }
     let outcome = execute(state, schedule).await;
     let (ok, result) = match &outcome {
         Ok(summary) => (true, format!("ok: {summary}")),
         Err(error) => (false, format!("failed: {error}")),
     };
     info!(schedule = %schedule.id, name = %schedule.name, result = %result, "scheduled event ran");
-    if let Err(error) = schedules::record_run(&state.db, &schedule.id, occurrence_ms, &result).await
-    {
+    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, result).await {
         warn!(err = %error, "failed to record a schedule run");
     }
     audit_run(state, schedule, ok).await;
 }
 
+/// Records an occurrence's outcome as a write that lands even when its
+/// deadline passes.
+async fn record_run(
+    db: &DeadlineDb,
+    id: &str,
+    occurrence_ms: i64,
+    result: String,
+) -> crate::application::services::ServiceResult<()> {
+    let id = id.to_string();
+    db.write(
+        move |pool| async move { schedules::record_run(&pool, &id, occurrence_ms, &result).await },
+    )
+    .await
+}
+
 /// Looks for due events every `tick` and runs them; an occurrence missed by
-/// more than the grace (the engine was down) is recorded as skipped.
+/// more than the grace (the engine was down) is recorded as skipped. Its
+/// own reads and writes go through `db`, the shared loops' deadline
+/// executor.
 pub async fn run_scheduler(
     state: Arc<AppState>,
+    db: DeadlineDb,
     tick: std::time::Duration,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
@@ -166,7 +194,7 @@ pub async fn run_scheduler(
             _ = ticks.tick() => {}
         }
         let now = now_ms();
-        let Ok(all) = schedules::list(&state.db, now).await else {
+        let Ok(all) = db.read(|pool| schedules::list(pool, now)).await else {
             continue;
         };
         for schedule in all {
@@ -178,16 +206,16 @@ pub async fn run_scheduler(
                 now,
             ) {
                 Due::Nothing => {}
-                Due::Run(occurrence) => run_occurrence(&state, &schedule, occurrence).await,
+                Due::Run(occurrence) => run_occurrence(&state, &db, &schedule, occurrence).await,
                 Due::Skip(occurrence) => {
                     let missed = chrono::DateTime::from_timestamp_millis(occurrence)
                         .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
                         .unwrap_or_default();
-                    let _ = schedules::record_run(
-                        &state.db,
+                    let _ = record_run(
+                        &db,
                         &schedule.id,
                         occurrence,
-                        &format!("skipped: the engine was not running at {missed}"),
+                        format!("skipped: the engine was not running at {missed}"),
                     )
                     .await;
                 }

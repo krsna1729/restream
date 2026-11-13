@@ -12,7 +12,8 @@ use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
     NotifyService, PipelineService, SettingsService, TeamService,
 };
-use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
+use crate::db::DeadlineDb;
+use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePipelineInputStore};
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteNotifyStore, SqlitePipelineStore,
@@ -30,11 +31,22 @@ pub struct SqliteServiceFactory<'pool> {
 
 impl<'pool> SqliteServiceFactory<'pool> {
     /// The index starts empty; production startup fills it with
-    /// [`CatalogAuth::load`] before any listener starts.
+    /// [`CatalogAuth::load`] before any listener starts. Its reloads read
+    /// `db` under the shared-loop deadline.
     pub fn new(db: &'pool SqlitePool) -> Self {
+        Self::with_catalog_db(
+            db,
+            DeadlineDb::new(db.clone(), crate::db::SHARED_LOOP_DEADLINE),
+        )
+    }
+
+    /// As [`Self::new`], with the admission index reloading from
+    /// `catalog_db` (production: the lifecycle pool, which API load cannot
+    /// exhaust).
+    pub fn with_catalog_db(db: &'pool SqlitePool, catalog_db: DeadlineDb) -> Self {
         Self {
             db,
-            catalog_auth: CatalogAuth::new(Arc::new(SqlitePipelineInputStore::new(db.clone()))),
+            catalog_auth: CatalogAuth::new(Arc::new(SqliteCatalogSource::new(catalog_db))),
         }
     }
 

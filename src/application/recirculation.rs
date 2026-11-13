@@ -402,8 +402,8 @@ mod tests {
         let pipeline_service = PipelineService::with_store(
             Arc::new(PipelineCatalogStore),
             crate::application::catalog_auth::CatalogAuth::new(Arc::new(
-                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                    pool.clone(),
+                crate::infrastructure::pipeline_input_store::SqliteCatalogSource::new(
+                    crate::db::DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE),
                 ),
             )),
         );

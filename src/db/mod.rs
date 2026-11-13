@@ -3,6 +3,7 @@
 //! in-place column backfills for contract migrations. WAL mode is enabled for
 //! concurrent reader/writer access.
 
+mod deadline;
 pub(crate) mod flight_repo;
 mod ingest_repo;
 mod job_repo;
@@ -20,6 +21,7 @@ pub(crate) mod session_repo;
 pub(crate) mod share_repo;
 pub(crate) mod team_repo;
 
+pub use deadline::{DeadlineDb, DeadlineError, SHARED_LOOP_DEADLINE};
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
     list_ingests_for_filename, list_ingests_for_stream_key, rename_ingest_file,
@@ -30,7 +32,8 @@ pub use job_repo::{
     list_jobs, reset_running_jobs, update_job,
 };
 pub use log_repo::{
-    append_app_log_batch, append_app_log_batch_returning, delete_app_logs_older_than, list_app_logs,
+    APP_LOG_RETENTION_BATCH, append_app_log_batch, append_app_log_batch_returning,
+    delete_app_logs_older_than, list_app_logs, prune_app_logs,
 };
 pub use output_repo::{
     OutputRecord, create_output, delete_output, get_output, list_outputs,
@@ -86,12 +89,32 @@ const BUSY_RETRY_MAX_DELAY: Duration = Duration::from_millis(100);
 /// journal mode on connect. Typed `journal_mode(Wal)` makes WAL stick for
 /// every pooled connection, including the first.
 pub async fn create_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
+    sanitize_preexisting_wal(url);
+    sqlx::SqlitePool::connect_with(connect_options(url)?).await
+}
+
+/// Connections only the shared control loops use (reconciler,
+/// housekeeping, egress start-up, scheduler, catalog reload), each through
+/// a [`DeadlineDb`]: API handlers holding every connection of the main pool
+/// cannot take the capacity these loops need. Opened after [`create_pool`]
+/// on the same file.
+pub async fn create_lifecycle_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(LIFECYCLE_POOL_CONNECTIONS)
+        .connect_with(connect_options(url)?)
+        .await
+}
+
+/// One connection per loop that awaits the database (reconciler output
+/// pass, housekeeping, scheduler, catalog reload), plus two for the writes
+/// that run as their own tasks (egress job rows, retries-exhausted marks).
+const LIFECYCLE_POOL_CONNECTIONS: u32 = 6;
+
+fn connect_options(url: &str) -> Result<sqlx::sqlite::SqliteConnectOptions, sqlx::Error> {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
     use std::str::FromStr;
 
-    sanitize_preexisting_wal(url);
-
-    let opts = SqliteConnectOptions::from_str(url)?
+    Ok(SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
@@ -99,9 +122,7 @@ pub async fn create_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
         .busy_timeout(SQLITE_BUSY_TIMEOUT)
         .pragma("cache_size", "-16384")
         .pragma("temp_store", "MEMORY")
-        .pragma("mmap_size", "134217728");
-
-    sqlx::SqlitePool::connect_with(opts).await
+        .pragma("mmap_size", "134217728"))
 }
 
 pub(crate) fn is_database_locked(err: &sqlx::Error) -> bool {

@@ -63,6 +63,11 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     db::setup_database_schema(&pool)
         .await
         .map_err(|error| format!("failed to set up the SQLite schema: {error}"))?;
+    // The shared control loops' own connections, each call deadline-bound.
+    let lifecycle_pool = db::create_lifecycle_pool(&db_url)
+        .await
+        .map_err(|error| format!("failed to connect to the SQLite database: {error}"))?;
+    let lifecycle = db::DeadlineDb::new(lifecycle_pool.clone(), db::SHARED_LOOP_DEADLINE);
 
     let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color);
     info!(
@@ -161,7 +166,11 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
-    let services_factory = crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool);
+    let services_factory =
+        crate::infrastructure::service_wiring::SqliteServiceFactory::with_catalog_db(
+            &pool,
+            lifecycle.clone(),
+        );
     let auth_service = services_factory.auth_service();
     auth::initialize_auth_with_bootstrap_file(
         &auth_service,
@@ -332,10 +341,11 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         }
     });
     supervised_task::spawn_supervised("scheduler", {
-        let (state, stop) = (state.clone(), projector_stop.clone());
+        let (state, db, stop) = (state.clone(), lifecycle.clone(), projector_stop.clone());
         move || {
             crate::api::schedules::run_scheduler(
                 state.clone(),
+                db.clone(),
                 crate::api::schedules::SCHEDULER_TICK,
                 stop.clone(),
             )
@@ -360,6 +370,7 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
 
     let (http, http_stop, rtmp, srt) = runtime.into_handles();
     shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
+    lifecycle_pool.close().await;
     Ok(())
 }
 

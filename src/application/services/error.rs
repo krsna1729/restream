@@ -45,4 +45,10 @@ impl From<String> for ServiceError {
     }
 }
 
+impl From<crate::db::DeadlineError> for ServiceError {
+    fn from(error: crate::db::DeadlineError) -> Self {
+        Self::Internal(error.to_string())
+    }
+}
+
 pub type ServiceResult<T> = Result<T, ServiceError>;
