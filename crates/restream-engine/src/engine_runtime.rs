@@ -69,22 +69,14 @@ impl MediaEngine {
         true
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `children` -> `active` (module docs of `engine_registries`): `children` is held through the `active` update so a stop or reap, which must take `children` to remove the child, clears `active` only after it"
+    )]
     pub async fn is_file_ingest_running(&self, id: &str) -> bool {
-        // `children` is released before `active` is taken: the two are never
-        // held together (see `FileIngestRegistry`).
-        let child_running = {
-            let mut children = self.file_ingests.children.write().await;
-            match children.get_mut(id).map(tokio::process::Child::try_wait) {
-                None => None,
-                Some(Ok(None)) => Some(true),
-                Some(_) => {
-                    children.remove(id);
-                    Some(false)
-                }
-            }
-        };
-        match child_running {
-            Some(true) => {
+        let mut children = self.file_ingests.children.write().await;
+        match children.get_mut(id).map(tokio::process::Child::try_wait) {
+            Some(Ok(None)) => {
                 self.file_ingests
                     .active
                     .write()
@@ -92,7 +84,8 @@ impl MediaEngine {
                     .insert(id.to_string());
                 true
             }
-            Some(false) => {
+            Some(_) => {
+                children.remove(id);
                 self.file_ingests.active.write().await.remove(id);
                 false
             }

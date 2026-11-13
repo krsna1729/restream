@@ -109,8 +109,8 @@ impl MediaEngine {
         &self,
         ingest_id: &str,
     ) -> FileIngestDependencySnapshot {
-        // One map at a time: `children` and `active` are never held together
-        // (see `FileIngestRegistry`).
+        // One map at a time: holding `active` while taking `children` would
+        // reverse the `children` -> `active` order (see `FileIngestRegistry`).
         let marked_active = self.file_ingests.active.read().await.contains(ingest_id);
         let child_registered = self
             .file_ingests

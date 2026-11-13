@@ -203,8 +203,9 @@ the [assurance roadmap](assurance-roadmap.md).
     joins the pull task (`hls_ingest/registry.rs` `ensure_pull`,
     `cancel_pulls`): a black-holed origin nameserver stalls the pass.
   - RTMP egress (`rtmp_shard_resolve_runtime.rs`, `rtmp_shard.rs`): one
-    FIFO resolver thread per shard, no deadline, no dedupe; a pending connect
-    takes its deadline from `LeafPolicy.resolve_timeout`.
+    FIFO resolver thread per shard, no deadline, no dedupe, and a pending
+    connect with no deadline (`LeafPolicy.resolve_timeout` serves only HLS
+    PUT today); make the connect take its deadline from it.
   - SRT egress (`egress/backends/srt/resolve_runtime.rs`, `srt.rs`): the
     same, plus bonded hosts resolved one after another, and `spawn_batch`
     silently drops the rest of a batch after the first full `try_send`. Those
@@ -245,8 +246,8 @@ the [assurance roadmap](assurance-roadmap.md).
   `metadata.quality` with no lock; `close_deleted_sessions` uses `try_read`
   and skips a tick. `selection_lock` (`engine_registries.rs`) serializes
   every pipeline's ingest lifecycle; key it by `pipeline_id`, keeping the
-  map order documented at `IngestRegistry`. Amortize the tracked-IP eviction
-  in `security.rs` that runs on the loop.
+  map order in the `engine_registries.rs` module docs. Amortize the
+  tracked-IP eviction in `security.rs` that runs on the loop.
 - Gates: with one pipeline's selection held by a stuck registration, an SRT
   publisher on another pipeline connects, gets its probe answer and
   disconnects on time; with `ingests.sessions` held for writing, the loop

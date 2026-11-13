@@ -189,7 +189,7 @@ async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<
     stop_owned_child(runtime, child_pid).await;
     // Replacement registration needs sessions.write(): hold this guard
     // through active removal so a newer generation cannot be cleared.
-    // Never nest children and active guards (snapshots take active first).
+    // `children` is not held here: its order is `children` -> `active`.
     let sessions = runtime.engine.ingests.sessions.read().await;
     if sessions
         .get(&runtime.registration.input_id)

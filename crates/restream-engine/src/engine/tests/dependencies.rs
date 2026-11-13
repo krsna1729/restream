@@ -246,8 +246,9 @@ async fn file_ingest_dependency_snapshot_reflects_active_and_child_state() {
 /// (`active` then `children`) once nested the two locks in opposite orders.
 /// The test parks the check on `children` and the snapshot on `active`
 /// behind two held write guards; releasing both hands each its first lock
-/// at once, so a check or snapshot that then waits on its second lock while
-/// holding the first deadlocks, and with it the reconciler's
+/// at once. The check keeps `children` while it waits on `active` (the
+/// documented order); a snapshot that also kept `active` while it waits on
+/// `children` deadlocks with it, and with them the reconciler's
 /// `reap_file_ingests` housekeeping.
 #[tokio::test]
 async fn file_ingest_running_check_and_snapshot_never_deadlock() {

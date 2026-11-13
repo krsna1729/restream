@@ -477,7 +477,8 @@ lifecycle and probe events (dotted).
   (`crates/restream-engine/src/srt/tokio_ingress/admission.rs`), so a slow
   lookup or a contended registration delays only that peer's admission.
   Probe application, publisher teardown (`finish_publisher`), telemetry
-  folding and deleted-pipeline checks still await engine locks on the loop
+  folding, `srt_call` caller starts and deleted-pipeline checks still await
+  engine locks on the loop
   ([Q-130](backlog.md#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)).
   The lookup has a 5 s deadline (expiry disconnects the peer); registration
   has none. In flight are at most `RESTREAM_SRT_MAX_PEERS_PER_IP` admissions

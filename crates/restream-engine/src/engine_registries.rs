@@ -19,12 +19,16 @@
 //!   unregistration with `try_read` only);
 //! - egress: `retry` -> `cancel_tokens` -> `active`;
 //! - stage: `runtimes` -> `metrics` -> `lifecycles`;
-//! - file ingest: `ingests.sessions` -> one of `children`, `active`,
-//!   `positions`; `children` and `active` are never held together.
+//! - file ingest: `ingests.sessions` -> `children` -> `active` -> `positions`
+//!   (any subsequence); `active` is never held while taking `children`.
 //!
-//! `clippy::await_holding_invalid_type` (`clippy.toml`) flags every tokio
-//! guard held across an await; each such section carries an `#[expect]`
-//! naming its order.
+//! `clippy::await_holding_invalid_type` (`clippy.toml`) flags a tokio guard
+//! bound directly to a local across an await; each such section carries an
+//! `#[expect]` naming its order. It does not see a guard inside an `Option`,
+//! a tuple or a struct field: today the `selected_inputs` and `active`
+//! guards of `try_register_pipeline_input_attempt` (already under an
+//! `#[expect]`) and `ObjectBody`'s `segment.growing` claim lock in
+//! `hls_ingest.rs`.
 
 use arc_swap::ArcSwapOption;
 use std::collections::{HashMap, HashSet};
@@ -346,9 +350,11 @@ impl HlsRegistry {
     }
 }
 
-/// `children` and `active` are never held together: each path releases one
-/// before it takes the other. Nested in opposite orders, they deadlocked the
-/// running check against the dependency snapshot.
+/// Lock order `children` -> `active`: the running check holds `children`
+/// through its `active` update, so a stop or reap (which must take
+/// `children` to remove the child) clears `active` only after it. Nothing
+/// holds `active` while taking `children`; the dependency snapshot reads one
+/// map at a time (the reverse nesting deadlocked against the running check).
 pub struct FileIngestRegistry {
     pub children: TokioRwLock<HashMap<String, tokio::process::Child>>,
     pub active: TokioRwLock<HashSet<String>>,

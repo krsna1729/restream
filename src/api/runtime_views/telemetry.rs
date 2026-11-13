@@ -491,13 +491,13 @@ mod tests {
 
     /// A telemetry view parked on one stage map while another pipeline's
     /// stage start (a `runtimes` writer) and an SRT publisher's registration
-    /// (an `ingests.active` writer, under `selection_lock`) queue up: all
-    /// three must finish. The test holds `stages.metrics` for writing, as an
-    /// in-flight metrics writer would, so the view parks at that read with
-    /// both writers queued behind it. A view that kept its earlier guards
-    /// and then read `runtimes` again would queue behind the stage start's
-    /// writer, which waits on the view: a deadlock that also froze every
-    /// ingest registration.
+    /// (an `ingests.active` writer, under `selection_lock`) run: all three
+    /// must finish. The test holds `stages.metrics` for writing, as an
+    /// in-flight metrics writer would, so the view parks at that read. A
+    /// view that holds nothing there lets both writers through at once. One
+    /// that kept its earlier guards blocks them, and once released it reads
+    /// `runtimes` again behind the queued stage-start writer, which waits on
+    /// the view: a deadlock that also froze every ingest registration.
     async fn assert_view_never_deadlocks_stage_and_ingest_writers<F, Fut>(view: F)
     where
         F: FnOnce(Arc<MediaEngine>) -> Fut,

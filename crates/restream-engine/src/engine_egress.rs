@@ -491,7 +491,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `retry` -> `active` (module docs of `engine_registries`), held across the active check on purpose (below)"
+        reason = "lock order `retry` -> `cancel_tokens` (module docs of `engine_registries`): held across `has_active_egress`, which reads `cancel_tokens`, on purpose (below)"
     )]
     pub async fn update_egress_retry_state(
         &self,
