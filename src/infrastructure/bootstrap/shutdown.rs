@@ -2,13 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use restream_engine::engine::MediaEngine;
 
-use super::runtime::HttpStop;
+use super::runtime::{HttpStop, ListenerHandles};
 
 pub(super) fn spawn_signal_watcher() -> CancellationToken {
     let shutdown = CancellationToken::new();
@@ -56,11 +55,14 @@ pub(super) fn spawn_signal_watcher() -> CancellationToken {
 pub(super) async fn cleanup(
     engine: &Arc<MediaEngine>,
     pool: &SqlitePool,
-    mut http_handle: JoinHandle<()>,
+    listeners: ListenerHandles,
     http_stop: HttpStop,
-    rtmp_handle: JoinHandle<()>,
-    srt_handle: JoinHandle<()>,
 ) {
+    let ListenerHandles {
+        http: http_handle,
+        rtmp: rtmp_handle,
+        srt: srt_handle,
+    } = listeners;
     info!(
         event_class = "lifecycle",
         event_type = "restream.shutdown.started",
@@ -71,9 +73,10 @@ pub(super) async fn cleanup(
     // bounds its own drain; the extra second only guards that bound.
     http_stop.begin();
     let http_deadline = crate::api::http_server::DRAIN_TIMEOUT + Duration::from_secs(1);
-    if tokio::time::timeout(http_deadline, &mut http_handle)
-        .await
-        .is_err()
+    if let Some(mut http_handle) = http_handle
+        && tokio::time::timeout(http_deadline, &mut http_handle)
+            .await
+            .is_err()
     {
         http_handle.abort();
     }

@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::FutureExt as _;
-use sqlx::SqlitePool;
 use tracing::{error, warn};
 
 use crate::application::reconcile::next_output_retry_count;
@@ -25,7 +24,7 @@ use restream_engine::ingest_lease::IngestEnd;
 use restream_engine::secret_display::redact_url;
 use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
-use super::FailureTracker;
+use super::{AttemptJob, FailureTracker};
 
 #[path = "egress_moq.rs"]
 mod egress_moq;
@@ -105,7 +104,6 @@ pub(super) struct EgressTask {
     pub(super) terminal_stage_key: restream_domain::domain::stage::StageKey,
     pub(super) registration: restream_engine::engine::EgressRegistration,
     pub(super) engine: Arc<MediaEngine>,
-    pub(super) pool: SqlitePool,
     pub(super) last_failed: FailureTracker,
     /// Leases on the shared stages this output reads through: they stop
     /// when the last egress (or other consumer) using them ends. A pipeline
@@ -113,7 +111,7 @@ pub(super) struct EgressTask {
     pub(super) stages: Vec<restream_engine::stage_lease::StageLease>,
     pub(super) tuning: RuntimeTuning,
     pub(super) correlation_id: String,
-    pub(super) job_id: String,
+    pub(super) job: AttemptJob,
     pub(super) srt_fabric: Option<SrtFabricTask>,
     pub(super) rtmp_fabric: Option<RtmpFabricTask>,
     pub(super) sink_fabric: Option<SinkFabricTask>,
@@ -147,6 +145,7 @@ impl EgressTask {
         let url_scheme = OutputUrlScheme::from_url(&self.url);
         if !url_scheme.is_supported_output() {
             self.reject_unsupported_url().await;
+            self.job.finish(JobStatus::Failed);
             return;
         }
 
@@ -329,14 +328,11 @@ impl EgressTask {
             .await;
         drop(hls_lease);
 
-        let ended_at = chrono::Utc::now().to_rfc3339();
-        let job_status = if is_cancelled {
+        self.job.finish(if is_cancelled {
             JobStatus::Stopped
         } else {
             JobStatus::Failed
-        };
-        let _ = crate::db::update_job(&self.pool, &self.job_id, Some(job_status), Some(&ended_at))
-            .await;
+        });
     }
 
     /// Waits for explicit cancellation (normal stop/reconfigure), the fabric
@@ -922,14 +918,6 @@ impl EgressTask {
         reason = "lock order `last_failed` -> engine egress registry: the failure is recorded under `last_failed` before the egress stop event can wake the reconciler; no I/O runs under it"
     )]
     async fn reject_unsupported_url(&self) {
-        let ended_at = chrono::Utc::now().to_rfc3339();
-        let _ = crate::db::update_job(
-            &self.pool,
-            &self.job_id,
-            Some(JobStatus::Failed),
-            Some(&ended_at),
-        )
-        .await;
         // Record the failure before the egress is gone: its stop event wakes
         // the reconciler, which must see the failure and wait out the backoff
         // (it reads `last_failed` under this lock).

@@ -109,8 +109,10 @@ impl SupervisedListener {
         }
     }
 
-    pub(super) fn into_handle(self) -> JoinHandle<()> {
-        self.task.unwrap_or_else(|| tokio::spawn(async {}))
+    /// The running task's handle for shutdown; an ended task's stand-in
+    /// while the listener is down.
+    pub(super) fn take_handle(&mut self) -> JoinHandle<()> {
+        self.task.take().unwrap_or_else(|| tokio::spawn(async {}))
     }
 }
 

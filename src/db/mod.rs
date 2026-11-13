@@ -32,8 +32,8 @@ pub use job_repo::{
     list_jobs, reset_running_jobs, update_job,
 };
 pub use log_repo::{
-    APP_LOG_RETENTION_BATCH, append_app_log_batch, append_app_log_batch_returning,
-    delete_app_logs_older_than, list_app_logs, prune_app_logs,
+    APP_LOG_RETENTION_BATCH, append_app_log_batch, append_app_log_batch_returning, list_app_logs,
+    prune_app_logs,
 };
 pub use output_repo::{
     OutputRecord, create_output, delete_output, get_output, list_outputs,
@@ -62,6 +62,7 @@ pub use session_repo::{
 
 pub use meta_repo::get_ingest_host;
 pub use meta_repo::get_meta;
+pub use meta_repo::list_meta_with_prefixes;
 pub use meta_repo::set_ingest_host;
 pub use meta_repo::set_meta;
 

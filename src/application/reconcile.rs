@@ -1,9 +1,11 @@
 //! Application-layer reconciliation logic that compares desired output and
 //! recording state with engine reality and computes convergence actions.
 
-use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
+use std::collections::HashSet;
+
+use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::state::DesiredOutputState;
-use restream_domain::models::Output;
+use restream_domain::models::{Output, Pipeline};
 use restream_engine::engine::MediaEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,13 +219,53 @@ pub enum RecordingCommand {
     },
 }
 
+/// The meta rows housekeeping reads each tick, in one statement for every
+/// pipeline: the recording and stream-check switches and the recording
+/// settings. A switch is on only when its value is `"1"`.
+#[derive(Debug, Default)]
+pub struct HousekeepingSwitches {
+    pub recording: HashSet<String>,
+    pub stream_qa: HashSet<String>,
+    pub recording_settings: RecordingSettings,
+}
+
+impl HousekeepingSwitches {
+    /// The key prefixes [`Self::from_meta`] reads.
+    pub const META_PREFIXES: [&'static str; 3] = [
+        crate::application::recording::RECORDING_ENABLED_META_PREFIX,
+        crate::application::stream_qa::STREAM_QA_ENABLED_META_PREFIX,
+        crate::application::recording::RECORDING_SETTINGS_META_KEY,
+    ];
+
+    pub fn from_meta(rows: Vec<(String, Option<String>)>) -> Self {
+        use crate::application::recording::{
+            RECORDING_ENABLED_META_PREFIX, RECORDING_SETTINGS_META_KEY,
+        };
+        use crate::application::stream_qa::STREAM_QA_ENABLED_META_PREFIX;
+
+        let mut switches = Self::default();
+        for (key, value) in rows {
+            let Some(value) = value else { continue };
+            if key == RECORDING_SETTINGS_META_KEY {
+                switches.recording_settings = serde_json::from_str(&value).unwrap_or_default();
+            } else if value != "1" {
+                continue;
+            } else if let Some(pipeline_id) = key.strip_prefix(RECORDING_ENABLED_META_PREFIX) {
+                switches.recording.insert(pipeline_id.to_string());
+            } else if let Some(pipeline_id) = key.strip_prefix(STREAM_QA_ENABLED_META_PREFIX) {
+                switches.stream_qa.insert(pipeline_id.to_string());
+            }
+        }
+        switches
+    }
+}
+
 pub async fn build_recording_reconcile_plan(
     engine: &MediaEngine,
-    pipeline_catalog: &dyn PipelineStore,
-    meta_store: &dyn MetaStore,
+    pipelines: &[Pipeline],
+    switches: &HousekeepingSwitches,
     ingest_disconnect_grace_ms: u64,
-) -> Result<Vec<RecordingCommand>, PipelineStoreError> {
-    let pipelines = pipeline_catalog.list_pipelines().await?;
+) -> Vec<RecordingCommand> {
     let mut commands = Vec::new();
 
     for pipeline in pipelines {
@@ -232,37 +274,32 @@ pub async fn build_recording_reconcile_plan(
             || engine
                 .has_recent_ingest_disconnect(&pipeline.id, ingest_disconnect_grace_ms)
                 .await;
-        let rec_enabled =
-            crate::application::recording::load_recording_enabled(meta_store, &pipeline.id).await;
+        let rec_enabled = switches.recording.contains(&pipeline.id);
         let rec_active = engine.is_recording_active(&pipeline.id).await;
 
         match decide_recording_action(rec_enabled, effective_has_ingest, rec_active) {
             RecordingAction::Keep => {}
             RecordingAction::Start => commands.push(RecordingCommand::Start {
-                pipeline_name: pipeline.name,
-                pipeline_id: pipeline.id,
-                input_source: pipeline.input_source,
+                pipeline_name: pipeline.name.clone(),
+                pipeline_id: pipeline.id.clone(),
+                input_source: pipeline.input_source.clone(),
             }),
             RecordingAction::Stop => commands.push(RecordingCommand::Stop {
-                pipeline_id: pipeline.id,
+                pipeline_id: pipeline.id.clone(),
             }),
         }
     }
 
-    Ok(commands)
+    commands
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
     use restream_core::metadata::VideoMeta;
     use restream_domain::domain::output_spec::OutputConfig;
-    use restream_domain::models::Pipeline;
     // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
     use proptest::strategy::Strategy;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     fn test_retry_policy() -> OutputRetryPolicy {
         OutputRetryPolicy {
@@ -741,97 +778,34 @@ mod tests {
         assert_eq!(snapshot.ingest_video_codec, None);
     }
 
-    struct FakePipelineStore {
-        pipelines: Vec<Pipeline>,
-        error: Option<&'static str>,
-    }
-
-    impl PipelineStore for FakePipelineStore {
-        fn get_pipeline_by_stream_key<'a>(
-            &'a self,
-            stream_key: &'a str,
-        ) -> crate::application::ports::PipelineLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .pipelines
-                    .iter()
-                    .find(|pipeline| pipeline.stream_key == stream_key)
-                    .cloned())
-            })
-        }
-
-        fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-            Box::pin(async move {
-                if let Some(message) = self.error {
-                    return Err(PipelineStoreError::new(message));
-                }
-                Ok(self.pipelines.clone())
-            })
-        }
-
-        fn get_pipeline<'a>(
-            &'a self,
-            id: &'a str,
-        ) -> crate::application::ports::PipelineLookupFuture<'a> {
-            Box::pin(async move { Ok(self.pipelines.iter().find(|p| p.id == id).cloned()) })
-        }
-
-        fn create_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> crate::application::ports::PipelineCreateFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-        }
-
-        fn update_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-        }
-
-        fn delete_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-        ) -> crate::application::ports::PipelineDeleteFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-        }
-
-        fn get_ingest_host<'a>(
-            &'a self,
-        ) -> crate::application::ports::PipelineIngestHostFuture<'a> {
-            Box::pin(async move { Ok(None) })
-        }
-
-        fn update_pipeline_input_source<'a>(
-            &'a self,
-            pipeline: &'a Pipeline,
-            input_source: Option<&'a str>,
-        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-            Box::pin(async move {
-                let mut updated = pipeline.clone();
-                updated.input_source = input_source.map(ToOwned::to_owned);
-                Ok(Some(updated))
-            })
+    fn pipeline(id: &str, input_source: Option<&str>) -> Pipeline {
+        Pipeline {
+            id: id.to_string(),
+            name: "Pipeline One".to_string(),
+            stream_key: "stream-one".to_string(),
+            input_source: input_source.map(str::to_string),
+            srt_ingest_policy: None,
         }
     }
 
-    struct FakeMetaStore {
-        values: Mutex<HashMap<String, String>>,
-    }
+    /// One bulk read gives every switch: only `"1"` turns one on, and the
+    /// settings decode from their own key.
+    #[test]
+    fn housekeeping_switches_decode_from_one_bulk_meta_read() {
+        let switches = HousekeepingSwitches::from_meta(vec![
+            ("recording_enabled:a".to_string(), Some("1".to_string())),
+            ("recording_enabled:b".to_string(), Some("0".to_string())),
+            ("recording_enabled:c".to_string(), None),
+            ("stream_qa_enabled:a".to_string(), Some("1".to_string())),
+            (
+                "recording_settings".to_string(),
+                Some("{\"retainSourceTs\":true}".to_string()),
+            ),
+        ]);
 
-    impl MetaStore for FakeMetaStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move { Ok(restream_sync::lock::lock(&self.values).get(key).cloned()) })
-        }
+        assert_eq!(switches.recording, HashSet::from(["a".to_string()]));
+        assert_eq!(switches.stream_qa, HashSet::from(["a".to_string()]));
+        assert!(switches.recording_settings.retain_source_ts);
     }
 
     #[tokio::test]
@@ -841,26 +815,18 @@ mod tests {
             .try_register_ingest("pipeline-1", "stream-one", "rtmp")
             .await
             .unwrap();
-        let catalog = FakePipelineStore {
-            pipelines: vec![Pipeline {
-                id: "pipeline-1".to_string(),
-                name: "Pipeline One".to_string(),
-                stream_key: "stream-one".to_string(),
-                input_source: Some("cam-1".to_string()),
-                srt_ingest_policy: None,
-            }],
-            error: None,
-        };
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::from([(
-                "recording_enabled:pipeline-1".to_string(),
-                "1".to_string(),
-            )])),
+        let switches = HousekeepingSwitches {
+            recording: HashSet::from(["pipeline-1".to_string()]),
+            ..Default::default()
         };
 
-        let commands = build_recording_reconcile_plan(&engine, &catalog, &store, 0)
-            .await
-            .unwrap();
+        let commands = build_recording_reconcile_plan(
+            &engine,
+            &[pipeline("pipeline-1", Some("cam-1"))],
+            &switches,
+            0,
+        )
+        .await;
 
         assert_eq!(
             commands,
@@ -876,48 +842,20 @@ mod tests {
     async fn recording_reconcile_plan_stops_disabled_active_recording() {
         let engine = MediaEngine::new();
         let _token = engine.register_recording("pipeline-1").await;
-        let catalog = FakePipelineStore {
-            pipelines: vec![Pipeline {
-                id: "pipeline-1".to_string(),
-                name: "Pipeline One".to_string(),
-                stream_key: "stream-one".to_string(),
-                input_source: None,
-                srt_ingest_policy: None,
-            }],
-            error: None,
-        };
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::new()),
-        };
 
-        let commands = build_recording_reconcile_plan(&engine, &catalog, &store, 0)
-            .await
-            .unwrap();
+        let commands = build_recording_reconcile_plan(
+            &engine,
+            &[pipeline("pipeline-1", None)],
+            &HousekeepingSwitches::default(),
+            0,
+        )
+        .await;
 
         assert_eq!(
             commands,
             vec![RecordingCommand::Stop {
                 pipeline_id: "pipeline-1".to_string(),
             }]
-        );
-    }
-
-    #[tokio::test]
-    async fn recording_reconcile_plan_propagates_pipeline_store_error() {
-        let engine = MediaEngine::new();
-        let catalog = FakePipelineStore {
-            pipelines: Vec::new(),
-            error: Some("catalog unavailable"),
-        };
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::new()),
-        };
-
-        let result = build_recording_reconcile_plan(&engine, &catalog, &store, 0).await;
-
-        assert_eq!(
-            result.err().map(|e| e.to_string()),
-            Some("catalog unavailable".to_string())
         );
     }
 }

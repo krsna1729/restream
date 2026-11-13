@@ -456,7 +456,8 @@ The output pass runs only when something asks for it:
 - a successful mutating HTTP request (one middleware covers every handler);
 - an engine lifecycle event (ingest connect or disconnect, egress stop);
 - a deadline the pass set itself (retry backoff end, ingest-disconnect grace
-  end);
+  end, a step that could not read its rows);
+- the end of an output's start or retries-exhausted task;
 - a backstop every 10 reconcile intervals.
 
 Passes are at least one interval apart (`RESTREAM_RECONCILE_INTERVAL_MS`).
@@ -464,9 +465,29 @@ A request after a quiet interval runs at once. A deadline only wakes the
 pass, which re-reads current state, so a stale deadline cannot act on old
 state. An egress error is not a trigger; the egress's stop is.
 
-Housekeeping that reads no outputs runs every interval: sessions, fabric
-sizing, recordings, idle HLS and file-ingest reaping. The pass does not manage
-shared stages; leases do.
+One slow dependency stalls only the entity that needs it:
+
+- Each output's start (rings, stages, the MoQ `ca` file, the egress task)
+  and retries-exhausted mark run in that output's own task. The pass skips
+  an output while its task runs; the task's end wakes the next pass. The job
+  row is written off the start path.
+- The pass and the other shared loops (housekeeping, scheduler, catalog
+  reload) reach SQLite only through `db::DeadlineDb` on a lifecycle pool of
+  their own, which API load cannot exhaust. Acquire, statements and busy
+  retries share one 3 s deadline; a read is dropped at it, and a write runs as
+  its own task, landing or failing as a unit. A step that cannot read skips
+  its convergence and the pass is retried after the gap, while the other
+  steps (input selection, HLS pulls, SRT calls, key state, topology, egress)
+  still run.
+- RTMP/SRT listener restarts and the dashboard listener's exit are handled
+  by a supervision task of their own, never between passes.
+
+Housekeeping that reads no outputs runs every interval in its own supervised
+task: sessions, log retention (in batches of at most 1000 rows per write),
+fabric sizing, recordings, stream checks, idle HLS and file-ingest reaping.
+A tick reads the pipelines and every pipeline's recording and stream-check
+switches in two statements. The pass does not manage shared stages; leases
+do.
 
 Failure isolation rules:
 

@@ -13,10 +13,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
+use crate::db::DeadlineDb;
 use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 
@@ -125,13 +125,19 @@ pub fn request_pass_for_event(
 /// Applies requested input selections from their persisted rows. The
 /// reconciler runs this first in a pass, so a manual failover waits only for
 /// a pass already in progress. A deleted pipeline has no input rows: no-op.
+/// Returns whether every selection was applied; one whose rows could not be
+/// read stays requested for the next pass.
 pub async fn apply_requested_selections(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     engine: &MediaEngine,
     requests: &ReconcileRequests,
-) {
+) -> bool {
+    let mut applied = true;
     for pipeline_id in requests.take_dirty_selections() {
-        match crate::db::list_pipeline_inputs(pool, &pipeline_id).await {
+        match db
+            .read(|pool| crate::db::list_pipeline_inputs(pool, &pipeline_id))
+            .await
+        {
             Ok(inputs) => {
                 if let Some(selected) = inputs.iter().find(|input| input.selected) {
                     engine
@@ -142,24 +148,26 @@ pub async fn apply_requested_selections(
             Err(error) => {
                 warn!(pipeline_id = %pipeline_id, err = %error, "DB error reading inputs; selection retried next pass");
                 requests.keep_dirty_selection(pipeline_id);
+                applied = false;
             }
         }
     }
+    applied
 }
 
 /// Converge runtime with the persisted topology: tear down deleted pipelines
 /// and stop egresses whose output row is gone. `outputs` are the rows this
-/// reconcile pass read.
-pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs: &[Output]) {
+/// reconcile pass read. Returns whether the pipeline rows could be read.
+pub async fn converge_topology(db: &DeadlineDb, engine: &MediaEngine, outputs: &[Output]) -> bool {
     // Snapshot runtime before reading rows. Runtime for a pipeline is created
     // only after its row commits, so an id seen here and missing from the rows
     // read below belongs to a deleted pipeline, never to a new one.
     let runtime_pipelines = engine.runtime_pipeline_ids().await;
-    let pipelines = match crate::db::list_pipelines(pool).await {
+    let pipelines = match db.read(crate::db::list_pipelines).await {
         Ok(rows) => rows.into_iter().map(|row| row.id).collect::<HashSet<_>>(),
         Err(error) => {
             warn!(err = %error, "DB error reading pipelines; topology not converged this pass");
-            return;
+            return false;
         }
     };
     // Only the reconciler registers egresses, always from its own output rows,
@@ -182,6 +190,7 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
     for pipeline_id in runtime_pipelines.difference(&pipelines) {
         engine.teardown_pipeline_runtime(pipeline_id).await;
     }
+    true
 }
 
 /// Release the ingest key state of inputs whose rows are gone.
@@ -192,16 +201,17 @@ pub async fn converge_topology(pool: &SqlitePool, engine: &MediaEngine, outputs:
 /// init to be empty, so without this pass the registry holds up to
 /// `max_init_bytes` per deleted fMP4 input until the process restarts.
 ///
-/// Returns the inputs whose key state was released.
+/// Returns the inputs whose key state was released; `None` when the input
+/// rows could not be read.
 pub async fn converge_ingest_key_state(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
-) -> Vec<String> {
-    let live: HashSet<String> = match crate::db::list_pipeline_input_ids(pool).await {
+) -> Option<Vec<String>> {
+    let live: HashSet<String> = match db.read(crate::db::list_pipeline_input_ids).await {
         Ok(ids) => ids,
         Err(error) => {
             warn!(err = %error, "DB error reading inputs; ingest key state not converged this pass");
-            return Vec::new();
+            return None;
         }
     };
     let mut released = Vec::new();
@@ -211,7 +221,7 @@ pub async fn converge_ingest_key_state(
             released.push(input_id);
         }
     }
-    released
+    Some(released)
 }
 
 /// Converge HLS pull inputs with their rows: an enabled `hls_pull` input has
@@ -224,20 +234,21 @@ pub async fn converge_ingest_key_state(
 /// costs no work while nothing changes.
 ///
 /// Returns the inputs this pass started or replaced: what a caller logs, and
-/// what a test asserts on — a second pass over unchanged rows starts nothing.
+/// what a test asserts on — a second pass over unchanged rows starts nothing;
+/// `None` when the rows could not be read.
 ///
 /// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
 /// stop before its runtime is torn down, and a pull task can never recreate
 /// the ring of a pipeline that is going away.
 pub async fn converge_pull_inputs(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
-) -> Vec<String> {
-    let pulls = match crate::db::list_pull_inputs(pool).await {
+) -> Option<Vec<String>> {
+    let pulls = match db.read(crate::db::list_pull_inputs).await {
         Ok(rows) => rows,
         Err(error) => {
             warn!(err = %error, "DB error reading pull inputs; pull inputs not converged this pass");
-            return Vec::new();
+            return None;
         }
     };
     let wanted = pulls
@@ -289,20 +300,24 @@ pub async fn converge_pull_inputs(
             started.push(input.id.clone());
         }
     }
-    started
+    Some(started)
 }
 
 /// Converge SRT caller inputs with their rows: the SRT server dials every
 /// enabled `srt_call` input and hangs up every other call. Like
 /// [`converge_pull_inputs`], unchanged rows cost a comparison.
 ///
-/// Returns the inputs whose call this pass started or replaced.
-pub async fn converge_srt_call_inputs(pool: &SqlitePool, engine: &MediaEngine) -> Vec<String> {
-    let rows = match crate::db::list_srt_call_inputs(pool).await {
+/// Returns the inputs whose call this pass started or replaced; `None` when
+/// the rows could not be read.
+pub async fn converge_srt_call_inputs(
+    db: &DeadlineDb,
+    engine: &MediaEngine,
+) -> Option<Vec<String>> {
+    let rows = match db.read(crate::db::list_srt_call_inputs).await {
         Ok(rows) => rows,
         Err(error) => {
             warn!(err = %error, "DB error reading SRT call inputs; calls not converged this pass");
-            return Vec::new();
+            return None;
         }
     };
     let wanted = rows
@@ -322,7 +337,7 @@ pub async fn converge_srt_call_inputs(pool: &SqlitePool, engine: &MediaEngine) -
     for input_id in &started {
         info!(input_id = %input_id, "SRT call input (re)dialled");
     }
-    started
+    Some(started)
 }
 
 #[cfg(test)]

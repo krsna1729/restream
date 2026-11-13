@@ -11,9 +11,10 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub const RECORDING_SETTINGS_META_KEY: &str = "recording_settings";
+pub const RECORDING_ENABLED_META_PREFIX: &str = "recording_enabled:";
 
 pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
-    format!("recording_enabled:{pipeline_id}")
+    format!("{RECORDING_ENABLED_META_PREFIX}{pipeline_id}")
 }
 
 pub async fn load_recording_enabled(meta_store: &dyn MetaStore, pipeline_id: &str) -> bool {
@@ -115,20 +116,11 @@ pub async fn spawn_recording_task(
 
 pub async fn apply_recording_commands(
     engine: Arc<MediaEngine>,
-    meta_store: &dyn MetaStore,
+    recording_settings: &RecordingSettings,
     media_dir: &str,
     commands: Vec<RecordingCommand>,
     metadata: Option<RecordingMetadataReporter>,
 ) {
-    let needs_settings = commands
-        .iter()
-        .any(|command| matches!(command, RecordingCommand::Start { .. }));
-    let recording_settings = if needs_settings {
-        Some(load_recording_settings(meta_store).await)
-    } else {
-        None
-    };
-
     for command in commands {
         match command {
             RecordingCommand::Start {
@@ -142,7 +134,7 @@ pub async fn apply_recording_commands(
                     pipeline_id,
                     input_source,
                     media_dir.to_string(),
-                    recording_settings.clone().unwrap_or_default(),
+                    recording_settings.clone(),
                     metadata.clone(),
                 )
                 .await;
@@ -360,18 +352,13 @@ mod tests {
     async fn apply_recording_commands_starts_and_stops_recordings() {
         let engine = Arc::new(MediaEngine::new());
         let media_dir = unique_test_media_dir("recording-commands");
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::from([(
-                RECORDING_SETTINGS_META_KEY.to_string(),
-                "{\"retainSourceTs\":true}".to_string(),
-            )])),
-            fail_keys: HashMap::new(),
-        };
         let _existing = engine.register_recording("pipeline-stop").await;
 
         apply_recording_commands(
             engine.clone(),
-            &store,
+            &RecordingSettings {
+                retain_source_ts: true,
+            },
             media_dir.to_str().unwrap_or_default(),
             vec![
                 RecordingCommand::Start {
@@ -424,51 +411,6 @@ mod tests {
         assert_eq!(row.status, RecordingPhase::Ready.as_str());
         assert_eq!(row.temp_path.as_deref(), Some("/tmp/recording-meta.ts"));
         assert_eq!(row.final_path.as_deref(), Some("/tmp/recording-meta.mp4"));
-    }
-
-    #[tokio::test]
-    async fn apply_recording_commands_skips_settings_load_when_only_stopping() {
-        struct CountingMetaStore {
-            get_meta_calls: std::sync::atomic::AtomicUsize,
-        }
-
-        impl MetaStore for CountingMetaStore {
-            fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-                self.get_meta_calls
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let message = format!("unexpected get_meta call for {key}");
-                Box::pin(async move { Err(MetaLookupError::new(message)) })
-            }
-        }
-
-        let engine = Arc::new(MediaEngine::new());
-        let media_dir = unique_test_media_dir("recording-commands-stop-only");
-        let store = CountingMetaStore {
-            get_meta_calls: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let _existing = engine.register_recording("pipeline-stop-only").await;
-
-        apply_recording_commands(
-            engine.clone(),
-            &store,
-            media_dir.to_str().unwrap_or_default(),
-            vec![RecordingCommand::Stop {
-                pipeline_id: "pipeline-stop-only".to_string(),
-            }],
-            None,
-        )
-        .await;
-
-        assert!(!engine.is_recording_active("pipeline-stop-only").await);
-        assert_eq!(
-            store
-                .get_meta_calls
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "stop-only commands must not trigger a recording-settings load"
-        );
-
-        let _ = std::fs::remove_dir_all(media_dir);
     }
 
     fn unique_test_media_dir(prefix: &str) -> PathBuf {

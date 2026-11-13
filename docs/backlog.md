@@ -19,11 +19,10 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
-- [Q-127 reconciler deadlines and listener supervision](#q-127-correctness-opus-the-reconciler-never-stalls-on-one-dependency-and-listeners-restart-without-it)
 - [Q-129 non-blocking stdout/stderr logging](#q-129-correctness-opus-logging-never-blocks-the-thread-that-logs)
 - [Q-130 SRT loop without engine-lock awaits](#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)
 - [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
-- [Q-132 SQLite deadline executor](#q-132-correctness-opus-shared-loops-reach-sqlite-only-through-a-deadline-executor)
+- [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
@@ -169,30 +168,6 @@ the [assurance roadmap](assurance-roadmap.md).
   Disabling an existing boundary, for example the per-peer SRT containment,
   must fail the matching mode.
 
-### Q-127 [correctness] [opus] The reconciler never stalls on one dependency, and listeners restart without it
-- Goal: one output's slow SQLite call or file read cannot hold the
-  reconciler pass for every pipeline, and a listener fault is handled while
-  a pass runs.
-  - RTMP/SRT `restart_if_due` and the HTTP-exit arm
-    (`src/infrastructure/bootstrap/runtime.rs`) are polled only between
-    passes (`bootstrap/reconcile.rs`), so a protocol whose listener faults
-    during a stalled pass stays down for the whole stall. Move them into
-    their own `spawn_supervised` task.
-  - The pass and housekeeping run back to back with no per-step deadline,
-    on the pool the API shares (10 connections, 30 s acquire, 30 s busy,
-    `with_busy_retry` up to 8×). Move `create_job` into `EgressTask::run`.
-    Put a deadline and a `wake_at` retry on `mark_output_retries_exhausted`
-    and each pass step. Replace housekeeping's 2N `get_meta` with one bulk
-    read, and run housekeeping (prune, recording/QA plans) in its own
-    supervised task, pruning `app_logs` in `LIMIT` batches. Pull, SRT-call
-    and key-state convergence also run when `list_outputs` fails.
-  - The MoQ CA file read (`egress_moq_fabric.rs`) is awaited in the pass;
-    move it to the per-output task or put a deadline on it.
-- Gates: with every pool connection held by API reads, another pipeline's
-  output starts within its deadline; a listener faulted while a pass is
-  stalled restarts within its 1–30 s backoff; an isolation-audit row for the
-  reconciler names both tests.
-
 ### Q-129 [correctness] [opus] Logging never blocks the thread that logs
 - Goal: the stdout/stderr tracing writer (`SplitWriter` in
   `src/logging/mod.rs`) is synchronous; only the file sink is
@@ -245,22 +220,22 @@ the [assurance roadmap](assurance-roadmap.md).
   sampler; an output whose planning panics leaves the later outputs started
   and stopped as wanted in the same pass; clippy `-D warnings` with the ban.
 
-### Q-132 [correctness] [opus] Shared loops reach SQLite only through a deadline executor
-- Goal: a `Db::deadline(d)`-style executor in `src/db/`, applied outside
-  `with_busy_retry` (which multiplies the 30 s busy wait up to 8×).
-  `disallowed-methods` bans sqlx query execution (`execute`, `fetch*`) and
-  `Pool::{acquire, begin, connect_with}` outside `src/db/`. Repository
-  functions take a deadline: the shared loops (reconciler, topology, egress
-  start, housekeeping, recording/QA, scheduler, catalog reload, runtime-event
-  persistence) pass seconds with a `wake_at` retry, API handlers a long
-  default. Lifecycle work gets capacity API load cannot take (a small second
-  pool or a short acquire deadline). A session check that hits a pool error
-  keeps the cached session and answers 503 instead of logging the operator
-  out (`api/state.rs`).
-- Gates: clippy `-D warnings` with the ban; with every pool connection held
-  by API reads, each shared-loop call returns at its deadline and the next
-  pass retries, while another pipeline's connect, disconnect and probe answer
-  stay on time; a session survives a pool timeout.
+### Q-132 [correctness] [opus] API handlers reach SQLite under a deadline, and a session survives a pool timeout
+- Goal: the shared loops (output pass, housekeeping, egress job rows, the
+  scheduler's own rows, catalog reload) reach SQLite only through
+  `db::DeadlineDb` on the lifecycle pool. What remains:
+  - API handlers, and the services the scheduler's actions call (output
+    start/stop requests, file-ingest start/stop), still wait on the main
+    pool's 30 s acquire and 30 s busy timeout, which `with_busy_retry`
+    multiplies up to 8×. Route their repository calls through a `DeadlineDb`
+    with a long default.
+  - A session check that hits a pool error evicts the cached session
+    (`api/state.rs`), logging the operator out. Keep it and answer 503.
+  - A `disallowed-methods` ban on sqlx execution outside `src/db/` is not
+    planned: clippy's allow is per lint, so exempting `src/db/` would also
+    drop its `Row::get` and `Mutex::lock` bans (`src/db/deadline.rs`).
+- Gates: with every main-pool connection held, an API read answers at its
+  deadline; a session survives a pool timeout.
 
 ### Q-133 [correctness] [opus] Fabric runtimes are built outside the per-protocol registry lock
 - Goal: `retain_*_fabric_runtime` (`engine_*_egress_fabric.rs`) reads the
