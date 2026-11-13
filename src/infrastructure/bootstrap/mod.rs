@@ -19,6 +19,7 @@
 //! │  TS recording writer      MemoryQueue → .ts recording file          │
 //! │  FFmpeg child pipes       ring → stdin; stdout → ring               │
 //! │  Stream check readers     FFmpeg child → thumbnails, f32 audio      │
+//! │  Log writers              bounded queue → stdout, stderr, log file  │
 //! └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -77,7 +78,11 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         .map_err(|error| format!("failed to connect to the SQLite database: {error}"))?;
     let lifecycle = db::DeadlineDb::new(lifecycle_pool.clone(), db::SHARED_LOOP_DEADLINE);
 
-    let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color);
+    let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color)?;
+    supervised_task::spawn_supervised("app_log_drain", {
+        let drain = logging_handles.history_drain.clone();
+        move || drain.clone().run()
+    });
     info!(
         event_class = "lifecycle",
         event_type = "restream.config.effective",

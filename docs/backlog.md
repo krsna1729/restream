@@ -19,7 +19,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
-- [Q-129 non-blocking stdout/stderr logging](#q-129-correctness-opus-logging-never-blocks-the-thread-that-logs)
 - [Q-130 SRT loop without engine-lock awaits](#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)
 - [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
@@ -160,26 +159,15 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-126 [correctness] [opus] Live fault gates prove siblings are unaffected
 - Goal: contract modes that inject one fault into one entity and assert on
   its siblings. The faults are a panic, a stall, malformed media, a stalled
-  reader, a stalled database and an Owner fault. The siblings checked are a
-  sibling output of the same pipeline, a sibling input of the same pipeline
-  and another pipeline: each keeps media flowing without a gap, and its
-  status stays healthy.
+  reader, a stalled database, a stdout collector that never reads, and an
+  Owner fault. The siblings checked are a sibling output of the same
+  pipeline, a sibling input of the same pipeline and another pipeline: each
+  keeps media flowing without a gap, and its status stays healthy. With the
+  stalled stdout, an SRT publisher also connects and disconnects on time
+  while `logging.consoleDropped` rises.
 - Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
   Disabling an existing boundary, for example the per-peer SRT containment,
   must fail the matching mode.
-
-### Q-129 [correctness] [opus] Logging never blocks the thread that logs
-- Goal: the stdout/stderr tracing writer (`SplitWriter` in
-  `src/logging/mod.rs`) is synchronous; only the file sink is
-  `non_blocking`. A stalled log collector fills the pipe and `write(2)`
-  blocks whichever thread logs next: the SRT Tokio loop (every disconnect
-  logs), the reconciler, the runtime-event consumer, Owner and shard
-  threads. Use `tracing_appender::non_blocking` in lossy mode with a drop
-  counter. Count the app-log `try_send` drops too, supervise that drain and
-  the recording-metadata writer, and bound the latter's queue.
-- Gates: with a stdout writer that never returns, an SRT publisher connects
-  and disconnects on time while the drop counter rises; a panicked drain
-  restarts; the isolation-audit catalog row stops relying on stdout.
 
 ### Q-130 [correctness] [opus] The SRT lifecycle loop awaits no engine lock, and selection is per pipeline
 - Goal: the loop shared by every SRT peer (`srt/tokio_ingress.rs`) still
@@ -215,10 +203,17 @@ the [assurance roadmap](assurance-roadmap.md).
     `reap(child, grace)` helper (from `reap_external_child`) and `run_tool`;
     `disallowed-methods` bans `tokio::process::Child::{wait,
     wait_with_output}` and `tokio::process::Command::output` elsewhere.
+  - The recording-metadata writer (`infrastructure/recording_metadata.rs`)
+    is a bare `tokio::spawn` over an unbounded channel: a panic ends it
+    silently and a stalled SQLite grows its queue without limit. Supervise
+    it and bound the queue; a full queue must not lose a `Finalized` or
+    `Failed` row silently (the recording would stay `recording` in SQLite).
 - Gates: a stalled occurrence leaves another pipeline's due occurrence run,
   not skipped; a pool timeout during housekeeping stops no recording or QA
   sampler; an output whose planning panics leaves the later outputs started
-  and stopped as wanted in the same pass; clippy `-D warnings` with the ban.
+  and stopped as wanted in the same pass; a panicked recording-metadata
+  writer restarts and its queue stays within its bound while SQLite stalls;
+  clippy `-D warnings` with the ban.
 
 ### Q-132 [correctness] [opus] API handlers reach SQLite under a deadline, and a session survives a pool timeout
 - Goal: the shared loops (output pass, housekeeping, egress job rows, the
