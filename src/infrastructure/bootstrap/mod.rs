@@ -40,6 +40,8 @@ mod reconcile;
 mod runtime;
 mod shutdown;
 mod supervised_task;
+#[cfg(test)]
+mod test_support;
 
 pub use auth::initialize_auth_for_test;
 

@@ -1,9 +1,10 @@
 //! Housekeeping: the periodic work that reads no outputs — session and log
 //! pruning, fabric sizing, recordings, stream checks, idle HLS segmenters and
 //! file-ingest reaping. It runs in a task of its own, so a stall here never
-//! delays an output pass or a listener restart, and its database calls are
-//! bounded by its [`DeadlineDb`]: each tick reads the pipelines and every
-//! pipeline's switches in two statements, whatever the pipeline count.
+//! delays an output pass or a listener restart. Its reads are bounded by its
+//! [`DeadlineDb`]: each tick reads the pipelines and every pipeline's
+//! switches in two statements, whatever the pipeline count. Its prune writes
+//! wait for their outcome, which stalls only housekeeping.
 
 use std::collections::HashSet;
 use std::sync::Arc;

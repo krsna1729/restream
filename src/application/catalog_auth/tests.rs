@@ -266,12 +266,43 @@ async fn the_index_refuses_every_key_until_it_is_loaded() {
     admit(&auth, PipelineAccessMode::RtmpPlay, "live", "10.0.0.30").unwrap();
 }
 
-#[tokio::test]
-async fn a_failed_startup_load_is_an_error() {
+/// The startup load retries a failing (or timed-out) catalog read with
+/// backoff instead of failing startup, and the index is filled once a read
+/// succeeds.
+#[tokio::test(start_paused = true)]
+async fn a_failing_startup_load_retries_until_a_load_succeeds() {
     let source = Arc::new(FakeCatalog::with(vec![keyed("live")]));
     source.failing.store(true, Ordering::SeqCst);
+    let catalog = CatalogAuth::new(source.clone());
+    let load = tokio::spawn({
+        let catalog = catalog.clone();
+        async move { catalog.load().await }
+    });
 
-    assert!(CatalogAuth::new(source).load().await.is_err());
+    let retried = tokio::time::timeout(Duration::from_secs(60), async {
+        while source.attempts.load(Ordering::SeqCst) < 3 && !load.is_finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        retried.is_ok() && !load.is_finished(),
+        "a failed startup load gave up instead of retrying"
+    );
+    source.failing.store(false, Ordering::SeqCst);
+
+    load.await.unwrap().unwrap();
+    assert!(catalog.snapshot().get("live").is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failing_startup_load_ends_with_its_error_at_shutdown() {
+    let source = Arc::new(FakeCatalog::with(vec![keyed("live")]));
+    source.failing.store(true, Ordering::SeqCst);
+    let catalog = CatalogAuth::new(source);
+    catalog.shutdown();
+
+    assert!(catalog.load().await.is_err());
 }
 
 /// A refresh whose reload fails keeps the previous index in force (every

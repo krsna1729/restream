@@ -82,29 +82,36 @@ async fn a_read_returns_at_its_deadline_while_every_connection_is_held() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// A write behind another writer's lock answers at its deadline, is not
-/// cancelled, and lands once the lock is released.
+/// A write behind another writer's lock is not given up at the deadline:
+/// it answers with its outcome once the lock is released.
 #[tokio::test]
-async fn a_write_behind_a_held_write_lock_returns_at_its_deadline_and_lands_after_release() {
+async fn a_write_behind_a_held_write_lock_answers_with_its_outcome_after_release() {
     let (api, db, dir) = file_pools("write").await;
     let lock = hold_write_lock(&api).await;
 
-    let answer = tokio::time::timeout(
-        ANSWERED_WITHIN,
-        db.write(|pool| async move { crate::db::set_meta(&pool, "k", "v").await }),
-    )
-    .await
-    .expect("the write answers at its deadline, not the busy timeout");
-    assert!(answer.is_err(), "{answer:?}");
+    let write = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(|pool| async move { crate::db::set_meta(&pool, "k", "v").await })
+                .await
+        }
+    });
+    tokio::time::sleep(DEADLINE * 3).await;
+    assert!(
+        !write.is_finished(),
+        "a write gave up at its deadline while it could still land"
+    );
 
     release_write_lock(lock).await;
-    tokio::time::timeout(ANSWERED_WITHIN, async {
-        while crate::db::get_meta(&api, "k").await.unwrap().is_none() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the timed-out write still lands");
+    let answer = tokio::time::timeout(ANSWERED_WITHIN, write)
+        .await
+        .expect("the write answers once the lock is released")
+        .unwrap();
+    assert!(answer.is_ok(), "{answer:?}");
+    assert_eq!(
+        crate::db::get_meta(&api, "k").await.unwrap().as_deref(),
+        Some("v")
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -138,33 +145,5 @@ async fn log_retention_deletes_in_batches_of_at_most_the_batch_size() {
         "one statement per batch of at most 10 rows"
     );
     assert_eq!(count(&api, "SELECT COUNT(*) FROM app_logs").await, 3);
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-/// Housekeeping's retention behind another writer's lock answers at its
-/// deadline, so the loop carries on; once the lock is released the next
-/// prune converges.
-#[tokio::test]
-async fn log_retention_returns_at_its_deadline_behind_a_write_lock_and_converges_after() {
-    let (api, db, dir) = file_pools("retention-lock").await;
-    insert_logs(&api, 5, "2000-01-01T00:00:00Z").await;
-    let lock = hold_write_lock(&api).await;
-
-    let answer = tokio::time::timeout(
-        ANSWERED_WITHIN,
-        crate::db::prune_app_logs(&db, 7, crate::db::APP_LOG_RETENTION_BATCH),
-    )
-    .await
-    .expect("retention answers at its deadline, not the busy timeout");
-    assert!(answer.is_err(), "{answer:?}");
-
-    release_write_lock(lock).await;
-    tokio::time::timeout(ANSWERED_WITHIN, async {
-        while count(&api, "SELECT COUNT(*) FROM app_logs").await > 0 {
-            let _ = crate::db::prune_app_logs(&db, 7, crate::db::APP_LOG_RETENTION_BATCH).await;
-        }
-    })
-    .await
-    .expect("retention converges once the lock is released");
     let _ = std::fs::remove_dir_all(dir);
 }

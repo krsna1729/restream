@@ -227,8 +227,9 @@ the [assurance roadmap](assurance-roadmap.md).
   - API handlers, and the services the scheduler's actions call (output
     start/stop requests, file-ingest start/stop), still wait on the main
     pool's 30 s acquire and 30 s busy timeout, which `with_busy_retry`
-    multiplies up to 8×. Route their repository calls through a `DeadlineDb`
-    with a long default.
+    multiplies up to 8×. Route their reads through a `DeadlineDb` with a long
+    default; writes stay awaited to their outcome (the rule in
+    `src/db/deadline.rs`).
   - A session check that hits a pool error evicts the cached session
     (`api/state.rs`), logging the operator out. Keep it and answer 503.
   - A `disallowed-methods` ban on sqlx execution outside `src/db/` is not

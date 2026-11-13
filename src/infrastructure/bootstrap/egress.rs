@@ -120,8 +120,10 @@ impl EgressReconciler {
     }
 
     /// At shutdown: stops taking work and waits up to `within` for the
-    /// output tasks still running, so none registers an egress after the
-    /// runtime's cleanup.
+    /// output tasks still running. A start registers its egress before its
+    /// slow steps (the MoQ `ca` read, the kTLS probe), so cleanup's cancel
+    /// reaches almost every one; a start still before registration after
+    /// `within` may register after cleanup and run until the process exits.
     pub async fn finish(&self, within: Duration) {
         self.tasks.close();
         let _ = tokio::time::timeout(within, self.tasks.wait()).await;
@@ -138,6 +140,22 @@ impl EgressReconciler {
             // Its task decides; the task's end wakes the next pass.
             if self.in_flight.contains(&output.id) {
                 continue;
+            }
+            // Its failures end here, and only here: from the row this pass
+            // read. A mark that landed after this pass read the rows leaves
+            // them tracked, so the stale row decides `MarkFailed` again, not
+            // a start; the next pass reads the mark and clears them, so the
+            // operator's next Start is a fresh attempt.
+            if output.retries_exhausted
+                && self
+                    .starter
+                    .last_failed
+                    .lock()
+                    .await
+                    .remove(&output.id)
+                    .is_some()
+            {
+                engine.clear_egress_retry_state(&output.id).await;
             }
             let snapshot =
                 load_output_runtime_snapshot(engine, output, tuning.ingest_disconnect_grace_ms)
@@ -252,9 +270,10 @@ impl EgressReconciler {
 }
 
 /// Records that the output used up its retries; restarts stop until the
-/// operator starts or stops it. Runs in the output's own task: a write that
-/// misses its deadline still lands, and the pass its claim wakes re-reads
-/// the row (and marks again if it did not land).
+/// operator starts or stops it. Runs in the output's own task and waits for
+/// the write's outcome, so the claim covers it: no second mark is issued
+/// while one is pending. The pass that reads the marked row clears its
+/// failures; one that fails is marked again by the pass the claim wakes.
 async fn mark_retries_exhausted(
     starter: EgressStarter,
     runtime_state: Arc<StateHub>,
@@ -269,8 +288,6 @@ async fn mark_retries_exhausted(
         .await
     {
         Ok(()) => {
-            starter.last_failed.lock().await.remove(&output.id);
-            starter.engine.clear_egress_retry_state(&output.id).await;
             runtime_state.mark_changed();
             warn!(
                 correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
@@ -293,7 +310,9 @@ async fn mark_retries_exhausted(
 
 /// The attempt's job row, written off the start path: created in a task of
 /// its own when the attempt starts and finished, after the create, when the
-/// attempt ends. Neither the pass nor the egress task waits on the database.
+/// attempt ends. Neither the pass nor the egress task waits on the database;
+/// each statement is a [`DeadlineDb::write`], so it takes one of the
+/// executor's write permits only while it runs.
 pub(super) struct AttemptJob {
     finish: tokio::sync::oneshot::Sender<(JobStatus, String)>,
 }
@@ -302,20 +321,34 @@ impl AttemptJob {
     fn begin(db: &DeadlineDb, job_id: String, pipeline_id: String, output_id: String) -> Self {
         let (finish, finished) = tokio::sync::oneshot::channel::<(JobStatus, String)>();
         let started_at = chrono::Utc::now().to_rfc3339();
-        db.detached(move |pool| async move {
-            let _ = crate::db::create_job(
-                &pool,
-                &job_id,
-                &pipeline_id,
-                &output_id,
-                JobStatus::Running,
-                &started_at,
-            )
-            .await;
+        let db = db.clone();
+        tokio::spawn(async move {
+            let create = {
+                let job_id = job_id.clone();
+                db.write(move |pool| async move {
+                    crate::db::create_job(
+                        &pool,
+                        &job_id,
+                        &pipeline_id,
+                        &output_id,
+                        JobStatus::Running,
+                        &started_at,
+                    )
+                    .await
+                })
+            };
+            if let Err(err) = create.await {
+                warn!(job_id = %job_id, error = %err, "failed to create the attempt's job row");
+            }
             // An attempt dropped without an end (process exit) leaves the
             // row running, for startup's `reset_running_jobs`.
             if let Ok((status, ended_at)) = finished.await {
-                let _ = crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await;
+                let finish = db.write(move |pool| async move {
+                    crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await
+                });
+                if let Err(err) = finish.await {
+                    warn!(error = %err, "failed to finish the attempt's job row");
+                }
             }
         });
         Self { finish }
@@ -673,3 +706,6 @@ pub(super) fn next_output_job_id(output_id: &str) -> String {
         restream_engine::correlation_id::next_correlation_id("attempt")
     )
 }
+
+#[cfg(test)]
+mod tests;

@@ -192,11 +192,32 @@ impl CatalogAuth {
         self.shutdown.cancel();
     }
 
-    /// The startup load, before any ingest listener starts. Its error fails
-    /// startup rather than leaving an index that refuses every key.
+    /// The startup load, before any ingest listener starts: retried with
+    /// backoff until it succeeds, each failure logged. A listener must not
+    /// admit against an empty index, and one slow read at boot (a cold disk,
+    /// an outside tool holding the lock) must not exit the process. Ends
+    /// with the last error only at [`Self::shutdown`].
     pub async fn load(&self) -> Result<(), PipelineStoreError> {
-        let ticket = self.request();
-        self.reload(ticket).await
+        let mut delay = RETRY_INITIAL_DELAY;
+        loop {
+            let ticket = self.request();
+            let error = match self.reload(ticket).await {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            };
+            warn!(
+                event_class = "lifecycle",
+                event_type = "restream.catalog_auth.load_failed",
+                %error,
+                retry_in_ms = delay.as_millis() as u64,
+                "the ingest admission index could not load at startup; retrying",
+            );
+            tokio::select! {
+                () = self.shutdown.cancelled() => return Err(error),
+                () = tokio::time::sleep(delay) => {}
+            }
+            delay = (delay * 2).min(RETRY_MAX_DELAY);
+        }
     }
 
     pub fn snapshot(&self) -> Arc<CatalogAuthSnapshot> {

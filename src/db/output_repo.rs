@@ -130,12 +130,13 @@ pub async fn get_output(
     .await
 }
 
+/// Every output, in creation order.
 pub async fn list_outputs(
     pool: impl sqlx::SqliteExecutor<'_>,
 ) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config FROM outputs",
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, retries_exhausted, config FROM outputs ORDER BY rowid ASC",
         &[],
     )
     .await

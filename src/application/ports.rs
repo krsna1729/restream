@@ -83,12 +83,6 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-impl From<crate::db::DeadlineError> for StoreError {
-    fn from(error: crate::db::DeadlineError) -> Self {
-        Self::new(error.to_string())
-    }
-}
-
 pub type PipelineStoreError = StoreError;
 
 pub type IngestLookupError = StoreError;

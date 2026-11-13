@@ -142,9 +142,10 @@ async fn run_occurrence(
     schedule: &Schedule,
     occurrence_ms: i64,
 ) {
-    // Recorded first: a slow action must not be started twice. Unrecorded
-    // (a database past its deadline), it is not started: the next tick
-    // re-reads the row and runs it then, unless the late write landed.
+    // Recorded first: a slow action must not be started twice. The record
+    // is awaited to its outcome (behind another writer this stalls only the
+    // scheduler); only a record that failed skips the action, and then the
+    // row still says the occurrence is due, so the next tick runs it.
     if let Err(error) = record_run(db, &schedule.id, occurrence_ms, "running".to_string()).await {
         warn!(schedule = %schedule.id, err = %error, "could not record a schedule run; retried next tick");
         return;
@@ -161,8 +162,7 @@ async fn run_occurrence(
     audit_run(state, schedule, ok).await;
 }
 
-/// Records an occurrence's outcome as a write that lands even when its
-/// deadline passes.
+/// Records an occurrence's outcome, awaited to its outcome.
 async fn record_run(
     db: &DeadlineDb,
     id: &str,
@@ -178,8 +178,8 @@ async fn record_run(
 
 /// Looks for due events every `tick` and runs them; an occurrence missed by
 /// more than the grace (the engine was down) is recorded as skipped. Its
-/// own reads and writes go through `db`, the shared loops' deadline
-/// executor.
+/// reads and writes go through `db`, the shared loops' executor: reads end
+/// at the deadline, writes are awaited to their outcome.
 pub async fn run_scheduler(
     state: Arc<AppState>,
     db: DeadlineDb,
