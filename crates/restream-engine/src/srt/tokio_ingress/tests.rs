@@ -166,3 +166,123 @@ async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
     drain.await.unwrap();
     assert!(exit.quiescent, "{exit:?}");
 }
+
+/// A publisher's `Probe` then its `Disconnected`, back to back on the loop:
+/// its task applies and answers the probe, then finishes the attempt. The
+/// loop answers nothing itself, the Owner gets exactly one answer, nothing
+/// follows the finish, and no lease or registration is left. One runtime
+/// thread: the publisher's task first runs after both events, with its queue
+/// already closed, so it must still apply what was queued before finishing.
+#[tokio::test(flavor = "current_thread")]
+async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
+    use super::super::ingress_test_support::TestAuth;
+    use crate::ingest_auth::AuthenticatedPipeline;
+    use restream_core::metadata::VideoMeta;
+    use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+
+    let peer = native_peer().await;
+    let engine = Arc::new(MediaEngine::new());
+    let server = Arc::new(SrtServer::new(
+        TestAuth::new(&[]),
+        engine.clone(),
+        Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
+        Arc::new(SrtIngestPolicyStore::new(
+            SrtGlobalIngestConfig::default(),
+            &[],
+        )),
+    ));
+    let remote = SocketAddr::from(([127, 0, 0, 1], 9));
+    let (session, _media) = server
+        .start_publisher(
+            remote,
+            AuthenticatedPipeline {
+                id: "pipe".to_string(),
+                input_id: "input".to_string(),
+                selected: true,
+            },
+            "key".to_string(),
+        )
+        .await
+        .unwrap();
+    let ingest = session.ingest.clone();
+    let identity = ProbeIdentity {
+        attempt_id: session.lease.registration().attempt_id,
+        revision: 1,
+    };
+    let (handle, receivers, _events) = SrtIngressHandle::test_channels(1);
+    let mut ingress = Ingress {
+        handle,
+        pending_command: None,
+    };
+    let mut sessions = HashMap::new();
+    let mut calls = CallSupervisor::new();
+    let mut admissions = Admissions::new(4);
+    let (mut peers, mut answers) = PeerWork::new();
+    sessions.insert(peer, Session::Publish(peers.attach(&server, peer, session)));
+
+    let probe = DemuxProbe {
+        video: Some(VideoMeta {
+            codec: "h264".to_string(),
+            fps: 30.0,
+            ..VideoMeta::default()
+        }),
+        video_sequence_header: None,
+        video_track_count: 1,
+        audio_tracks: Vec::new(),
+    };
+    let events = [
+        SrtIngressEvent::Probe {
+            logical_peer: peer,
+            identity,
+            probe: Box::new(probe),
+        },
+        SrtIngressEvent::Disconnected {
+            peer: remote,
+            logical_peer: peer,
+            reason: "test".to_string(),
+        },
+    ];
+    for event in events {
+        assert!(
+            server
+                .handle_ingress_event(
+                    &mut ingress,
+                    &mut sessions,
+                    &mut calls,
+                    &mut admissions,
+                    event,
+                )
+                .is_ok()
+        );
+    }
+    assert!(
+        receivers[0].is_empty() && ingress.pending_command.is_none(),
+        "the publisher's task answers its probe, not the loop"
+    );
+
+    peers.drain().await;
+    let answer = answers.try_recv().expect("the probe was answered");
+    assert_eq!(answer.logical_peer, peer);
+    assert_eq!(answer.identity, identity);
+    assert!(answer.ring.is_some(), "the selected input's ring");
+    assert!(
+        answers.try_recv().is_err(),
+        "exactly one answer, and none after the finish"
+    );
+    assert!(
+        ingest.metadata().tracks_authoritative,
+        "the probe was applied while the attempt was current"
+    );
+    assert!(engine.ingests.sessions.read().await.is_empty());
+    assert!(engine.ingests.cancel_tokens.read().await.is_empty());
+    assert!(engine.ingests.active.read().await.is_empty());
+    assert!(engine.ingests.selection.is_empty());
+    assert_eq!(
+        engine
+            .recent_ingest_outcome("pipe")
+            .await
+            .and_then(|outcome| outcome.failure_phase),
+        Some("disconnect".to_string()),
+        "finished in order, not released as abandoned"
+    );
+}

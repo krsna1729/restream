@@ -19,7 +19,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
-- [Q-130 SRT loop without engine-lock awaits](#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)
 - [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
@@ -168,22 +167,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
   Disabling an existing boundary, for example the per-peer SRT containment,
   must fail the matching mode.
-
-### Q-130 [correctness] [opus] The SRT lifecycle loop awaits no engine lock, and selection is per pipeline
-- Goal: the loop shared by every SRT peer (`srt/tokio_ingress.rs`) still
-  awaits engine locks inline: `start_caller` registers on the loop,
-  `apply_probe` and `finish_publisher` take `selection_lock` and the ingest
-  maps, `fold_telemetry` reads `sessions`, `close_deleted_sessions` reads
-  `pipelines`. Route `start_caller` through `Admissions`; run `apply_probe`
-  and `finish_publisher` in per-peer tasks that answer through a join set;
-  keep the `Arc<ActiveIngest>` in `PublisherSession` so telemetry writes
-  `metadata.quality` with no lock; `close_deleted_sessions` uses `try_read`
-  and skips a tick. Amortize the tracked-IP eviction in `security.rs` that
-  runs on the loop. (Selection is already per pipeline: `ingests.selection`.)
-- Gates: with one peer's probe application stalled on an engine lock, the
-  loop answers another peer's probe and finishes its disconnect on time; with
-  `ingests.sessions` held for writing, the loop answers another peer's probe
-  inside the Owner's 2 s probe hold.
 
 ### Q-131 [correctness] [opus] Scheduler, recording and planning faults stay with their own entity
 - Goal:

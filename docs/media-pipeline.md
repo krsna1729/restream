@@ -472,14 +472,20 @@ lifecycle and probe events (dotted).
   cookie, so a CONCLUSION comes from an address that received the
   listener's reply. It applies the input's latency and encryption.
   Tokio then checks IP bans, pipeline authentication, duplicate publishers and
-  read targets; a rejection disconnects that peer. The lookup and the
-  registration run off the session loop, one task per connecting peer
-  (`crates/restream-engine/src/srt/tokio_ingress/admission.rs`), so a slow
-  lookup or a contended registration delays only that peer's admission.
-  Probe application, publisher teardown (`finish_publisher`), telemetry
-  folding, `srt_call` caller starts and deleted-pipeline checks still await
-  engine locks on the loop
-  ([Q-130](backlog.md#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)).
+  read targets; a rejection disconnects that peer. The session loop shared by
+  every peer awaits no engine lock. The lookup and the registration run off
+  it, one task per connecting peer, and so does an `srt_call` caller's
+  registration (`crates/restream-engine/src/srt/tokio_ingress/admission.rs`),
+  so a slow lookup or a contended registration delays only that peer's
+  admission. An attached publisher's probe applications and its finish run
+  in that publisher's own task, in event order
+  (`crates/restream-engine/src/srt/tokio_ingress/peer_work.rs`): a stalled
+  probe application delays only its own peer. Receive-quality telemetry
+  writes the publisher's own ingest state, and the deleted-pipeline check
+  skips a tick while the ring map is being written. Ingest selection is
+  serialized per pipeline (`ingests.selection`, keyed by pipeline id), so a
+  holder stuck on one pipeline delays no other pipeline's registration,
+  probe or disconnect.
   The lookup has a 5 s deadline (expiry disconnects the peer); registration
   has none. In flight are at most `RESTREAM_SRT_MAX_PEERS_PER_IP` admissions
   per client IP and the Owner's peer table size (srt-rs `max_peers`, 4096)
@@ -491,8 +497,9 @@ lifecycle and probe events (dotted).
   lookup (logged at warn). A task is never aborted, because registration
   precedes its result. A peer that disconnects meanwhile is marked gone: its
   task registers nothing once its lookup answers and finishes a registration
-  that raced the mark itself, and the loop finishes anything that raced even
-  that, so a reconnect on the same key is not refused as a duplicate.
+  that raced the mark itself, and anything that raced even that is finished
+  in a task of its own, so a reconnect on the same key is not refused as a
+  duplicate.
   Listener exit waits for every in-flight admission and finishes late
   registrations, so a restart on the same engine never finds the key held as
   a duplicate publisher. A panicking admission task is counted as a
@@ -503,10 +510,16 @@ lifecycle and probe events (dotted).
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
   (`crates/restream-engine/src/srt/ingress_bridge.rs`). Tokio retains at most one deferred
-  command; a full Owner command bridge backpressures event consumption, and
-  the application of finished admissions, instead of growing a reply queue
-  behind another Owner's topology churn. Shutdown delivers that accepted
-  command before the native Owner's peer drain.
+  command; a full Owner command bridge backpressures event consumption, the
+  application of finished admissions and the delivery of probe answers,
+  instead of growing a reply queue behind another Owner's topology churn.
+  Every `Probe` gets exactly one `ProbeApplied`, in order: a publisher's task
+  answers its own (a panicking application is answered with no ring), and
+  the loop answers a probe for any other peer at once. At most one answer per
+  publisher waits for the command slot, since each publisher has at most one
+  probe in flight. Shutdown delivers the accepted command before the native
+  Owner's peer drain; listener exit then waits for each publisher task to
+  apply what was queued and finish its attempt.
 - **Payload work.** Messages stay in packet chunks. A 64-slot owner-local work
   list holds them; a visit consumes at most 64 chunks, 16 per message, and
   retires at most 64 actions. Events keep queue order, so a disconnect never
