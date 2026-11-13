@@ -1,7 +1,12 @@
+//! Launches the dashboard and ingest listeners, and supervises them in a
+//! task of their own: a faulted RTMP or SRT listener restarts after its
+//! backoff, and a dashboard listener that exits ends the process, whatever
+//! the reconciler or housekeeping is doing.
+
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -26,10 +31,30 @@ pub(super) struct RuntimeLaunch {
 }
 
 pub(super) struct RuntimeTasks {
-    http: JoinHandle<()>,
-    http_stop: HttpStop,
+    pub http_stop: HttpStop,
+    pub listeners: Listeners,
+}
+
+/// The listener tasks: the dashboard's, and the supervised ingest ones.
+pub(super) struct Listeners {
+    /// `None` once the dashboard listener exited and its handle was awaited.
+    http: Option<JoinHandle<()>>,
     rtmp: SupervisedListener,
     srt: SupervisedListener,
+}
+
+/// The listener handles shutdown cleanup ends.
+pub(super) struct ListenerHandles {
+    /// `None` when the dashboard listener already exited.
+    pub http: Option<JoinHandle<()>>,
+    pub rtmp: JoinHandle<()>,
+    pub srt: JoinHandle<()>,
+}
+
+/// The running supervision task and the listeners it owns.
+pub(super) struct ListenerSupervision {
+    listeners: Arc<tokio::sync::Mutex<Listeners>>,
+    task: JoinHandle<()>,
 }
 
 /// Ends the dashboard listener first at shutdown: live state streams close,
@@ -141,47 +166,100 @@ impl RuntimeTasks {
         let srt = SupervisedListener::new("srt", spawn_srt(), Box::new(spawn_srt), srt_restarts);
 
         Ok(Self {
-            http,
             http_stop,
-            rtmp,
-            srt,
+            listeners: Listeners::new(http, rtmp, srt),
         })
     }
+}
 
-    pub async fn wait_for_reconcile_tick(
-        &mut self,
-        shutdown: &CancellationToken,
-        wait: Duration,
-        requested: impl std::future::Future<Output = ()>,
-    ) -> bool {
-        let now = tokio::time::Instant::now();
-        self.rtmp.restart_if_due(now);
-        self.srt.restart_if_due(now);
-        // Wake for a due restart even when the requested wait is longer.
-        let wake = [self.rtmp.restart_due(), self.srt.restart_due()]
-            .into_iter()
-            .flatten()
-            .fold(now + wait, std::cmp::min);
-        tokio::select! {
-            _ = shutdown.cancelled() => false,
-            result = &mut self.http => {
-                error!(result = ?result, "critical HTTP listener task exited");
-                shutdown.cancel();
-                false
-            }
-            () = self.rtmp.exited() => true,
-            () = self.srt.exited() => true,
-            _ = tokio::time::sleep_until(wake) => true,
-            () = requested => true,
+impl Listeners {
+    pub(super) fn new(
+        http: JoinHandle<()>,
+        rtmp: SupervisedListener,
+        srt: SupervisedListener,
+    ) -> Self {
+        Self {
+            http: Some(http),
+            rtmp,
+            srt,
         }
     }
 
-    pub fn into_handles(self) -> (JoinHandle<()>, HttpStop, JoinHandle<()>, JoinHandle<()>) {
-        (
-            self.http,
-            self.http_stop,
-            self.rtmp.into_handle(),
-            self.srt.into_handle(),
-        )
+    /// Supervises the listeners in a task of their own until `shutdown`;
+    /// cancels `shutdown` itself when the dashboard listener exits.
+    pub(super) fn supervise(self, shutdown: CancellationToken) -> ListenerSupervision {
+        // Shared so a restart after a panic resumes the same listeners; a
+        // tokio Mutex is not poisoned by the panicking holder.
+        let listeners = Arc::new(tokio::sync::Mutex::new(self));
+        let task = super::supervised_task::spawn_supervised("listener_supervisor", {
+            let listeners = listeners.clone();
+            move || supervise(listeners.clone(), shutdown.clone())
+        });
+        ListenerSupervision { listeners, task }
+    }
+}
+
+impl ListenerSupervision {
+    /// Waits for the supervision task to end at shutdown and hands back the
+    /// listener handles.
+    pub(super) async fn stop(self) -> ListenerHandles {
+        let _ = self.task.await;
+        let mut listeners = self.listeners.lock().await;
+        ListenerHandles {
+            http: listeners.http.take(),
+            rtmp: listeners.rtmp.take_handle(),
+            srt: listeners.srt.take_handle(),
+        }
+    }
+}
+
+enum ListenerEvent {
+    Shutdown,
+    HttpExited(Result<(), tokio::task::JoinError>),
+    Changed,
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the one supervision task holds the listeners for its lifetime; the mutex exists only so a restart after a panic resumes them"
+)]
+async fn supervise(listeners: Arc<tokio::sync::Mutex<Listeners>>, shutdown: CancellationToken) {
+    let mut listeners = listeners.lock().await;
+    let Listeners { http, rtmp, srt } = &mut *listeners;
+    loop {
+        let now = Instant::now();
+        rtmp.restart_if_due(now);
+        srt.restart_if_due(now);
+        let restart_due = [rtmp.restart_due(), srt.restart_due()]
+            .into_iter()
+            .flatten()
+            .min();
+        let event = tokio::select! {
+            () = shutdown.cancelled() => ListenerEvent::Shutdown,
+            result = async {
+                match http.as_mut() {
+                    Some(task) => task.await,
+                    None => std::future::pending().await,
+                }
+            } => ListenerEvent::HttpExited(result),
+            () = rtmp.exited() => ListenerEvent::Changed,
+            () = srt.exited() => ListenerEvent::Changed,
+            () = async {
+                match restart_due {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => ListenerEvent::Changed,
+        };
+        match event {
+            ListenerEvent::Shutdown => return,
+            ListenerEvent::HttpExited(result) => {
+                *http = None;
+                error!(result = ?result, "critical HTTP listener task exited");
+                shutdown.cancel();
+                return;
+            }
+            ListenerEvent::Changed => {}
+        }
     }
 }

@@ -8,7 +8,9 @@
 //! │  Axum web server          HTTP handlers, SSE streams                │
 //! │  RTMP listener            per-connection async tasks                │
 //! │  SRT accept loop          per-connection async tasks                │
-//! │  Reconciler (1s tick)     output lifecycle + recording auto-start   │
+//! │  Reconciler (passes)      output lifecycle, input convergence       │
+//! │  Housekeeping (1s tick)   recordings, stream checks, pruning        │
+//! │  Listener supervisor      RTMP/SRT restart, dashboard exit          │
 //! │  Egress tasks             ring buffer reader → network send         │
 //! │  HLS segmenter            TsMuxer → segment accumulator → HlsStore │
 //! └─────────────────────────────────────────────────────────────────────┘
@@ -30,6 +32,7 @@ mod auth;
 mod egress;
 mod events;
 mod hls_segmenter;
+mod housekeeping;
 mod layout;
 mod listener_supervisor;
 #[forbid(unsafe_code)]
@@ -47,6 +50,9 @@ use tracing::{info, warn};
 use crate::config::AppConfig;
 use crate::db;
 use restream_engine::engine::MediaEngine;
+
+/// How long shutdown waits for a housekeeping tick in progress.
+const HOUSEKEEPING_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Runs the server until shutdown. Startup failures (runtime layout,
 /// database, dashboard bind, initial password) return an error for `main`
@@ -130,8 +136,6 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     ));
     let pipeline_store =
         crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone());
-    let pipeline_catalog: Arc<dyn crate::application::ports::PipelineStore> =
-        Arc::new(pipeline_store.clone());
     let pipeline_input_store =
         crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(pool.clone());
     let srt_ingest_policy_store = Arc::new(
@@ -248,17 +252,29 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
 
     let reconciler = reconcile::Reconciler::new(
         config.clone(),
-        pool.clone(),
+        lifecycle.clone(),
         engine.clone(),
-        pipeline_catalog,
-        meta_store,
-        sessions_for_reconciler,
-        recording_metadata,
         state.reconcile.clone(),
         state.runtime_state.clone(),
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
+    let mut housekeeping_task = supervised_task::spawn_supervised("housekeeping", {
+        let housekeeping = Arc::new(housekeeping::Housekeeping::new(
+            config.clone(),
+            lifecycle.clone(),
+            engine.clone(),
+            Arc::new(
+                crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(
+                    lifecycle_pool.clone(),
+                ),
+            ),
+            sessions_for_reconciler,
+            recording_metadata,
+        ));
+        let stop = projector_stop.clone();
+        move || housekeeping.clone().run(stop.clone())
+    });
     // Bounds how stale the admission index can get from a change no write
     // reported; `shutdown` below ends it and any reload retry.
     supervised_task::spawn_supervised("catalog_auth_reload", {
@@ -351,7 +367,10 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
             )
         }
     });
-    let mut runtime = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
+    let runtime::RuntimeTasks {
+        http_stop,
+        listeners,
+    } = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,
         engine: engine.clone(),
@@ -364,14 +383,35 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     .await?;
     let shutdown = shutdown::spawn_signal_watcher();
 
-    reconciler.run(&mut runtime, &shutdown).await;
+    let listeners = run_control_loops(&reconciler, listeners, &shutdown).await;
     projector_stop.cancel();
     catalog_auth.shutdown();
+    // A tick in progress ends before cleanup tears the runtime down, or is
+    // cut short: it must not start a recording after cleanup.
+    if tokio::time::timeout(HOUSEKEEPING_STOP_WAIT, &mut housekeeping_task)
+        .await
+        .is_err()
+    {
+        housekeeping_task.abort();
+    }
 
-    let (http, http_stop, rtmp, srt) = runtime.into_handles();
-    shutdown::cleanup(&engine, &pool, http, http_stop, rtmp, srt).await;
+    shutdown::cleanup(&engine, &pool, listeners, http_stop).await;
     lifecycle_pool.close().await;
     Ok(())
+}
+
+/// Runs the reconciler's output passes on this future until shutdown, with
+/// listener supervision in a task of its own beside it, so a stalled pass
+/// never delays a faulted listener's restart. Returns the listener handles
+/// for cleanup.
+async fn run_control_loops(
+    reconciler: &reconcile::Reconciler,
+    listeners: runtime::Listeners,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> runtime::ListenerHandles {
+    let supervision = listeners.supervise(shutdown.clone());
+    reconciler.run(shutdown).await;
+    supervision.stop().await
 }
 
 /// The one runtime-event consumer: wakes the reconciler, marks the runtime

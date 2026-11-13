@@ -47,6 +47,12 @@ pub(crate) fn moq_fabric_output_spec(
     }
 }
 
+/// How long an output start waits for its `ca` file. A hung filesystem
+/// fails this output's attempt (retried with backoff) instead of holding its
+/// start task; the read itself stays on its blocking-pool thread until the
+/// filesystem answers.
+const MOQ_CA_READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// All path resolution and reads stay on the blocking pool. The directory
 /// and its contents must be writable only by the operator, not API users.
 async fn load_moq_ca_file(
@@ -56,7 +62,7 @@ async fn load_moq_ca_file(
     let Some(ca_file) = ca_file else {
         return Ok(None);
     };
-    tokio::task::spawn_blocking(move || {
+    let read = tokio::task::spawn_blocking(move || {
         let root = ca_dir
             .filter(|root| !root.is_empty())
             .ok_or("MoQ output ca file requires operator setting RESTREAM_MOQ_CA_DIR")?;
@@ -83,10 +89,12 @@ async fn load_moq_ca_file(
         std::fs::read(path)
             .map(Some)
             .map_err(|_| "MoQ output ca file is unreadable in the configured CA directory")
-    })
-    .await
-    .map_err(|_| "MoQ output CA loading task failed".to_string())?
-    .map_err(str::to_string)
+    });
+    tokio::time::timeout(MOQ_CA_READ_DEADLINE, read)
+        .await
+        .map_err(|_| "MoQ output ca file read timed out".to_string())?
+        .map_err(|_| "MoQ output CA loading task failed".to_string())?
+        .map_err(str::to_string)
 }
 
 /// The publish startup for one output: the output ring's tracks and

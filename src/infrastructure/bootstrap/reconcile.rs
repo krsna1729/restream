@@ -1,119 +1,99 @@
-use std::collections::HashSet;
+//! The output pass: rows, topology, input convergence and egress start,
+//! stop and retry, on the main future. Listener supervision
+//! (`runtime.rs`) and housekeeping (`housekeeping.rs`) run in tasks of their
+//! own, so nothing here delays them; every database call is bounded by the
+//! pass's [`DeadlineDb`], and each output's slow work runs in its own task
+//! (`egress.rs`).
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt as _;
-use sqlx::SqlitePool;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::application::ports::PipelineStore;
-use crate::application::reconcile::build_recording_reconcile_plan;
 use crate::application::topology::{
     ReconcileRequests, apply_requested_selections, converge_ingest_key_state, converge_pull_inputs,
     converge_srt_call_inputs, converge_topology,
 };
 use crate::config::AppConfig;
-use crate::infrastructure::sqlite_ports::SqliteMetaStore;
+use crate::db::DeadlineDb;
 use restream_engine::engine::MediaEngine;
-use restream_engine::recording::RecordingMetadataReporter;
 
 use super::egress::EgressReconciler;
-use super::runtime::RuntimeTasks;
 
 /// Backstop output pass, in reconcile intervals, for state changes no
 /// trigger reports.
 const BACKSTOP_INTERVALS: u32 = 10;
+/// How long shutdown waits for output tasks still starting.
+const SHUTDOWN_START_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) struct Reconciler {
     config: Arc<AppConfig>,
-    pool: SqlitePool,
+    db: DeadlineDb,
     engine: Arc<MediaEngine>,
-    pipeline_catalog: Arc<dyn PipelineStore>,
-    meta_store: SqliteMetaStore,
-    sessions: Arc<RwLock<HashSet<String>>>,
-    recording_metadata: RecordingMetadataReporter,
     egress: EgressReconciler,
     requests: Arc<ReconcileRequests>,
     hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
 }
 
 impl Reconciler {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<AppConfig>,
-        pool: SqlitePool,
+        db: DeadlineDb,
         engine: Arc<MediaEngine>,
-        pipeline_catalog: Arc<dyn PipelineStore>,
-        meta_store: SqliteMetaStore,
-        sessions: Arc<RwLock<HashSet<String>>>,
-        recording_metadata: RecordingMetadataReporter,
         requests: Arc<ReconcileRequests>,
         runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
         hls_ingest: Arc<restream_engine::hls_ingest::HlsIngest>,
     ) -> Self {
-        let egress =
-            EgressReconciler::new(engine.clone(), pool.clone(), config.tuning, runtime_state);
+        let egress = EgressReconciler::new(
+            engine.clone(),
+            db.clone(),
+            config.tuning,
+            runtime_state,
+            requests.clone(),
+        );
         Self {
             config,
-            pool,
+            db,
             engine,
-            pipeline_catalog,
-            meta_store,
-            sessions,
-            recording_metadata,
             egress,
             requests,
             hls_ingest,
         }
     }
 
-    /// Runs until shutdown. Two cadences:
-    /// - the output pass (rows, topology, egress start/stop/retry) runs only
-    ///   when requested or due: a mutation or lifecycle event, a deadline it
-    ///   scheduled itself (retry backoff, ingest-disconnect grace), and a
-    ///   slow backstop pass every
-    ///   [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers.
-    ///   Passes are at least one interval apart, so a storm of events or
-    ///   deadlines (a destination outage) costs no more than the old timer;
-    ///   a request after a quiet interval still runs at once, and one in the
-    ///   gap waits for its end;
-    /// - housekeeping that reads no outputs (sessions, fabric sizing,
-    ///   recordings, idle HLS, file-ingest reaping) runs every interval.
-    pub async fn run(&self, runtime: &mut RuntimeTasks, shutdown: &CancellationToken) {
-        let tuning = self.config.tuning;
-        let interval = Duration::from_millis(tuning.reconciler_interval_ms);
+    /// Runs output passes until shutdown. A pass runs only when requested
+    /// or due: a mutation or lifecycle event, a deadline it scheduled itself
+    /// (retry backoff, ingest-disconnect grace, a step that could not read
+    /// its rows, an output task's end), and a slow backstop pass every
+    /// [`BACKSTOP_INTERVALS`] intervals for anything no trigger covers.
+    /// Passes are at least one interval apart, so a storm of events or
+    /// deadlines (a destination outage) costs no more than a timer; a
+    /// request after a quiet interval still runs at once, and one in the gap
+    /// waits for its end.
+    pub async fn run(&self, shutdown: &CancellationToken) {
+        let interval = Duration::from_millis(self.config.tuning.reconciler_interval_ms);
         let backstop = interval * BACKSTOP_INTERVALS;
-        let session_prune_every_ticks = tuning.session_prune_every_ticks();
-        let mut tick = 0_u64;
-        // Both are due at once: converge right after startup.
-        let mut next_tick = Instant::now();
-        let mut next_backstop = next_tick;
-        let mut next_pass_allowed = next_tick;
+        // Due at once: converge right after startup.
+        let mut next_backstop = Instant::now();
+        let mut next_pass_allowed = next_backstop;
 
         loop {
             let gap = Instant::now() < next_pass_allowed;
-            let pass_wake = if gap {
-                // Requests stay pending; the Notify is not polled, so its
-                // permit cannot spin the loop before the gap ends.
-                Some(next_pass_allowed)
+            let wake = if gap {
+                next_pass_allowed
             } else {
-                [Some(next_backstop), self.requests.next_deadline()]
-                    .into_iter()
-                    .flatten()
-                    .min()
+                self.requests
+                    .next_deadline()
+                    .map_or(next_backstop, |at| at.min(next_backstop))
             };
-            let wake = pass_wake.map_or(next_tick, |at| at.min(next_tick));
-            let wait = wake.saturating_duration_since(Instant::now());
-            let alive = if gap {
-                runtime
-                    .wait_for_reconcile_tick(shutdown, wait, std::future::pending())
-                    .await
-            } else {
-                runtime
-                    .wait_for_reconcile_tick(shutdown, wait, self.requests.woken())
-                    .await
+            // In the gap requests stay pending: the Notify is not polled, so
+            // its permit cannot spin the loop before the gap ends.
+            let alive = tokio::select! {
+                () = shutdown.cancelled() => false,
+                () = tokio::time::sleep_until(wake.into()) => true,
+                () = self.requests.woken(), if !gap => true,
             };
             if !alive {
                 break;
@@ -124,13 +104,8 @@ impl Reconciler {
                 self.contained_output_pass(interval).await;
                 next_pass_allowed = Instant::now() + interval;
             }
-            if now >= next_tick {
-                next_tick = now + interval;
-                tick += 1;
-                self.contained_housekeeping(tick, session_prune_every_ticks)
-                    .await;
-            }
         }
+        self.egress.finish(SHUTDOWN_START_WAIT).await;
         // Pull tasks fetch from origins that are not ours: stop them with the
         // runtime rather than leaving requests in flight at shutdown.
         self.hls_ingest.cancel_all_pulls();
@@ -146,175 +121,59 @@ impl Reconciler {
         completed
     }
 
-    /// Housekeeping behind the panic boundary.
-    async fn contained_housekeeping(&self, tick: u64, session_prune_every_ticks: u64) -> bool {
-        contained(
-            "housekeeping",
-            self.housekeeping(tick, session_prune_every_ticks),
-        )
-        .await
-    }
-
-    /// Work that reads no outputs, every interval.
-    async fn housekeeping(&self, tick: u64, session_prune_every_ticks: u64) {
-        if tick.is_multiple_of(session_prune_every_ticks) {
-            self.prune_sessions_and_logs().await;
-        }
-        self.engine.resize_srt_fabrics().await;
-        self.engine.resize_rtmp_fabrics().await;
-        self.engine.resize_moq_fabrics().await;
-        self.engine.resize_sink_fabrics().await;
-        self.engine.resize_pipeline_fabrics().await;
-        self.engine.resize_hls_put_fabrics().await;
-        if self.reconcile_recordings(tick).await {
-            self.reconcile_stream_qa(tick).await;
-            self.sweep_idle_hls().await;
-            self.engine.reap_file_ingests().await;
-        }
-    }
-
+    /// Each step reads its own rows under the deadline. A step that cannot
+    /// read skips its convergence and the pass is retried after the gap;
+    /// the other steps still run.
     async fn output_pass(&self, interval: Duration) {
-        apply_requested_selections(&self.pool, &self.engine, &self.requests).await;
-        let outputs = match crate::db::list_outputs(&self.pool).await {
-            Ok(records) => records
-                .into_iter()
-                .map(crate::application::outputs::from_record)
-                .collect::<Vec<_>>(),
+        let mut converged =
+            apply_requested_selections(&self.db, &self.engine, &self.requests).await;
+        let outputs = match self.db.read(crate::db::list_outputs).await {
+            Ok(records) => Some(
+                records
+                    .into_iter()
+                    .map(crate::application::outputs::from_record)
+                    .collect::<Vec<_>>(),
+            ),
             Err(error) => {
                 warn!(err = %error, "DB error reading outputs; output pass retried");
-                self.requests.wake_at(Instant::now() + interval);
-                return;
+                None
             }
         };
 
-        converge_pull_inputs(&self.pool, &self.hls_ingest).await;
-        converge_srt_call_inputs(&self.pool, &self.engine).await;
-        for input_id in converge_ingest_key_state(&self.pool, &self.hls_ingest).await {
-            info!(input_id = %input_id, "ingest key state released for a deleted input");
+        converged &= converge_pull_inputs(&self.db, &self.hls_ingest)
+            .await
+            .is_some();
+        converged &= converge_srt_call_inputs(&self.db, &self.engine)
+            .await
+            .is_some();
+        match converge_ingest_key_state(&self.db, &self.hls_ingest).await {
+            Some(released) => {
+                for input_id in released {
+                    info!(input_id = %input_id, "ingest key state released for a deleted input");
+                }
+            }
+            None => converged = false,
         }
-        converge_topology(&self.pool, &self.engine, &outputs).await;
-        if let Some(wait) = self.egress.reconcile(&outputs).await {
-            self.requests.wake_at(Instant::now() + wait);
+        match outputs {
+            Some(outputs) => {
+                converged &= converge_topology(&self.db, &self.engine, &outputs).await;
+                if let Some(wait) = self.egress.reconcile(&outputs).await {
+                    self.requests.wake_at(Instant::now() + wait);
+                }
+            }
+            None => converged = false,
         }
-    }
-
-    async fn prune_sessions_and_logs(&self) {
-        let _ = crate::db::prune_expired_sessions(&self.pool, 30 * 24 * 60 * 60 * 1000).await;
-        let _ = crate::db::delete_app_logs_older_than(
-            &self.pool,
-            self.config.log_retention_days as i64,
-        )
-        .await;
-        match crate::db::list_sessions(&self.pool).await {
-            Ok(live_tokens) => {
-                let live_set = live_tokens.into_iter().collect::<HashSet<_>>();
-                self.sessions
-                    .write()
-                    .await
-                    .retain(|token| live_set.contains(token));
-            }
-            Err(error) => warn!(err = %error, "failed to list sessions for prune"),
-        }
-    }
-
-    async fn reconcile_recordings(&self, tick: u64) -> bool {
-        let commands = match build_recording_reconcile_plan(
-            &self.engine,
-            self.pipeline_catalog.as_ref(),
-            &self.meta_store,
-            self.config.tuning.ingest_disconnect_grace_ms,
-        )
-        .await
-        {
-            Ok(commands) => commands,
-            Err(error) => {
-                warn!(
-                    tick,
-                    err = %error,
-                    "pipeline catalog error while reconciling recordings"
-                );
-                return false;
-            }
-        };
-        crate::application::recording::apply_recording_commands(
-            self.engine.clone(),
-            &self.meta_store,
-            &self.config.media_dir,
-            commands,
-            Some(self.recording_metadata.clone()),
-        )
-        .await;
-        true
-    }
-
-    async fn reconcile_stream_qa(&self, tick: u64) {
-        if let Err(error) = crate::application::stream_qa::reconcile_stream_qa(
-            &self.engine,
-            self.pipeline_catalog.as_ref(),
-            &self.meta_store,
-            self.config.tuning.ingest_disconnect_grace_ms,
-        )
-        .await
-        {
-            warn!(
-                tick,
-                err = %error,
-                "pipeline catalog error while reconciling stream checks"
-            );
-        }
-    }
-
-    async fn sweep_idle_hls(&self) {
-        for pipeline_id in self.engine.hls_pipeline_ids().await {
-            if self
-                .engine
-                .has_recent_ingest_disconnect(
-                    &pipeline_id,
-                    self.config.tuning.ingest_disconnect_grace_ms,
-                )
-                .await
-            {
-                continue;
-            }
-            if self
-                .engine
-                .should_shutdown_hls_segmenter(&pipeline_id, self.config.tuning.hls_idle_timeout_ms)
-                .await
-            {
-                self.engine.shutdown_hls_segmenter(&pipeline_id).await;
-            }
-        }
-        for pipeline_id in self.engine.hls_preview_pipeline_ids().await {
-            if self
-                .engine
-                .has_recent_ingest_disconnect(
-                    restream_engine::engine_hls::preview_pipeline(&pipeline_id).0,
-                    self.config.tuning.ingest_disconnect_grace_ms,
-                )
-                .await
-            {
-                continue;
-            }
-            if self
-                .engine
-                .should_shutdown_hls_preview_segmenter(
-                    &pipeline_id,
-                    self.config.tuning.hls_idle_timeout_ms,
-                )
-                .await
-            {
-                self.engine
-                    .shutdown_hls_preview_segmenter(&pipeline_id)
-                    .await;
-            }
+        if !converged {
+            self.requests.wake_at(Instant::now() + interval);
         }
     }
 }
 
-/// Runs one reconciler step behind a panic boundary: the reconciler runs on
-/// the main future, so a panic in any step would otherwise end the process.
-/// Returns whether the step completed.
-async fn contained(step: &'static str, work: impl std::future::Future<Output = ()>) -> bool {
+/// Runs one reconciler or housekeeping step behind a panic boundary: the
+/// output pass runs on the main future, so a panic in a step would
+/// otherwise end the process, and a housekeeping panic would wait out its
+/// supervisor's restart backoff. Returns whether the step completed.
+pub(super) async fn contained(step: &'static str, work: impl Future<Output = ()>) -> bool {
     let completed = std::panic::AssertUnwindSafe(work)
         .catch_unwind()
         .await

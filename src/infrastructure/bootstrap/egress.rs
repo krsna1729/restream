@@ -1,9 +1,17 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+//! Output start, stop and retry. A pass decides every output in memory and
+//! hands each output's slow work to a task of its own: a start (rings,
+//! stages, the MoQ CA file, the egress task) and a retries-exhausted mark.
+//! The pass leaves an output alone while its task runs, and the task's end
+//! wakes the next pass, so one output's slow start or write never holds the
+//! pass for the others. The job row is written off the start path entirely
+//! ([`AttemptJob`]).
 
-use sqlx::SqlitePool;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use tokio::sync::Mutex;
+use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
 use crate::application::reconcile::{
@@ -11,7 +19,9 @@ use crate::application::reconcile::{
     decide_output_stop_action, load_output_runtime_snapshot,
 };
 use crate::application::runtime_state::hub::StateHub;
+use crate::application::topology::ReconcileRequests;
 use crate::config::RuntimeTuning;
+use crate::db::DeadlineDb;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::models::{JobStatus, Output};
 use restream_engine::engine::MediaEngine;
@@ -26,29 +36,95 @@ use egress_task::{
 pub(super) type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
 
 pub(super) struct EgressReconciler {
-    engine: Arc<MediaEngine>,
-    pool: SqlitePool,
-    tuning: RuntimeTuning,
-    last_failed: FailureTracker,
+    starter: EgressStarter,
     /// Marked when this reconciler writes a row the projection reads
     /// (retries exhausted), as API writes and engine events are.
     runtime_state: Arc<StateHub>,
+    requests: Arc<ReconcileRequests>,
+    /// Outputs whose start or retries-exhausted mark runs in its own task.
+    in_flight: InFlight,
+    tasks: TaskTracker,
+}
+
+/// What an output's start needs, cloned into its task.
+#[derive(Clone)]
+struct EgressStarter {
+    engine: Arc<MediaEngine>,
+    db: DeadlineDb,
+    tuning: RuntimeTuning,
+    last_failed: FailureTracker,
+}
+
+/// Output ids with a task running for them.
+#[derive(Clone, Default)]
+struct InFlight(Arc<std::sync::Mutex<HashSet<String>>>);
+
+impl InFlight {
+    fn contains(&self, output_id: &str) -> bool {
+        restream_sync::lock::lock(&self.0).contains(output_id)
+    }
+}
+
+/// An output's claim on its one task. Released however the task ends
+/// (return, panic, abort at shutdown), and the release wakes a pass: the
+/// output's state changed, and a pass that ran meanwhile left it alone.
+struct Claim {
+    in_flight: InFlight,
+    output_id: String,
+    requests: Arc<ReconcileRequests>,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        restream_sync::lock::lock(&self.in_flight.0).remove(&self.output_id);
+        self.requests.wake();
+    }
 }
 
 impl EgressReconciler {
     pub fn new(
         engine: Arc<MediaEngine>,
-        pool: SqlitePool,
+        db: DeadlineDb,
         tuning: RuntimeTuning,
         runtime_state: Arc<StateHub>,
+        requests: Arc<ReconcileRequests>,
     ) -> Self {
         Self {
-            engine,
-            pool,
-            tuning,
-            last_failed: Arc::new(Mutex::new(HashMap::new())),
+            starter: EgressStarter {
+                engine,
+                db,
+                tuning,
+                last_failed: Arc::new(Mutex::new(HashMap::new())),
+            },
             runtime_state,
+            requests,
+            in_flight: InFlight::default(),
+            tasks: TaskTracker::new(),
         }
+    }
+
+    /// Runs `work` for the output in its own task, unless one runs already.
+    fn spawn_for(&self, output_id: &str, work: impl Future<Output = ()> + Send + 'static) {
+        if !restream_sync::lock::lock(&self.in_flight.0).insert(output_id.to_string()) {
+            return;
+        }
+        let claim = Claim {
+            in_flight: self.in_flight.clone(),
+            output_id: output_id.to_string(),
+            requests: self.requests.clone(),
+        };
+        self.tasks.spawn(async move {
+            let _claim = claim;
+            work.await;
+        });
+    }
+
+    /// At shutdown: stops taking work and waits up to `within` for the
+    /// output tasks still running, so none registers an egress after the
+    /// runtime's cleanup.
+    pub async fn finish(&self, within: Duration) {
+        self.tasks.close();
+        let _ = tokio::time::timeout(within, self.tasks.wait()).await;
     }
 
     /// Starts, stops and retries outputs. Returns how long until the earliest
@@ -56,20 +132,23 @@ impl EgressReconciler {
     /// run then.
     pub async fn reconcile(&self, outputs: &[Output]) -> Option<std::time::Duration> {
         let mut next_retry: Option<u64> = None;
+        let engine = &self.starter.engine;
+        let tuning = self.starter.tuning;
         for output in outputs {
-            let snapshot = load_output_runtime_snapshot(
-                &self.engine,
-                output,
-                self.tuning.ingest_disconnect_grace_ms,
-            )
-            .await;
+            // Its task decides; the task's end wakes the next pass.
+            if self.in_flight.contains(&output.id) {
+                continue;
+            }
+            let snapshot =
+                load_output_runtime_snapshot(engine, output, tuning.ingest_disconnect_grace_ms)
+                    .await;
             // Restart backoff is the reconciler's; while an output is active,
             // its retry state is its uploader's, so it is cleared only here.
             if !output.wants_running() {
-                self.engine.clear_egress_retry_state(&output.id).await;
+                engine.clear_egress_retry_state(&output.id).await;
             }
             let failure = {
-                let last_failed = self.last_failed.lock().await;
+                let last_failed = self.starter.last_failed.lock().await;
                 last_failed
                     .get(&output.id)
                     .map(|(failed_at, retries)| OutputFailureWindow {
@@ -86,12 +165,12 @@ impl EgressReconciler {
                 snapshot.effective_has_ingest,
                 snapshot.ingest_tracks_ready,
                 failure,
-                self.tuning.output_retry_policy(),
+                tuning.output_retry_policy(),
                 &output.id,
             ) {
                 OutputStartAction::NotApplicable => {}
                 OutputStartAction::SkipNoIngest => {
-                    self.engine.clear_egress_retry_state(&output.id).await;
+                    engine.clear_egress_retry_state(&output.id).await;
                     continue;
                 }
                 OutputStartAction::SkipProbePending => {
@@ -100,39 +179,19 @@ impl EgressReconciler {
                     // allows: a source that never probes opens the gate only
                     // when its probe grace from the first media byte runs
                     // out, and nothing wakes a pass for that.
-                    let interval_ms = self.tuning.reconciler_interval_ms;
+                    let interval_ms = tuning.reconciler_interval_ms;
                     next_retry = Some(next_retry.map_or(interval_ms, |next| next.min(interval_ms)));
                     continue;
                 }
                 OutputStartAction::MarkFailed => {
-                    match crate::db::mark_output_retries_exhausted(
-                        &self.pool,
-                        &output.pipeline_id,
+                    self.spawn_for(
                         &output.id,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            self.last_failed.lock().await.remove(&output.id);
-                            self.engine.clear_egress_retry_state(&output.id).await;
-                            self.runtime_state.mark_changed();
-                            warn!(
-                                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                                output_id = %output.id,
-                                output_name = %output.name,
-                                max_retries = self.tuning.output_max_retries,
-                                "output exceeded max retries — retries exhausted; restarts stop until the operator starts or stops it",
-                            );
-                        }
-                        Err(err) => {
-                            warn!(
-                                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                                output_id = %output.id,
-                                error = %err,
-                                "failed to record exhausted output retries in db; will retry on next tick",
-                            );
-                        }
-                    }
+                        mark_retries_exhausted(
+                            self.starter.clone(),
+                            self.runtime_state.clone(),
+                            output.clone(),
+                        ),
+                    );
                     continue;
                 }
                 OutputStartAction::WaitRetry {
@@ -140,7 +199,7 @@ impl EgressReconciler {
                     backoff_ms,
                     remaining_ms,
                 } => {
-                    self.engine
+                    engine
                         .update_egress_retry_state(&output.id, retries, backoff_ms, remaining_ms)
                         .await;
                     next_retry =
@@ -149,8 +208,8 @@ impl EgressReconciler {
                 }
                 OutputStartAction::StartNow => {
                     // A fresh attempt carries no restart backoff.
-                    self.engine.clear_egress_retry_state(&output.id).await;
-                    self.start(output).await;
+                    engine.clear_egress_retry_state(&output.id).await;
+                    self.spawn_for(&output.id, self.starter.clone().start(output.clone()));
                 }
             }
 
@@ -170,8 +229,8 @@ impl EgressReconciler {
                         event_type = "lifecycle.stop",
                         "output job stopped because ingest is no longer active",
                     );
-                    self.engine.unregister_egress(&output.id).await;
-                    self.engine.clear_egress_retry_state(&output.id).await;
+                    engine.unregister_egress(&output.id).await;
+                    engine.clear_egress_retry_state(&output.id).await;
                 }
                 OutputStopAction::StopRequested => {
                     info!(
@@ -183,15 +242,93 @@ impl EgressReconciler {
                         event_type = "lifecycle.stop",
                         "output job stopped",
                     );
-                    self.engine.unregister_egress(&output.id).await;
-                    self.engine.clear_egress_retry_state(&output.id).await;
+                    engine.unregister_egress(&output.id).await;
+                    engine.clear_egress_retry_state(&output.id).await;
                 }
             }
         }
-        next_retry.map(std::time::Duration::from_millis)
+        next_retry.map(Duration::from_millis)
+    }
+}
+
+/// Records that the output used up its retries; restarts stop until the
+/// operator starts or stops it. Runs in the output's own task: a write that
+/// misses its deadline still lands, and the pass its claim wakes re-reads
+/// the row (and marks again if it did not land).
+async fn mark_retries_exhausted(
+    starter: EgressStarter,
+    runtime_state: Arc<StateHub>,
+    output: Output,
+) {
+    let (pipeline_id, output_id) = (output.pipeline_id.clone(), output.id.clone());
+    match starter
+        .db
+        .write(move |pool| async move {
+            crate::db::mark_output_retries_exhausted(&pool, &pipeline_id, &output_id).await
+        })
+        .await
+    {
+        Ok(()) => {
+            starter.last_failed.lock().await.remove(&output.id);
+            starter.engine.clear_egress_retry_state(&output.id).await;
+            runtime_state.mark_changed();
+            warn!(
+                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
+                output_id = %output.id,
+                output_name = %output.name,
+                max_retries = starter.tuning.output_max_retries,
+                "output exceeded max retries — retries exhausted; restarts stop until the operator starts or stops it",
+            );
+        }
+        Err(err) => {
+            warn!(
+                correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
+                output_id = %output.id,
+                error = %err,
+                "failed to record exhausted output retries in db; retried on the next pass",
+            );
+        }
+    }
+}
+
+/// The attempt's job row, written off the start path: created in a task of
+/// its own when the attempt starts and finished, after the create, when the
+/// attempt ends. Neither the pass nor the egress task waits on the database.
+pub(super) struct AttemptJob {
+    finish: tokio::sync::oneshot::Sender<(JobStatus, String)>,
+}
+
+impl AttemptJob {
+    fn begin(db: &DeadlineDb, job_id: String, pipeline_id: String, output_id: String) -> Self {
+        let (finish, finished) = tokio::sync::oneshot::channel::<(JobStatus, String)>();
+        let started_at = chrono::Utc::now().to_rfc3339();
+        db.detached(move |pool| async move {
+            let _ = crate::db::create_job(
+                &pool,
+                &job_id,
+                &pipeline_id,
+                &output_id,
+                JobStatus::Running,
+                &started_at,
+            )
+            .await;
+            // An attempt dropped without an end (process exit) leaves the
+            // row running, for startup's `reset_running_jobs`.
+            if let Ok((status, ended_at)) = finished.await {
+                let _ = crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await;
+            }
+        });
+        Self { finish }
     }
 
-    async fn start(&self, output: &Output) {
+    pub(super) fn finish(self, status: JobStatus) {
+        let _ = self.finish.send((status, chrono::Utc::now().to_rfc3339()));
+    }
+}
+
+impl EgressStarter {
+    async fn start(self, output: Output) {
+        let output = &output;
         let correlation_id = restream_engine::correlation_id::next_correlation_id("out");
         info!(
             correlation_id = %correlation_id,
@@ -225,17 +362,12 @@ impl EgressReconciler {
             )
             .await;
 
-        let job_id = next_output_job_id(&output.id);
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = crate::db::create_job(
-            &self.pool,
-            &job_id,
-            &output.pipeline_id,
-            &output.id,
-            JobStatus::Running,
-            &now,
-        )
-        .await;
+        let job = AttemptJob::begin(
+            &self.db,
+            next_output_job_id(&output.id),
+            output.pipeline_id.clone(),
+            output.id.clone(),
+        );
 
         let use_rtmp_fabric = matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
         let rtmp_fabric = if use_rtmp_fabric {
@@ -520,11 +652,10 @@ impl EgressReconciler {
             stages,
             registration,
             engine: self.engine.clone(),
-            pool: self.pool.clone(),
             last_failed: self.last_failed.clone(),
             tuning: self.tuning,
             correlation_id,
-            job_id,
+            job,
             srt_fabric,
             rtmp_fabric,
             sink_fabric,

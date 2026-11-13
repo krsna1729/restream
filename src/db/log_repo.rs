@@ -179,14 +179,6 @@ pub async fn list_app_logs(
     q.fetch_all(pool).await
 }
 
-pub async fn delete_app_logs_older_than(pool: &SqlitePool, days: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM app_logs WHERE ts < datetime('now', ?)")
-        .bind(format!("-{} days", days))
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 /// Rows one retention statement deletes at most: each batch is its own short
 /// write transaction, so the app-log drain and API writes take the write
 /// lock between batches instead of waiting behind one long `DELETE`.

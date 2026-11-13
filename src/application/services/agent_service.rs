@@ -505,7 +505,12 @@ mod tests {
         let outputs = crate::application::outputs::list_outputs(&pool)
             .await
             .unwrap();
-        crate::application::topology::converge_topology(&pool, &engine, &outputs).await;
+        crate::application::topology::converge_topology(
+            &crate::db::DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE),
+            &engine,
+            &outputs,
+        )
+        .await;
         assert!(egress.is_cancelled());
     }
 }

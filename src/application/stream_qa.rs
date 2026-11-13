@@ -4,12 +4,17 @@
 
 use std::sync::Arc;
 
-use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::application::reconcile::{RecordingAction, decide_recording_action};
+use crate::application::ports::MetaStore;
+use crate::application::reconcile::{
+    HousekeepingSwitches, RecordingAction, decide_recording_action,
+};
+use restream_domain::models::Pipeline;
 use restream_engine::engine::MediaEngine;
 
+pub const STREAM_QA_ENABLED_META_PREFIX: &str = "stream_qa_enabled:";
+
 pub fn stream_qa_enabled_meta_key(pipeline_id: &str) -> String {
-    format!("stream_qa_enabled:{pipeline_id}")
+    format!("{STREAM_QA_ENABLED_META_PREFIX}{pipeline_id}")
 }
 
 pub async fn load_stream_qa_enabled(meta_store: &dyn MetaStore, pipeline_id: &str) -> bool {
@@ -46,28 +51,26 @@ pub async fn spawn_stream_qa(engine: Arc<MediaEngine>, pipeline_id: String) -> b
 /// the reconnect grace) runs a sampler; every other one does not.
 pub async fn reconcile_stream_qa(
     engine: &Arc<MediaEngine>,
-    pipeline_catalog: &dyn PipelineStore,
-    meta_store: &dyn MetaStore,
+    pipelines: &[Pipeline],
+    switches: &HousekeepingSwitches,
     ingest_disconnect_grace_ms: u64,
-) -> Result<(), PipelineStoreError> {
-    for pipeline in pipeline_catalog.list_pipelines().await? {
+) {
+    for pipeline in pipelines {
         let effective_has_ingest = engine.has_active_ingest(&pipeline.id).await
             || engine
                 .has_recent_ingest_disconnect(&pipeline.id, ingest_disconnect_grace_ms)
                 .await;
-        let enabled = load_stream_qa_enabled(meta_store, &pipeline.id).await;
         // The same rule as recordings: wanted and fed, start; else stop.
         match decide_recording_action(
-            enabled,
+            switches.stream_qa.contains(&pipeline.id),
             effective_has_ingest,
             engine.is_stream_qa_active(&pipeline.id),
         ) {
             RecordingAction::Keep => {}
             RecordingAction::Start => {
-                spawn_stream_qa(engine.clone(), pipeline.id).await;
+                spawn_stream_qa(engine.clone(), pipeline.id.clone()).await;
             }
             RecordingAction::Stop => engine.unregister_stream_qa(&pipeline.id),
         }
     }
-    Ok(())
 }

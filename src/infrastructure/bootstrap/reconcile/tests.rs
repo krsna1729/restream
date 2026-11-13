@@ -1,76 +1,18 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::*;
-use crate::application::ports::{
-    PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
-    PipelineLookupFuture, PipelineUpdateFuture,
-};
+use crate::db::{SHARED_LOOP_DEADLINE, create_lifecycle_pool, create_pool, setup_database_schema};
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
-use restream_domain::models::Pipeline;
 use restream_engine::security::IngestSecurityService;
 
-/// A pipeline catalog whose every read panics, standing in for any panic in
-/// a reconciler step (`resume_unwind` skips the panic hook: quiet logs).
-struct PanickingCatalog;
-
-fn panics<T: Send + 'static>() -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>> {
-    Box::pin(async { std::panic::resume_unwind(Box::new("injected pipeline catalog panic")) })
-}
-
-impl PipelineStore for PanickingCatalog {
-    fn get_pipeline<'a>(&'a self, _: &'a str) -> PipelineLookupFuture<'a> {
-        panics()
-    }
-    fn get_pipeline_by_stream_key<'a>(&'a self, _: &'a str) -> PipelineLookupFuture<'a> {
-        panics()
-    }
-    fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-        panics()
-    }
-    fn create_pipeline<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: &'a str,
-        _: Option<&'a str>,
-        _: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a> {
-        panics()
-    }
-    fn update_pipeline<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: &'a str,
-        _: Option<&'a str>,
-        _: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        panics()
-    }
-    fn delete_pipeline<'a>(&'a self, _: &'a str) -> PipelineDeleteFuture<'a> {
-        panics()
-    }
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-        panics()
-    }
-    fn update_pipeline_input_source<'a>(
-        &'a self,
-        _: &'a Pipeline,
-        _: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        panics()
-    }
-}
-
-async fn reconciler(catalog: Arc<dyn PipelineStore>) -> Reconciler {
+fn reconciler(engine: Arc<MediaEngine>, db: DeadlineDb, pool: &sqlx::SqlitePool) -> Reconciler {
     let config = Arc::new(AppConfig::default());
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    crate::db::setup_database_schema(&pool).await.unwrap();
-    let engine = Arc::new(MediaEngine::new());
     let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let hls_ingest = restream_engine::hls_ingest::HlsIngest::new(
         engine.clone(),
         Arc::new(
             crate::application::catalog_auth::CatalogIngestAuthenticator::new(
-                crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool)
+                crate::infrastructure::service_wiring::SqliteServiceFactory::new(pool)
                     .catalog_auth(),
                 security.clone(),
             ),
@@ -84,28 +26,321 @@ async fn reconciler(catalog: Arc<dyn PipelineStore>) -> Reconciler {
     ));
     Reconciler::new(
         config,
-        pool.clone(),
+        db,
         engine,
-        catalog,
-        SqliteMetaStore::new(pool),
-        Arc::default(),
-        RecordingMetadataReporter::new(tokio::sync::mpsc::unbounded_channel().0),
         Arc::new(ReconcileRequests::new()),
         runtime_state,
         hls_ingest,
     )
 }
 
-/// The reconciler runs on the main future: a panic in a step is contained,
-/// reported as a failed step, and the next tick runs again.
-#[tokio::test]
-async fn a_panicking_housekeeping_step_is_contained_and_the_next_tick_runs() {
-    let reconciler = reconciler(Arc::new(PanickingCatalog)).await;
-    let task = tokio::spawn(async move {
-        let first = reconciler.contained_housekeeping(1, u64::MAX).await;
-        let second = reconciler.contained_housekeeping(2, u64::MAX).await;
-        (first, second)
+async fn memory_pool() -> sqlx::SqlitePool {
+    let pool = create_pool("sqlite::memory:").await.unwrap();
+    setup_database_schema(&pool).await.unwrap();
+    pool
+}
+
+/// A file database with production's two pools (API and lifecycle).
+async fn file_pools(tag: &str) -> (sqlx::SqlitePool, sqlx::SqlitePool, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "restream-reconcile-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite://{}", dir.join("db.sqlite").display());
+    let api = create_pool(&url).await.unwrap();
+    setup_database_schema(&api).await.unwrap();
+    let lifecycle = create_lifecycle_pool(&url).await.unwrap();
+    (api, lifecycle, dir)
+}
+
+async fn hold_every_connection(
+    pool: &sqlx::SqlitePool,
+) -> Vec<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
+    let mut held = Vec::new();
+    while let Ok(connection) =
+        tokio::time::timeout(Duration::from_millis(200), pool.acquire()).await
+    {
+        held.push(connection.unwrap());
+    }
+    assert!(!held.is_empty());
+    held
+}
+
+/// A pipeline with a live, probed ingest and one output that wants to run.
+async fn live_output(
+    engine: &Arc<MediaEngine>,
+    pool: &sqlx::SqlitePool,
+    pipeline_id: &str,
+    url: &str,
+) -> restream_engine::ingest_lease::IngestLease {
+    let stream_key = format!("key-{pipeline_id}");
+    crate::db::create_pipeline(pool, pipeline_id, pipeline_id, &stream_key, None, None)
+        .await
+        .unwrap();
+    crate::db::create_output(
+        pool,
+        &format!("out-{pipeline_id}"),
+        pipeline_id,
+        "out",
+        url,
+        None,
+        restream_domain::domain::state::DesiredOutputState::Running,
+        &restream_domain::domain::output_spec::OutputConfig::source(),
+    )
+    .await
+    .unwrap();
+    let lease = engine
+        .try_register_ingest(pipeline_id, &stream_key, "rtmp")
+        .await
+        .unwrap();
+    engine
+        .update_ingest_meta(
+            pipeline_id,
+            Some(restream_core::metadata::VideoMeta {
+                codec: "h264".to_string(),
+                ..Default::default()
+            }),
+            None,
+            None,
+        )
+        .await;
+    lease
+}
+
+async fn output_starts_within(engine: &MediaEngine, output_id: &str, within: Duration) -> bool {
+    tokio::time::timeout(within, async {
+        while !engine.has_active_egress(output_id).await {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// A listener that faults while the output pass is stalled (every
+/// lifecycle connection held: each of the pass's reads waits out its
+/// deadline) restarts within its 1 s backoff, not after the pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is_stalled() {
+    let (api, lifecycle, dir) = file_pools("listener").await;
+    let reconciler = Arc::new(reconciler(
+        Arc::new(MediaEngine::new()),
+        DeadlineDb::new(lifecycle.clone(), SHARED_LOOP_DEADLINE),
+        &api,
+    ));
+    let held = hold_every_connection(&lifecycle).await;
+    let listener = |restarts: Arc<AtomicU64>| {
+        super::super::listener_supervisor::SupervisedListener::new(
+            "test",
+            // Faulted: the listener task has already ended.
+            tokio::spawn(async {}),
+            Box::new(|| tokio::spawn(std::future::pending())),
+            restarts,
+        )
+    };
+    let restarts = Arc::new(AtomicU64::new(0));
+    let listeners = super::super::runtime::Listeners::new(
+        tokio::spawn(std::future::pending()),
+        listener(restarts.clone()),
+        listener(Arc::new(AtomicU64::new(0))),
+    );
+    let shutdown = CancellationToken::new();
+    let control = tokio::spawn({
+        let (reconciler, shutdown) = (reconciler.clone(), shutdown.clone());
+        async move { super::super::run_control_loops(&reconciler, listeners, &shutdown).await }
     });
-    let (first, second) = task.await.expect("the panic stays inside the step");
-    assert!(!first && !second, "both ticks ran and reported the panic");
+
+    let started = Instant::now();
+    let restarted = tokio::time::timeout(Duration::from_secs(3), async {
+        while restarts.load(Ordering::Relaxed) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    shutdown.cancel();
+    control.abort();
+    drop(held);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        restarted.is_ok(),
+        "the faulted listener did not restart within its 1 s backoff (+2 s) while the pass was stalled; waited {:?}",
+        started.elapsed()
+    );
+}
+
+/// Pipeline A's output start stalls on its `ca` file (a FIFO no one
+/// writes: a hung filesystem). Pipeline B's output still starts at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_pipelines_output_starts_while_one_output_start_is_stalled() {
+    let dir = std::env::temp_dir().join(format!(
+        "restream-ca-fifo-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("stalled.pem");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+        restream_engine::config::EngineConfig {
+            moq_ca_dir: Some(dir.to_string_lossy().into_owned()),
+            ..Default::default()
+        },
+    )));
+    let pool = memory_pool().await;
+    // A first: on its own the pass reaches A's start before B's.
+    let _a = live_output(
+        &engine,
+        &pool,
+        "pipe-a",
+        "moqt://localhost/live?ca=stalled.pem",
+    )
+    .await;
+    let _b = live_output(&engine, &pool, "pipe-b", "sink://local/discard").await;
+    let reconciler = Arc::new(reconciler(
+        engine.clone(),
+        DeadlineDb::new(pool.clone(), SHARED_LOOP_DEADLINE),
+        &pool,
+    ));
+
+    let pass = tokio::spawn({
+        let reconciler = reconciler.clone();
+        async move {
+            reconciler
+                .contained_output_pass(Duration::from_secs(1))
+                .await
+        }
+    });
+    let b_started = output_starts_within(&engine, "out-pipe-b", Duration::from_secs(2)).await;
+
+    // End the stalled read so its blocking thread returns.
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo);
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(5), pass).await;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        b_started,
+        "pipeline B's output did not start within 2 s while pipeline A's output start was stalled on its CA file"
+    );
+}
+
+/// Every lifecycle connection held: the pass's reads answer at their
+/// deadline, the pass ends and asks for a retry; once a connection is free,
+/// the next pass starts the output.
+#[tokio::test]
+async fn a_stalled_pool_ends_the_pass_at_its_deadline_and_the_output_converges_after() {
+    let engine = Arc::new(MediaEngine::new());
+    let pool = memory_pool().await;
+    let _ingest = live_output(&engine, &pool, "pipe", "sink://local/discard").await;
+    let reconciler = reconciler(
+        engine.clone(),
+        DeadlineDb::new(pool.clone(), Duration::from_millis(200)),
+        &pool,
+    );
+    let held = hold_every_connection(&pool).await;
+
+    let completed = tokio::time::timeout(
+        Duration::from_secs(5),
+        reconciler.contained_output_pass(Duration::from_secs(1)),
+    )
+    .await
+    .expect("the pass answers at its deadlines, not the acquire timeout");
+    assert!(completed);
+    assert!(
+        reconciler.requests.next_deadline().is_some(),
+        "the pass asked to be retried"
+    );
+    assert!(!engine.has_active_egress("out-pipe").await);
+
+    drop(held);
+    reconciler
+        .contained_output_pass(Duration::from_secs(1))
+        .await;
+    assert!(output_starts_within(&engine, "out-pipe", Duration::from_secs(2)).await);
+}
+
+/// Another writer holds the write lock: the output starts and the pass ends
+/// on time, since the job row is written off the start path; it lands once
+/// the lock is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_output_starts_while_another_writer_holds_the_write_lock() {
+    let (api, lifecycle, dir) = file_pools("write-lock").await;
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = live_output(&engine, &api, "pipe", "sink://local/discard").await;
+    let reconciler = reconciler(
+        engine.clone(),
+        DeadlineDb::new(lifecycle, SHARED_LOOP_DEADLINE),
+        &api,
+    );
+    let mut lock = api.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        reconciler.contained_output_pass(Duration::from_secs(1)),
+    )
+    .await
+    .expect("the pass does not wait on the write lock");
+    assert!(output_starts_within(&engine, "out-pipe", Duration::from_secs(2)).await);
+
+    sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
+    drop(lock);
+    let landed = tokio::time::timeout(Duration::from_secs(5), async {
+        while crate::db::list_jobs(&api).await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        landed.is_ok(),
+        "the job row lands after the lock is released"
+    );
+}
+
+/// API reads hold every connection of the API pool: the pass reads through
+/// the lifecycle pool, so another pipeline's output starts on time.
+#[tokio::test]
+async fn an_output_starts_while_api_reads_hold_every_api_connection() {
+    let (api, lifecycle, dir) = file_pools("api-held").await;
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = live_output(&engine, &api, "pipe", "sink://local/discard").await;
+    let reconciler = reconciler(
+        engine.clone(),
+        DeadlineDb::new(lifecycle, SHARED_LOOP_DEADLINE),
+        &api,
+    );
+    let held = hold_every_connection(&api).await;
+
+    reconciler
+        .contained_output_pass(Duration::from_secs(1))
+        .await;
+    let started = output_starts_within(&engine, "out-pipe", Duration::from_secs(2)).await;
+    drop(held);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        started,
+        "the output did not start while API reads held the API pool"
+    );
 }

@@ -17,6 +17,35 @@ pub async fn get_meta(
         .flatten())
 }
 
+/// Every meta row whose key starts with one of `prefixes`, in one statement:
+/// the per-pipeline switches a periodic loop needs, read once rather than
+/// one lookup per pipeline. A NULL or non-text value reads as absent.
+pub async fn list_meta_with_prefixes(
+    pool: impl sqlx::SqliteExecutor<'_>,
+    prefixes: &[&str],
+) -> Result<Vec<(String, Option<String>)>, sqlx::Error> {
+    if prefixes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = vec!["substr(key, 1, length(?)) = ?"; prefixes.len()].join(" OR ");
+    let sql = format!("SELECT key, value FROM meta WHERE {filter}");
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for prefix in prefixes {
+        query = query.bind(*prefix).bind(*prefix);
+    }
+    query
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>(0)?,
+                row.try_get::<Option<String>, _>(1).ok().flatten(),
+            ))
+        })
+        .collect()
+}
+
 pub async fn set_meta(pool: &SqlitePool, key: &str, value: &str) -> Result<String, sqlx::Error> {
     sqlx::query(
         "INSERT INTO meta (key, value) VALUES (?, ?)

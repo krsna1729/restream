@@ -1,11 +1,16 @@
 use super::*;
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::state::DesiredOutputState;
+use sqlx::SqlitePool;
 
 async fn pool() -> SqlitePool {
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     pool
+}
+
+fn db(pool: &SqlitePool) -> DeadlineDb {
+    DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE)
 }
 
 async fn outputs(pool: &SqlitePool) -> Vec<Output> {
@@ -87,7 +92,7 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     .unwrap();
 
     assert_eq!(
-        converge_pull_inputs(&pool, &ingest).await,
+        converge_pull_inputs(&db(&pool), &ingest).await.unwrap(),
         ["in-pull".to_string()],
         "only the pull input pulls, and the pass reports what it started"
     );
@@ -97,7 +102,10 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     );
 
     assert!(
-        converge_pull_inputs(&pool, &ingest).await.is_empty(),
+        converge_pull_inputs(&db(&pool), &ingest)
+            .await
+            .unwrap()
+            .is_empty(),
         "a pass that changes nothing starts nothing: the running task is left alone"
     );
     assert!(ingest.pull_input_ids().contains("in-pull"));
@@ -105,13 +113,16 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     crate::db::update_pipeline_input(&pool, "pipe", "in-pull", "pull", false, &pull(first_url))
         .await
         .unwrap();
-    converge_pull_inputs(&pool, &ingest).await;
+    converge_pull_inputs(&db(&pool), &ingest).await.unwrap();
     assert!(
         ingest.pull_input_ids().is_empty(),
         "a disabled input stops pulling"
     );
     assert!(
-        converge_pull_inputs(&pool, &ingest).await.is_empty(),
+        converge_pull_inputs(&db(&pool), &ingest)
+            .await
+            .unwrap()
+            .is_empty(),
         "a disabled input is not started again"
     );
 
@@ -126,7 +137,7 @@ async fn pull_inputs_follow_their_rows_across_passes() {
     .await
     .unwrap();
     assert_eq!(
-        converge_pull_inputs(&pool, &ingest).await,
+        converge_pull_inputs(&db(&pool), &ingest).await.unwrap(),
         ["in-pull".to_string()],
         "an edited row pulls again"
     );
@@ -163,7 +174,9 @@ async fn a_deleted_inputs_key_state_is_released() {
         .await
         .unwrap();
     assert_eq!(
-        converge_ingest_key_state(&pool, &ingest).await,
+        converge_ingest_key_state(&db(&pool), &ingest)
+            .await
+            .unwrap(),
         vec!["in-gone".to_string()],
         "only the deleted input's key state is released"
     );
@@ -173,7 +186,10 @@ async fn a_deleted_inputs_key_state_is_released() {
         "a live input keeps the init its encoder may resume with"
     );
     assert!(
-        converge_ingest_key_state(&pool, &ingest).await.is_empty(),
+        converge_ingest_key_state(&db(&pool), &ingest)
+            .await
+            .unwrap()
+            .is_empty(),
         "a second pass releases nothing"
     );
 }
@@ -197,7 +213,7 @@ async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
             .await
             .unwrap()
     );
-    converge_topology(&pool, &engine, &outputs(&pool).await).await;
+    converge_topology(&db(&pool), &engine, &outputs(&pool).await).await;
 
     assert!(deleted.is_cancelled());
     assert!(!kept.is_cancelled());
@@ -238,7 +254,7 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
             .await
             .unwrap()
     );
-    converge_topology(&pool, &engine, &outputs(&pool).await).await;
+    converge_topology(&db(&pool), &engine, &outputs(&pool).await).await;
 
     assert!(gone_ingest.registration().cancel_token.is_cancelled());
     assert!(egress.is_cancelled(), "the output row cascaded away");
@@ -281,8 +297,8 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
         .await
         .unwrap()
         .unwrap();
-    apply_requested_selections(&pool, &engine, &requests).await;
-    converge_topology(&pool, &engine, &[]).await;
+    apply_requested_selections(&db(&pool), &engine, &requests).await;
+    converge_topology(&db(&pool), &engine, &[]).await;
     assert_eq!(
         forwarded_input(&engine, "pipe").as_deref(),
         Some("input_primary_pipe"),
@@ -290,7 +306,7 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
     );
 
     requests.input_selection_changed("pipe");
-    apply_requested_selections(&pool, &engine, &requests).await;
+    apply_requested_selections(&db(&pool), &engine, &requests).await;
     assert_eq!(
         forwarded_input(&engine, "pipe").as_deref(),
         Some("input-backup")
@@ -315,8 +331,8 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
         .await
         .unwrap();
 
-    apply_requested_selections(&pool, &engine, &ReconcileRequests::new()).await;
-    converge_topology(&pool, &engine, &[]).await;
+    apply_requested_selections(&db(&pool), &engine, &ReconcileRequests::new()).await;
+    converge_topology(&db(&pool), &engine, &[]).await;
 
     assert_eq!(forwarded_input(&engine, "pipe").as_deref(), Some("key-p"));
     assert!(!file_ingest.registration().cancel_token.is_cancelled());
