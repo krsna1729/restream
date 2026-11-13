@@ -186,3 +186,43 @@ pub async fn delete_app_logs_older_than(pool: &SqlitePool, days: i64) -> Result<
         .await?;
     Ok(())
 }
+
+/// Rows one retention statement deletes at most: each batch is its own short
+/// write transaction, so the app-log drain and API writes take the write
+/// lock between batches instead of waiting behind one long `DELETE`.
+pub const APP_LOG_RETENTION_BATCH: u32 = 1000;
+
+/// Deletes app-log rows older than `days`, at most `batch` rows per
+/// statement, each bounded by `db`'s deadline. Returns the rows each
+/// statement deleted; stops after a short batch. A statement that misses its
+/// deadline still lands (see [`super::DeadlineDb::write`]) and ends this
+/// prune with its error; the next prune carries on.
+pub async fn prune_app_logs(
+    db: &super::DeadlineDb,
+    days: i64,
+    batch: u32,
+) -> Result<Vec<u64>, sqlx::Error> {
+    let cutoff = format!("-{days} days");
+    let mut batches = Vec::new();
+    loop {
+        let cutoff = cutoff.clone();
+        let deleted = db
+            .write(move |pool| async move {
+                sqlx::query(
+                    "DELETE FROM app_logs WHERE id IN (
+                         SELECT id FROM app_logs WHERE ts < datetime('now', ?) ORDER BY ts LIMIT ?
+                     )",
+                )
+                .bind(cutoff)
+                .bind(batch)
+                .execute(&pool)
+                .await
+                .map(|result| result.rows_affected())
+            })
+            .await?;
+        batches.push(deleted);
+        if deleted < u64::from(batch) {
+            return Ok(batches);
+        }
+    }
+}

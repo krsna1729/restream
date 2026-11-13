@@ -1,0 +1,170 @@
+use super::*;
+use crate::db::{create_lifecycle_pool, create_pool, setup_database_schema};
+use sqlx::AssertSqlSafe;
+
+const DEADLINE: Duration = Duration::from_millis(300);
+/// Far below the 30 s acquire and busy timeouts a call without the deadline
+/// would wait.
+const ANSWERED_WITHIN: Duration = Duration::from_secs(5);
+
+/// A file database with production's two pools: a write lock and the
+/// lifecycle pool's connections are then real and separate from the API's.
+async fn file_pools(tag: &str) -> (SqlitePool, DeadlineDb, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "restream-deadline-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite://{}", dir.join("db.sqlite").display());
+    let api = create_pool(&url).await.unwrap();
+    setup_database_schema(&api).await.unwrap();
+    let lifecycle = create_lifecycle_pool(&url).await.unwrap();
+    (api, DeadlineDb::new(lifecycle, DEADLINE), dir)
+}
+
+async fn hold_every_connection(pool: &SqlitePool) -> Vec<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
+    let mut held = Vec::new();
+    while let Ok(connection) =
+        tokio::time::timeout(Duration::from_millis(200), pool.acquire()).await
+    {
+        held.push(connection.unwrap());
+    }
+    assert!(!held.is_empty());
+    held
+}
+
+/// The write lock another writer (an API transaction) holds.
+async fn hold_write_lock(api: &SqlitePool) -> sqlx::pool::PoolConnection<sqlx::Sqlite> {
+    let mut connection = api.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    connection
+}
+
+async fn release_write_lock(mut connection: sqlx::pool::PoolConnection<sqlx::Sqlite>) {
+    sqlx::query("ROLLBACK")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+}
+
+async fn count(pool: &SqlitePool, sql: &str) -> i64 {
+    sqlx::query_scalar(AssertSqlSafe(sql.to_string()))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Every lifecycle connection held: a shared-loop read answers at its
+/// deadline instead of after the pool's 30 s acquire timeout, and reads
+/// again once a connection is free.
+#[tokio::test]
+async fn a_read_returns_at_its_deadline_while_every_connection_is_held() {
+    let (_api, db, dir) = file_pools("read").await;
+    let held = hold_every_connection(&db.pool).await;
+
+    let answer = tokio::time::timeout(ANSWERED_WITHIN, db.read(crate::db::list_outputs))
+        .await
+        .expect("the read answers at its deadline, not the acquire timeout");
+    assert!(
+        matches!(&answer, Err(sqlx::Error::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut),
+        "{answer:?}"
+    );
+
+    drop(held);
+    assert!(db.read(crate::db::list_outputs).await.is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A write behind another writer's lock answers at its deadline, is not
+/// cancelled, and lands once the lock is released.
+#[tokio::test]
+async fn a_write_behind_a_held_write_lock_returns_at_its_deadline_and_lands_after_release() {
+    let (api, db, dir) = file_pools("write").await;
+    let lock = hold_write_lock(&api).await;
+
+    let answer = tokio::time::timeout(
+        ANSWERED_WITHIN,
+        db.write(|pool| async move { crate::db::set_meta(&pool, "k", "v").await }),
+    )
+    .await
+    .expect("the write answers at its deadline, not the busy timeout");
+    assert!(answer.is_err(), "{answer:?}");
+
+    release_write_lock(lock).await;
+    tokio::time::timeout(ANSWERED_WITHIN, async {
+        while crate::db::get_meta(&api, "k").await.unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the timed-out write still lands");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+async fn insert_logs(api: &SqlitePool, rows: usize, ts: &str) {
+    let mut tx = api.begin().await.unwrap();
+    for _ in 0..rows {
+        sqlx::query(
+            "INSERT INTO app_logs (ts, level, target, message) VALUES (?, 'info', 't', 'm')",
+        )
+        .bind(ts)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
+
+/// Retention deletes in statements of at most one batch, each its own
+/// short write, and stops after the first short batch.
+#[tokio::test]
+async fn log_retention_deletes_in_batches_of_at_most_the_batch_size() {
+    let (api, db, dir) = file_pools("retention").await;
+    insert_logs(&api, 25, "2000-01-01T00:00:00Z").await;
+    insert_logs(&api, 3, "2999-01-01T00:00:00Z").await;
+
+    let batches = crate::db::prune_app_logs(&db, 7, 10).await.unwrap();
+
+    assert_eq!(
+        batches,
+        [10, 10, 5],
+        "one statement per batch of at most 10 rows"
+    );
+    assert_eq!(count(&api, "SELECT COUNT(*) FROM app_logs").await, 3);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Housekeeping's retention behind another writer's lock answers at its
+/// deadline, so the loop carries on; once the lock is released the next
+/// prune converges.
+#[tokio::test]
+async fn log_retention_returns_at_its_deadline_behind_a_write_lock_and_converges_after() {
+    let (api, db, dir) = file_pools("retention-lock").await;
+    insert_logs(&api, 5, "2000-01-01T00:00:00Z").await;
+    let lock = hold_write_lock(&api).await;
+
+    let answer = tokio::time::timeout(
+        ANSWERED_WITHIN,
+        crate::db::prune_app_logs(&db, 7, crate::db::APP_LOG_RETENTION_BATCH),
+    )
+    .await
+    .expect("retention answers at its deadline, not the busy timeout");
+    assert!(answer.is_err(), "{answer:?}");
+
+    release_write_lock(lock).await;
+    tokio::time::timeout(ANSWERED_WITHIN, async {
+        while count(&api, "SELECT COUNT(*) FROM app_logs").await > 0 {
+            let _ = crate::db::prune_app_logs(&db, 7, crate::db::APP_LOG_RETENTION_BATCH).await;
+        }
+    })
+    .await
+    .expect("retention converges once the lock is released");
+    let _ = std::fs::remove_dir_all(dir);
+}

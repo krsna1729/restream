@@ -130,14 +130,33 @@ impl PipelineInputLookup for SqlitePipelineInputStore {
     }
 }
 
-impl CatalogAuthSource for SqlitePipelineInputStore {
+/// The ingest admission index's source: every input row, read through the
+/// shared loops' deadline executor, so a reload (a catalog write's, the
+/// periodic one, a retry) answers within its deadline and fails over to the
+/// retry task instead of holding the reload lock behind a stalled pool.
+#[derive(Clone)]
+pub struct SqliteCatalogSource {
+    db: crate::db::DeadlineDb,
+}
+
+impl SqliteCatalogSource {
+    pub fn new(db: crate::db::DeadlineDb) -> Self {
+        Self { db }
+    }
+}
+
+impl CatalogAuthSource for SqliteCatalogSource {
     fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
         Box::pin(async move {
-            let rows = crate::db::with_busy_retry(|| {
-                crate::db::list_pipeline_inputs_for_admission(&self.pool)
-            })
-            .await
-            .map_err(|error| PipelineStoreError::new(error.to_string()))?;
+            let rows = self
+                .db
+                .read(|pool| {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::list_pipeline_inputs_for_admission(pool)
+                    })
+                })
+                .await
+                .map_err(|error| PipelineStoreError::new(error.to_string()))?;
             Ok(rows
                 .into_iter()
                 .map(|row| {
