@@ -123,6 +123,7 @@ view is serialized straight from its typed form.
 | `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
 | `egressFabricShards` | Per-shard state, progress age, command depth, resyncs |
 | `containedPanics` | Panics contained at a per-entity boundary since start |
+| `nameResolver` | `lookups`, `timeouts`, `overflows` of the one process name resolver; a rising `overflows` means more distinct names are waiting than its queue holds |
 | `tuning.outputMaxRetries` | Restart budget the alert rules compare against |
 
 The health view applies the ingest disconnect grace

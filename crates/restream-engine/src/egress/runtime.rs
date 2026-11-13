@@ -431,6 +431,18 @@ impl EgressFabricRuntime {
     pub fn shutdown(self) -> Vec<EgressShardSnapshot> {
         self.group.shutdown_and_join()
     }
+
+    /// [`Self::shutdown`] from async code: the joins (each shard's drain,
+    /// bounded by its drain timeout) run on the blocking pool, never on a
+    /// Tokio worker.
+    pub async fn shutdown_off_worker(self) -> Vec<EgressShardSnapshot> {
+        tokio::task::spawn_blocking(move || self.shutdown())
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "egress fabric shutdown did not finish cleanly");
+                Vec::new()
+            })
+    }
 }
 
 /// Delivers coalesced wakes from the publishing thread. Each handle uses

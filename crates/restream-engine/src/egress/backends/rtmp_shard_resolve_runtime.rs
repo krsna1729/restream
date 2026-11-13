@@ -1,141 +1,70 @@
-//! Decorator that queues RTMP DNS resolution on `Add`/`Update`.
-//! The single bounded resolver worker reports success or failure for every
-//! accepted request. On drop it stops queued lookups and joins after its
-//! current system resolver call completes.
+//! Decorator that resolves each RTMP `Add`/`Update` destination on the
+//! process resolver (`crate::resolver`), with the output's
+//! `LeafPolicy::resolve_timeout` as its deadline. Every request is answered
+//! (addresses, failure, timeout or a full resolver queue) into the wrapped
+//! backend's completion queue, which it drains on its media tick; a failure
+//! fails that output alone and its egress task retries it. The shard owns no
+//! resolver thread, so its teardown never waits on DNS.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{
-    Arc,
-    mpsc::{self, SyncSender},
-};
-use std::thread::JoinHandle;
+use std::sync::{Arc, mpsc::Sender};
+use std::time::{Duration, Instant};
 
-use crate::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
+use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::egress::journal::RingFeed;
 use crate::egress::metrics::ShardMetrics;
 use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::resolver::{ResolveError, Resolver};
 use restream_rtmp::parse_rtmp_url;
 
 use super::rtmp_shard::{
     RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolvedConnect, RtmpShardBackend,
-    resolve_rtmp_peer_host, rtmp_resolve_completion_queue,
+    rtmp_resolve_completion_queue,
 };
 
-const RTMP_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
-const RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
-
 struct RtmpResolveRequest {
-    output_id: crate::egress::command::OutputId,
+    output_id: OutputId,
     generation: u64,
     host: String,
     port: u16,
+    timeout: Duration,
 }
 
-struct RtmpResolveWorkerSet {
-    completion_sender: SyncSender<RtmpResolvedConnect>,
-    request_sender: Option<SyncSender<RtmpResolveRequest>>,
-    stopping: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
+pub(crate) struct ResolvingRtmpShardBackend<B> {
+    backend: B,
+    resolver: Arc<Resolver>,
+    completions: Sender<RtmpResolvedConnect>,
 }
 
-impl RtmpResolveWorkerSet {
-    fn new(completion_sender: SyncSender<RtmpResolvedConnect>) -> Self {
+impl<B> ResolvingRtmpShardBackend<B> {
+    fn new(backend: B, resolver: Arc<Resolver>, completions: Sender<RtmpResolvedConnect>) -> Self {
         Self {
-            completion_sender,
-            request_sender: None,
-            stopping: Arc::new(AtomicBool::new(false)),
-            worker: None,
+            backend,
+            resolver,
+            completions,
         }
     }
 
-    /// Starts the worker on first use. A thread that cannot be created
-    /// (thread or memory limits) rejects the request instead of panicking
-    /// the shard factory; the next request tries again.
-    fn ensure_started(&mut self) -> Option<&SyncSender<RtmpResolveRequest>> {
-        if self.request_sender.is_none() {
-            let (request_sender, request_receiver) =
-                mpsc::sync_channel::<RtmpResolveRequest>(RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY);
-            let worker_stopping = Arc::clone(&self.stopping);
-            let completion_sender = self.completion_sender.clone();
-            let worker = std::thread::Builder::new()
-                .name("rtmp-dns-res".to_string())
-                .spawn(move || {
-                    while let Ok(request) = request_receiver.recv() {
-                        if worker_stopping.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        // A blocking send backpressures the worker onto the
-                        // bounded request queue instead of dropping a
-                        // completion, which would leave its pending connect
-                        // resident forever. The shard drops its completion
-                        // receiver before joining this worker.
-                        let completion = RtmpResolvedConnect {
-                            peer_addr: resolve_rtmp_peer_host(&request.host, request.port),
-                            output_id: request.output_id,
-                            generation: request.generation,
-                        };
-                        if completion_sender.send(completion).is_err() {
-                            break;
-                        }
-                    }
-                })
-                .ok()?;
-            self.request_sender = Some(request_sender);
-            self.worker = Some(worker);
-        }
-        self.request_sender.as_ref()
-    }
-
-    fn spawn(
-        &mut self,
-        output_id: crate::egress::command::OutputId,
-        generation: u64,
-        host: String,
-        port: u16,
-    ) -> bool {
-        let Some(sender) = self.ensure_started() else {
-            return false;
-        };
-        let request = RtmpResolveRequest {
+    fn resolve(&self, request: RtmpResolveRequest) {
+        let RtmpResolveRequest {
             output_id,
             generation,
             host,
             port,
-        };
-        if sender.try_send(request).is_err() {
-            return false;
-        }
-        true
-    }
-
-    fn shutdown(&mut self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.request_sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-    }
-}
-
-impl Drop for RtmpResolveWorkerSet {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
-pub(crate) struct ResolvingRtmpShardBackend<B> {
-    // Keep the completion receiver before the worker set in drop order.
-    backend: B,
-    resolve_workers: RtmpResolveWorkerSet,
-}
-
-impl<B> ResolvingRtmpShardBackend<B> {
-    fn new(backend: B, resolve_workers: RtmpResolveWorkerSet) -> Self {
-        Self {
-            backend,
-            resolve_workers,
-        }
+            timeout,
+        } = request;
+        let completions = self.completions.clone();
+        self.resolver
+            .submit(&host, port, Instant::now() + timeout, move |resolution| {
+                // The receiver goes only with the shard, when no answer matters.
+                let _ = completions.send(RtmpResolvedConnect {
+                    output_id,
+                    generation,
+                    peer: resolution.and_then(|addresses| {
+                        addresses.first().copied().ok_or(ResolveError::NoAddress)
+                    }),
+                });
+            });
     }
 }
 
@@ -144,40 +73,19 @@ where
     B: EgressShardBackend,
 {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
-        let Some((output_id, generation, host, port)) = resolve_request_from_command(&command)
-        else {
-            return self.backend.on_command(command);
-        };
-        let progress = match &command {
-            EgressCommand::Add(spec) | EgressCommand::Update(spec) => spec.progress.clone(),
-            _ => unreachable!("only RTMP add/update commands request DNS"),
-        };
-        let rejected_output = output_id.clone();
-        if !self
-            .resolve_workers
-            .spawn(output_id, generation, host, port)
-        {
-            tracing::warn!(
-                output_id = %rejected_output,
-                "rtmp fabric leaf rejected: resolver unavailable or its request queue is full"
-            );
-            self.backend
-                .on_command(EgressCommand::Remove(rejected_output));
-            progress.mark_terminated_unexpectedly();
-            return EgressShardCommandEffect::Continue;
+        // The answer is drained on a later media tick, after the backend has
+        // queued the pending connect it completes.
+        if let Some(request) = resolve_request_from_command(&command) {
+            self.resolve(request);
         }
         self.backend.on_command(command)
     }
 
-    fn timer_generation(&self, output_id: &crate::egress::command::OutputId) -> Option<u64> {
+    fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
         self.backend.timer_generation(output_id)
     }
 
-    fn on_timer(
-        &mut self,
-        output_id: crate::egress::command::OutputId,
-        generation: u64,
-    ) -> EgressShardCommandEffect {
+    fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
         self.backend.on_timer(output_id, generation)
     }
 
@@ -219,6 +127,8 @@ where
 pub(crate) type ResolvingRtmpShardBackendWithPoller<P, S> =
     ResolvingRtmpShardBackend<RtmpShardBackend<P, S>>;
 
+/// Build one RTMP shard backend whose lookups go to `resolver`
+/// (`crate::resolver::shared()` in production).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     poller: P,
@@ -229,13 +139,13 @@ pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     startup_source: S,
     drain_timeout: std::time::Duration,
     leaf_capacity: usize,
+    resolver: Arc<Resolver>,
 ) -> ResolvingRtmpShardBackendWithPoller<P, S>
 where
     P: RtmpReadinessPoller,
     S: RtmpPublishStartupSource,
 {
-    let (completion_sender, completion_queue) =
-        rtmp_resolve_completion_queue(RTMP_RESOLVE_COMPLETION_QUEUE_CAPACITY);
+    let (completion_sender, completion_queue) = rtmp_resolve_completion_queue();
     let backend = RtmpShardBackend::with_runtime_components(
         poller,
         feed,
@@ -247,12 +157,10 @@ where
     )
     .with_leaf_capacity(leaf_capacity)
     .with_drain_timeout(drain_timeout);
-    ResolvingRtmpShardBackend::new(backend, RtmpResolveWorkerSet::new(completion_sender))
+    ResolvingRtmpShardBackend::new(backend, resolver, completion_sender)
 }
 
-fn resolve_request_from_command(
-    command: &EgressCommand,
-) -> Option<(crate::egress::command::OutputId, u64, String, u16)> {
+fn resolve_request_from_command(command: &EgressCommand) -> Option<RtmpResolveRequest> {
     match command {
         EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
             resolve_request_from_output_spec(spec)
@@ -265,14 +173,18 @@ fn resolve_request_from_command(
     }
 }
 
-fn resolve_request_from_output_spec(
-    spec: &OutputSpec,
-) -> Option<(crate::egress::command::OutputId, u64, String, u16)> {
+fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<RtmpResolveRequest> {
     let ProtocolSpec::Rtmp { url, .. } = &spec.protocol else {
         return None;
     };
     let parts = parse_rtmp_url(url)?;
-    Some((spec.id.clone(), spec.generation, parts.host, parts.port))
+    Some(RtmpResolveRequest {
+        output_id: spec.id.clone(),
+        generation: spec.generation,
+        host: parts.host,
+        port: parts.port,
+        timeout: spec.policy.resolve_timeout,
+    })
 }
 
 #[cfg(test)]

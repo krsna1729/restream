@@ -78,6 +78,7 @@ pub mod pipe_metrics;
 pub mod profiles;
 pub mod recirculation;
 pub mod recording;
+pub mod resolver;
 pub mod rtmp;
 pub mod secret_display;
 pub mod security;

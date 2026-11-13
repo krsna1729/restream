@@ -5,8 +5,8 @@
 //! The shard owns the connections (Compio TCP through the same poller as
 //! RTMP, TLS through `egress::tls`, kernel TLS after the handshake) and the
 //! clock. A store publish wakes the shard directly (see
-//! `engine_hls_egress_fabric.rs`); a small pool of resolve threads keeps
-//! DNS off the shard, so one destination with a hanging name server holds
+//! `engine_hls_egress_fabric.rs`); names resolve on the process resolver
+//! (`crate::resolver`), so one destination with a hanging name server holds
 //! one lookup thread, not every output's connects, and every retry
 //! resolves again (Akamai). One request is in flight per output, and each
 //! output's deadlines (backoff, resolve, connect, request timeout) are
@@ -37,6 +37,7 @@ use crate::hls::HlsStore;
 use crate::hls::upload_policy::{
     self, Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,
 };
+use crate::resolver::{ResolveError, Resolver};
 
 /// HTTPS connection and kTLS counters for HLS PUT, reported beside RTMPS.
 pub static HLS_PUT_TLS_COUNTERS: TlsCounters = TlsCounters::new();
@@ -49,74 +50,15 @@ const END_TIMEOUT: Duration = Duration::from_secs(1);
 /// completion and shard visit. HTTPS x600 and HTTP x1000 A/B, 512 KiB vs
 /// 64 KiB, paired rounds: 7-20 CPU points lower in every pair.
 const TRANSMIT_CAPACITY: usize = 512 * 1024;
-const RESOLVE_QUEUE_CAPACITY: usize = 1024;
-/// Lookup threads per shard: a destination whose name server hangs ties up
-/// one, not the shard's other outputs.
-const RESOLVE_THREADS: usize = 4;
 const SCRATCH_BYTES: usize = 16 * 1024;
 /// Rates each output's on-time segment bytes over half a minute: about ten
 /// segments, so the sizer learns from a steady rate, not single segments.
 const DELIVERY_RATE_WINDOW: Duration = Duration::from_secs(30);
 
-// ---------------------------------------------------------------------------
-// Resolve worker
-// ---------------------------------------------------------------------------
-
-struct ResolveRequest {
-    key: LeafKey,
-    token: u64,
-    host: String,
-    port: u16,
-}
-
 struct Resolved {
     key: LeafKey,
     token: u64,
-    addr: Option<SocketAddr>,
-}
-
-/// A few threads resolving names for the shard. Dropping it closes the
-/// request queue; each thread ends after its current lookup and is never
-/// joined, so a lookup blocked in `getaddrinfo` cannot stall shutdown.
-struct Resolver {
-    requests: flume::Sender<ResolveRequest>,
-    completions: flume::Receiver<Resolved>,
-}
-
-impl Resolver {
-    fn spawn() -> std::io::Result<Self> {
-        let (request_tx, request_rx) = flume::bounded::<ResolveRequest>(RESOLVE_QUEUE_CAPACITY);
-        let (done_tx, done_rx) = flume::bounded::<Resolved>(RESOLVE_QUEUE_CAPACITY);
-        for _ in 0..RESOLVE_THREADS {
-            let (request_rx, done_tx) = (request_rx.clone(), done_tx.clone());
-            std::thread::Builder::new()
-                .name("hls-put-resolve".to_string())
-                .spawn(move || {
-                    while let Ok(request) = request_rx.recv() {
-                        let addr = crate::egress::backends::rtmp_shard::resolve_rtmp_peer_host(
-                            &request.host,
-                            request.port,
-                        );
-                        let resolved = Resolved {
-                            key: request.key,
-                            token: request.token,
-                            addr,
-                        };
-                        if done_tx.send(resolved).is_err() {
-                            return;
-                        }
-                    }
-                })?;
-        }
-        Ok(Self {
-            requests: request_tx,
-            completions: done_rx,
-        })
-    }
-
-    fn request(&self, request: ResolveRequest) -> bool {
-        self.requests.try_send(request).is_ok()
-    }
+    addr: Result<SocketAddr, ResolveError>,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,10 +100,6 @@ struct Slot {
     /// The policy's backoff instant, when it is waiting for one.
     wake_at: Option<Instant>,
     resolve_token: u64,
-    /// The lookup still running for this slot: a retry waits for its answer
-    /// instead of queueing another, so one destination whose name server
-    /// hangs holds at most one of the shard's lookup threads.
-    lookup_in_flight: Option<u64>,
     /// The deadline of this slot's live entry in the backend's `deadlines`
     /// heap; `None` once that entry is popped or when nothing is indexed.
     indexed_deadline: Option<Instant>,
@@ -197,7 +135,11 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     poller: P,
     store: Arc<HlsStore>,
     client_config: Arc<ClientConfig>,
-    resolver: Resolver,
+    resolver: Arc<Resolver>,
+    /// The resolver's answers. Unbounded so a resolver thread never blocks
+    /// on, or drops, an answer: one per lookup, each by its deadline.
+    resolved_tx: flume::Sender<Resolved>,
+    resolved_rx: flume::Receiver<Resolved>,
     slots: LeafArena<Slot>,
     by_output: HashMap<OutputId, LeafKey>,
     /// Reused by `drive_due`.
@@ -232,12 +174,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         store: Arc<HlsStore>,
         client_config: Arc<ClientConfig>,
         leaf_capacity: usize,
-    ) -> std::io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        let (resolved_tx, resolved_rx) = flume::unbounded();
+        Self {
             poller,
             store,
             client_config,
-            resolver: Resolver::spawn()?,
+            resolver: crate::resolver::shared(),
+            resolved_tx,
+            resolved_rx,
             slots: LeafArena::with_capacity(leaf_capacity),
             by_output: HashMap::new(),
             due: Vec::new(),
@@ -250,7 +195,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             tx_bytes: 0,
             tx_units: 0,
             sweep: LeafServiceSweep::default(),
-        })
+        }
     }
 
     fn add(&mut self, spec: OutputSpec) {
@@ -287,7 +232,6 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             resolve_timeout: spec.policy.resolve_timeout,
             wake_at: None,
             resolve_token: 0,
-            lookup_in_flight: None,
             indexed_deadline: None,
             delivery: DeliveryTracker::default(),
         });
@@ -337,25 +281,26 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             return;
         };
         let deadline = Instant::now() + slot.resolve_timeout;
-        if let Some(token) = slot.lookup_in_flight {
-            // The earlier lookup's answer serves this attempt too.
-            slot.conn = Conn::Resolving { token, deadline };
-            return;
-        }
         slot.resolve_token = slot.resolve_token.wrapping_add(1);
         let token = slot.resolve_token;
-        let request = ResolveRequest {
-            key,
-            token,
-            host: slot.target.host.clone(),
-            port: slot.target.port,
-        };
         slot.conn = Conn::Resolving { token, deadline };
-        if self.resolver.request(request) {
-            slot.lookup_in_flight = Some(token);
-        } else {
-            self.connection_failed(key, "resolver queue full");
-        }
+        // A retry while an earlier lookup of the name still runs joins it
+        // in the resolver instead of starting another.
+        let resolved = self.resolved_tx.clone();
+        self.resolver.submit(
+            &slot.target.host,
+            slot.target.port,
+            deadline,
+            move |resolution| {
+                let _ = resolved.send(Resolved {
+                    key,
+                    token,
+                    addr: resolution.and_then(|addresses| {
+                        addresses.first().copied().ok_or(ResolveError::NoAddress)
+                    }),
+                });
+            },
+        );
     }
 
     /// The connection attempt for the waiting request failed: it counts as
@@ -386,15 +331,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         let Some(slot) = self.slots.get_mut(key) else {
             return;
         };
-        if slot.lookup_in_flight == Some(resolved.token) {
-            slot.lookup_in_flight = None;
-        }
         if !matches!(slot.conn, Conn::Resolving { token, .. } if token == resolved.token) {
             return; // a stale lookup
         }
-        let Some(addr) = resolved.addr else {
-            self.connection_failed(key, "name resolution failed");
-            return;
+        let addr = match resolved.addr {
+            Ok(addr) => addr,
+            Err(error) => {
+                self.connection_failed(key, &error.to_string());
+                return;
+            }
         };
         let (generation, timeout) = (slot.generation, slot.connect_timeout);
         match self.poller.start_connect(addr, key, generation, timeout) {
@@ -479,7 +424,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             self.enqueue(event.key);
         }
         self.poll_buffer = events;
-        while let Ok(resolved) = self.resolver.completions.try_recv() {
+        while let Ok(resolved) = self.resolved_rx.try_recv() {
             self.resolved(resolved);
         }
     }
@@ -920,7 +865,7 @@ impl<P: RtmpReadinessPoller + 'static> EgressShardBackend for HlsPutShardBackend
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved_any = false;
-        while let Ok(resolved) = self.resolver.completions.try_recv() {
+        while let Ok(resolved) = self.resolved_rx.try_recv() {
             self.resolved(resolved);
             resolved_any = true;
         }

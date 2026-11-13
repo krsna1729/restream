@@ -46,6 +46,7 @@ fn runtime_and_owners_live_and_die_on_the_shard_thread() {
                 Duration::from_millis(300),
                 64,
                 settings(),
+                crate::resolver::shared(),
             )
         },
     )
@@ -187,6 +188,7 @@ fn shard_factory_builds_backend_or_returns_a_typed_error() {
         Duration::from_millis(100),
         8,
         settings(),
+        crate::resolver::shared(),
     );
     let ok = AtomicBool::new(built.is_ok());
     assert!(ok.load(Ordering::Relaxed));

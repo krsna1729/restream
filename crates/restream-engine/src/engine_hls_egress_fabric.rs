@@ -60,8 +60,12 @@ fn backend_factory(
 ) -> impl FnOnce() -> Result<HlsPutShardBackend<CompioTcpPoller>, String> + Send + 'static {
     move || {
         let poller = CompioTcpPoller::new(max_events).map_err(|error| error.message)?;
-        HlsPutShardBackend::new(poller, store, client_config, leaf_capacity)
-            .map_err(|error| error.to_string())
+        Ok(HlsPutShardBackend::new(
+            poller,
+            store,
+            client_config,
+            leaf_capacity,
+        ))
     }
 }
 
@@ -225,7 +229,7 @@ impl MediaEngine {
         let Some(runtime) = runtime else {
             return false;
         };
-        let _ = runtime.shutdown();
+        let _ = runtime.shutdown_off_worker().await;
         true
     }
 
@@ -257,7 +261,7 @@ impl MediaEngine {
         };
         let count = runtimes.len();
         for runtime in runtimes {
-            let _ = runtime.shutdown();
+            let _ = runtime.shutdown_off_worker().await;
         }
         count
     }

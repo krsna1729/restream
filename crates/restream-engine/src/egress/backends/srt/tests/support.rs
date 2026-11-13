@@ -51,7 +51,7 @@ pub(super) fn settings() -> SrtOwnerSettings {
 /// A backend plus the resolver-completion sender the tests drive by hand.
 pub(super) struct Harness {
     pub(super) backend: SrtShardBackend,
-    pub(super) resolved: SyncSender<SrtResolvedConnect>,
+    pub(super) resolved: std::sync::mpsc::Sender<SrtResolvedConnect>,
     pub(super) feed: TestFeed,
     /// The shard command channel the backend parks on in `wait_idle`.
     _commands: flume::Sender<EgressCommand>,
@@ -65,7 +65,7 @@ impl Harness {
 
     pub(super) fn with_settings(settings: SrtOwnerSettings) -> Self {
         let feed = TestFeed::new();
-        let (resolved, queue) = srt_resolve_completion_queue(256);
+        let (resolved, queue) = srt_resolve_completion_queue();
         let backend = SrtShardBackend::with_runtime_components(
             feed.reader(),
             budget(),
@@ -92,7 +92,7 @@ impl Harness {
             .send(SrtResolvedConnect {
                 output_id,
                 generation,
-                peer_addrs: peers,
+                peers: Ok(peers),
             })
             .expect("completion queue open");
         self.backend.on_media_tick();

@@ -14,12 +14,11 @@ use std::time::{Duration, Instant};
 
 use super::egress_connect::egress_connect_spec;
 use super::ingress_bridge::{CallToken, IngressCommand, IngressPeer};
+use crate::resolver::{DEFAULT_RESOLVE_TIMEOUT, split_host_port};
 use std::hash::Hash;
 
 /// How long one call's handshake may take before it counts as failed.
 const CALL_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long resolving the listener's host may take.
-const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// The ingress Owner whose caller side dials every call. Its caller side
@@ -278,30 +277,22 @@ fn place(hosts: &[Vec<SocketAddr>]) -> Result<Vec<SocketAddr>, String> {
     })
 }
 
-/// Every address of every listed host. The system resolver blocks, so it
-/// runs on the blocking pool (never on a Tokio worker), bounded by
-/// `RESOLVE_TIMEOUT` per host.
+/// Every address of every listed host, looked up concurrently on the process
+/// resolver by one [`DEFAULT_RESOLVE_TIMEOUT`] deadline.
 async fn resolve(hosts: Vec<String>) -> Result<Vec<Vec<SocketAddr>>, String> {
-    let mut resolved = Vec::with_capacity(hosts.len());
-    for host in hosts {
-        let lookup = host.clone();
-        let addrs: Vec<SocketAddr> = tokio::time::timeout(
-            RESOLVE_TIMEOUT,
-            tokio::task::spawn_blocking(move || {
-                std::net::ToSocketAddrs::to_socket_addrs(lookup.as_str())
-                    .map(Iterator::collect::<Vec<_>>)
-            }),
-        )
-        .await
-        .map_err(|_| format!("resolving {host} timed out"))?
-        .map_err(|_| format!("resolving {host} was interrupted"))?
-        .map_err(|error| format!("resolving {host}: {error}"))?;
-        if addrs.is_empty() {
-            return Err(format!("{host} resolved to no address"));
+    let resolver = crate::resolver::shared();
+    let deadline = Instant::now() + DEFAULT_RESOLVE_TIMEOUT;
+    let lookups = hosts.iter().map(|host| {
+        let resolver = &resolver;
+        async move {
+            let (name, port) = split_host_port(host).map_err(|error| error.to_string())?;
+            resolver
+                .resolve(name, port, deadline)
+                .await
+                .map_err(|error| format!("resolving {host}: {error}"))
         }
-        resolved.push(addrs);
-    }
-    Ok(resolved)
+    });
+    futures_util::future::try_join_all(lookups).await
 }
 
 #[cfg(test)]

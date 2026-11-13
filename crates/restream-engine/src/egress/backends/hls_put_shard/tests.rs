@@ -158,7 +158,6 @@ fn start_output_with(
             client_config,
             8,
         )
-        .unwrap()
     });
     let bytes_sent = Arc::new(AtomicU64::new(0));
     let terminated = Arc::new(AtomicBool::new(false));
@@ -390,7 +389,6 @@ fn backend(capacity: usize) -> HlsPutShardBackend<CompioTcpPoller> {
         crate::egress::tls::rustls_client_config(),
         capacity,
     )
-    .unwrap()
 }
 
 fn hls_spec(id: &str, port: u16) -> OutputSpec {
@@ -425,7 +423,7 @@ fn a_removed_outputs_late_dns_answer_does_not_reach_the_slots_next_output() {
     backend.resolved(Resolved {
         key: old,
         token: new_token,
-        addr: Some("127.0.0.1:9".parse().unwrap()),
+        addr: Ok("127.0.0.1:9".parse().unwrap()),
     });
 
     assert!(
@@ -511,29 +509,6 @@ fn a_drain_stays_alive_while_an_end_playlist_is_in_flight() {
         "a draining shard with an end playlist outstanding reported no work"
     );
     backend.on_shutdown();
-}
-
-/// A retry while the slot's earlier lookup still runs waits for that
-/// answer instead of queueing a second lookup; the answer then serves it.
-#[test]
-fn a_retry_reuses_the_slots_lookup_in_flight() {
-    let mut backend = backend(1);
-    backend.on_command(EgressCommand::Add(hls_spec("dns", 1)));
-    let key = backend.by_output[&OutputId::new("dns")];
-    let first = backend
-        .slots
-        .get(key)
-        .and_then(|slot| slot.lookup_in_flight);
-    assert!(first.is_some(), "the first attempt starts a lookup");
-    // The attempt times out before the answer; the retry starts.
-    backend.connection_failed(key, "name resolution timed out");
-    backend.start_resolve(key);
-    let slot = backend.slots.get(key).unwrap();
-    assert_eq!(slot.lookup_in_flight, first, "no second lookup was queued");
-    assert!(
-        matches!(slot.conn, Conn::Resolving { token, .. } if Some(token) == first),
-        "the retry waits on the running lookup"
-    );
 }
 
 fn scheduled_output(effect: EgressShardCommandEffect) -> Option<String> {

@@ -3,6 +3,8 @@ disallowed-methods = [
   { path = "std::sync::RwLock::read", reason = "use restream_sync::lock::read (poison-tolerant)" },
   { path = "std::sync::RwLock::write", reason = "use restream_sync::lock::write (poison-tolerant)" },
   { path = "sqlx::Row::get", reason = "use Row::try_get with ?: a NULL or mistyped column (SQLite stores any type) must be an error, not a panic" },
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "blocking getaddrinfo with no deadline: resolve through restream_engine::resolver (Resolver::resolve / Resolver::submit)" },
+  { path = "tokio::net::lookup_host", reason = "no deadline, and each hung call holds a blocking-pool thread: resolve through restream_engine::resolver (Resolver::resolve)" },
 ]
 # `clippy::await_holding_invalid_type`: a tokio guard held across an await
 # (another lock's acquisition included) is how a registry read re-acquired

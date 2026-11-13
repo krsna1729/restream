@@ -17,8 +17,8 @@
 //! re-examined at a bounded rate on Owner activity, never in a spin.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::net::SocketAddr;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use srt_transport::advanced::caller::{PoolOutcome, PoolRequestId};
@@ -33,6 +33,7 @@ use crate::egress::policy::{LeafLimits, WorkBudgetConfig};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
 use crate::egress::visit::EngineVisitResult;
+use crate::resolver::ResolveError;
 use crate::srt::egress_connect::egress_connect_spec;
 use restream_srt::address_family::AddressFamily;
 use restream_srt::egress_connect::SrtFabricEgressConnectSpec;
@@ -90,86 +91,30 @@ pub(crate) fn apply_send_backlog(
 pub(crate) struct SrtResolvedConnect {
     pub(crate) output_id: OutputId,
     pub(crate) generation: u64,
-    pub(crate) peer_addrs: Vec<SocketAddr>,
+    /// One address per listed peer host, in order. An error fails the
+    /// pending connect instead of keeping it resident (and holding leaf
+    /// capacity) forever.
+    pub(crate) peers: Result<Vec<SocketAddr>, ResolveError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SrtResolveRequest {
-    pub(crate) output_id: OutputId,
-    pub(crate) generation: u64,
-    pub(crate) peer_hosts: Vec<String>,
-}
-
-impl SrtResolveRequest {
-    pub(crate) fn new(output_id: OutputId, generation: u64, peer_hosts: Vec<String>) -> Self {
-        Self {
-            output_id,
-            generation,
-            peer_hosts,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SrtResolveWorkerError {
-    EmptyPeerList,
-    ResolveFailed { host: String },
-    CompletionQueueFull,
-    CompletionQueueClosed,
-}
 #[derive(Debug)]
 pub(crate) struct SrtResolveCompletionQueue {
     receiver: Receiver<SrtResolvedConnect>,
 }
 
-pub(crate) fn srt_resolve_completion_queue(
-    capacity: usize,
-) -> (SyncSender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
-    let (sender, receiver) = mpsc::sync_channel(capacity);
+/// Unbounded so a resolver thread never blocks on, or drops, a shard's
+/// answer: it holds one completion per accepted `Add`/`Update`, each
+/// answered by its deadline and drained every media tick.
+pub(crate) fn srt_resolve_completion_queue()
+-> (Sender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
+    let (sender, receiver) = mpsc::channel();
     (sender, SrtResolveCompletionQueue { receiver })
-}
-
-fn resolve_srt_peer_hosts(
-    request: SrtResolveRequest,
-    completion_sender: SyncSender<SrtResolvedConnect>,
-) -> Result<(), SrtResolveWorkerError> {
-    if request.peer_hosts.is_empty() {
-        return Err(SrtResolveWorkerError::EmptyPeerList);
-    }
-
-    let mut peer_addrs = Vec::with_capacity(request.peer_hosts.len());
-    for host in &request.peer_hosts {
-        let addr = resolve_srt_peer_host(host)
-            .ok_or_else(|| SrtResolveWorkerError::ResolveFailed { host: host.clone() })?;
-        peer_addrs.push(addr);
-    }
-
-    completion_sender
-        .try_send(SrtResolvedConnect {
-            output_id: request.output_id,
-            generation: request.generation,
-            peer_addrs,
-        })
-        .map_err(|error| match error {
-            TrySendError::Full(_) => SrtResolveWorkerError::CompletionQueueFull,
-            TrySendError::Disconnected(_) => SrtResolveWorkerError::CompletionQueueClosed,
-        })
-}
-
-pub(crate) fn resolve_srt_peer_host(host: &str) -> Option<SocketAddr> {
-    host.parse::<SocketAddr>()
-        .ok()
-        .or_else(|| super::resolve::contained_lookup(host, || host.to_socket_addrs().ok()?.next()))
 }
 
 impl SrtResolveCompletionQueue {
     pub(crate) fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
-        loop {
-            match self.receiver.try_recv() {
-                Ok(completion) => resolved.push(completion),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
-            }
+        while let Ok(completion) = self.receiver.try_recv() {
+            resolved.push(completion);
         }
     }
 }
@@ -814,20 +759,20 @@ impl EgressShardBackend for SrtShardBackend {
         self.resolve_completions.drain_resolved(&mut resolved);
         let before = self.output_sockets.len() + self.queued_requests.len();
         for completion in resolved.drain(..) {
-            if completion.peer_addrs.is_empty() {
-                // The bounded failure completion from the resolver worker.
-                self.fail_pending(
+            match completion.peers {
+                Ok(peers) => {
+                    self.complete_pending_connect(
+                        &completion.output_id,
+                        completion.generation,
+                        &peers,
+                    );
+                }
+                Err(error) => self.fail_pending(
                     &completion.output_id,
                     completion.generation,
-                    "SRT peer resolution failed",
-                );
-                continue;
+                    &format!("SRT peer resolution failed: {error}"),
+                ),
             }
-            self.complete_pending_connect(
-                &completion.output_id,
-                completion.generation,
-                &completion.peer_addrs,
-            );
         }
         self.resolved_connects = resolved;
         self.sweep_stalled_leaves(Instant::now());

@@ -79,7 +79,12 @@ where
         self.pending_connects.contains_key(output_id)
     }
 
-    pub(super) fn fail_pending_connect(&mut self, output_id: &OutputId, generation: u64) {
+    pub(super) fn fail_pending_connect(
+        &mut self,
+        output_id: &OutputId,
+        generation: u64,
+        error: &crate::resolver::ResolveError,
+    ) {
         let Some(pending) = self.pending_connects.remove(output_id) else {
             return;
         };
@@ -87,7 +92,7 @@ where
             self.pending_connects.insert(output_id.clone(), pending);
             return;
         }
-        tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: peer resolution failed");
+        tracing::warn!(output_id = %output_id, %error, "rtmp fabric leaf rejected: peer resolution failed");
         pending.common.progress_sink.mark_terminated_unexpectedly();
     }
 

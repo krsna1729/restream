@@ -20,11 +20,11 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
 - [Q-127 reconciler deadlines and listener supervision](#q-127-correctness-opus-the-reconciler-never-stalls-on-one-dependency-and-listeners-restart-without-it)
-- [Q-128 deadline-bounded DNS resolver](#q-128-correctness-opus-one-deadline-bounded-resolver-serves-every-lookup)
 - [Q-129 non-blocking stdout/stderr logging](#q-129-correctness-opus-logging-never-blocks-the-thread-that-logs)
 - [Q-130 SRT loop without engine-lock awaits](#q-130-correctness-opus-the-srt-lifecycle-loop-awaits-no-engine-lock-and-selection-is-per-pipeline)
 - [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
 - [Q-132 SQLite deadline executor](#q-132-correctness-opus-shared-loops-reach-sqlite-only-through-a-deadline-executor)
+- [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -124,8 +124,9 @@ the [assurance roadmap](assurance-roadmap.md).
 - Goal: each candidate is kept with a stated reason or deleted:
   - `ResolvingSrtShardBackend` (`egress/backends/srt/resolve_runtime.rs`) and
     `ResolvingRtmpShardBackend` (`egress/backends/rtmp_shard_resolve_runtime.rs`):
-    decorators whose methods mostly forward to the inner backend. Move
-    resolution batching into the backend if nothing else needs the wrapper.
+    decorators whose methods mostly forward to the inner backend; each now
+    only submits its `Add`/`Update` lookup to the process resolver. Move that
+    into the backend if nothing else needs the wrapper.
   - `LeafLimits` (`egress/policy.rs`): a renamed subset of `LeafPolicy` built
     by `from_policy`.
   - `EgressFeed` (`egress/feed.rs`): keep unless one concrete feed can serve
@@ -191,36 +192,6 @@ the [assurance roadmap](assurance-roadmap.md).
   output starts within its deadline; a listener faulted while a pass is
   stalled restarts within its 1–30 s backoff; an isolation-audit row for the
   reconciler names both tests.
-
-### Q-128 [correctness] [opus] One deadline-bounded resolver serves every lookup
-- Goal: one `resolve(host, port, deadline)` wrapper, a bounded pool of
-  threads that are never joined with in-flight dedupe by key (generalize the
-  HLS PUT resolver in `hls_put_shard.rs`). `disallowed-methods` bans
-  `std::net::ToSocketAddrs::to_socket_addrs` and `tokio::net::lookup_host`
-  outside it.
-  - HLS pull's private-address check (`hls_pull.rs`, `hls_pull/fetch.rs`)
-    runs before the cancel `select!` with no deadline, and the reconciler
-    joins the pull task (`hls_ingest/registry.rs` `ensure_pull`,
-    `cancel_pulls`): a black-holed origin nameserver stalls the pass.
-  - RTMP egress (`rtmp_shard_resolve_runtime.rs`, `rtmp_shard.rs`): one
-    FIFO resolver thread per shard, no deadline, no dedupe, and a pending
-    connect with no deadline (`LeafPolicy.resolve_timeout` serves only HLS
-    PUT today); make the connect take its deadline from it.
-  - SRT egress (`egress/backends/srt/resolve_runtime.rs`, `srt.rs`): the
-    same, plus bonded hosts resolved one after another, and `spawn_batch`
-    silently drops the rest of a batch after the first full `try_send`. Those
-    outputs stay in `pending_connects` holding leaf slots and never retry; a
-    failed submit must terminate and remove the output.
-  - `srt/calls.rs` and `moq/egress/leaf.rs` migrate to the wrapper.
-  - Teardown never joins a resolver: `shutdown()` leaves the Tokio worker
-    (`spawn_blocking`), and a panicked shard's `replace_with` under the
-    `fabric.<proto>` lock detaches as `shrink` does. Fabric runtimes and
-    trust roots are built outside that lock.
-- Gates: clippy `-D warnings` with the ban; one black-holed destination on a
-  shard leaves a sibling output on that shard connected within its deadline
-  (RTMP and SRT); a pull edited while its DNS is black-holed leaves a sibling
-  pipeline converging within one pass; an SRT batch past the queue capacity
-  leaves every output with a terminal state and no leaked leaf slot.
 
 ### Q-129 [correctness] [opus] Logging never blocks the thread that logs
 - Goal: the stdout/stderr tracing writer (`SplitWriter` in
@@ -290,6 +261,20 @@ the [assurance roadmap](assurance-roadmap.md).
   by API reads, each shared-loop call returns at its deadline and the next
   pass retries, while another pipeline's connect, disconnect and probe answer
   stay on time; a session survives a pool timeout.
+
+### Q-133 [correctness] [opus] Fabric runtimes are built outside the per-protocol registry lock
+- Goal: `retain_*_fabric_runtime` (`engine_*_egress_fabric.rs`) reads the
+  RTMPS/HLS PUT trust roots from disk (`resolve_client_config`) and builds
+  the shard group, waiting on each shard's backend construction
+  (`EgressShardHandle::try_spawn_with` blocks in `ready_rx.recv()`), under
+  the `fabric.<proto>` tokio mutex and on a Tokio worker; `rescale`'s
+  `grow_with` does the same. A hung filesystem behind
+  `rtmps_extra_trust_roots_pem_path` stalls every feed's dispatch for that
+  protocol. Load the trust roots once off-lock, build the runtime on the
+  blocking pool, then insert after a re-check (shutting down the loser off
+  the worker).
+- Gates: with the trust-roots read held, another feed's dispatch on the same
+  protocol completes; no `try_spawn_with` wait runs on a Tokio worker.
 
 ## Not planned
 

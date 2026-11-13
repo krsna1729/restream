@@ -431,8 +431,11 @@ that cannot safely be taken by another thread.
 
 - Each shard owns one Compio io_uring runtime in `CompioTcpPoller`. Shard
   construction fails if io_uring is unavailable.
-- DNS runs on the backend's resolver worker (`ResolvingRtmpShardBackend`),
-  never on the shard thread.
+- DNS runs on the process resolver (`crates/restream-engine/src/resolver.rs`),
+  never on the shard thread: `ResolvingRtmpShardBackend` submits each
+  `Add`/`Update` with the output's `resolve_timeout` as its deadline, and the
+  answer (or timeout, or a full resolver queue) fails or completes that
+  output's pending connect on the next media tick.
 - Each peer starts with one non-blocking `connect(2)`. Only `EINPROGRESS`
   sockets are registered with `PollFd`. A rotating scan visits at most half
   of `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` pending connects per poll.
@@ -468,7 +471,8 @@ socket buffers.
   `srt_transport::compio::Owner` per address family. Each Owner owns one
   caller UDP socket, a caller pool and a fixed TX pool. No output has its own
   runtime, task, socket or Owner.
-- DNS runs on the shard's `srt-dns-res` worker.
+- DNS runs on the process resolver as for RTMP; a bond's hosts resolve
+  concurrently under one deadline and answer as one completion.
 - `Owner::connect` and `connect_bonded` return `Admitted`, `Queued` or `Full`.
   The caller pool (`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, default 64,
   with an equal queue) bounds in-flight handshakes. Each output's

@@ -1,31 +1,63 @@
-use super::super::resolve_runtime::{ResolvingSrtShardBackend, SrtResolveWorkerSet};
+use super::super::resolve_runtime::{
+    ResolvingSrtShardBackend, ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
+};
 use super::super::*;
 use super::support::*;
 use crate::egress::command::ShardId;
 use crate::egress::shard::EgressShardBackend;
+use crate::resolver::Resolver;
+use crate::resolver::fake::FakeDns;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-fn resolving_backend() -> (ResolvingSrtShardBackend<SrtShardBackend>, TestFeed) {
+fn resolving_backend(resolver: Arc<Resolver>) -> (ResolvingSrtShardBackendDefault, TestFeed) {
     let feed = TestFeed::new();
-    let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
-    let inner = SrtShardBackend::with_runtime_components(
+    let backend = resolving_srt_shard_backend(
         feed.reader(),
         budget(),
-        completion_queue,
-        SrtOwners::new(settings()).expect("shard runtime"),
-    );
-    (
-        ResolvingSrtShardBackend::new(inner, SrtResolveWorkerSet::new(completion_sender)),
-        feed,
+        Duration::from_millis(400),
+        64,
+        settings(),
+        resolver,
     )
+    .expect("shard runtime");
+    (backend, feed)
 }
 
-/// The full DNS -> Owner path through the resolver worker: a numeric host
-/// resolves off-thread, then the completion is attached to a live leaf.
+fn tick_until(
+    backend: &mut ResolvingSrtShardBackendDefault,
+    within: Duration,
+    mut done: impl FnMut(&SrtShardBackend) -> bool,
+) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        backend.on_media_tick();
+        if done(backend.inner_backend()) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    false
+}
+
+fn spec_resolving_within(
+    id: &str,
+    generation: u64,
+    url: &str,
+    resolve_timeout: Duration,
+) -> (OutputSpec, Arc<AtomicBool>) {
+    let (mut spec, flag) = srt_spec_with_flag(id, generation, url);
+    spec.policy.resolve_timeout = resolve_timeout;
+    (spec, flag)
+}
+
+/// The full DNS -> Owner path: numeric hosts need no lookup, and the
+/// completion attaches the bond to one live leaf.
 #[test]
-fn resolving_srt_backend_resolves_off_thread_and_completes_add() {
-    let (mut backend, _feed) = resolving_backend();
+fn resolving_srt_backend_resolves_and_completes_add() {
+    let (mut backend, _feed) = resolving_backend(crate::resolver::shared());
     let effect = backend.on_command(EgressCommand::Add(srt_spec(
         "out-a",
         7,
@@ -33,21 +65,11 @@ fn resolving_srt_backend_resolves_off_thread_and_completes_add() {
     )));
 
     assert_eq!(effect, EgressShardCommandEffect::Continue);
-    for _ in 0..500 {
-        backend.on_media_tick();
-        if backend
-            .inner_backend()
-            .output_sockets
-            .contains_key(&OutputId::new("out-a"))
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(2));
-    }
-    let inner = backend.inner_backend();
-    assert!(inner.output_sockets.contains_key(&OutputId::new("out-a")));
+    assert!(tick_until(&mut backend, Duration::from_secs(1), |inner| {
+        inner.output_sockets.contains_key(&OutputId::new("out-a"))
+    }));
     assert_eq!(
-        inner.callers.len(),
+        backend.inner_backend().callers.len(),
         1,
         "one logical caller for the whole bond"
     );
@@ -55,7 +77,8 @@ fn resolving_srt_backend_resolves_off_thread_and_completes_add() {
 
 #[test]
 fn resolving_srt_backend_does_not_resolve_a_non_srt_add() {
-    let (mut backend, _feed) = resolving_backend();
+    let dns = FakeDns::new();
+    let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
     let mut spec = srt_spec("out-a", 7, "unused");
     spec.protocol = ProtocolSpec::Sink;
     assert_eq!(
@@ -64,32 +87,126 @@ fn resolving_srt_backend_does_not_resolve_a_non_srt_add() {
     );
     backend.on_media_tick();
     assert!(backend.inner_backend().pending_connects.is_empty());
+    assert_eq!(dns.calls(), 0);
 }
 
 #[test]
 fn resolving_srt_backend_retires_failed_dns_connect() {
-    let (mut backend, _feed) = resolving_backend();
-    let (spec, flag) = srt_spec_with_flag(
-        "out-a",
-        7,
-        "srt://256.256.256.256:9000?streamid=publish%3Akey",
-    );
+    let dns = FakeDns::new();
+    let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
+    let (spec, flag) =
+        srt_spec_with_flag("out-a", 7, "srt://fail.test:9000?streamid=publish%3Akey");
     backend.on_command(EgressCommand::Add(spec));
-    for _ in 0..500 {
-        backend.on_media_tick();
-        if backend.inner_backend().pending_connects.is_empty() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(2));
-    }
     assert!(
-        backend.inner_backend().pending_connects.is_empty(),
+        tick_until(&mut backend, Duration::from_secs(1), |inner| {
+            inner.pending_connects.is_empty()
+        }),
         "failed DNS must not leave a pending connect resident"
     );
-    assert!(
-        flag.load(std::sync::atomic::Ordering::Relaxed),
-        "and is reported terminated"
+    assert!(flag.load(Ordering::Relaxed), "and is reported terminated");
+}
+
+/// One black-holed host on a shard leaves a sibling output connecting at
+/// once. A bond with one hung leg fails as a whole at its resolve deadline
+/// (its egress task retries it).
+#[test]
+fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
+    let dns = FakeDns::new();
+    let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
+    let timeout = Duration::from_millis(300);
+    let (hung, hung_failed) = spec_resolving_within(
+        "hung",
+        1,
+        "srt://ok.test:9000?streamid=publish%3Akey&bond=hung.test:9001",
+        timeout,
     );
+    let started = Instant::now();
+    backend.on_command(EgressCommand::Add(hung));
+    dns.wait_for_calls(2);
+
+    let (sibling, _) = spec_resolving_within(
+        "sibling",
+        1,
+        "srt://sibling.test:9000?streamid=publish%3Akey",
+        Duration::from_secs(5),
+    );
+    backend.on_command(EgressCommand::Add(sibling));
+    assert!(
+        tick_until(&mut backend, Duration::from_secs(1), |inner| {
+            inner.output_sockets.contains_key(&OutputId::new("sibling"))
+        }),
+        "the sibling connected while the hung lookup runs"
+    );
+    let inner = backend.inner_backend();
+    assert!(inner.pending_connects.contains_key(&OutputId::new("hung")));
+
+    assert!(
+        tick_until(&mut backend, Duration::from_secs(2), |inner| {
+            inner.pending_connects.is_empty()
+        }),
+        "the hung bond fails at its deadline"
+    );
+    assert!(hung_failed.load(Ordering::Relaxed));
+    assert!(started.elapsed() >= timeout);
+    assert!(
+        !backend
+            .inner_backend()
+            .output_sockets
+            .contains_key(&OutputId::new("hung"))
+    );
+}
+
+/// More outputs than the resolver's queue holds: every one reaches a
+/// terminal state (refused at once, or timed out at its deadline), none is
+/// left pending holding a leaf slot.
+#[test]
+fn every_output_past_the_resolver_queue_gets_a_terminal_state() {
+    let dns = FakeDns::with_pool(1, 4);
+    let (mut backend, _feed) = resolving_backend(dns.resolver.clone());
+    let timeout = Duration::from_millis(300);
+    let (hung, hung_flag) = spec_resolving_within(
+        "hung",
+        1,
+        "srt://hung.test:9000?streamid=publish%3Akey",
+        timeout,
+    );
+    backend.on_command(EgressCommand::Add(hung));
+    dns.wait_for_calls(1);
+    let mut flags = vec![hung_flag];
+    for index in 0..20 {
+        let (spec, flag) = spec_resolving_within(
+            &format!("out-{index}"),
+            1,
+            &format!("srt://name-{index}.test:9000?streamid=publish%3Akey"),
+            timeout,
+        );
+        backend.on_command(EgressCommand::Add(spec));
+        flags.push(flag);
+    }
+    backend.on_media_tick();
+    assert_eq!(
+        dns.resolver.stats().overflows,
+        16,
+        "four names fit the queue"
+    );
+    assert_eq!(
+        flags
+            .iter()
+            .filter(|flag| flag.load(Ordering::Relaxed))
+            .count(),
+        16,
+        "the refused outputs failed at once"
+    );
+
+    assert!(
+        tick_until(&mut backend, Duration::from_secs(2), |inner| {
+            inner.pending_connects.is_empty()
+        }),
+        "every output was answered"
+    );
+    assert!(flags.iter().all(|flag| flag.load(Ordering::Relaxed)));
+    let inner = backend.inner_backend();
+    assert!(inner.output_sockets.is_empty() && inner.leaves.is_empty());
 }
 
 struct ForwardingProbe;
@@ -125,9 +242,12 @@ impl EgressShardBackend for ForwardingProbe {
 /// backend's Compio park).
 #[test]
 fn resolving_srt_backend_forwards_metrics_and_the_idle_wait() {
-    let (completion_sender, _completion_queue) = srt_resolve_completion_queue(1);
-    let mut backend =
-        ResolvingSrtShardBackend::new(ForwardingProbe, SrtResolveWorkerSet::new(completion_sender));
+    let (completion_sender, _completion_queue) = srt_resolve_completion_queue();
+    let mut backend = ResolvingSrtShardBackend::new(
+        ForwardingProbe,
+        crate::resolver::shared(),
+        completion_sender,
+    );
     let mut metrics = ShardMetrics::new(ShardId::new(0));
 
     assert_eq!(backend.resync_count(), 7);

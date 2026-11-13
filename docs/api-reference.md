@@ -1428,6 +1428,7 @@ Returns `EngineHealthView`:
 | `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
 | `egressFabricShards` | One row per live shard: `protocol`, `feedId`, `shardIndex`, `state`, loop and command-queue counters |
 | `containedPanics` | Panics contained at a per-entity boundary since start |
+| `nameResolver` | The process name resolver: `lookups` (system lookups started), `timeouts` (requests answered at their deadline), `overflows` (requests refused because its queue was full) |
 | `tuning.outputMaxRetries` | `RESTREAM_OUTPUT_MAX_RETRIES` |
 
 - `egressFabricShards` covers all six fabric registries: `srt`, `rtmp`,

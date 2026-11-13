@@ -485,7 +485,7 @@ fn shard_connect_advertises_fourcc_list(enhanced_rtmp: bool) -> bool {
             ..RtmpPublishStartup::default()
         },
     );
-    let (_sender, queue) = rtmp_resolve_completion_queue(1);
+    let (_sender, queue) = rtmp_resolve_completion_queue();
     let mut backend = RtmpShardBackend::with_runtime_components(
         CompioTcpPoller::new(4).unwrap(),
         feed(),
