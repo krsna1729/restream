@@ -244,6 +244,12 @@ struct NameResolverHealthJson {
     timeouts: u64,
     /// Lookups refused because the resolver queue was full.
     overflows: u64,
+    /// Live lookup threads, hung ones included.
+    threads: u64,
+    /// Lookup threads still inside a lookup past its caller's deadline.
+    hung_threads: u64,
+    /// Hung threads left unreplaced because the pool was at its cap.
+    cap_reached: u64,
 }
 
 #[derive(Serialize)]
@@ -626,6 +632,9 @@ pub(crate) async fn health_snapshot_view(
                 lookups: stats.lookups,
                 timeouts: stats.timeouts,
                 overflows: stats.overflows,
+                threads: stats.threads,
+                hung_threads: stats.hung_threads,
+                cap_reached: stats.cap_reached,
             }
         },
         tuning: TuningHealthJson {

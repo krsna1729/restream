@@ -2,30 +2,40 @@
 //! tests that need a name server that hangs, answers slowly or panics.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{RESOLVER_QUEUE_CAPACITY, RESOLVER_THREADS, Resolver};
+use super::{RESOLVER_MAX_THREADS, RESOLVER_QUEUE_CAPACITY, RESOLVER_THREADS, Resolver};
 
-/// Names starting with `hung` block until this value drops; `slow` ones
-/// answer after [`FakeDns::SLOW`]; `panic` ones panic; `fail` ones fail;
-/// every other name answers 127.0.0.1.
+/// Names starting with `hung` block until [`FakeDns::release_hung`] or this
+/// value drops; `slow` ones answer after [`FakeDns::SLOW`]; `panic` ones
+/// panic; `fail` ones fail; every other name answers 127.0.0.1.
 pub(crate) struct FakeDns {
     pub(crate) resolver: Arc<Resolver>,
     calls: Arc<AtomicUsize>,
-    _release: flume::Sender<()>,
+    release: Mutex<Option<flume::Sender<()>>>,
 }
 
 impl FakeDns {
     pub(crate) const SLOW: Duration = Duration::from_millis(200);
 
-    /// The production pool size and queue.
+    /// The production pool: sizes, cap and queue.
     pub(crate) fn new() -> Self {
-        Self::with_pool(RESOLVER_THREADS, RESOLVER_QUEUE_CAPACITY)
+        Self::build(
+            RESOLVER_THREADS,
+            RESOLVER_MAX_THREADS,
+            RESOLVER_QUEUE_CAPACITY,
+        )
     }
 
+    /// A pool already at its cap (`threads` total, never replaced), to
+    /// exercise queueing and overflow.
     pub(crate) fn with_pool(threads: usize, queue_capacity: usize) -> Self {
+        Self::build(threads, threads, queue_capacity)
+    }
+
+    pub(crate) fn build(threads: usize, max_threads: usize, queue_capacity: usize) -> Self {
         let (release, released) = flume::bounded::<()>(0);
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&calls);
@@ -49,15 +59,35 @@ impl FakeDns {
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)])
         };
         Self {
-            resolver: Arc::new(Resolver::new(threads, queue_capacity, Arc::new(lookup))),
+            resolver: Arc::new(Resolver::new(
+                threads,
+                max_threads,
+                queue_capacity,
+                Arc::new(lookup),
+            )),
             calls,
-            _release: release,
+            release: Mutex::new(Some(release)),
         }
     }
 
     /// Lookups the pool has run so far.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Lets every hung lookup (and any later one) return.
+    pub(crate) fn release_hung(&self) {
+        restream_sync::lock::lock(&self.release).take();
+    }
+
+    /// Drops the resolver while its hung lookups stay hung; they return
+    /// when the result drops.
+    pub(crate) fn drop_resolver(self) -> impl Sized {
+        let Self {
+            resolver, release, ..
+        } = self;
+        drop(resolver);
+        release
     }
 
     /// Waits until `count` lookups have started.

@@ -116,6 +116,7 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
     let timeout = Duration::from_millis(300);
     let (hung, hung_failed) = flagged_spec("hung", "rtmp://hung.test:1935/live/key", 1, timeout);
     let hung_id = hung.id.clone();
+    let hung_added = std::time::Instant::now();
     backend.on_command(EgressCommand::Add(hung));
     dns.wait_for_calls(1);
 
@@ -151,7 +152,7 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
         "the hung output fails at its deadline"
     );
     assert!(hung_failed.load(std::sync::atomic::Ordering::Relaxed));
-    assert!(started.elapsed() >= timeout - Duration::from_millis(50));
+    assert!(hung_added.elapsed() >= timeout);
 
     let (retry, retry_failed) = flagged_spec("hung", "rtmp://hung.test:1935/live/key", 2, timeout);
     backend.on_command(EgressCommand::Add(retry));

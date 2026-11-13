@@ -3,10 +3,16 @@
 //! (`ToSocketAddrs::to_socket_addrs`, `tokio::net::lookup_host`) everywhere
 //! else.
 //!
-//! - `getaddrinfo` blocks, so it runs on a fixed pool of [`RESOLVER_THREADS`]
-//!   dedicated OS threads, never on a Tokio worker, a Compio `Owner` or an
-//!   egress shard. One name whose server black-holes holds one thread; other
-//!   names keep resolving on the rest.
+//! - `getaddrinfo` blocks, so it runs on a pool of dedicated OS threads,
+//!   never on a Tokio worker, a Compio `Owner` or an egress shard. The pool
+//!   keeps [`RESOLVER_THREADS`] threads *available*: when a request's
+//!   deadline passes while its lookup is still inside `getaddrinfo`, that
+//!   thread is marked hung and a replacement starts, up to
+//!   [`RESOLVER_MAX_THREADS`] in total. A hung thread exits when its lookup
+//!   returns if the pool has its full complement without it. So distinct
+//!   names that hang (a tenant's own name server can produce any number)
+//!   never starve other names until the cap; at the cap, names wait in the
+//!   queue until their deadline, counted as `cap_reached`.
 //! - Concurrent requests for one `(host, port)` share one `getaddrinfo` call.
 //!   A request made while that call is still running joins it, so a retrying
 //!   output never stacks lookups of its hung name.
@@ -32,9 +38,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Lookup threads in the process pool: how many distinct hung names it takes
-/// before another name waits for a thread (it still gets its deadline).
+/// Lookup threads the pool keeps available (not stuck in a lookup past its
+/// deadline).
 pub(crate) const RESOLVER_THREADS: usize = 16;
+/// Hard cap on lookup threads, hung ones included: each costs a thread
+/// stack, and a name server can hold `getaddrinfo` for its full retry
+/// schedule (resolv.conf `timeout` x `attempts`, tens of seconds).
+pub(crate) const RESOLVER_MAX_THREADS: usize = 128;
 /// Distinct names that may wait for a lookup thread.
 pub(crate) const RESOLVER_QUEUE_CAPACITY: usize = 1024;
 /// The deadline of a lookup whose caller has no per-output resolve timeout
@@ -91,6 +101,14 @@ pub struct ResolverStats {
     pub timeouts: u64,
     /// Requests refused because the queue was full.
     pub overflows: u64,
+    /// Live lookup threads, hung ones included (gauge).
+    pub threads: u64,
+    /// Live lookup threads still inside a lookup past a request's deadline
+    /// (gauge).
+    pub hung_threads: u64,
+    /// Times a hung thread could not be replaced because the pool was at
+    /// [`RESOLVER_MAX_THREADS`].
+    pub cap_reached: u64,
 }
 
 struct Waiter {
@@ -98,17 +116,32 @@ struct Waiter {
     deliver: Deliver,
 }
 
+/// One queued or running lookup.
+#[derive(Default)]
+struct Pending {
+    /// The requests waiting on it.
+    ids: Vec<u64>,
+    /// A thread is inside the lookup.
+    running: bool,
+    /// A request's deadline passed while it ran: its thread is not
+    /// counted as available, and a replacement was started.
+    hung: bool,
+}
+
 #[derive(Default)]
 struct State {
     /// Requests not yet answered, by id.
     waiters: HashMap<u64, Waiter>,
-    /// The ids waiting on each queued or running lookup. An entry lives
-    /// until its lookup returns (or a thread dequeues it with nobody left
-    /// waiting), so a later request for the name joins it.
-    names: HashMap<Name, Vec<u64>>,
+    /// Each queued or running lookup. An entry lives until its lookup
+    /// returns (or a thread dequeues it with nobody left waiting), so a
+    /// later request for the name joins it.
+    names: HashMap<Name, Pending>,
     deadlines: BinaryHeap<Reverse<(Instant, u64)>>,
     next_id: u64,
+    /// Live lookup threads, hung ones included.
     workers: usize,
+    /// Live lookup threads marked hung (`workers - hung` are available).
+    hung: usize,
     timer: bool,
     closed: bool,
 }
@@ -117,9 +150,13 @@ struct Shared {
     state: Mutex<State>,
     timer_wake: Condvar,
     lookup: Lookup,
+    queue: flume::Receiver<Name>,
+    threads: usize,
+    max_threads: usize,
     lookups: AtomicU64,
     timeouts: AtomicU64,
     overflows: AtomicU64,
+    cap_reached: AtomicU64,
 }
 
 impl Shared {
@@ -131,13 +168,12 @@ impl Shared {
 pub struct Resolver {
     shared: Arc<Shared>,
     queue: flume::Sender<Name>,
-    queue_rx: flume::Receiver<Name>,
-    threads: usize,
 }
 
 static SHARED: LazyLock<Arc<Resolver>> = LazyLock::new(|| {
     Arc::new(Resolver::new(
         RESOLVER_THREADS,
+        RESOLVER_MAX_THREADS,
         RESOLVER_QUEUE_CAPACITY,
         Arc::new(system_lookup),
     ))
@@ -189,30 +225,46 @@ fn answer(deliver: Deliver, resolution: Resolution) {
 }
 
 impl Resolver {
-    /// A resolver with `threads` lookup threads and room for
-    /// `queue_capacity` names waiting for one. Threads start on first use.
-    pub(crate) fn new(threads: usize, queue_capacity: usize, lookup: Lookup) -> Self {
+    /// A resolver keeping `threads` lookup threads available, at most
+    /// `max_threads` in total, with room for `queue_capacity` names waiting
+    /// for one. Threads start on first use.
+    pub(crate) fn new(
+        threads: usize,
+        max_threads: usize,
+        queue_capacity: usize,
+        lookup: Lookup,
+    ) -> Self {
         let (queue, queue_rx) = flume::bounded(queue_capacity);
+        let threads = threads.max(1);
         Self {
             shared: Arc::new(Shared {
                 state: Mutex::new(State::default()),
                 timer_wake: Condvar::new(),
                 lookup,
+                queue: queue_rx,
+                threads,
+                max_threads: max_threads.max(threads),
                 lookups: AtomicU64::new(0),
                 timeouts: AtomicU64::new(0),
                 overflows: AtomicU64::new(0),
+                cap_reached: AtomicU64::new(0),
             }),
             queue,
-            queue_rx,
-            threads: threads.max(1),
         }
     }
 
     pub fn stats(&self) -> ResolverStats {
+        let (threads, hung_threads) = {
+            let state = self.shared.state();
+            (state.workers as u64, state.hung as u64)
+        };
         ResolverStats {
             lookups: self.shared.lookups.load(Ordering::Relaxed),
             timeouts: self.shared.timeouts.load(Ordering::Relaxed),
             overflows: self.shared.overflows.load(Ordering::Relaxed),
+            threads,
+            hung_threads,
+            cap_reached: self.shared.cap_reached.load(Ordering::Relaxed),
         }
     }
 
@@ -243,7 +295,7 @@ impl Resolver {
         }
         let deliver: Deliver = Box::new(deliver);
         let mut state = self.shared.state();
-        self.ensure_threads(&mut state);
+        ensure_threads(&self.shared, &mut state);
         if state.closed || state.workers == 0 || !state.timer {
             drop(state);
             answer(deliver, Err(ResolveError::Unavailable));
@@ -252,8 +304,8 @@ impl Resolver {
         let name = (host.to_string(), port);
         let id = state.next_id;
         state.next_id = state.next_id.wrapping_add(1);
-        if let Some(ids) = state.names.get_mut(&name) {
-            ids.push(id);
+        if let Some(pending) = state.names.get_mut(&name) {
+            pending.ids.push(id);
         } else {
             if self.queue.try_send(name.clone()).is_err() {
                 drop(state);
@@ -261,7 +313,11 @@ impl Resolver {
                 answer(deliver, Err(ResolveError::Overflow));
                 return;
             }
-            state.names.insert(name.clone(), vec![id]);
+            let pending = Pending {
+                ids: vec![id],
+                ..Pending::default()
+            };
+            state.names.insert(name.clone(), pending);
         }
         state.waiters.insert(id, Waiter { name, deliver });
         let earliest = state
@@ -274,34 +330,37 @@ impl Resolver {
             self.shared.timer_wake.notify_one();
         }
     }
+}
 
-    /// Starts missing threads: on first use, and again after a spawn
-    /// failure (thread or memory limits) or a thread that died.
-    fn ensure_threads(&self, state: &mut State) {
-        while state.workers < self.threads {
-            let (shared, queue) = (Arc::clone(&self.shared), self.queue_rx.clone());
-            match std::thread::Builder::new()
-                .name("dns-resolve".to_string())
-                .spawn(move || run_worker(&shared, &queue))
-            {
-                Ok(_) => state.workers += 1,
-                Err(error) => {
-                    tracing::warn!(%error, "name resolver thread did not start");
-                    break;
-                }
-            }
-        }
-        if !state.timer {
-            let shared = Arc::clone(&self.shared);
-            match std::thread::Builder::new()
-                .name("dns-deadline".to_string())
-                .spawn(move || run_timer(&shared))
-            {
-                Ok(_) => state.timer = true,
-                Err(error) => tracing::warn!(%error, "name resolver timer did not start"),
+/// Starts threads until `threads` are available (hung ones do not count) or
+/// the pool holds `max_threads`: on first use, after a lookup is marked
+/// hung, and again after a spawn failure (thread or memory limits) or a
+/// thread that died. Returns whether `threads` are available.
+fn ensure_threads(shared: &Arc<Shared>, state: &mut State) -> bool {
+    while state.workers - state.hung < shared.threads && state.workers < shared.max_threads {
+        let worker = Arc::clone(shared);
+        match std::thread::Builder::new()
+            .name("dns-resolve".to_string())
+            .spawn(move || run_worker(&worker))
+        {
+            Ok(_) => state.workers += 1,
+            Err(error) => {
+                tracing::warn!(%error, "name resolver thread did not start");
+                break;
             }
         }
     }
+    if !state.timer {
+        let timer = Arc::clone(shared);
+        match std::thread::Builder::new()
+            .name("dns-deadline".to_string())
+            .spawn(move || run_timer(&timer))
+        {
+            Ok(_) => state.timer = true,
+            Err(error) => tracing::warn!(%error, "name resolver timer did not start"),
+        }
+    }
+    state.workers - state.hung >= shared.threads
 }
 
 impl Drop for Resolver {
@@ -311,36 +370,60 @@ impl Drop for Resolver {
     }
 }
 
-fn run_worker(shared: &Shared, queue: &flume::Receiver<Name>) {
+fn run_worker(shared: &Shared) {
+    // `Ok(true)`: the thread left the pool as surplus and already
+    // uncounted itself.
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        while let Ok(name) = queue.recv() {
+        while let Ok(name) = shared.queue.recv() {
             {
                 let mut state = shared.state();
                 if state.closed {
-                    return;
+                    return false;
                 }
-                if state.names.get(&name).is_some_and(Vec::is_empty) {
-                    // Everyone waiting gave up while it queued.
-                    state.names.remove(&name);
-                    continue;
+                match state.names.get_mut(&name) {
+                    Some(pending) if !pending.ids.is_empty() => pending.running = true,
+                    _ => {
+                        // Everyone waiting gave up while it queued.
+                        state.names.remove(&name);
+                        continue;
+                    }
                 }
             }
             shared.lookups.fetch_add(1, Ordering::Relaxed);
             let resolution = contained_lookup(shared, &name);
-            let answered: Vec<Deliver> = {
+            let (answered, surplus) = {
                 let mut state = shared.state();
-                let ids = state.names.remove(&name).unwrap_or_default();
-                ids.into_iter()
+                let pending = state.names.remove(&name).unwrap_or_default();
+                // A hung thread is back: it rejoins the pool only if the
+                // pool is short of available threads without it.
+                let mut surplus = false;
+                if pending.hung {
+                    state.hung -= 1;
+                    if state.workers - state.hung > shared.threads {
+                        state.workers -= 1;
+                        surplus = true;
+                    }
+                }
+                let answered: Vec<Deliver> = pending
+                    .ids
+                    .into_iter()
                     .filter_map(|id| state.waiters.remove(&id))
                     .map(|waiter| waiter.deliver)
-                    .collect()
+                    .collect();
+                (answered, surplus)
             };
             for deliver in answered {
                 answer(deliver, resolution.clone());
             }
+            if surplus {
+                return true;
+            }
         }
+        false
     }));
-    shared.state().workers -= 1;
+    if !matches!(outcome, Ok(true)) {
+        shared.state().workers -= 1;
+    }
     if let Err(payload) = outcome {
         let panic = crate::panic_boundary::record_contained(payload.as_ref());
         tracing::warn!(
@@ -367,7 +450,7 @@ fn contained_lookup(shared: &Shared, (host, port): &Name) -> Resolution {
 
 /// Answers each request at its deadline, and everyone once the resolver
 /// is dropped.
-fn run_timer(shared: &Shared) {
+fn run_timer(shared: &Arc<Shared>) {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let mut state = shared.state();
         loop {
@@ -394,9 +477,7 @@ fn run_timer(shared: &Shared) {
                 state.deadlines.pop();
                 // An id already answered by its lookup is gone: skip it.
                 if let Some(waiter) = state.waiters.remove(&id) {
-                    if let Some(ids) = state.names.get_mut(&waiter.name) {
-                        ids.retain(|waiting| *waiting != id);
-                    }
+                    mark_hung(shared, &mut state, &waiter.name, id);
                     expired.push(waiter.deliver);
                 }
             }
@@ -434,6 +515,24 @@ fn run_timer(shared: &Shared) {
             panic,
             "name resolver timer panicked; the next request restarts it"
         );
+    }
+}
+
+/// Request `id` for `name` passed its deadline. If a thread is inside that
+/// lookup and not yet marked, it is hung: uncount it and start a
+/// replacement, so other names keep their `threads` available ones.
+fn mark_hung(shared: &Arc<Shared>, state: &mut State, name: &Name, id: u64) {
+    let Some(pending) = state.names.get_mut(name) else {
+        return;
+    };
+    pending.ids.retain(|waiting| *waiting != id);
+    if !pending.running || pending.hung {
+        return;
+    }
+    pending.hung = true;
+    state.hung += 1;
+    if !ensure_threads(shared, state) && state.workers >= shared.max_threads {
+        shared.cap_reached.fetch_add(1, Ordering::Relaxed);
     }
 }
 
