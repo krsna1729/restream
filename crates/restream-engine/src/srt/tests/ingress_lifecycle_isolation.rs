@@ -123,8 +123,8 @@ async fn a_stuck_selection_on_one_pipeline_leaves_another_pipelines_publisher_on
 }
 
 /// A stalled engine lock for peer A's probe application delays neither
-/// peer B's probe answer nor B's disconnect on the shared loop; A's probe
-/// is applied once the lock frees, before A's finish.
+/// peer B's probe answer nor B's disconnect on the shared loop; once the
+/// lock frees, A's queued probe is answered and A is finished.
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn a_stalled_probe_on_one_peer_leaves_another_peers_probe_and_disconnect_on_time() {
     let server = TestServer::start(
@@ -188,14 +188,14 @@ async fn a_stalled_probe_on_one_peer_leaves_another_peers_probe_and_disconnect_o
         .expect("A's replacing input registers");
     server
         .wait_until(
-            "A's probe applies and A is finished",
+            "A's queued probe is answered and A is finished",
             Duration::from_secs(5),
             || async { session(&server.engine, "input-probe-a").await.is_none() },
         )
         .await;
     assert!(
-        a_ingest.metadata().tracks_authoritative,
-        "A's probe was applied before its finish"
+        !a_ingest.metadata().tracks_authoritative,
+        "A's disconnect cancelled the attempt before its queued probe"
     );
     finish(a2).await;
     server.stop().await;
@@ -245,5 +245,81 @@ async fn a_held_session_map_leaves_a_probe_answered_inside_the_owners_hold() {
     drop(held);
 
     assert!(caller.await.unwrap().connected);
+    server.stop().await;
+}
+
+/// A peer's disconnect frees its input at once, even while its task still
+/// waits to apply a queued probe: a fast reconnect on the same key, whose
+/// registration queues on the pipeline's selection ahead of the old peer's
+/// finish, registers instead of being refused as a duplicate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_fast_reconnect_behind_a_stalled_probe_is_not_refused_as_a_duplicate() {
+    let server = TestServer::start(&["again"], vec![plain("again")]).await;
+    let go = Arc::new(AtomicBool::new(false));
+    let a = publish_when(
+        direct(server.remote, &publish_id("again"), None),
+        go.clone(),
+    );
+    server
+        .wait_until("A registers", Duration::from_secs(5), || async {
+            server.ingest_active("pipeline-again").await
+        })
+        .await;
+    let a_ingest = session(&server.engine, "input-again").await.unwrap();
+    let gate = a_ingest.gate.clone();
+    let in_flight = gate
+        .try_enter(InputPacketBoundary::Other)
+        .expect("A's selected input forwards");
+    let stuck = stuck_registration(&server, &gate, "pipeline-again", "input-again2").await;
+
+    // A publishes and leaves: its probe waits for the stuck selection.
+    go.store(true, Ordering::Release);
+    assert!(a.await.unwrap().connected);
+
+    // A' reconnects on the key; its registration queues behind A's probe.
+    let stop = Arc::new(AtomicBool::new(false));
+    let again = {
+        let stop = stop.clone();
+        let remote = server.remote;
+        tokio::task::spawn_blocking(move || {
+            run_caller(
+                direct(remote, &publish_id("again"), None),
+                Duration::from_secs(20),
+                move |ctx| ctx.report.disconnected || stop.load(Ordering::Acquire),
+            )
+        })
+    };
+    server
+        .wait_until(
+            "A' queues on the pipeline's selection behind A's probe",
+            Duration::from_secs(5),
+            || async { server.engine.ingests.selection.users("pipeline-again") >= 3 },
+        )
+        .await;
+
+    drop(in_flight);
+    let a2 = tokio::time::timeout(Duration::from_secs(5), stuck)
+        .await
+        .expect("the stuck registration completes once the gate is idle")
+        .unwrap()
+        .expect("the replacing input registers");
+    server
+        .wait_until(
+            "A' registers on the key",
+            Duration::from_secs(5),
+            || async {
+                session(&server.engine, "input-again")
+                    .await
+                    .is_some_and(|current| current.attempt_id != a_ingest.attempt_id)
+            },
+        )
+        .await;
+    stop.store(true, Ordering::Release);
+    let again = again.await.unwrap();
+    assert!(
+        again.connected && !again.disconnected,
+        "A' was never refused: {again:?}"
+    );
+    finish(a2).await;
     server.stop().await;
 }

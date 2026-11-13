@@ -10,8 +10,9 @@
 //! abandoned (`crate::ingest_lease`). A peer that disconnects meanwhile is
 //! marked as gone: its task registers nothing once its lookup returns,
 //! finishes a registration that raced the mark itself, and anything that
-//! raced even that is finished in a task of its own, so a reconnect on the
-//! same key is not refused as a duplicate.
+//! raced even that is finished in a task of its own. An attached publisher's
+//! disconnect cancels its attempt at once (`peer_work`), so a reconnect on
+//! the same key is not refused as a duplicate.
 //!
 //! Publishers and readers of one key are admitted concurrently, so a reader
 //! whose task overtakes its publisher's registration is refused with "no

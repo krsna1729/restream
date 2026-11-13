@@ -258,3 +258,50 @@ async fn assert_current(engine: &Arc<MediaEngine>, lease: &IngestLease) {
     );
     assert!(!registration.cancel_token.is_cancelled());
 }
+
+/// Dropped leases' attempts are released independently: one whose pipeline
+/// selection is stuck does not hold up another pipeline's release, so that
+/// pipeline's input is promptly free and unselected again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds pipeline A's selection as a stuck holder"
+)]
+async fn a_stuck_selection_does_not_delay_another_pipelines_abandoned_release() {
+    let engine = Arc::new(MediaEngine::new());
+    let a = engine
+        .try_register_pipeline_input_attempt("pipe-a", "input-a", "key-a", "srt", true)
+        .await
+        .unwrap();
+    let b = engine
+        .try_register_pipeline_input_attempt("pipe-b", "input-b", "key-b", "srt", true)
+        .await
+        .unwrap();
+    let stuck = engine.ingests.selection.lock("pipe-a").await;
+    drop(a);
+    drop(b);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while engine.ingests.active.read().await.contains_key("pipe-b") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("B's abandoned attempt is released while A's selection is stuck");
+    let republished = engine
+        .try_register_pipeline_input_attempt("pipe-b", "input-b", "key-b", "srt", true)
+        .await
+        .expect("B republishes");
+    assert!(
+        engine.ingests.active.read().await.contains_key("pipe-a"),
+        "A's release waits for its own selection"
+    );
+    drop(stuck);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while engine.ingests.active.read().await.contains_key("pipe-a") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("A is released once its selection frees");
+    republished.finish(IngestEnd::Released).await;
+}
