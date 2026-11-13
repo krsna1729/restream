@@ -13,7 +13,11 @@
 //! The queue is engine-owned storage, not a channel a task owns: an attempt
 //! stays queued until a release has ended it, so a release task cancelled with
 //! its runtime loses nothing, and the next task started (or the shutdown's
-//! final pass) ends the backlog first.
+//! final pass) ends the backlog first. The release task ends each attempt in
+//! a task of its own, so an attempt whose pipeline selection is stuck delays
+//! no other pipeline's release; a claimed attempt is not handed to a second
+//! task, and a claim dropped unfinished (its task cancelled) is handed out
+//! again.
 //!
 //! Every release is attempt-checked: a lease ends only its own attempt (its
 //! own cancel token, its own session), so a stale lease dropped after a newer
@@ -22,7 +26,7 @@
 //! Media state (an Owner's publisher, a ring pusher) holds only the attempt's
 //! identity ([`IngestRegistration`]), never the lease.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Weak};
 
 use tokio::sync::Notify;
@@ -64,13 +68,22 @@ pub(crate) struct AbandonedAttempt {
 /// each entry leaves it only once its release completed.
 #[derive(Default)]
 pub(crate) struct ReleaseQueue {
-    pending: std::sync::Mutex<VecDeque<AbandonedAttempt>>,
+    pending: std::sync::Mutex<Pending>,
     wake: Notify,
+}
+
+#[derive(Default)]
+struct Pending {
+    queue: VecDeque<AbandonedAttempt>,
+    /// Attempts a release task is ending now, by attempt id.
+    claimed: HashSet<u64>,
 }
 
 impl ReleaseQueue {
     fn push(&self, attempt: AbandonedAttempt) {
-        restream_sync::lock::lock(&self.pending).push_back(attempt);
+        restream_sync::lock::lock(&self.pending)
+            .queue
+            .push_back(attempt);
         // Stores a permit when no task waits, so a wake is never lost.
         self.wake.notify_one();
     }
@@ -78,7 +91,27 @@ impl ReleaseQueue {
     /// The oldest attempt not yet released; it stays queued until
     /// [`Self::complete`].
     fn front(&self) -> Option<AbandonedAttempt> {
-        restream_sync::lock::lock(&self.pending).front().cloned()
+        restream_sync::lock::lock(&self.pending)
+            .queue
+            .front()
+            .cloned()
+    }
+
+    /// Every queued attempt no release task has, claimed now.
+    fn claim_unclaimed(self: &Arc<Self>) -> Vec<(AbandonedAttempt, Claim)> {
+        let mut pending = restream_sync::lock::lock(&self.pending);
+        let Pending { queue, claimed } = &mut *pending;
+        queue
+            .iter()
+            .filter(|attempt| claimed.insert(attempt.registration.attempt_id))
+            .map(|attempt| {
+                let claim = Claim {
+                    queue: self.clone(),
+                    attempt_id: attempt.registration.attempt_id,
+                };
+                (attempt.clone(), claim)
+            })
+            .collect()
     }
 
     /// Removes `attempt` by its id, wherever it is now: a second pass that
@@ -86,15 +119,33 @@ impl ReleaseQueue {
     fn complete(&self, attempt: &AbandonedAttempt) {
         let mut pending = restream_sync::lock::lock(&self.pending);
         if let Some(index) = pending
+            .queue
             .iter()
             .position(|queued| queued.registration.attempt_id == attempt.registration.attempt_id)
         {
-            pending.remove(index);
+            pending.queue.remove(index);
         }
     }
 
     async fn woken(&self) {
         self.wake.notified().await;
+    }
+}
+
+/// One release task's claim on an attempt. Dropped, it frees the claim and
+/// wakes the release task: an attempt still queued (its task cancelled) is
+/// handed out again.
+struct Claim {
+    queue: Arc<ReleaseQueue>,
+    attempt_id: u64,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        restream_sync::lock::lock(&self.queue.pending)
+            .claimed
+            .remove(&self.attempt_id);
+        self.queue.wake.notify_one();
     }
 }
 
@@ -197,32 +248,46 @@ impl Drop for IngestLease {
 /// passes over one queue release every entry.
 pub(crate) async fn release_backlog(engine: &MediaEngine, queue: &ReleaseQueue) {
     while let Some(attempt) = queue.front() {
-        if attempt.record {
-            engine
-                .record_ingest_disconnect_if_current(
-                    &attempt.pipeline_id,
-                    &attempt.registration,
-                    Some(ABANDONED_PHASE),
-                    Some(ABANDONED_REASON.to_string()),
-                    true,
-                )
-                .await;
-        }
-        engine
-            .unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
-            .await;
+        release(engine, &attempt).await;
         queue.complete(&attempt);
     }
 }
 
-/// The engine's release task: empties the backlog first, then each wake's
-/// arrivals, until the engine is dropped.
+/// Record (unless `finish` already did) and unregister one attempt;
+/// attempt-checked, so repeating it is harmless.
+async fn release(engine: &MediaEngine, attempt: &AbandonedAttempt) {
+    if attempt.record {
+        engine
+            .record_ingest_disconnect_if_current(
+                &attempt.pipeline_id,
+                &attempt.registration,
+                Some(ABANDONED_PHASE),
+                Some(ABANDONED_REASON.to_string()),
+                true,
+            )
+            .await;
+    }
+    engine
+        .unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
+        .await;
+}
+
+/// The engine's release task: on each wake, hands every unclaimed queued
+/// attempt to a task of its own, until the engine is dropped.
 pub(crate) async fn drain_releases(engine: Weak<MediaEngine>, queue: Arc<ReleaseQueue>) {
     loop {
         let Some(strong) = engine.upgrade() else {
             return;
         };
-        release_backlog(&strong, &queue).await;
+        for (attempt, claim) in queue.claim_unclaimed() {
+            let engine = strong.clone();
+            let queue = queue.clone();
+            tokio::spawn(async move {
+                release(&engine, &attempt).await;
+                queue.complete(&attempt);
+                drop(claim);
+            });
+        }
         drop(strong);
         queue.woken().await;
     }

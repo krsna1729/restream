@@ -168,11 +168,12 @@ async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
 }
 
 /// A publisher's `Probe` then its `Disconnected`, back to back on the loop:
-/// its task applies and answers the probe, then finishes the attempt. The
-/// loop answers nothing itself, the Owner gets exactly one answer, nothing
-/// follows the finish, and no lease or registration is left. One runtime
-/// thread: the publisher's task first runs after both events, with its queue
-/// already closed, so it must still apply what was queued before finishing.
+/// its task answers the probe (with no ring: the disconnect cancelled the
+/// attempt), then finishes the attempt. The loop answers nothing itself, the
+/// Owner gets exactly one answer, nothing follows the finish, and no lease or
+/// registration is left. One runtime thread: the publisher's task first runs
+/// after both events, with its queue already closed, so it must still answer
+/// what was queued before finishing.
 #[tokio::test(flavor = "current_thread")]
 async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
     use super::super::ingress_test_support::TestAuth;
@@ -264,15 +265,15 @@ async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
     let answer = answers.try_recv().expect("the probe was answered");
     assert_eq!(answer.logical_peer, peer);
     assert_eq!(answer.identity, identity);
-    assert!(answer.ring.is_some(), "the selected input's ring");
+    assert!(
+        answer.ring.is_none(),
+        "the disconnect cancelled the attempt before its queued probe"
+    );
     assert!(
         answers.try_recv().is_err(),
         "exactly one answer, and none after the finish"
     );
-    assert!(
-        ingest.metadata().tracks_authoritative,
-        "the probe was applied while the attempt was current"
-    );
+    assert!(!ingest.metadata().tracks_authoritative);
     assert!(engine.ingests.sessions.read().await.is_empty());
     assert!(engine.ingests.cancel_tokens.read().await.is_empty());
     assert!(engine.ingests.active.read().await.is_empty());

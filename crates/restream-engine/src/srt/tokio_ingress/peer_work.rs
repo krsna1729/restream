@@ -1,8 +1,10 @@
 //! Per-publisher lifecycle work off the shared SRT session loop. Each
 //! attached publisher has one task that owns its ingest lease and applies its
-//! stream probes in event order. The peer's disconnect drops the task's queue
-//! sender, so the task applies every probe queued before the disconnect, then
-//! finishes the lease: a peer's probe answers and its finish happen in event
+//! stream probes in event order. The peer's disconnect cancels the attempt,
+//! which frees its input for a reconnect at once (as a dropped lease does),
+//! and drops the task's queue sender: the task answers every probe queued
+//! before the disconnect (with no ring, the attempt being cancelled), then
+//! finishes the lease. A peer's probe answers and its finish happen in event
 //! order, and nothing follows the finish. What a task awaits (its pipeline's
 //! selection, the ingest maps, the ring map) delays neither the loop nor
 //! another peer.
@@ -75,6 +77,7 @@ impl PeerWork {
     ) -> Publisher {
         let (jobs_tx, jobs) = unbounded_channel();
         let ingest = session.ingest.clone();
+        let cancel = session.lease.registration().cancel_token.clone();
         self.tasks.spawn(run(
             server.clone(),
             logical_peer,
@@ -86,6 +89,7 @@ impl PeerWork {
             jobs: jobs_tx,
             ingest,
             closing: false,
+            cancel,
             quality_fold: QualityFold::default(),
         }
     }

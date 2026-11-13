@@ -119,6 +119,9 @@ struct Publisher {
     /// The publisher task's probe queue.
     jobs: tokio::sync::mpsc::UnboundedSender<ProbeJob>,
     ingest: Arc<ActiveIngest>,
+    /// The attempt's own token: cancelled on disconnect, it frees the input
+    /// for a reconnect at once, before the task's finish runs.
+    cancel: tokio_util::sync::CancellationToken,
     closing: bool,
     /// Tracks the last Owner observation, so rates use Owner-to-Owner intervals.
     quality_fold: QualityFold,
@@ -351,9 +354,14 @@ impl SrtServer {
                 logical_peer,
                 reason,
             } => {
-                // Dropping the publisher closes its task's queue: the task
-                // applies the probes queued before this event, then finishes.
-                sessions.remove(&logical_peer);
+                // The input is free at once, as a dropped lease frees it: a
+                // reconnect must not be refused while this peer's task still
+                // waits. Dropping the publisher closes the task's queue: the
+                // task answers the probes queued before this event (with no
+                // ring: the attempt is cancelled), then finishes.
+                if let Some(Session::Publish(publisher)) = sessions.remove(&logical_peer) {
+                    publisher.cancel.cancel();
+                }
                 admissions.abandon(&logical_peer);
                 calls.disconnected(logical_peer, &reason, std::time::Instant::now());
                 info!(peer = %peer, %reason, "SRT peer disconnected");
