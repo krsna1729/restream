@@ -157,11 +157,18 @@ impl IngestSecurityService {
         let now = Instant::now();
         let config = self.get_config();
 
-        // Enforce the tracked-IP limit before inserting a new entry.
-        let limit = config.tracked_ip_limit.max(1) as usize;
-        Self::evict_oldest_if_needed(&mut state, limit.saturating_sub(1));
-
+        // Enforce the tracked-IP limit before inserting a new entry. Eviction
+        // scans and sorts the table, so it frees an eighth of the limit at a
+        // time: a flood of distinct IPs on the SRT session loop pays it once
+        // per `limit / 8` new entries, not on every one.
         let key = Self::scoped_key(scope, ip);
+        if !state.contains_key(&key) {
+            let limit = config.tracked_ip_limit.max(1) as usize;
+            if state.len() >= limit {
+                Self::evict_oldest_if_needed(&mut state, limit - 1 - (limit - 1) / 8);
+            }
+        }
+
         let record = state.entry(key).or_insert_with(|| FailureRecord {
             failures: Vec::new(),
             banned_until: None,
@@ -599,6 +606,44 @@ mod tests {
             state.len() <= 5,
             "tracked IP map must not exceed limit, got {}",
             state.len()
+        );
+    }
+
+    /// A full table frees an eighth of its limit per eviction pass, so the
+    /// following new IPs insert without scanning it again; a known IP never
+    /// triggers a pass (nor evicts itself).
+    #[test]
+    fn tracked_ip_eviction_is_amortized() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 100,
+            failure_window_ms: 60_000,
+            ban_ms: 60_000,
+            tracked_ip_limit: 17,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        for i in 0..17u8 {
+            svc.record_failure(&format!("10.0.0.{i}"));
+        }
+        assert_eq!(svc.state.read().unwrap().len(), 17);
+        // A known IP at the limit evicts nothing.
+        svc.record_failure("10.0.0.16");
+        assert_eq!(svc.state.read().unwrap().len(), 17);
+
+        // One pass frees two slots (an eighth of 16), then the next new IP
+        // fits without another pass.
+        svc.record_failure("10.0.1.0");
+        assert_eq!(svc.state.read().unwrap().len(), 15);
+        svc.record_failure("10.0.1.1");
+        assert_eq!(svc.state.read().unwrap().len(), 16);
+        assert!(
+            svc.state
+                .read()
+                .unwrap()
+                .contains_key(&IngestSecurityService::scoped_key(
+                    RateLimitScope::RtmpPublish,
+                    "10.0.0.16"
+                )),
+            "the most recently failing IP survives the pass"
         );
     }
 

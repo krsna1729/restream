@@ -1,17 +1,17 @@
 //! Off-loop SRT admission. A connect's ban check, pipeline lookup and
-//! publisher/reader registration run as one task per peer, so a stalled
-//! lookup or a contended registration delays only that peer's admission, not
-//! the shared session loop. Only these moved off the loop: probe
-//! application, `finish_publisher`, telemetry folding, caller starts and
-//! deleted-pipeline checks still await engine locks on it (backlog Q-130).
+//! publisher/reader registration, and an `srt_call` caller's registration,
+//! run as one task per peer, so a stalled lookup or a contended registration
+//! delays only that peer's admission, not the shared session loop. An
+//! attached publisher's later lifecycle runs in its own task too
+//! (`peer_work`).
 //!
 //! A task is never aborted, so a registration it made ends in order: a
 //! panicking task drops its ingest lease, which releases the attempt as
 //! abandoned (`crate::ingest_lease`). A peer that disconnects meanwhile is
 //! marked as gone: its task registers nothing once its lookup returns,
-//! finishes a registration that raced the mark itself, and the loop finishes
-//! anything that raced even that, so a reconnect on the same key is not
-//! refused as a duplicate.
+//! finishes a registration that raced the mark itself, and anything that
+//! raced even that is finished in a task of its own, so a reconnect on the
+//! same key is not refused as a duplicate.
 //!
 //! Publishers and readers of one key are admitted concurrently, so a reader
 //! whose task overtakes its publisher's registration is refused with "no
@@ -25,12 +25,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::task::{Id, JoinError, JoinSet};
-use tracing::{error, warn};
+use tokio::task::{Id, JoinSet};
+use tracing::{info, warn};
 
+use super::peer_work::PeerWork;
 use super::{Ingress, PublisherSession, Session, SrtServer};
-use crate::ingest_auth::PipelineAccessMode;
+use crate::ingest_auth::{AuthenticatedPipeline, PipelineAccessMode};
 use crate::security::RateLimitScope;
+use crate::srt::calls::CallerPublisher;
 use crate::srt::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use crate::srt::ingress_owner::{IngressCommand, IngressPeer};
 use crate::srt_stream_id::{ParsedStreamId, SrtConnectionMode, parse_srt_stream_id};
@@ -63,7 +65,8 @@ pub(super) struct Joined {
 
 struct InFlight {
     peer: IngressPeer,
-    ip: IpAddr,
+    /// Unset for calls: the engine placed them, so no client cap applies.
+    ip: Option<IpAddr>,
     /// Set for publish admissions only.
     publish_key: Option<String>,
 }
@@ -126,14 +129,16 @@ impl Admissions {
     fn spawn(
         &mut self,
         peer: IngressPeer,
-        ip: IpAddr,
+        ip: Option<IpAddr>,
         publish_key: Option<String>,
         gone: Arc<AtomicBool>,
         admission: impl Future<Output = Admitted> + Send + 'static,
     ) {
         let task = self.tasks.spawn(admission).id();
         self.pending.insert(peer, Pending { task, gone });
-        *self.per_ip.entry(ip).or_default() += 1;
+        if let Some(ip) = ip {
+            *self.per_ip.entry(ip).or_default() += 1;
+        }
         if let Some(key) = &publish_key {
             *self.per_publish_key.entry(key.clone()).or_default() += 1;
         }
@@ -162,7 +167,7 @@ impl Admissions {
             Ok((id, outcome)) => (id, Some(outcome)),
             Err(error) => {
                 let id = error.id();
-                report_failed(error);
+                super::report_failed("admission", error);
                 (id, None)
             }
         };
@@ -178,7 +183,9 @@ impl Admissions {
             ip,
             publish_key,
         } = self.in_flight.remove(&id)?;
-        release(&mut self.per_ip, ip);
+        if let Some(ip) = ip {
+            release(&mut self.per_ip, ip);
+        }
         if let Some(key) = publish_key {
             release(&mut self.per_publish_key, key);
         }
@@ -195,16 +202,6 @@ fn release<K: Eq + Hash>(counts: &mut HashMap<K, usize>, key: K) {
         if *count.get() == 0 {
             count.remove();
         }
-    }
-}
-
-fn report_failed(error: JoinError) {
-    if error.is_panic() {
-        let payload = error.into_panic();
-        let message = crate::panic_boundary::record_contained(&*payload);
-        error!(panic = message, "SRT admission task panicked");
-    } else {
-        error!(%error, "SRT admission task was cancelled");
     }
 }
 
@@ -236,8 +233,63 @@ impl SrtServer {
         let publish_key = publish_key.cloned();
         let gone = Arc::new(AtomicBool::new(false));
         let admission = self.clone().admit(peer, parsed, gone.clone());
-        admissions.spawn(logical_peer, ip, publish_key, gone, admission);
+        admissions.spawn(logical_peer, Some(ip), publish_key, gone, admission);
         Ok(())
+    }
+
+    /// A call connected: register it as a publisher of its own input off the
+    /// loop, with no stream-key or IP checks (the engine placed the call).
+    pub(super) fn start_call(
+        self: &Arc<Self>,
+        admissions: &mut Admissions,
+        peer: SocketAddr,
+        logical_peer: IngressPeer,
+        caller: CallerPublisher,
+    ) {
+        let gone = Arc::new(AtomicBool::new(false));
+        let admission = self.clone().admit_call(peer, caller, gone.clone());
+        admissions.spawn(logical_peer, None, None, gone, admission);
+    }
+
+    async fn admit_call(
+        self: Arc<Self>,
+        peer: SocketAddr,
+        caller: CallerPublisher,
+        gone: Arc<AtomicBool>,
+    ) -> Admitted {
+        let input_id = caller.pipeline.input_id.clone();
+        match self
+            .register_publisher(peer, caller.pipeline, caller.stream_key, &gone)
+            .await
+        {
+            Ok(admitted) => {
+                if matches!(admitted, Admitted::Publish(..)) {
+                    info!(peer = %peer, input_id = %input_id, "SRT call connected");
+                }
+                admitted
+            }
+            Err(error) => {
+                warn!(peer = %peer, input_id = %input_id, %error, "hanging up SRT call");
+                Admitted::Rejected
+            }
+        }
+    }
+
+    /// Register a publisher; one whose peer left meanwhile is finished at
+    /// once.
+    async fn register_publisher(
+        &self,
+        peer: SocketAddr,
+        pipeline: AuthenticatedPipeline,
+        stream_key: String,
+        gone: &AtomicBool,
+    ) -> Result<Admitted, String> {
+        let (session, media) = self.start_publisher(peer, pipeline, stream_key).await?;
+        if gone.load(Ordering::Acquire) {
+            self.finish_publisher(session).await;
+            return Ok(Admitted::Rejected);
+        }
+        Ok(Admitted::Publish(session, media))
     }
 
     /// The admission task: IP bans, the pipeline lookup (under its deadline),
@@ -290,14 +342,10 @@ impl SrtServer {
         match parsed.mode {
             SrtConnectionMode::Publish => {
                 match self
-                    .start_publisher(peer, pipeline, parsed.stream_key)
+                    .register_publisher(peer, pipeline, parsed.stream_key, &gone)
                     .await
                 {
-                    Ok((session, _media)) if gone.load(Ordering::Acquire) => {
-                        self.finish_publisher(session).await;
-                        Admitted::Rejected
-                    }
-                    Ok((session, media)) => Admitted::Publish(session, media),
+                    Ok(admitted) => admitted,
                     Err(error) => {
                         warn!(peer = %peer, %error, "rejecting SRT publisher");
                         Admitted::Rejected
@@ -318,23 +366,25 @@ impl SrtServer {
     }
 
     /// Apply a finished admission to its still-connected peer, or finish what
-    /// it registered when the peer already left. Called only with a free
-    /// command slot, so the one command it may issue is accepted.
-    pub(super) async fn apply_admission(
-        &self,
+    /// it registered, off the loop, when the peer already left. Called only
+    /// with a free command slot, so the one command it may issue is accepted.
+    pub(super) fn apply_admission(
+        self: &Arc<Self>,
         ingress: &mut Ingress,
         sessions: &mut HashMap<IngressPeer, Session>,
+        peers: &mut PeerWork,
         Joined { peer, outcome }: Joined,
     ) -> Result<(), IngressCommand> {
         let Some(logical_peer) = peer else {
             if let Some(outcome) = outcome {
-                self.discard_admission(outcome).await;
+                self.discard_admission(peers, outcome);
             }
             return Ok(());
         };
         match outcome {
             Some(Admitted::Publish(session, media)) => {
-                sessions.insert(logical_peer, Session::Publish(session));
+                let publisher = peers.attach(self, logical_peer, session);
+                sessions.insert(logical_peer, Session::Publish(publisher));
                 ingress.command(IngressCommand::AttachPublisher {
                     logical_peer,
                     media,
@@ -363,19 +413,24 @@ impl SrtServer {
     /// Listener exit: every late admission runs to completion and whatever it
     /// registered is finished, so a restart on the same engine never inherits
     /// a registration. The Owner is already shut down, so nothing attaches.
-    pub(super) async fn drain_admissions(&self, admissions: &mut Admissions) {
+    pub(super) async fn drain_admissions(
+        self: &Arc<Self>,
+        admissions: &mut Admissions,
+        peers: &mut PeerWork,
+    ) {
         while let Some(Joined { outcome, .. }) = admissions.join_next().await {
             if let Some(outcome) = outcome {
-                self.discard_admission(outcome).await;
+                self.discard_admission(peers, outcome);
             }
         }
     }
 
     /// Nothing attaches for a peer that is gone: a publisher's registration
-    /// is finished, a reader's muxer lease releases on drop.
-    async fn discard_admission(&self, outcome: Admitted) {
+    /// is finished (in its own task), a reader's muxer lease releases on
+    /// drop.
+    fn discard_admission(self: &Arc<Self>, peers: &mut PeerWork, outcome: Admitted) {
         if let Admitted::Publish(session, _media) = outcome {
-            self.finish_publisher(session).await;
+            peers.finish(self, session);
         }
     }
 }
