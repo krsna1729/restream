@@ -34,8 +34,8 @@ pub(super) fn on_writer_thread() -> bool {
     ON_WRITER_THREAD.with(Cell::get)
 }
 
-/// The logging side of one sink: hands each line to the writer thread
-/// without waiting, counting every line it cannot hand over.
+/// One sink's handle: hands each line to the writer thread without waiting,
+/// counting every line it cannot hand over, and flushes on demand.
 #[derive(Clone)]
 pub(super) struct NonBlocking {
     tx: SyncSender<Msg>,
@@ -47,6 +47,26 @@ impl NonBlocking {
         if self.tx.try_send(Msg::Line(line.to_vec())).is_err() {
             self.lost.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Waits until the writer has written every line queued before this call,
+    /// or until `deadline`. Returns whether the flush completed.
+    pub(super) fn flush_until(&self, deadline: Instant) -> bool {
+        let (done_tx, done_rx) = sync_channel(1);
+        let mut msg = Msg::Flush(done_tx);
+        loop {
+            match self.tx.try_send(msg) {
+                Ok(()) => break,
+                Err(TrySendError::Full(back)) if Instant::now() < deadline => {
+                    msg = back;
+                    std::thread::sleep(FLUSH_RETRY);
+                }
+                Err(_) => return false,
+            }
+        }
+        done_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .is_ok()
     }
 }
 
@@ -71,33 +91,6 @@ impl<'a> MakeWriter<'a> for NonBlocking {
     }
 }
 
-/// Flushes one sink's queue on demand; held by `LoggingHandles`.
-pub(super) struct FlushGuard {
-    tx: SyncSender<Msg>,
-}
-
-impl FlushGuard {
-    /// Waits until the writer has written every line queued before this call,
-    /// or until `deadline`. Returns whether the flush completed.
-    pub(super) fn flush_until(&self, deadline: Instant) -> bool {
-        let (done_tx, done_rx) = sync_channel(1);
-        let mut msg = Msg::Flush(done_tx);
-        loop {
-            match self.tx.try_send(msg) {
-                Ok(()) => break,
-                Err(TrySendError::Full(back)) if Instant::now() < deadline => {
-                    msg = back;
-                    std::thread::sleep(FLUSH_RETRY);
-                }
-                Err(_) => return false,
-            }
-        }
-        done_rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .is_ok()
-    }
-}
-
 /// Starts the writer thread for `sink` with a queue of `capacity` lines.
 /// `lost` counts lines dropped on a full queue or lost to a failed write.
 pub(super) fn spawn<W: Write + Send + 'static>(
@@ -105,18 +98,12 @@ pub(super) fn spawn<W: Write + Send + 'static>(
     sink: W,
     capacity: usize,
     lost: &'static AtomicU64,
-) -> io::Result<(NonBlocking, FlushGuard)> {
+) -> io::Result<NonBlocking> {
     let (tx, rx) = sync_channel(capacity);
     std::thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || run_writer(rx, sink, lost))?;
-    Ok((
-        NonBlocking {
-            tx: tx.clone(),
-            lost,
-        },
-        FlushGuard { tx },
-    ))
+    Ok(NonBlocking { tx, lost })
 }
 
 /// Runs until every sender is gone. A panicking sink loses the line it was

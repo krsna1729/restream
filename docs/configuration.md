@@ -296,6 +296,7 @@ pinned build and set `FFMPEG_BIN_PATH=/usr/local/bin/ffmpeg` and
 |---|---|---|---|
 | `RUST_LOG` | `info` | `tracing` `EnvFilter` syntax | Log filter (`src/logging/mod.rs`) |
 | `NO_COLOR` | unset | presence | Any value turns off ANSI colour in console logs |
+| `RUST_BACKTRACE` | unset | `0`, `1`, `full` | Backtrace in panic reports, read once at startup: unset or `0` none, `full` the full form, any other value the short form (`src/logging/panic_report.rs`) |
 | `RESTREAM_LOG_RETENTION_DAYS` | `7` | days | SQLite log-history retention |
 | `RESTREAM_MEDIA_POLL_USAGE` | off | bool | Diagnostic: per-poll `getrusage` in media executor metrics (two extra syscalls per poll) |
 

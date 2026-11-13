@@ -260,7 +260,8 @@ struct LoggingHealthJson {
     console_dropped: u64,
     /// Daily-file lines dropped on a full queue or lost to a failed write.
     file_dropped: u64,
-    /// History rows dropped on a full `app_logs` channel.
+    /// History rows dropped on a full `app_logs` channel or in a failed
+    /// batch write.
     history_dropped: u64,
 }
 

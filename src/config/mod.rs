@@ -106,6 +106,8 @@ pub struct AppConfig {
     pub ffmpeg_bin_path: Option<String>,
     pub log_dir: String,
     pub no_color: bool,
+    /// `RUST_BACKTRACE`, read for the panic hook's report (`logging::init`).
+    pub rust_backtrace: Option<String>,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
     pub initial_admin_password: Option<String>,
@@ -284,6 +286,7 @@ impl Default for AppConfig {
             ffmpeg_bin_path: None,
             log_dir: ".restream/logs".to_string(),
             no_color: false,
+            rust_backtrace: None,
             srt_passphrase: None,
             srt_pbkeylen: 16,
             initial_admin_password: None,
@@ -319,6 +322,7 @@ impl AppConfig {
         let ffmpeg_bin_path = env_var("FFMPEG_BIN_PATH");
         let log_dir = env_var("RESTREAM_LOG_DIR").unwrap_or_else(|| ".restream/logs".to_string());
         let no_color = env_present("NO_COLOR");
+        let rust_backtrace = env_var("RUST_BACKTRACE");
         let srt_passphrase = env_var("RESTREAM_SRT_PASSPHRASE");
         let srt_pbkeylen = env_var("RESTREAM_SRT_PBKEYLEN")
             .and_then(|v| v.parse::<i32>().ok())
@@ -346,6 +350,7 @@ impl AppConfig {
             ffmpeg_bin_path,
             log_dir,
             no_color,
+            rust_backtrace,
             srt_passphrase,
             srt_pbkeylen,
             initial_admin_password,
