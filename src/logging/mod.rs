@@ -1,31 +1,68 @@
 //! Unified logging subsystem — tracing subscriber with three simultaneous sinks:
 //!
 //! 1. **fmt::Layer**       → stdout (info/debug) + stderr (error/warn)
-//! 2. **FileLayer**        → rolling daily file via `tracing-appender` (NonBlocking)
+//! 2. **FileLayer**        → rolling daily file via `tracing-appender`
 //! 3. **DbLayer**          → `app_logs` SQLite table, then SSE broadcast with persisted IDs
+//!
+//! No sink makes the logging thread wait: the console and file layers write
+//! through [`nonblocking`] queues, the history layer through `try_send`, and
+//! each counts what it drops ([`dropped_lines`]).
 //!
 //! Call `init()` once at the top of `run_app()`, before any tasks are spawned.
 //! Hold the returned `LoggingHandles` for the process lifetime.
 
+mod nonblocking;
 pub mod types;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Record};
 use tracing::{Id, Metadata, Subscriber};
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, Layer};
 
+use self::nonblocking::{FlushGuard, NonBlocking};
 pub use self::types::{AppLogEntry, AppLogFilters, AppLogRow};
+
+/// Lines each console stream and the file sink queue while their collector
+/// is slow; more are dropped and counted.
+const SINK_QUEUE_LINES: usize = 16_384;
+/// How long shutdown waits for the console and file sinks to flush, in total.
+const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
+
+static CONSOLE_DROPPED: AtomicU64 = AtomicU64::new(0);
+static FILE_DROPPED: AtomicU64 = AtomicU64::new(0);
+static HISTORY_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Log lines that never reached their sink since start, per sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DroppedLines {
+    /// Console lines (stdout, stderr and panic reports) dropped on a full
+    /// queue or lost to a failed write.
+    pub console: u64,
+    /// Daily-file lines dropped on a full queue or lost to a failed write.
+    pub file: u64,
+    /// History rows dropped on a full `app_logs` channel.
+    pub history: u64,
+}
+
+/// The process-lifetime drop counters of every log sink.
+pub fn dropped_lines() -> DroppedLines {
+    DroppedLines {
+        console: CONSOLE_DROPPED.load(Ordering::Relaxed),
+        file: FILE_DROPPED.load(Ordering::Relaxed),
+        history: HISTORY_DROPPED.load(Ordering::Relaxed),
+    }
+}
 
 // ── Public broadcast entry (also used by the SSE handler) ────────────────────
 
@@ -34,12 +71,23 @@ pub type LogBroadcast = AppLogRow;
 
 // ── LoggingHandles ────────────────────────────────────────────────────────────
 
-/// Held by `AppState` for the process lifetime.
-/// Dropping this struct flushes the file sink and stops the DB drain task.
+/// Held by `run_app` for the process lifetime. Dropping it flushes the
+/// console and file sinks, together bounded by [`SHUTDOWN_FLUSH`].
 pub struct LoggingHandles {
     pub broadcast_tx: broadcast::Sender<LogBroadcast>,
+    /// The `app_logs` drain; `run_app` runs it under supervision.
+    pub history_drain: HistoryDrain,
     _db_tx: tokio::sync::mpsc::Sender<AppLogEntry>,
-    _file_guard: WorkerGuard,
+    flush: Vec<FlushGuard>,
+}
+
+impl Drop for LoggingHandles {
+    fn drop(&mut self) {
+        let deadline = Instant::now() + SHUTDOWN_FLUSH;
+        for guard in &self.flush {
+            guard.flush_until(deadline);
+        }
+    }
 }
 
 // ── Span context store ────────────────────────────────────────────────────────
@@ -231,53 +279,106 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
             event_class,
         };
 
-        // try_send — never block the callsite; silently drop if channel is full.
-        let _ = self.tx.try_send(entry);
+        // try_send — never block the callsite; drop and count if the channel is full.
+        if self.tx.try_send(entry).is_err() {
+            HISTORY_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
-// ── Stderr writer (error/warn → stderr, rest → stdout) ───────────────────────
+// ── Console writer (error/warn → stderr, rest → stdout) ──────────────────────
 
-struct SplitWriter;
+struct SplitWriter {
+    stdout: NonBlocking,
+    stderr: NonBlocking,
+}
 
 impl<'a> MakeWriter<'a> for SplitWriter {
-    type Writer = Box<dyn std::io::Write + 'a>;
+    type Writer = &'a NonBlocking;
 
     fn make_writer(&'a self) -> Self::Writer {
-        Box::new(std::io::stdout())
+        &self.stdout
     }
 
     fn make_writer_for(&'a self, meta: &Metadata<'_>) -> Self::Writer {
         if *meta.level() <= tracing::Level::WARN {
-            Box::new(std::io::stderr())
+            &self.stderr
         } else {
-            Box::new(std::io::stdout())
+            &self.stdout
         }
     }
+}
+
+/// Replaces the default panic hook, which writes to stderr synchronously and
+/// so would park a panicking Owner or Tokio worker behind a stalled
+/// collector. The report goes through the stderr queue instead. It bypasses
+/// the subscriber: a panic inside a layer that holds a lock would deadlock
+/// on a nested event.
+fn install_panic_hook(stderr: NonBlocking) {
+    std::panic::set_hook(Box::new(move |info| {
+        if nonblocking::on_writer_thread() {
+            // The writer counts the line it lost; reporting it would queue
+            // another line for a sink that may panic again.
+            return;
+        }
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let backtrace = std::backtrace::Backtrace::capture();
+        let report = match backtrace.status() {
+            std::backtrace::BacktraceStatus::Captured => {
+                format!("thread '{name}' {info}\nstack backtrace:\n{backtrace}\n")
+            }
+            _ => format!("thread '{name}' {info}\n"),
+        };
+        stderr.push(report.as_bytes());
+    }));
 }
 
 // ── init() ───────────────────────────────────────────────────────────────────
 
 /// Initialise the global tracing subscriber. Must be called once before any
-/// tracing macros are used.
+/// tracing macros are used. Also replaces the panic hook
+/// ([`install_panic_hook`]).
 ///
-/// `db_pool` is used by the background drain task that batch-writes to app_logs.
+/// `db_pool` is used by the [`HistoryDrain`] that batch-writes to app_logs.
 /// `log_dir` and `no_color` are read from [`AppConfig`] (not from the environment).
-pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandles {
+pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> Result<LoggingHandles, String> {
     // ── channel plumbing ──
-    let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<AppLogEntry>(4096);
+    let (db_tx, db_rx) = tokio::sync::mpsc::channel::<AppLogEntry>(4096);
     let (broadcast_tx, _) = broadcast::channel::<LogBroadcast>(256);
 
     // ── span context for the persistence layer ──
     let db_spans = SpanStore::default();
 
-    // ── file sink ──
-    let (file_writer, file_guard) = if log_dir.is_empty() {
-        // Disabled — write to a sink that discards everything.
-        tracing_appender::non_blocking(std::io::sink())
+    // ── console and file sinks, each drained by its own writer thread ──
+    let sink_error =
+        |error: std::io::Error| format!("failed to start a log writer thread: {error}");
+    let mut flush = Vec::with_capacity(3);
+    let (stdout, guard) = nonblocking::spawn(
+        "log-stdout",
+        std::io::stdout(),
+        SINK_QUEUE_LINES,
+        &CONSOLE_DROPPED,
+    )
+    .map_err(sink_error)?;
+    flush.push(guard);
+    let (stderr, guard) = nonblocking::spawn(
+        "log-stderr",
+        std::io::stderr(),
+        SINK_QUEUE_LINES,
+        &CONSOLE_DROPPED,
+    )
+    .map_err(sink_error)?;
+    flush.push(guard);
+    let file_writer = if log_dir.is_empty() {
+        None
     } else {
         let appender = tracing_appender::rolling::daily(log_dir, "restream.log");
-        tracing_appender::non_blocking(appender)
+        let (writer, guard) =
+            nonblocking::spawn("log-file", appender, SINK_QUEUE_LINES, &FILE_DROPPED)
+                .map_err(sink_error)?;
+        flush.push(guard);
+        Some(writer)
     };
 
     // ── RUST_LOG / EnvFilter ──
@@ -290,72 +391,90 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
     };
 
     let fmt_layer_stdout = tracing_subscriber::fmt::layer()
-        .with_writer(SplitWriter)
+        .with_writer(SplitWriter {
+            stdout,
+            stderr: stderr.clone(),
+        })
         .with_target(true)
         .with_thread_ids(false)
         .with_ansi(!no_color);
 
-    let fmt_layer_file = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
-        .with_ansi(false)
-        .with_target(true)
-        .json();
+    let fmt_layer_file = file_writer.map(|writer| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(writer)
+            .with_ansi(false)
+            .with_target(true)
+            .json()
+            .with_filter(filter.clone())
+    });
 
     let history_filter = filter_fn(|meta: &Metadata<'_>| history_level_enabled(meta.level()));
 
     let subscriber = tracing_subscriber::registry()
-        .with(fmt_layer_stdout.with_filter(filter.clone()))
-        .with(fmt_layer_file.with_filter(filter))
+        .with(fmt_layer_stdout.with_filter(filter))
+        .with(fmt_layer_file)
         .with(db_layer.with_filter(history_filter));
 
-    // set_global_default panics if called twice — acceptable for a process-lifetime init.
     tracing::subscriber::set_global_default(subscriber)
-        .expect("tracing subscriber already installed");
+        .map_err(|error| format!("failed to install the tracing subscriber: {error}"))?;
+    install_panic_hook(stderr);
 
-    // ── DB drain task — spawned here, runs until db_tx is dropped ──
-    let drain_broadcast_tx = broadcast_tx.clone();
-    tokio::spawn(async move {
+    Ok(LoggingHandles {
+        history_drain: HistoryDrain {
+            rx: Arc::new(tokio::sync::Mutex::new(db_rx)),
+            db_pool,
+            broadcast_tx: broadcast_tx.clone(),
+        },
+        broadcast_tx,
+        _db_tx: db_tx,
+        flush,
+    })
+}
+
+/// Batch-writes history rows to `app_logs` and broadcasts the committed ones.
+/// The receiver is shared so a restart after a panic resumes the same
+/// channel; a tokio Mutex is not poisoned by the panicking holder.
+#[derive(Clone)]
+pub struct HistoryDrain {
+    rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<AppLogEntry>>>,
+    db_pool: SqlitePool,
+    broadcast_tx: broadcast::Sender<LogBroadcast>,
+}
+
+impl HistoryDrain {
+    /// Runs until every history sender is dropped.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the one drain holds the receiver for its lifetime; the mutex exists only so a restart after a panic resumes the same channel"
+    )]
+    pub async fn run(self) {
+        let mut rx = self.rx.lock().await;
         let mut batch: Vec<AppLogEntry> = Vec::with_capacity(64);
         loop {
             // Collect up to 64 entries or wait 100 ms, whichever comes first.
             let deadline = tokio::time::sleep(Duration::from_millis(100));
             tokio::pin!(deadline);
-            loop {
+            let closed = loop {
                 tokio::select! {
                     biased;
-                    entry = db_rx.recv() => {
-                        match entry {
-                            Some(e) => {
-                                batch.push(e);
-                                if batch.len() >= 64 { break; }
-                            }
-                            None => {
-                                // Channel closed — flush remaining and exit.
-                                if !batch.is_empty() {
-                                    persist_and_broadcast_log_batch(
-                                        &db_pool,
-                                        &drain_broadcast_tx,
-                                        &mut batch,
-                                    )
-                                    .await;
-                                }
-                                return;
-                            }
+                    entry = rx.recv() => match entry {
+                        Some(e) => {
+                            batch.push(e);
+                            if batch.len() >= 64 { break false; }
                         }
-                    }
-                    _ = &mut deadline => break,
+                        None => break true,
+                    },
+                    _ = &mut deadline => break false,
                 }
-            }
+            };
             if !batch.is_empty() {
-                persist_and_broadcast_log_batch(&db_pool, &drain_broadcast_tx, &mut batch).await;
+                persist_and_broadcast_log_batch(&self.db_pool, &self.broadcast_tx, &mut batch)
+                    .await;
+            }
+            if closed {
+                return;
             }
         }
-    });
-
-    LoggingHandles {
-        broadcast_tx,
-        _db_tx: db_tx,
-        _file_guard: file_guard,
     }
 }
 

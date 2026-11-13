@@ -252,6 +252,18 @@ struct NameResolverHealthJson {
     cap_reached: u64,
 }
 
+/// Log lines that never reached their sink (`crate::logging::dropped_lines`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoggingHealthJson {
+    /// Console lines dropped on a full queue or lost to a failed write.
+    console_dropped: u64,
+    /// Daily-file lines dropped on a full queue or lost to a failed write.
+    file_dropped: u64,
+    /// History rows dropped on a full `app_logs` channel.
+    history_dropped: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeLimitsHealthJson {
@@ -279,6 +291,7 @@ pub(crate) struct EngineHealthView {
     /// output only.
     contained_panics: u64,
     name_resolver: NameResolverHealthJson,
+    logging: LoggingHealthJson,
     tuning: TuningHealthJson,
 }
 
@@ -635,6 +648,14 @@ pub(crate) async fn health_snapshot_view(
                 threads: stats.threads,
                 hung_threads: stats.hung_threads,
                 cap_reached: stats.cap_reached,
+            }
+        },
+        logging: {
+            let dropped = crate::logging::dropped_lines();
+            LoggingHealthJson {
+                console_dropped: dropped.console,
+                file_dropped: dropped.file,
+                history_dropped: dropped.history,
             }
         },
         tuning: TuningHealthJson {
