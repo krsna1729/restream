@@ -15,7 +15,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::future::{Future, pending, poll_fn};
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Poll, Waker};
@@ -34,6 +34,7 @@ use crate::egress::journal::RingFeed;
 use crate::egress::leaf_arena::LeafKey;
 use crate::egress::policy::WorkBudget;
 use crate::moq::transport;
+use crate::resolver::DEFAULT_RESOLVE_TIMEOUT;
 use restream_moq::tls;
 use restream_srt::address_family::AddressFamily;
 
@@ -102,23 +103,15 @@ impl MoqConnector for QuicConnector {
     }
 }
 
-/// The relay address: an IP literal, else the first resolved address (on
-/// Compio's blocking pool, never the shard thread).
+/// The relay address: the first the process resolver returns (an IP literal
+/// needs no lookup), by [`DEFAULT_RESOLVE_TIMEOUT`].
 async fn resolve(host: &str, port: u16) -> Result<SocketAddr, String> {
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(SocketAddr::new(ip, port));
-    }
-    let owned = host.to_string();
-    compio::runtime::spawn_blocking(move || {
-        (owned.as_str(), port)
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut addrs| addrs.next())
-    })
-    .await
-    .ok()
-    .flatten()
-    .ok_or_else(|| format!("MoQ relay host {host} did not resolve"))
+    let deadline = Instant::now() + DEFAULT_RESOLVE_TIMEOUT;
+    crate::resolver::shared()
+        .resolve(host, port, deadline)
+        .await
+        .map(|addresses| addresses[0])
+        .map_err(|error| format!("MoQ relay host {host} did not resolve: {error}"))
 }
 
 /// Leaves whose link changed state, and the waker of the shard's idle

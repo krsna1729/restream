@@ -41,7 +41,14 @@ where
     EgressShardGroup::try_spawn_with(shard_count, shard_config, |shard_id| {
         let feed = feed_for(shard_id);
         move || {
-            resolving_srt_shard_backend(feed, budget, drain_timeout, leaf_capacity, owner_settings)
+            resolving_srt_shard_backend(
+                feed,
+                budget,
+                drain_timeout,
+                leaf_capacity,
+                owner_settings,
+                crate::resolver::shared(),
+            )
         }
     })
     .map_err(|error| match error {
@@ -89,6 +96,7 @@ where
                 startup_source,
                 drain_timeout,
                 leaf_capacity,
+                crate::resolver::shared(),
             ))
         }
     })

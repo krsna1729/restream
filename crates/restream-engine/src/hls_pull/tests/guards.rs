@@ -582,6 +582,40 @@ async fn a_source_url_with_userinfo_is_refused() {
 
 // ---- cancellation --------------------------------------------------------
 
+/// A pull whose origin name server black-holes stops as soon as it is
+/// cancelled, even mid private-address lookup: the reconciler that cancels
+/// and joins it (`ensure_pull`, `cancel_pulls`) never waits on DNS.
+#[tokio::test]
+async fn a_pull_cancelled_during_its_source_lookup_ends_at_once() {
+    let dns = crate::resolver::fake::FakeDns::new();
+    let (engine, ingest) = test_ingest(limits());
+    let cancel = CancellationToken::new();
+    let pull = tokio::spawn(run(
+        engine.clone(),
+        ingest,
+        identity(),
+        source(
+            "http://hung.test/live/index.m3u8".to_string(),
+            VariantRule::HighestBandwidth,
+        ),
+        limits(),
+        dns.resolver.clone(),
+        cancel.clone(),
+    ));
+    while dns.calls() == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let cancelled = std::time::Instant::now();
+    cancel.cancel();
+    let end = tokio::time::timeout(Duration::from_secs(1), pull)
+        .await
+        .expect("the pull ends while its source lookup still hangs")
+        .expect("pull task");
+    assert_eq!(end, PullEnd::Fatal);
+    assert!(cancelled.elapsed() < Duration::from_secs(1));
+    engine.cancel_pipeline_input(INPUT_ID).await;
+}
+
 /// A cancelled task dispatches nothing: `HlsIngest::dispatch` would open a
 /// session under an input the next source is about to own. Deterministic,
 /// because the guard is what is called here — a cancellation that lands
@@ -627,7 +661,7 @@ async fn a_cancelled_task_dispatches_nothing() {
         "and opens no session"
     );
 
-    let client = build_client(false, true);
+    let client = build_client(crate::resolver::shared(), false, true);
     let url = Url::parse(&format!("{base}/live/seg0.ts")).unwrap();
     let object = state
         .fetch_object(

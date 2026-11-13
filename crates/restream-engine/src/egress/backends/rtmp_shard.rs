@@ -6,11 +6,11 @@
 //! remains shard-scheduled, preserving feed fairness, drain and retry rules.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
@@ -28,6 +28,7 @@ use crate::egress::policy::{
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardConfig};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
+use crate::resolver::ResolveError;
 use restream_rtmp::parse_rtmp_url;
 
 #[cfg(test)]
@@ -109,20 +110,21 @@ impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
 pub(crate) struct RtmpResolvedConnect {
     pub(crate) output_id: OutputId,
     pub(crate) generation: u64,
-    /// `None` is the bounded failure completion: resolution failed, so the
-    /// shard fails the matching pending connect instead of keeping it
+    /// An error fails the matching pending connect instead of keeping it
     /// resident (and holding leaf capacity) forever.
-    pub(crate) peer_addr: Option<SocketAddr>,
+    pub(crate) peer: Result<SocketAddr, ResolveError>,
 }
 
 pub(crate) struct RtmpResolveCompletionQueue {
     receiver: Receiver<RtmpResolvedConnect>,
 }
 
-pub(crate) fn rtmp_resolve_completion_queue(
-    capacity: usize,
-) -> (SyncSender<RtmpResolvedConnect>, RtmpResolveCompletionQueue) {
-    let (sender, receiver) = mpsc::sync_channel(capacity);
+/// Unbounded so a resolver thread never blocks on, or drops, a shard's
+/// answer: it holds one completion per accepted `Add`/`Update`, each
+/// answered by its deadline and drained every media tick.
+pub(crate) fn rtmp_resolve_completion_queue()
+-> (Sender<RtmpResolvedConnect>, RtmpResolveCompletionQueue) {
+    let (sender, receiver) = mpsc::channel();
     (sender, RtmpResolveCompletionQueue { receiver })
 }
 
@@ -146,13 +148,6 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
 fn merge_ready_flags(pending: &mut Readiness, event: TcpReadyLeaf) {
     pending.readable |= event.readable;
     pending.writable |= event.writable;
-}
-
-pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
-    if let Ok(addr) = host.parse::<std::net::IpAddr>() {
-        return Some(SocketAddr::new(addr, port));
-    }
-    super::resolve::contained_lookup(host, || (host, port).to_socket_addrs().ok()?.next())
 }
 
 struct RtmpFabricLeaf {
@@ -751,9 +746,12 @@ where
         self.resolve_completions.drain_resolved(&mut resolved);
         let mut connected_any = false;
         for completion in resolved.drain(..) {
-            let Some(peer_addr) = completion.peer_addr else {
-                self.fail_pending_connect(&completion.output_id, completion.generation);
-                continue;
+            let peer_addr = match completion.peer {
+                Ok(peer_addr) => peer_addr,
+                Err(error) => {
+                    self.fail_pending_connect(&completion.output_id, completion.generation, &error);
+                    continue;
+                }
             };
             connected_any |= self.complete_pending_connect(
                 &completion.output_id,
@@ -808,7 +806,7 @@ where
         budget: WorkBudgetConfig,
         chunk_size: u32,
     ) -> Self {
-        let (_sender, queue) = rtmp_resolve_completion_queue(1);
+        let (_sender, queue) = rtmp_resolve_completion_queue();
         Self::with_runtime_components(
             poller,
             feed,

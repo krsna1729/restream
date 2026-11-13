@@ -80,6 +80,7 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
                     startup_source,
                     shard_config.drain_timeout(),
                     shard_config.leaf_capacity().get(),
+                    crate::resolver::shared(),
                 ),
             )
         }

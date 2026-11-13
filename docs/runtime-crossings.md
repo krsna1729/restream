@@ -33,7 +33,7 @@ Verdicts:
 | MoQ ingest and origin | `moq-ingest` (one Compio runtime) | MoQ/QUIC and WebTransport sessions, CMAF demux, publish, local origin |
 | Media executor | `restream-media` (fixed pool, `RESTREAM_MEDIA_WORKERS`) | Shared SRT TS muxing, audio routers, HLS segmenting, recording feed, file ingest demux, HLS push/pull assembly |
 | Egress shards | `egress-shard-N` (one Compio runtime each) | RTMP/RTMPS, SRT, HLS PUT, MoQ, sink and pipeline leaves ([Egress architecture](egress-architecture.md)) |
-| Egress DNS | RTMP resolver worker, `srt-dns-res`, `hls-put-resolve`; MoQ uses Compio `spawn_blocking` | Blocking `getaddrinfo` |
+| Name resolution | `dns-resolve` (16, one process pool) and `dns-deadline` (`crates/restream-engine/src/resolver.rs`) | Blocking `getaddrinfo` for every hostname: egress (RTMP, SRT, HLS PUT, MoQ), HLS pull, SRT caller |
 | FFmpeg | `restream-ffin`, `restream-ffout` per child | Child stdin writes and stdout demux |
 | Disk | Guarded writer threads | Recording file writes |
 
@@ -97,7 +97,7 @@ media runs on CONTROL.
 | MQ5 | Ring → local origin | The ring's publication subscriber calls `ChannelWake::wake` on the producer thread (`flume::bounded(1)`, `try_send`). One Compio pump per served pipeline reads the ring and writes shared-`Bytes` hang frames to every viewer session | per publication, coalesced | 1 queued wake per pipeline; 64 units / ~1 MiB per pump batch | **Justified.** |
 | MQ6 | Output control: CONTROL → MoQ shard | `run_moq_fabric` installs a `MoqPublishStartup` in `SharedMoqStartupSource`, then dispatches `Add`; `Remove` at the end. Same command channel as W2 | per output attempt | W2 | **Justified.** |
 | MQ7 | Ring → MoQ relay egress | Feed wakes as W1. `MoqShardBackend` visits leaves; `MoqEngine` reads `RingFeed` and writes the broadcast. Each output has one Compio connection task on the shard runtime, linked by `LeafLink` | per bounded visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` and `_BYTES` per visit (the publisher does not check the time budget); one connection task per output | **No media crossing.** |
-| MQ8 | MoQ relay DNS | `compio::runtime::spawn_blocking` resolves a hostname; IP literals skip it | per connect | Compio blocking pool; no explicit timeout `[unverified bound]` | **Open.** No measurement yet. |
+| MQ8 | MoQ relay DNS | The connection task awaits `Resolver::resolve` (W5); IP literals skip the pool | per connect | 5 s deadline (`DEFAULT_RESOLVE_TIMEOUT`) | **Justified.** As W5. |
 
 ## Control and wake crossings
 
@@ -107,7 +107,7 @@ media runs on CONTROL.
 | W2 | Egress commands: CONTROL → shard | Bounded flume channel per shard (`RESTREAM_EGRESS_COMMAND_CAPACITY`, default 1024); the manager checks free slots before sending | per add, update, remove | **Justified.** |
 | W3 | Egress progress and quality: shard → CONTROL/API | `EgressProgressSink`: relaxed atomics per visit; `Mutex<PublisherQuality>` and backpressure reason written by the stall sweep at most once per second per leaf; `terminated_unexpectedly` polled by `EgressTask` every 250 ms | ≤ 1 Hz per leaf for quality | **Justified.** |
 | W4 | SRT Owner events inside a shard | Owner event and failure queues drained per ready batch (`SrtOwners::drain_events`, ≤ 64 per pass). The Owner runs on the shard's own thread and runtime, so this is not a thread crossing; results reach CONTROL through W3 | connection and failure events | **No media crossing.** |
-| W5 | Egress DNS | RTMP: one resolver worker per shard, request and completion queues of 1024. SRT: lazy `srt-dns-res` worker per shard with bounded queues. HLS PUT: `hls-put-resolve`. MoQ: MQ8 | per connect | **Justified.** Blocking `getaddrinfo` stays off shard threads. |
+| W5 | Name resolution: shard or task → resolver → caller | One process resolver (`crate::resolver`): 16 `dns-resolve` threads, a 1024-name queue, concurrent lookups of one `(host, port)` sharing one `getaddrinfo`. Shards call `Resolver::submit` with a completion that pushes into their own unbounded completion queue, drained on the media tick; async callers (HLS pull, SRT caller, MoQ) await `Resolver::resolve`. The `dns-deadline` thread answers each request at its deadline (`LeafPolicy::resolve_timeout` for egress, 5 s otherwise) even while the lookup still runs; a full queue answers `Overflow` at once. No shard owns a resolver thread, and nothing joins one | per connect or retry | **Justified.** Blocking `getaddrinfo` stays off Tokio workers, Owners and shard threads; one hung name holds one pool thread and fails only its own callers at their deadlines. |
 
 ## Observability crossings
 

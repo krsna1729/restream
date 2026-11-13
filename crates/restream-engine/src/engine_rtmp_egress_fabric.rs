@@ -266,6 +266,7 @@ impl MediaEngine {
                         startup_source,
                         drain_timeout,
                         leaf_capacity,
+                        crate::resolver::shared(),
                     ))
                 }
             },
@@ -302,7 +303,7 @@ impl MediaEngine {
         let Some(runtime) = runtime else {
             return false;
         };
-        let _ = runtime.shutdown();
+        let _ = runtime.shutdown_off_worker().await;
         true
     }
 
@@ -343,7 +344,7 @@ impl MediaEngine {
         };
         let count = runtimes.len();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown();
+            let _ = runtime.shutdown_off_worker().await;
         }
         count
     }

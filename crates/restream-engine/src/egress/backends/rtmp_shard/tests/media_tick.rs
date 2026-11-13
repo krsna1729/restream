@@ -21,9 +21,9 @@ use std::sync::Arc;
 /// worker does, then observe `on_media_tick`'s real return value.
 fn backend_with_resolve_queue() -> (
     RtmpShardBackend<CompioTcpPoller>,
-    std::sync::mpsc::SyncSender<RtmpResolvedConnect>,
+    std::sync::mpsc::Sender<RtmpResolvedConnect>,
 ) {
-    let (sender, queue) = rtmp_resolve_completion_queue(4);
+    let (sender, queue) = rtmp_resolve_completion_queue();
     let backend = RtmpShardBackend::with_runtime_components(
         CompioTcpPoller::new(4).unwrap(),
         feed(),
@@ -57,7 +57,7 @@ fn on_media_tick_schedules_ready_work_when_a_connect_completes() {
         .send(RtmpResolvedConnect {
             output_id: output_id.clone(),
             generation: 1,
-            peer_addr: Some(addr),
+            peer: Ok(addr),
         })
         .unwrap();
 
@@ -108,7 +108,7 @@ fn failed_resolution_terminates_the_pending_connect() {
         .send(RtmpResolvedConnect {
             output_id: output_id.clone(),
             generation: 1,
-            peer_addr: None,
+            peer: Err(crate::resolver::ResolveError::TimedOut),
         })
         .unwrap();
     assert_eq!(backend.on_media_tick(), EgressShardCommandEffect::Continue);

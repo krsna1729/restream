@@ -273,7 +273,7 @@ flowchart TD
     subgraph Os["Dedicated OS threads"]
         T1["restream-ffin, restream-ffout"]
         T2["Recording TS writer"]
-        T3["hls-put-resolve, srt-dns-res"]
+        T3["dns-resolve pool, dns-deadline"]
     end
     Child["FFmpeg child processes"]
     T1 <-->|pipes| Child
@@ -288,7 +288,7 @@ flowchart TD
 | SRT ingress | `srt-in-<port>[-<i>]` | 1 | `RESTREAM_SRT_INGRESS_OWNERS` | one srt-rs Compio `Owner` each; demux and ring publish inline |
 | MoQ ingest | `moq-ingest` | 1 when enabled | `RESTREAM_MOQ_INGEST_LISTEN` | QUIC endpoint, sessions, frame conversion, ring push, MoQ origin |
 | Egress fabric | `egress-shard-<n>` | grows with load, at most `clamp(C, 2, 8)` per fabric | `RESTREAM_EGRESS_SHARDS` (ceiling) | one fabric per feed and protocol (per HLS store for HLS PUT); RTMP/RTMPS, SRT, HLS PUT and MoQ shards each run a Compio runtime |
-| OS threads | `restream-ffin`, `restream-ffout`, recording writer, resolvers | per stage or per fabric | — | blocking FFmpeg pipes, disk writes, DNS |
+| OS threads | `restream-ffin`, `restream-ffout`, recording writer, `dns-resolve` (16) and `dns-deadline` | per stage; one resolver pool per process | — | blocking FFmpeg pipes, disk writes, every hostname lookup (`crates/restream-engine/src/resolver.rs`) |
 
 `C` is the host's CPU count from `HostCapacity` (`crates/restream-engine/src/host_capacity.rs`): the
 affinity mask and root cgroup `cpu.max` quota, read once at boot.

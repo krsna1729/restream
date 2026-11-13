@@ -210,6 +210,7 @@ impl MediaEngine {
                         drain_timeout,
                         leaf_capacity,
                         owner_settings,
+                        crate::resolver::shared(),
                     )
                 }
             },
@@ -244,7 +245,7 @@ impl MediaEngine {
         let Some(runtime) = runtime else {
             return false;
         };
-        let _ = runtime.shutdown();
+        let _ = runtime.shutdown_off_worker().await;
         true
     }
 
@@ -287,7 +288,7 @@ impl MediaEngine {
             registry.active_outputs.remove(feed_id);
             registry.runtimes.remove(feed_id)?
         };
-        Some(runtime.shutdown())
+        Some(runtime.shutdown_off_worker().await)
     }
 
     pub(crate) async fn shutdown_all_srt_fabric_runtimes(&self) -> usize {
@@ -299,7 +300,7 @@ impl MediaEngine {
         };
         let count = runtimes.len();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown();
+            let _ = runtime.shutdown_off_worker().await;
         }
         count
     }

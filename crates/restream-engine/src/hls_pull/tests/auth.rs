@@ -5,6 +5,7 @@
 use super::super::fetch::{AuthScope, RequestAuth, build_client};
 use super::super::*;
 use super::origin::{Origin, media_playlist};
+use crate::resolver::shared;
 use restream_domain::domain::pipeline_input::PullAuth;
 
 // ---- the resolver guard ----------------------------------------------------
@@ -24,7 +25,8 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
     let scope = AuthScope::new(&url, RequestAuth::new(&PullAuth::None).unwrap());
 
     let refused =
-        super::super::fetch::fetch_small(&build_client(false, false), &url, &scope, 4096).await;
+        super::super::fetch::fetch_small(&build_client(shared(), false, false), &url, &scope, 4096)
+            .await;
     match refused {
         Err(super::super::fetch::FetchError::PrivateTarget(reason)) => {
             assert!(reason.contains("localhost"), "{reason}")
@@ -46,7 +48,8 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
 
     // A pull whose own source is private may reach it.
     let allowed =
-        super::super::fetch::fetch_small(&build_client(false, true), &url, &scope, 4096).await;
+        super::super::fetch::fetch_small(&build_client(shared(), false, true), &url, &scope, 4096)
+            .await;
     assert!(
         allowed.is_ok(),
         "a private pull reaches its origin: {allowed:?}"
@@ -58,10 +61,10 @@ async fn a_name_that_resolves_to_a_private_address_is_refused_before_any_request
 #[tokio::test]
 async fn a_source_named_into_a_private_range_is_a_private_pull() {
     let url = Url::parse("http://localhost:9/live/index.m3u8").unwrap();
-    assert!(super::super::fetch::source_resolves_private(&url).await);
+    assert!(super::super::fetch::source_resolves_private(&shared(), &url).await);
     let public = Url::parse("http://192.0.2.1/live/index.m3u8").unwrap();
     assert!(
-        !super::super::fetch::source_resolves_private(&public).await,
+        !super::super::fetch::source_resolves_private(&shared(), &public).await,
         "a literal is judged by the literal guard, not resolved"
     );
 }
@@ -152,7 +155,8 @@ async fn fetch_with_digest(
     .unwrap();
     let scope = AuthScope::new(&url, auth);
     let result =
-        super::super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
+        super::super::fetch::fetch_small(&build_client(shared(), true, true), &url, &scope, 4096)
+            .await;
     let seen = restream_sync::lock::lock(&origin.seen).clone();
     (result, seen)
 }
@@ -311,7 +315,7 @@ async fn a_nonce_rotated_without_stale_is_answered_on_the_next_request() {
     })
     .unwrap();
     let scope = AuthScope::new(&url, auth);
-    let client = build_client(true, true);
+    let client = build_client(shared(), true, true);
     let fetch = || super::super::fetch::fetch_small(&client, &url, &scope, 4096);
 
     assert!(fetch().await.is_ok(), "the first challenge is answered");
@@ -352,7 +356,8 @@ async fn a_digest_username_outside_ascii_is_refused_with_its_reason() {
     .unwrap();
     let scope = AuthScope::new(&url, auth);
     let result =
-        super::super::fetch::fetch_small(&build_client(true, true), &url, &scope, 4096).await;
+        super::super::fetch::fetch_small(&build_client(shared(), true, true), &url, &scope, 4096)
+            .await;
     match result {
         Err(super::super::fetch::FetchError::Auth(reason)) => {
             assert!(reason.contains("username*"), "{reason}")

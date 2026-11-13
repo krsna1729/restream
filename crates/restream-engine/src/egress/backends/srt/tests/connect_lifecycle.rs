@@ -182,7 +182,7 @@ fn stale_queued_admission_never_attaches_to_a_replacement_generation() {
         .send(SrtResolvedConnect {
             output_id: OutputId::new("out-b"),
             generation: 2,
-            peer_addrs: vec![p2],
+            peers: Ok(vec![p2]),
         })
         .unwrap();
     harness.backend.on_media_tick();
@@ -209,7 +209,7 @@ fn late_dns_for_an_old_generation_is_ignored() {
         .send(SrtResolvedConnect {
             output_id: OutputId::new("out-a"),
             generation: 1,
-            peer_addrs: vec![p1],
+            peers: Ok(vec![p1]),
         })
         .unwrap();
     harness.backend.on_media_tick();

@@ -573,7 +573,8 @@ ready delivery and newly exposed gap expiry within its existing visit budget.
 An `srtCall` input reverses the handshake: the engine is the caller.
 `converge_srt_call_inputs` writes the enabled rows into
 `engine.ingests.srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
-`crates/restream-engine/src/srt/calls.rs`) resolves the host off the loop and sends
+`crates/restream-engine/src/srt/calls.rs`) resolves every listed host on the process
+resolver (`crates/restream-engine/src/resolver.rs`, one 5 s deadline) off the loop and sends
 `IngressCommand::Call` to Owner 0, whose caller side holds an IPv4 and an
 IPv6 socket (each bound on first use) and dials through its caller pool
 (`CALLS_IN_FLIGHT` handshakes at once, more queued). The Owner keys sessions
@@ -841,6 +842,9 @@ The diagram shows a pull feeding the same session code as a push.
 - **Address guard.** Loopback, link-local, private, unique-local, CGNAT and
   `localhost` targets are fatal, unless the source itself is private. The
   guard checks every resolved address and connects to those addresses only.
+  Names resolve on the process resolver with a 5 s deadline; the source's own
+  private-address check also ends at once when the pull is cancelled, so the
+  reconciler that cancels and joins a pull never waits on its DNS.
   Proxy environment variables are ignored.
 - **Refresh.** Every target duration, or half of it after a reload with
   nothing new, never faster than 500 ms. A live playlist starts at the

@@ -218,7 +218,8 @@ pub fn spawn(
     let end = Arc::new(Mutex::new(None));
     let task_end = end.clone();
     let join = tokio::spawn(async move {
-        let ended = run(engine, ingest, identity, source, limits, token).await;
+        let resolver = crate::resolver::shared();
+        let ended = run(engine, ingest, identity, source, limits, resolver, token).await;
         *restream_sync::lock::lock(&task_end) = Some(ended);
     });
     HlsPullTask { cancel, join, end }
@@ -311,6 +312,7 @@ async fn run(
     identity: PullIdentity,
     source: PullSource,
     limits: HlsIngestLimits,
+    resolver: Arc<crate::resolver::Resolver>,
     cancel: CancellationToken,
 ) -> PullEnd {
     let mut url = match Url::parse(&source.url) {
@@ -351,11 +353,17 @@ async fn run(
     let scope = AuthScope::new(&url, auth);
     // A source in one of the refused ranges says the operator meant an
     // internal origin, so its playlist may point there too; anything else may
-    // not.
-    let allow_private = host_refused(&url) || source_resolves_private(&url).await;
+    // not. The lookup is bounded by its deadline and by cancellation, so a
+    // caller that cancels and joins (the reconciler) never waits on DNS.
+    let allow_private = host_refused(&url)
+        || tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return PullEnd::Fatal,
+            private = source_resolves_private(&resolver, &url) => private,
+        };
     // One client — and one cookie jar — per pull task: an origin's
     // `Set-Cookie` is scoped to this task's requests, never another input's.
-    let client = build_client(scope.is_configured(), allow_private);
+    let client = build_client(resolver, scope.is_configured(), allow_private);
     let mut state = PullState {
         source_url: url.clone(),
         next_url: url,

@@ -355,7 +355,7 @@ async fn an_oversize_playlist_is_refused() {
     let origin = Origin::new();
     origin.serve("/live/huge.m3u8", "#EXTM3U\n".repeat(512));
     let base = origin.spawn().await;
-    let client = build_client(false, false);
+    let client = build_client(crate::resolver::shared(), false, false);
     let url = Url::parse(&format!("{base}/live/huge.m3u8")).unwrap();
     let error = fetch_small(&client, &url, &AuthScope::new(&url, RequestAuth::None), 64)
         .await
@@ -368,7 +368,7 @@ async fn an_oversize_segment_is_refused_declared_or_streamed() {
     let origin = Origin::new();
     origin.serve("/live/huge.ts", vec![0x47u8; 4_096]);
     let base = origin.spawn().await;
-    let client = build_client(false, false);
+    let client = build_client(crate::resolver::shared(), false, false);
     let (_engine, ingest) = test_ingest(limits());
 
     let declared = Url::parse(&format!("{base}/live/huge.ts")).unwrap();

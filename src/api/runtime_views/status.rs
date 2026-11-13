@@ -234,6 +234,18 @@ struct TuningHealthJson {
     output_max_retries: u32,
 }
 
+/// The process name resolver (`restream_engine::resolver`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NameResolverHealthJson {
+    /// System lookups started.
+    lookups: u64,
+    /// Lookups answered at their caller's deadline.
+    timeouts: u64,
+    /// Lookups refused because the resolver queue was full.
+    overflows: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeLimitsHealthJson {
@@ -260,6 +272,7 @@ pub(crate) struct EngineHealthView {
     /// (`restream_engine::panic_boundary`); each one ended one connection, peer or
     /// output only.
     contained_panics: u64,
+    name_resolver: NameResolverHealthJson,
     tuning: TuningHealthJson,
 }
 
@@ -607,6 +620,14 @@ pub(crate) async fn health_snapshot_view(
         },
         egress_fabric_shards,
         contained_panics: restream_engine::panic_boundary::contained_panics(),
+        name_resolver: {
+            let stats = restream_engine::resolver::stats();
+            NameResolverHealthJson {
+                lookups: stats.lookups,
+                timeouts: stats.timeouts,
+                overflows: stats.overflows,
+            }
+        },
         tuning: TuningHealthJson {
             output_max_retries: config.tuning.output_max_retries,
         },

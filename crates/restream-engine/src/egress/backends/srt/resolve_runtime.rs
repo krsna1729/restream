@@ -1,117 +1,45 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
-use std::thread::JoinHandle;
+//! Decorator that resolves each SRT `Add`/`Update`'s peer hosts (one, or a
+//! bond's several, concurrently) on the process resolver
+//! (`crate::resolver`), with the output's `LeafPolicy::resolve_timeout` as
+//! the deadline. Each request gets exactly one completion (addresses, or the
+//! first failure, timeout or full resolver queue) in the wrapped backend's
+//! queue, which it drains on its media tick; a failure fails that output
+//! alone and its egress task retries it. The shard owns no resolver thread,
+//! so its teardown never waits on DNS.
+
+use std::net::SocketAddr;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::owner_set::{SrtOwnerSettings, SrtOwners};
-use super::{SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, srt_resolve_completion_queue};
-use crate::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
+use super::{SrtResolvedConnect, SrtShardBackend, srt_resolve_completion_queue};
+use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::egress::journal::TsFeed;
 use crate::egress::metrics::ShardMetrics;
 use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
+use crate::resolver::{Resolution, ResolveError, Resolver, split_host_port};
 use crate::srt::egress_connect::egress_connect_spec;
-use std::sync::mpsc::SyncSender;
-
-const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
-const SRT_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
 
 pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtShardBackend>;
 
-pub(crate) struct SrtResolveWorkerSet {
-    completion_sender: SyncSender<SrtResolvedConnect>,
-    request_sender: Option<SyncSender<SrtResolveRequest>>,
-    stopping: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl SrtResolveWorkerSet {
-    pub(crate) fn new(completion_sender: SyncSender<SrtResolvedConnect>) -> Self {
-        Self {
-            completion_sender,
-            request_sender: None,
-            stopping: Arc::new(AtomicBool::new(false)),
-            worker: None,
-        }
-    }
-
-    fn ensure_started(&mut self) -> Option<&SyncSender<SrtResolveRequest>> {
-        if self.request_sender.is_none() {
-            let (request_sender, request_receiver) =
-                mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
-            let worker_stopping = Arc::clone(&self.stopping);
-            let completion_sender = self.completion_sender.clone();
-            let worker = std::thread::Builder::new()
-                .name("srt-dns-res".to_string())
-                .spawn(move || {
-                    while let Ok(request) = request_receiver.recv() {
-                        if worker_stopping.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        let output_id = request.output_id.clone();
-                        let generation = request.generation;
-                        if super::resolve_srt_peer_hosts(request, completion_sender.clone())
-                            .is_err()
-                        {
-                            let _ = completion_sender.send(SrtResolvedConnect {
-                                output_id,
-                                generation,
-                                peer_addrs: Vec::new(),
-                            });
-                        }
-                    }
-                })
-                .ok()?;
-            self.request_sender = Some(request_sender);
-            self.worker = Some(worker);
-        }
-        self.request_sender.as_ref()
-    }
-
-    /// Queue a bounded batch for the one resolver worker owned by this shard.
-    fn spawn_batch(&mut self, requests: Vec<SrtResolveRequest>) {
-        if requests.is_empty() {
-            return;
-        }
-        let Some(sender) = self.ensure_started() else {
-            return;
-        };
-        for request in requests {
-            if sender.try_send(request).is_err() {
-                break;
-            }
-        }
-    }
-
-    fn shutdown(&mut self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.request_sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-    }
-}
-
-impl Drop for SrtResolveWorkerSet {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
 pub(crate) struct ResolvingSrtShardBackend<B> {
-    // Keep the completion receiver before the worker set in drop order.
     backend: B,
-    resolve_workers: SrtResolveWorkerSet,
-    /// Pending resolves buffered during `on_command` and flushed in
-    /// `on_media_tick` into the shard's bounded resolver request queue.
-    pending_resolves: Vec<SrtResolveRequest>,
+    resolver: Arc<Resolver>,
+    completions: Sender<SrtResolvedConnect>,
 }
 
 impl<B> ResolvingSrtShardBackend<B> {
-    pub(crate) fn new(backend: B, resolve_workers: SrtResolveWorkerSet) -> Self {
+    pub(crate) fn new(
+        backend: B,
+        resolver: Arc<Resolver>,
+        completions: Sender<SrtResolvedConnect>,
+    ) -> Self {
         Self {
             backend,
-            resolve_workers,
-            pending_resolves: Vec::with_capacity(64),
+            resolver,
+            completions,
         }
     }
 
@@ -123,28 +51,100 @@ impl<B> ResolvingSrtShardBackend<B> {
     }
 }
 
+struct SrtResolveRequest {
+    output_id: OutputId,
+    generation: u64,
+    /// `host:port` per listed peer.
+    peer_hosts: Vec<String>,
+    deadline: Instant,
+}
+
+/// One output's answers, one slot per peer host; the last answer in sends
+/// the completion.
+struct PeerAnswers {
+    output_id: OutputId,
+    generation: u64,
+    remaining: usize,
+    peers: Vec<Option<SocketAddr>>,
+    failure: Option<ResolveError>,
+    completions: Sender<SrtResolvedConnect>,
+}
+
+impl PeerAnswers {
+    fn record(&mut self, index: usize, resolution: Resolution) {
+        match resolution
+            .and_then(|addresses| addresses.first().copied().ok_or(ResolveError::NoAddress))
+        {
+            Ok(address) => self.peers[index] = Some(address),
+            Err(error) => {
+                self.failure.get_or_insert(error);
+            }
+        }
+        self.remaining -= 1;
+        if self.remaining > 0 {
+            return;
+        }
+        let peers = match self.failure.take() {
+            Some(error) => Err(error),
+            None => Ok(self.peers.iter().flatten().copied().collect()),
+        };
+        // The receiver goes only with the shard, when no answer matters.
+        let _ = self.completions.send(SrtResolvedConnect {
+            output_id: self.output_id.clone(),
+            generation: self.generation,
+            peers,
+        });
+    }
+}
+
+fn resolve_peers(
+    resolver: &Resolver,
+    request: SrtResolveRequest,
+    completions: Sender<SrtResolvedConnect>,
+) {
+    let SrtResolveRequest {
+        output_id,
+        generation,
+        peer_hosts,
+        deadline,
+    } = request;
+    let answers = Arc::new(Mutex::new(PeerAnswers {
+        output_id,
+        generation,
+        remaining: peer_hosts.len(),
+        peers: vec![None; peer_hosts.len()],
+        failure: None,
+        completions,
+    }));
+    for (index, peer) in peer_hosts.iter().enumerate() {
+        let answers = Arc::clone(&answers);
+        let record =
+            move |resolution| restream_sync::lock::lock(&answers).record(index, resolution);
+        match split_host_port(peer) {
+            Ok((host, port)) => resolver.submit(host, port, deadline, record),
+            Err(error) => record(Err(error)),
+        }
+    }
+}
+
 impl<B> EgressShardBackend for ResolvingSrtShardBackend<B>
 where
     B: EgressShardBackend,
 {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
-        // Buffer the resolve request instead of spawning a thread per
-        // command. `on_media_tick` flushes the batch.
+        // The answer is drained on a later media tick, after the backend has
+        // queued the pending connect it completes.
         if let Some(request) = resolve_request_from_command(&command) {
-            self.pending_resolves.push(request);
+            resolve_peers(&self.resolver, request, self.completions.clone());
         }
         self.backend.on_command(command)
     }
 
-    fn timer_generation(&self, output_id: &crate::egress::command::OutputId) -> Option<u64> {
+    fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
         self.backend.timer_generation(output_id)
     }
 
-    fn on_timer(
-        &mut self,
-        output_id: crate::egress::command::OutputId,
-        generation: u64,
-    ) -> EgressShardCommandEffect {
+    fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
         self.backend.on_timer(output_id, generation)
     }
 
@@ -163,16 +163,7 @@ where
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let effect = self.backend.on_media_tick();
-        // Flush buffered resolve requests into the worker set, batching
-        // all pending resolves into a single thread per tick instead of
-        // one thread per command. At 1,200-output scale this collapses
-        // ~1,200 thread creations into ~40 (one per shard iteration).
-        if !self.pending_resolves.is_empty() {
-            let batch = std::mem::take(&mut self.pending_resolves);
-            self.resolve_workers.spawn_batch(batch);
-        }
-        effect
+        self.backend.on_media_tick()
     }
 
     fn on_shutdown(&mut self) {
@@ -192,25 +183,27 @@ where
     }
 }
 
-/// Build one SRT shard backend. Runs on the shard OS thread (it is the shard
-/// factory's body) because it constructs the shard's Compio runtime; a
-/// runtime that cannot be built is a typed error, not a panic.
+/// Build one SRT shard backend whose lookups go to `resolver`
+/// (`crate::resolver::shared()` in production). Runs on the shard OS thread
+/// (it is the shard factory's body) because it constructs the shard's Compio
+/// runtime; a runtime that cannot be built is a typed error, not a panic.
 pub(crate) fn resolving_srt_shard_backend(
     feed: TsFeed,
     budget: WorkBudgetConfig,
     drain_timeout: std::time::Duration,
     leaf_capacity: usize,
     owner_settings: SrtOwnerSettings,
+    resolver: Arc<Resolver>,
 ) -> Result<ResolvingSrtShardBackendDefault, String> {
     let owners = SrtOwners::new(owner_settings)?;
-    let (completion_sender, completion_queue) =
-        srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
+    let (completion_sender, completion_queue) = srt_resolve_completion_queue();
     let backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue, owners)
         .with_leaf_capacity(leaf_capacity)
         .with_drain_timeout(drain_timeout);
     Ok(ResolvingSrtShardBackend::new(
         backend,
-        SrtResolveWorkerSet::new(completion_sender),
+        resolver,
+        completion_sender,
     ))
 }
 
@@ -236,9 +229,10 @@ fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<SrtResolveReque
     if peer_hosts.is_empty() {
         return None;
     }
-    Some(SrtResolveRequest::new(
-        spec.id.clone(),
-        spec.generation,
+    Some(SrtResolveRequest {
+        output_id: spec.id.clone(),
+        generation: spec.generation,
         peer_hosts,
-    ))
+        deadline: Instant::now() + spec.policy.resolve_timeout,
+    })
 }

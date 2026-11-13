@@ -179,8 +179,9 @@ impl EgressShardGroup {
     }
 
     /// Give `shard_id` a new thread whose backend `factory` builds on it,
-    /// then join the old thread. A construction error, or an unknown
-    /// shard, leaves the group unchanged.
+    /// then detach the old thread as [`Self::shrink`] does: this runs under
+    /// the per-protocol registry lock, so it never joins a shard's drain.
+    /// A construction error, or an unknown shard, leaves the group unchanged.
     pub fn replace_with<B, E, F>(
         &mut self,
         shard_id: ShardId,
@@ -199,7 +200,7 @@ impl EgressShardGroup {
             return Ok(());
         };
         let replacement = EgressShardHandle::try_spawn_with(shard_id, config, factory)?;
-        let _ = std::mem::replace(handle, replacement).shutdown_and_join();
+        std::mem::replace(handle, replacement).shutdown_detached();
         Ok(())
     }
 

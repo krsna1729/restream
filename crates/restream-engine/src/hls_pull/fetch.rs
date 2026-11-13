@@ -10,9 +10,9 @@
 //! redirect's hop into loopback, link-local (cloud metadata) or a private
 //! range, unless the source itself is there.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -22,6 +22,7 @@ use url::Host;
 
 use super::digest;
 use crate::hls_ingest::{BodyError, ObjectBody};
+use crate::resolver::{DEFAULT_RESOLVE_TIMEOUT, Resolver};
 use restream_domain::domain::pipeline_input::{HeaderPair, PullAuth};
 
 /// Connect timeout for origin requests; a stalled request is bounded by
@@ -267,14 +268,15 @@ pub(super) fn ip_refused(address: IpAddr) -> bool {
 
 /// Whether the source's host resolves into a refused range: a source there
 /// says the operator meant an internal origin. A name that does not resolve
-/// is not private; the fetch reports it.
-pub(super) async fn source_resolves_private(url: &Url) -> bool {
+/// by [`DEFAULT_RESOLVE_TIMEOUT`] is not private; the fetch reports it.
+pub(super) async fn source_resolves_private(resolver: &Resolver, url: &Url) -> bool {
     let Some(Host::Domain(name)) = url.host() else {
         return false;
     };
     let port = url.port_or_known_default().unwrap_or(0);
-    match tokio::net::lookup_host((name, port)).await {
-        Ok(mut addresses) => addresses.any(|address| ip_refused(address.ip())),
+    let deadline = Instant::now() + DEFAULT_RESOLVE_TIMEOUT;
+    match resolver.resolve(name, port, deadline).await {
+        Ok(addresses) => addresses.iter().any(|address| ip_refused(address.ip())),
         Err(_) => false,
     }
 }
@@ -285,8 +287,9 @@ pub(super) async fn source_resolves_private(url: &Url) -> bool {
 /// unless the pull is allowed private targets. The client connects to the
 /// addresses returned, so the address checked is the address connected to:
 /// a name cannot rebind between the check and the connect.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 struct GuardedResolver {
+    resolver: Arc<Resolver>,
     allow_private: bool,
 }
 
@@ -308,11 +311,14 @@ impl std::error::Error for PrivateTarget {}
 
 impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let allow_private = self.allow_private;
+        let GuardedResolver {
+            resolver,
+            allow_private,
+        } = self.clone();
         Box::pin(async move {
             let host = name.as_str().to_string();
-            let addresses: Vec<SocketAddr> =
-                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let deadline = Instant::now() + DEFAULT_RESOLVE_TIMEOUT;
+            let addresses = resolver.resolve(&host, 0, deadline).await?;
             if !allow_private && addresses.iter().any(|address| ip_refused(address.ip())) {
                 return Err(
                     Box::new(PrivateTarget(host)) as Box<dyn std::error::Error + Send + Sync>
@@ -461,9 +467,14 @@ pub(super) fn pair_headers(pairs: &[HeaderPair]) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-/// The pull's HTTP client. `auth_configured` and `allow_private` are what the
-/// redirect policy refuses on; see [`redirect_refusal`].
-pub(super) fn build_client(auth_configured: bool, allow_private: bool) -> Client {
+/// The pull's HTTP client, resolving names on `resolver`. `auth_configured`
+/// and `allow_private` are what the redirect policy refuses on; see
+/// [`redirect_refusal`].
+pub(super) fn build_client(
+    resolver: Arc<Resolver>,
+    auth_configured: bool,
+    allow_private: bool,
+) -> Client {
     let tls = crate::egress::tls::resolve_client_config(None).unwrap_or_else(|error| {
         warn!(%error, "HLS pull TLS configuration unusable; using the default roots");
         crate::egress::tls::rustls_client_config()
@@ -499,7 +510,10 @@ pub(super) fn build_client(auth_configured: bool, allow_private: bool) -> Client
         // default) resolves the target name itself, out of the guard's
         // sight, and an internal proxy's own name would be refused anyway.
         .no_proxy()
-        .dns_resolver(Arc::new(GuardedResolver { allow_private }))
+        .dns_resolver(Arc::new(GuardedResolver {
+            resolver,
+            allow_private,
+        }))
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .build()
