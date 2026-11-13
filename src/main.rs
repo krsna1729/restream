@@ -81,7 +81,8 @@ fn main() {
         }
     };
     if let Err(error) = runtime.block_on(restream::run_app(config)) {
-        tracing::error!(event_class = "lifecycle", event_type = "restream.startup.failed", %error, "startup failed");
+        // `run_app` logged it if logging was up; this synchronous write is the
+        // one report that does not depend on the log sinks.
         eprintln!("restream: {error}");
         std::process::exit(1);
     }

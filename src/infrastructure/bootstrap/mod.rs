@@ -59,7 +59,8 @@ const HOUSEKEEPING_STOP_WAIT: std::time::Duration = std::time::Duration::from_se
 
 /// Runs the server until shutdown. Startup failures (runtime layout,
 /// database, dashboard bind, initial password) return an error for `main`
-/// to report and exit with, rather than panicking.
+/// to report and exit with, rather than panicking; one that happens once
+/// logging is up is also logged, before the log sinks flush.
 pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
     layout::set_rlimit(config.tuning.nofile_limit);
     layout::ensure_runtime_layout(&config)
@@ -78,11 +79,44 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         .map_err(|error| format!("failed to connect to the SQLite database: {error}"))?;
     let lifecycle = db::DeadlineDb::new(lifecycle_pool.clone(), db::SHARED_LOOP_DEADLINE);
 
-    let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color)?;
+    let logging_handles = crate::logging::init(
+        pool.clone(),
+        &config.log_dir,
+        config.no_color,
+        config.rust_backtrace.as_deref(),
+    )?;
     supervised_task::spawn_supervised("app_log_drain", {
         let drain = logging_handles.history_drain.clone();
         move || drain.clone().run()
     });
+    let result = serve(
+        config,
+        pool,
+        lifecycle_pool,
+        lifecycle,
+        logging_handles.broadcast_tx.clone(),
+    )
+    .await;
+    if let Err(error) = &result {
+        tracing::error!(
+            event_class = "lifecycle",
+            event_type = "restream.startup.failed",
+            %error,
+            "startup failed"
+        );
+    }
+    // `logging_handles` drops here, flushing the line above.
+    result
+}
+
+/// Everything `run_app` does once logging is up.
+async fn serve(
+    config: Arc<AppConfig>,
+    pool: sqlx::SqlitePool,
+    lifecycle_pool: sqlx::SqlitePool,
+    lifecycle: db::DeadlineDb,
+    log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+) -> Result<(), String> {
     info!(
         event_class = "lifecycle",
         event_type = "restream.config.effective",
@@ -227,7 +261,7 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
         srt_ingest_policy_store.clone(),
         sessions,
         engine.clone(),
-        logging_handles.broadcast_tx.clone(),
+        log_broadcast,
         crate::api::state::AppStateRuntimeConfig::from(config.clone()),
     ));
 

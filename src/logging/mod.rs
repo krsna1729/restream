@@ -9,9 +9,10 @@
 //! each counts what it drops ([`dropped_lines`]).
 //!
 //! Call `init()` once at the top of `run_app()`, before any tasks are spawned.
-//! Hold the returned `LoggingHandles` for the process lifetime.
+//! `run_app` holds the returned `LoggingHandles` until it returns.
 
 mod nonblocking;
+mod panic_report;
 pub mod types;
 
 use std::collections::HashMap;
@@ -30,7 +31,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, Layer};
 
-use self::nonblocking::{FlushGuard, NonBlocking};
+use self::nonblocking::NonBlocking;
 pub use self::types::{AppLogEntry, AppLogFilters, AppLogRow};
 
 /// Lines each console stream and the file sink queue while their collector
@@ -51,7 +52,8 @@ pub struct DroppedLines {
     pub console: u64,
     /// Daily-file lines dropped on a full queue or lost to a failed write.
     pub file: u64,
-    /// History rows dropped on a full `app_logs` channel.
+    /// History rows dropped on a full `app_logs` channel or in a failed
+    /// batch write.
     pub history: u64,
 }
 
@@ -71,21 +73,21 @@ pub type LogBroadcast = AppLogRow;
 
 // ── LoggingHandles ────────────────────────────────────────────────────────────
 
-/// Held by `run_app` for the process lifetime. Dropping it flushes the
-/// console and file sinks, together bounded by [`SHUTDOWN_FLUSH`].
+/// Held by `run_app` until it returns. Dropping it flushes the console and
+/// file sinks, together bounded by [`SHUTDOWN_FLUSH`].
 pub struct LoggingHandles {
     pub broadcast_tx: broadcast::Sender<LogBroadcast>,
     /// The `app_logs` drain; `run_app` runs it under supervision.
     pub history_drain: HistoryDrain,
     _db_tx: tokio::sync::mpsc::Sender<AppLogEntry>,
-    flush: Vec<FlushGuard>,
+    sinks: Vec<NonBlocking>,
 }
 
 impl Drop for LoggingHandles {
     fn drop(&mut self) {
         let deadline = Instant::now() + SHUTDOWN_FLUSH;
-        for guard in &self.flush {
-            guard.flush_until(deadline);
+        for sink in &self.sinks {
+            sink.flush_until(deadline);
         }
     }
 }
@@ -309,40 +311,21 @@ impl<'a> MakeWriter<'a> for SplitWriter {
     }
 }
 
-/// Replaces the default panic hook, which writes to stderr synchronously and
-/// so would park a panicking Owner or Tokio worker behind a stalled
-/// collector. The report goes through the stderr queue instead. It bypasses
-/// the subscriber: a panic inside a layer that holds a lock would deadlock
-/// on a nested event.
-fn install_panic_hook(stderr: NonBlocking) {
-    std::panic::set_hook(Box::new(move |info| {
-        if nonblocking::on_writer_thread() {
-            // The writer counts the line it lost; reporting it would queue
-            // another line for a sink that may panic again.
-            return;
-        }
-        let thread = std::thread::current();
-        let name = thread.name().unwrap_or("<unnamed>");
-        let backtrace = std::backtrace::Backtrace::capture();
-        let report = match backtrace.status() {
-            std::backtrace::BacktraceStatus::Captured => {
-                format!("thread '{name}' {info}\nstack backtrace:\n{backtrace}\n")
-            }
-            _ => format!("thread '{name}' {info}\n"),
-        };
-        stderr.push(report.as_bytes());
-    }));
-}
-
 // ── init() ───────────────────────────────────────────────────────────────────
 
 /// Initialise the global tracing subscriber. Must be called once before any
 /// tracing macros are used. Also replaces the panic hook
-/// ([`install_panic_hook`]).
+/// ([`panic_report::install`]).
 ///
 /// `db_pool` is used by the [`HistoryDrain`] that batch-writes to app_logs.
-/// `log_dir` and `no_color` are read from [`AppConfig`] (not from the environment).
-pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> Result<LoggingHandles, String> {
+/// `log_dir`, `no_color` and `rust_backtrace` are read from [`AppConfig`]
+/// (not from the environment).
+pub fn init(
+    db_pool: SqlitePool,
+    log_dir: &str,
+    no_color: bool,
+    rust_backtrace: Option<&str>,
+) -> Result<LoggingHandles, String> {
     // ── channel plumbing ──
     let (db_tx, db_rx) = tokio::sync::mpsc::channel::<AppLogEntry>(4096);
     let (broadcast_tx, _) = broadcast::channel::<LogBroadcast>(256);
@@ -353,33 +336,34 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> Result<Loggin
     // ── console and file sinks, each drained by its own writer thread ──
     let sink_error =
         |error: std::io::Error| format!("failed to start a log writer thread: {error}");
-    let mut flush = Vec::with_capacity(3);
-    let (stdout, guard) = nonblocking::spawn(
+    let stdout = nonblocking::spawn(
         "log-stdout",
         std::io::stdout(),
         SINK_QUEUE_LINES,
         &CONSOLE_DROPPED,
     )
     .map_err(sink_error)?;
-    flush.push(guard);
-    let (stderr, guard) = nonblocking::spawn(
+    let stderr = nonblocking::spawn(
         "log-stderr",
         std::io::stderr(),
         SINK_QUEUE_LINES,
         &CONSOLE_DROPPED,
     )
     .map_err(sink_error)?;
-    flush.push(guard);
     let file_writer = if log_dir.is_empty() {
         None
     } else {
         let appender = tracing_appender::rolling::daily(log_dir, "restream.log");
-        let (writer, guard) =
+        Some(
             nonblocking::spawn("log-file", appender, SINK_QUEUE_LINES, &FILE_DROPPED)
-                .map_err(sink_error)?;
-        flush.push(guard);
-        Some(writer)
+                .map_err(sink_error)?,
+        )
     };
+    let sinks: Vec<NonBlocking> = [Some(&stdout), Some(&stderr), file_writer.as_ref()]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
 
     // ── RUST_LOG / EnvFilter ──
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -417,7 +401,7 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> Result<Loggin
 
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|error| format!("failed to install the tracing subscriber: {error}"))?;
-    install_panic_hook(stderr);
+    panic_report::install(stderr, rust_backtrace);
 
     Ok(LoggingHandles {
         history_drain: HistoryDrain {
@@ -427,7 +411,7 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> Result<Loggin
         },
         broadcast_tx,
         _db_tx: db_tx,
-        flush,
+        sinks,
     })
 }
 
@@ -478,15 +462,22 @@ impl HistoryDrain {
     }
 }
 
+/// Commits `batch` and broadcasts its rows; a batch whose write fails is
+/// dropped and counted in `historyDropped`.
 async fn persist_and_broadcast_log_batch(
     db_pool: &SqlitePool,
     broadcast_tx: &broadcast::Sender<LogBroadcast>,
     batch: &mut Vec<AppLogEntry>,
 ) {
-    if let Ok(rows) = crate::db::append_app_log_batch_returning(db_pool, batch).await {
-        for row in rows {
-            // send() fails only when all receivers have dropped.
-            let _ = broadcast_tx.send(row);
+    match crate::db::append_app_log_batch_returning(db_pool, batch).await {
+        Ok(rows) => {
+            for row in rows {
+                // send() fails only when all receivers have dropped.
+                let _ = broadcast_tx.send(row);
+            }
+        }
+        Err(_) => {
+            HISTORY_DROPPED.fetch_add(batch.len() as u64, Ordering::Relaxed);
         }
     }
     batch.clear();
@@ -494,8 +485,37 @@ async fn persist_and_broadcast_log_batch(
 
 #[cfg(test)]
 mod tests {
-    use super::{history_level_enabled, persist_and_broadcast_log_batch};
+    use super::{dropped_lines, history_level_enabled, persist_and_broadcast_log_batch};
     use crate::logging::AppLogEntry;
+
+    fn entry(message: &str) -> AppLogEntry {
+        AppLogEntry {
+            ts: "2026-07-10T00:00:00Z".to_string(),
+            level: "INFO".to_string(),
+            target: "restream::test".to_string(),
+            message: message.to_string(),
+            fields: None,
+            pipeline_id: None,
+            output_id: None,
+            event_type: None,
+            event_class: None,
+        }
+    }
+
+    /// A batch the database refuses (here: no `app_logs` table) is counted
+    /// as dropped history, row by row.
+    #[tokio::test]
+    async fn a_failed_history_batch_counts_its_rows_dropped() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let (tx, _rx) = tokio::sync::broadcast::channel(4);
+        let mut batch = vec![entry("first"), entry("second"), entry("third")];
+        let before = dropped_lines().history;
+
+        persist_and_broadcast_log_batch(&pool, &tx, &mut batch).await;
+
+        assert!(batch.is_empty());
+        assert_eq!(dropped_lines().history, before + 3);
+    }
 
     #[test]
     fn history_level_filter_keeps_operator_levels() {

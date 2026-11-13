@@ -124,7 +124,7 @@ view is serialized straight from its typed form.
 | `egressFabricShards` | Per-shard state, progress age, command depth, resyncs |
 | `containedPanics` | Panics contained at a per-entity boundary since start |
 | `nameResolver` | `lookups`, `timeouts`, `overflows`, `threads`, `hungThreads`, `capReached` of the one process name resolver; a rising `overflows` means more distinct names are waiting than its queue holds; a high `hungThreads` means name servers are black-holing lookups (each is replaced once it runs past the 500 ms slow threshold); a rising `capReached` means 128 threads are hung and other names wait until their deadline |
-| `logging` | `consoleDropped`, `fileDropped`, `historyDropped`: log lines dropped since start because a sink's queue was full or its write failed (see [sinks](#sinks)); a rising count means that log collector is stalled or slower than the log rate |
+| `logging` | `consoleDropped`, `fileDropped`, `historyDropped`: log lines dropped since start because a sink's queue was full or its write failed (see [sinks](#sinks)); a rising count means that log collector is stalled, slower than the log rate, or (history) SQLite is refusing writes |
 | `tuning.outputMaxRetries` | Restart budget the alert rules compare against |
 
 The health view applies the ingest disconnect grace
@@ -733,7 +733,9 @@ Tokio worker. Each sink counts the lines it loses in `/api/v1/engine/health`
   stdout. Text format with module targets; ANSI color follows `no_color`.
   Each stream has a 16 384-line queue drained by its own writer thread
   (`log-stdout`, `log-stderr`); a line that finds the queue full, or whose
-  write fails, is dropped and counted in `consoleDropped`.
+  write fails, is dropped and counted in `consoleDropped`. The two streams
+  have separate queues and threads, so a line's order relative to lines on
+  the other stream is not preserved (each stream keeps its own order).
 - **Daily file**: JSON, rolled daily as `restream.log.<date>` under
   `RESTREAM_LOG_DIR` (default `.restream/logs`; empty disables it), through
   the same kind of queue and thread (`log-file`); losses count in
@@ -743,18 +745,24 @@ Tokio worker. Each sink counts the lines it loses in `/api/v1/engine/health`
   never waits; when full, the event is dropped and counted in
   `historyDropped`. The drain task, restarted after a panic, commits up to
   64 rows or every 100 ms to `app_logs`, then broadcasts them on a 256-row
-  channel. The reconciler deletes rows older than
+  channel; every row of a batch whose write fails is dropped and counted in
+  `historyDropped` too. The reconciler deletes rows older than
   `RESTREAM_LOG_RETENTION_DAYS` (default 7).
-- **Panics**: once logging is up, the panic hook writes its report
-  (`thread '<name>' panicked at …`, plus a backtrace when `RUST_BACKTRACE`
-  asks for one) through the stderr queue instead of writing stderr directly,
-  so a panicking thread never waits on the collector. A panic on a log writer
-  thread is not reported; that sink counts the line it lost. Before logging
-  starts, and for a startup failure `main` reports before exiting, stderr is
-  written directly.
-- **Shutdown**: dropping `LoggingHandles` at the end of `run_app` flushes the
-  console and file queues, all together bounded by 2 s; a stalled collector
-  loses what it has not written by then instead of holding the exit.
+- **Panics**: once logging is up, the panic hook (`src/logging/panic_report.rs`)
+  queues the report std's default hook would write (`thread '<name>' panicked
+  at <location>:` and the message, `Box<dyn Any>` for a non-string payload;
+  a backtrace per `RUST_BACKTRACE`, `full` for the full form, read once at
+  startup; otherwise the `RUST_BACKTRACE=1` hint on the first panic) on the
+  stderr queue, then waits up to 100 ms for it to be written. Only the
+  panicking thread waits, and never longer: a panic that aborts the process
+  (one raised while unwinding) gets its report out unless stderr is stalled.
+  A panic on a log writer thread is not reported; that sink counts the line
+  it lost. Before logging starts, and for a startup failure `main` reports
+  before exiting, stderr is written directly.
+- **Shutdown**: `run_app` logs a startup failure, then drops
+  `LoggingHandles`, which flushes the console and file queues, all together
+  bounded by 2 s; a stalled collector loses what it has not written by then
+  instead of holding the exit.
 
 ### Pipeline and output context
 
@@ -800,8 +808,9 @@ history by those fields, not by message text.
 
 | Concern | Source |
 |---|---|
-| Subscriber layers, span inheritance, batching, broadcast, panic hook | `src/logging/mod.rs` |
+| Subscriber layers, span inheritance, batching, broadcast | `src/logging/mod.rs` |
 | Console and file queues and writer threads | `src/logging/nonblocking.rs` |
+| Panic hook | `src/logging/panic_report.rs` |
 | Log DTOs and filters | `src/logging/types.rs` |
 | SQLite schema | `src/db/schema.rs` |
 | Storage and filter queries | `src/db/log_repo.rs` |
@@ -816,8 +825,9 @@ history by those fields, not by message text.
 - Callsites never block on SQLite, SSE consumers, stdout, stderr or the log
   file.
 - SSE publishes only committed rows with a stable ID.
-- `LoggingHandles`, which flushes the console and file sinks on drop,
-  outlives every task that can log.
+- `run_app` holds `LoggingHandles` until it returns and flushes the console
+  and file sinks when it drops it. A line logged after that (a task still
+  running while `main` exits) is queued but may never be written.
 - Async work that needs context uses `.instrument(span)`; never hold a
   `span.enter()` guard across a task boundary.
 
