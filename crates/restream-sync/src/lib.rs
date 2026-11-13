@@ -4,6 +4,7 @@
 
 pub mod byte_queue;
 pub mod frame_units;
+pub mod keyed_lock;
 pub mod lock;
 pub mod reader;
 pub mod ring_buffer;

@@ -17,6 +17,7 @@ const LOOM_TARGETS: &[&str] = &[
     "byte_queue_loom",
     "egress_feed_wake_loom",
     "input_selection_loom",
+    "keyed_lock_loom",
     "moq_origin_loom",
     "ring_frame_unit_loom",
     "ring_migration_loom",

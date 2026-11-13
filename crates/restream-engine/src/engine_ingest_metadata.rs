@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::{ActiveIngest, IngestRegistration, MediaEngine};
 use crate::snapshots::PublisherQuality;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 
@@ -136,24 +136,32 @@ impl MediaEngine {
     }
 
     /// Replace an authoritative container track snapshot, rather than merge
-    /// optional probe fields. Selection, registration replacement and origin
-    /// resolution share this lock: an old attempt can neither clear a new
-    /// session's metadata nor resize/change its selected ring.
+    /// optional probe fields, then report the probe recorded
+    /// ([`Self::note_ingest_session_probed`]). The pipeline's selection,
+    /// registration replacement and origin resolution share its `selection`
+    /// lock: an old attempt can neither clear a new session's metadata nor
+    /// resize/change its selected ring.
+    ///
+    /// `ingest` is the attempt's own state, so no `sessions` lookup is made
+    /// (a held `sessions` map does not stall a probe). Under the selection an
+    /// uncancelled token proves the attempt current: every path that removes
+    /// a session cancels its token and holds that pipeline's selection.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "`selection_lock` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `engine_registries`)"
     )]
     pub(crate) async fn replace_ingest_session_tracks(
         &self,
+        ingest: &ActiveIngest,
         registration: &IngestRegistration,
         video: Option<VideoMeta>,
         audio_tracks: Vec<AudioMeta>,
         video_track_count: usize,
         video_sequence_header: Option<bytes::Bytes>,
     ) -> Option<Arc<restream_sync::RingBuffer>> {
-        let _selection = self.ingests.selection_lock.lock().await;
-        let ingest = self.current_ingest_session(registration).await?;
-        if registration.cancel_token.is_cancelled() {
+        let _selection = self.ingests.selection.lock(&ingest.pipeline_id).await;
+        if ingest.attempt_id != registration.attempt_id || registration.cancel_token.is_cancelled()
+        {
             return None;
         }
         let selected = self
@@ -204,6 +212,7 @@ impl MediaEngine {
         if selected && let Some(ring) = &ring {
             update_ring(ring);
         }
+        self.emit_ingest_probed(ingest);
         ring
     }
 
@@ -216,9 +225,12 @@ impl MediaEngine {
     /// retry interval. A probe recorder calls it once it has written the
     /// whole probe, so the pass it wakes never sees half of one.
     pub async fn note_ingest_session_probed(&self, registration: &IngestRegistration) {
-        let Some(ingest) = self.current_ingest_session(registration).await else {
-            return;
-        };
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            self.emit_ingest_probed(&ingest);
+        }
+    }
+
+    fn emit_ingest_probed(&self, ingest: &ActiveIngest) {
         self.runtime
             .event_log
             .emit(crate::events::EventKind::IngestProbed {
