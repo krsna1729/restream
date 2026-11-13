@@ -51,14 +51,14 @@ fn a_hung_name_never_delays_another_name() {
     );
 }
 
-/// Lookups past their deadline free their pool slot: 20 distinct names hang
-/// (a tenant's own name server can do that) and a 21st name still resolves
-/// at once.
+/// Lookups past their slow threshold free their pool slot: 20 distinct
+/// names hang (a tenant's own name server can do that) and a 21st name
+/// still resolves at once.
 #[test]
 fn hung_lookups_are_replaced_so_another_name_still_resolves() {
     let dns = FakeDns::new();
-    let (answers, answered) = flume::unbounded();
-    let timeout = Duration::from_millis(100);
+    let (answers, _answered) = flume::unbounded();
+    let timeout = Duration::from_secs(1);
     for index in 0..RESOLVER_THREADS {
         submit(
             &dns.resolver,
@@ -68,12 +68,6 @@ fn hung_lookups_are_replaced_so_another_name_still_resolves() {
         );
     }
     dns.wait_for_calls(RESOLVER_THREADS);
-    for _ in 0..RESOLVER_THREADS {
-        let (_, resolution) = answered
-            .recv_timeout(Duration::from_secs(2))
-            .expect("answered");
-        assert_eq!(resolution, Err(ResolveError::TimedOut));
-    }
     for index in RESOLVER_THREADS..20 {
         submit(
             &dns.resolver,
@@ -82,13 +76,16 @@ fn hung_lookups_are_replaced_so_another_name_still_resolves() {
             &answers,
         );
     }
-    for _ in RESOLVER_THREADS..20 {
-        let (_, resolution) = answered
-            .recv_timeout(Duration::from_secs(2))
-            .expect("answered");
-        assert_eq!(resolution, Err(ResolveError::TimedOut));
-    }
+    dns.wait_for_calls(20);
+    wait_for_stats(&dns, "20 hung threads", |stats| stats.hung_threads == 20);
+    let stats = dns.resolver.stats();
+    assert_eq!(
+        (stats.threads, stats.cap_reached),
+        (RESOLVER_THREADS as u64 + 20, 0),
+        "one replacement per hung thread"
+    );
 
+    let (answers, answered) = flume::unbounded();
     let started = Instant::now();
     submit(
         &dns.resolver,
@@ -105,25 +102,55 @@ fn hung_lookups_are_replaced_so_another_name_still_resolves() {
         "{:?}",
         started.elapsed()
     );
-    assert_eq!(dns.calls(), 21, "all 20 hung names reached getaddrinfo");
-    let stats = dns.resolver.stats();
-    assert_eq!(
-        (stats.threads, stats.hung_threads, stats.cap_reached),
-        (RESOLVER_THREADS as u64 + 20, 20, 0),
-        "one replacement per hung thread"
-    );
+    assert_eq!(dns.calls(), 21);
 
     // Hung lookups return: the surplus threads exit, 16 stay.
     dns.release_hung();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    wait_for_stats(&dns, "16 threads, none hung", |stats| {
+        (stats.threads, stats.hung_threads) == (RESOLVER_THREADS as u64, 0)
+    });
+}
+
+fn wait_for_stats(dns: &FakeDns, what: &str, done: impl Fn(&ResolverStats) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let stats = dns.resolver.stats();
-        if (stats.threads, stats.hung_threads) == (RESOLVER_THREADS as u64, 0) {
-            break;
+        if done(&stats) {
+            return;
         }
-        assert!(Instant::now() < deadline, "{stats:?}");
-        std::thread::sleep(Duration::from_millis(5));
+        assert!(Instant::now() < deadline, "waiting for {what}: {stats:?}");
+        std::thread::sleep(Duration::from_millis(2));
     }
+}
+
+/// A healthy name queued behind 16 hung ones with the same deadline still
+/// resolves long before that deadline: a lookup running past the slow
+/// threshold gets a replacement thread then, not at its deadline.
+#[test]
+fn a_name_queued_behind_hung_lookups_resolves_before_their_deadline() {
+    let dns = FakeDns::new();
+    let (answers, answered) = flume::unbounded();
+    let timeout = Duration::from_secs(5);
+    let started = Instant::now();
+    for index in 0..RESOLVER_THREADS {
+        submit(
+            &dns.resolver,
+            &format!("hung-{index}.test"),
+            timeout,
+            &answers,
+        );
+    }
+    submit(&dns.resolver, "other.test", timeout, &answers);
+    let (name, resolution) = answered
+        .recv_timeout(Duration::from_secs(6))
+        .expect("answered");
+    let waited = started.elapsed();
+    assert_eq!(
+        (name.as_str(), resolution),
+        ("other.test", Ok(localhost(80))),
+        "after {waited:?}"
+    );
+    assert!(waited < Duration::from_millis(1500), "{waited:?}");
 }
 
 /// The caller hears back at its deadline while `getaddrinfo` still runs.
@@ -155,19 +182,17 @@ fn a_request_is_answered_at_its_deadline_while_the_lookup_hangs() {
 fn every_request_is_answered_when_the_queue_overflows() {
     let dns = FakeDns::with_pool(1, 2);
     let (answers, answered) = flume::unbounded();
-    submit(
-        &dns.resolver,
-        "hung.test",
-        Duration::from_millis(300),
-        &answers,
-    );
+    // Long enough that no deadline passes before the overflow answers are
+    // drained below.
+    let timeout = Duration::from_secs(1);
+    submit(&dns.resolver, "hung.test", timeout, &answers);
     dns.wait_for_calls(1);
     let total = 10;
     for index in 0..total {
         submit(
             &dns.resolver,
             &format!("name-{index}.test"),
-            Duration::from_millis(300),
+            timeout,
             &answers,
         );
     }
@@ -182,7 +207,7 @@ fn every_request_is_answered_when_the_queue_overflows() {
     let rest: Vec<_> = (0..3)
         .map(|_| {
             answered
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(3))
                 .expect("answered")
         })
         .collect();
@@ -205,38 +230,39 @@ fn every_request_is_answered_when_the_queue_overflows() {
 fn concurrent_lookups_of_one_name_share_one_call() {
     let dns = FakeDns::new();
     let (answers, answered) = flume::unbounded();
-    for _ in 0..8 {
-        submit(&dns.resolver, "slow.test", Duration::from_secs(5), &answers);
-    }
-    for _ in 0..8 {
+    for _ in 0..2 {
+        submit(
+            &dns.resolver,
+            "hung.test",
+            Duration::from_millis(50),
+            &answers,
+        );
         let (_, resolution) = answered
             .recv_timeout(Duration::from_secs(2))
             .expect("answered");
-        assert_eq!(resolution, Ok(localhost(80)));
+        assert_eq!(resolution, Err(ResolveError::TimedOut));
     }
-    assert_eq!(dns.calls(), 1);
+    assert_eq!(dns.calls(), 1, "the retry joined the running lookup");
 
-    submit(
-        &dns.resolver,
-        "hung.test",
-        Duration::from_millis(50),
-        &answers,
-    );
-    let (_, first) = answered
-        .recv_timeout(Duration::from_secs(2))
-        .expect("answered");
-    assert_eq!(first, Err(ResolveError::TimedOut));
-    submit(
-        &dns.resolver,
-        "hung.test",
-        Duration::from_millis(50),
-        &answers,
-    );
-    let (_, retry) = answered
-        .recv_timeout(Duration::from_secs(2))
-        .expect("answered");
-    assert_eq!(retry, Err(ResolveError::TimedOut));
-    assert_eq!(dns.calls(), 2, "the retry joined the running lookup");
+    // Eight requests made while one lookup is held: one call, eight answers.
+    for _ in 0..8 {
+        submit(
+            &dns.resolver,
+            "hung-shared.test",
+            Duration::from_secs(5),
+            &answers,
+        );
+    }
+    dns.wait_for_calls(2);
+    dns.release_hung();
+    for _ in 0..8 {
+        let (name, resolution) = answered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("answered");
+        assert_eq!(name, "hung-shared.test");
+        assert_eq!(resolution, Err(ResolveError::Failed("released".into())));
+    }
+    assert_eq!(dns.calls(), 2);
     assert_eq!(dns.resolver.stats().lookups, 2);
 }
 
