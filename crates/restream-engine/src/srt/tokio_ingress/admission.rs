@@ -2,8 +2,8 @@
 //! publisher/reader registration run as one task per peer, so a stalled
 //! lookup or a contended registration delays only that peer's admission, not
 //! the shared session loop. Only these moved off the loop: probe
-//! application, `finish_publisher`, telemetry folding and deleted-pipeline
-//! checks still await engine locks on it (backlog Q-130).
+//! application, `finish_publisher`, telemetry folding, caller starts and
+//! deleted-pipeline checks still await engine locks on it (backlog Q-130).
 //!
 //! A task is never aborted, so a registration it made ends in order: a
 //! panicking task drops its ingest lease, which releases the attempt as

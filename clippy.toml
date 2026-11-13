@@ -19,4 +19,6 @@ await-holding-invalid-types = [
   { path = "tokio::sync::OwnedRwLockReadGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
   { path = "tokio::sync::OwnedRwLockWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
   { path = "tokio::sync::OwnedMutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::OwnedRwLockMappedWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
+  { path = "tokio::sync::OwnedMappedMutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
 ]
