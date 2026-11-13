@@ -185,10 +185,10 @@ pub async fn list_app_logs(
 pub const APP_LOG_RETENTION_BATCH: u32 = 1000;
 
 /// Deletes app-log rows older than `days`, at most `batch` rows per
-/// statement, each bounded by `db`'s deadline. Returns the rows each
-/// statement deleted; stops after a short batch. A statement that misses its
-/// deadline still lands (see [`super::DeadlineDb::write`]) and ends this
-/// prune with its error; the next prune carries on.
+/// statement, each a [`super::DeadlineDb::write`] awaited to its outcome.
+/// Returns the rows each statement deleted; stops after a short batch. A
+/// failed statement ends this prune with its error; the next prune carries
+/// on.
 pub async fn prune_app_logs(
     db: &super::DeadlineDb,
     days: i64,

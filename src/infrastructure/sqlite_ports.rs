@@ -12,6 +12,14 @@ use crate::application::ports::*;
 use restream_domain::models::Pipeline;
 use sqlx::SqlitePool;
 
+/// A port call bounded by the shared loops' [`crate::db::DeadlineDb`] that
+/// missed its deadline fails as a store error.
+impl From<crate::db::DeadlineError> for StoreError {
+    fn from(error: crate::db::DeadlineError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 #[derive(Clone)]
 pub struct SqlitePipelineStore {
     pool: SqlitePool,

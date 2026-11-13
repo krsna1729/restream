@@ -1,7 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::super::test_support::{
+    file_pools, hold_every_connection, hold_write_lock, live_output, memory_pool,
+    output_starts_within, release_write_lock,
+};
 use super::*;
-use crate::db::{SHARED_LOOP_DEADLINE, create_lifecycle_pool, create_pool, setup_database_schema};
+use crate::db::SHARED_LOOP_DEADLINE;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::security::IngestSecurityService;
 
@@ -32,94 +36,6 @@ fn reconciler(engine: Arc<MediaEngine>, db: DeadlineDb, pool: &sqlx::SqlitePool)
         runtime_state,
         hls_ingest,
     )
-}
-
-async fn memory_pool() -> sqlx::SqlitePool {
-    let pool = create_pool("sqlite::memory:").await.unwrap();
-    setup_database_schema(&pool).await.unwrap();
-    pool
-}
-
-/// A file database with production's two pools (API and lifecycle).
-async fn file_pools(tag: &str) -> (sqlx::SqlitePool, sqlx::SqlitePool, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!(
-        "restream-reconcile-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let url = format!("sqlite://{}", dir.join("db.sqlite").display());
-    let api = create_pool(&url).await.unwrap();
-    setup_database_schema(&api).await.unwrap();
-    let lifecycle = create_lifecycle_pool(&url).await.unwrap();
-    (api, lifecycle, dir)
-}
-
-async fn hold_every_connection(
-    pool: &sqlx::SqlitePool,
-) -> Vec<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
-    let mut held = Vec::new();
-    while let Ok(connection) =
-        tokio::time::timeout(Duration::from_millis(200), pool.acquire()).await
-    {
-        held.push(connection.unwrap());
-    }
-    assert!(!held.is_empty());
-    held
-}
-
-/// A pipeline with a live, probed ingest and one output that wants to run.
-async fn live_output(
-    engine: &Arc<MediaEngine>,
-    pool: &sqlx::SqlitePool,
-    pipeline_id: &str,
-    url: &str,
-) -> restream_engine::ingest_lease::IngestLease {
-    let stream_key = format!("key-{pipeline_id}");
-    crate::db::create_pipeline(pool, pipeline_id, pipeline_id, &stream_key, None, None)
-        .await
-        .unwrap();
-    crate::db::create_output(
-        pool,
-        &format!("out-{pipeline_id}"),
-        pipeline_id,
-        "out",
-        url,
-        None,
-        restream_domain::domain::state::DesiredOutputState::Running,
-        &restream_domain::domain::output_spec::OutputConfig::source(),
-    )
-    .await
-    .unwrap();
-    let lease = engine
-        .try_register_ingest(pipeline_id, &stream_key, "rtmp")
-        .await
-        .unwrap();
-    engine
-        .update_ingest_meta(
-            pipeline_id,
-            Some(restream_core::metadata::VideoMeta {
-                codec: "h264".to_string(),
-                ..Default::default()
-            }),
-            None,
-            None,
-        )
-        .await;
-    lease
-}
-
-async fn output_starts_within(engine: &MediaEngine, output_id: &str, within: Duration) -> bool {
-    tokio::time::timeout(within, async {
-        while !engine.has_active_egress(output_id).await {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .is_ok()
 }
 
 /// A listener that faults while the output pass is stalled (every
@@ -201,7 +117,8 @@ async fn another_pipelines_output_starts_while_one_output_start_is_stalled() {
         },
     )));
     let pool = memory_pool().await;
-    // A first: on its own the pass reaches A's start before B's.
+    // A first: `list_outputs` returns creation order, so the pass reaches
+    // A's start before B's.
     let _a = live_output(
         &engine,
         &pool,
@@ -290,11 +207,7 @@ async fn an_output_starts_while_another_writer_holds_the_write_lock() {
         DeadlineDb::new(lifecycle, SHARED_LOOP_DEADLINE),
         &api,
     );
-    let mut lock = api.acquire().await.unwrap();
-    sqlx::query("BEGIN IMMEDIATE")
-        .execute(&mut *lock)
-        .await
-        .unwrap();
+    let lock = hold_write_lock(&api).await;
 
     tokio::time::timeout(
         Duration::from_secs(5),
@@ -304,8 +217,7 @@ async fn an_output_starts_while_another_writer_holds_the_write_lock() {
     .expect("the pass does not wait on the write lock");
     assert!(output_starts_within(&engine, "out-pipe", Duration::from_secs(2)).await);
 
-    sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
-    drop(lock);
+    release_write_lock(lock).await;
     let landed = tokio::time::timeout(Duration::from_secs(5), async {
         while crate::db::list_jobs(&api).await.unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(20)).await;

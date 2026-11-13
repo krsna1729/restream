@@ -93,12 +93,12 @@ async fn a_panicking_housekeeping_step_is_contained_and_the_next_tick_runs() {
     assert!(!first && !second, "both ticks ran and reported the panic");
 }
 
-/// Every connection of its pool held (the prune tick: sessions, logs,
-/// session list, pipelines): each call answers at its deadline and the
-/// tick ends, so the next one runs, instead of each waiting out the pool's
-/// 30 s acquire timeout.
+/// Every connection of its pool held: the tick's reads (pipelines,
+/// switches) answer at their deadline and the tick ends, so the next one
+/// runs, instead of each waiting out the pool's 30 s acquire timeout. The
+/// prune's writes are not in this tick: a write waits for its outcome.
 #[tokio::test]
-async fn a_housekeeping_tick_returns_at_its_deadlines_while_every_connection_is_held() {
+async fn a_housekeeping_ticks_reads_return_at_their_deadlines_while_every_connection_is_held() {
     let pool = memory_pool().await;
     let db = DeadlineDb::new(pool.clone(), Duration::from_millis(200));
     let housekeeping = housekeeping(
@@ -112,9 +112,12 @@ async fn a_housekeeping_tick_returns_at_its_deadlines_while_every_connection_is_
         held.push(connection.unwrap());
     }
 
-    let completed = tokio::time::timeout(Duration::from_secs(5), housekeeping.contained_tick(1, 1))
-        .await
-        .expect("the tick answers at its deadlines, not the acquire timeout");
+    let completed = tokio::time::timeout(
+        Duration::from_secs(5),
+        housekeeping.contained_tick(1, u64::MAX),
+    )
+    .await
+    .expect("the tick answers at its deadlines, not the acquire timeout");
     assert!(completed);
     drop(held);
 }

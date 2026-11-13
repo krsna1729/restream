@@ -21,7 +21,7 @@ pub(crate) mod session_repo;
 pub(crate) mod share_repo;
 pub(crate) mod team_repo;
 
-pub use deadline::{DeadlineDb, DeadlineError, SHARED_LOOP_DEADLINE};
+pub use deadline::{DeadlineDb, DeadlineError, SHARED_LOOP_DEADLINE, WRITE_PERMITS};
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
     list_ingests_for_filename, list_ingests_for_stream_key, rename_ingest_file,
@@ -106,9 +106,9 @@ pub async fn create_lifecycle_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::
         .await
 }
 
-/// One connection per loop that awaits the database (reconciler output
-/// pass, housekeeping, scheduler, catalog reload), plus two for the writes
-/// that run as their own tasks (egress job rows, retries-exhausted marks).
+/// One read connection per loop (reconciler output pass, housekeeping,
+/// scheduler, catalog reload), plus the [`WRITE_PERMITS`] (two)
+/// connections writes hold at most.
 const LIFECYCLE_POOL_CONNECTIONS: u32 = 6;
 
 fn connect_options(url: &str) -> Result<sqlx::sqlite::SqliteConnectOptions, sqlx::Error> {

@@ -5,16 +5,25 @@
 //! on the pool (API reads holding every connection: a 30 s acquire timeout)
 //! or on the write lock (a 30 s busy timeout, retried up to 8 times by
 //! [`super::with_busy_retry`]) would stall all of them for minutes.
-//! [`DeadlineDb`] bounds the whole call — acquire, statements and busy
+//! [`DeadlineDb`] bounds a whole read — acquire, statements and busy
 //! retries — and in production runs on the lifecycle pool
 //! ([`super::create_lifecycle_pool`]), which API handlers never use, so API
 //! load cannot take the capacity these loops need.
 //!
-//! A read is dropped at its deadline: nothing changed, and the loop retries
-//! on its next pass. A write runs as its own task, as `CatalogAuth::commit`
-//! does: the caller stops waiting at the deadline, but the write is never
-//! cancelled mid-transaction, so it lands or fails as a unit and the next
-//! pass observes whichever happened.
+//! The rule: a deadline bounds a caller's wait, never a write's outcome. A
+//! read is dropped at its deadline: nothing changed, and the loop retries on
+//! its next pass. A write is never given up on: a write that missed a
+//! deadline can still land, so treating it as failed makes the caller act on
+//! a state the database is about to contradict. [`DeadlineDb::write`] runs
+//! the write as its own task (as `CatalogAuth::commit` does), so it is never
+//! cancelled mid-transaction, and returns its real outcome however long it
+//! takes. Only a task that may stall on that is allowed to write: one
+//! output's task, housekeeping, the scheduler; the output pass never awaits
+//! a write.
+//!
+//! At most [`WRITE_PERMITS`] writes hold a connection at once, so writes
+//! queued behind another writer's lock never take the connections the loops
+//! read on (WAL readers do not wait for the write lock).
 //!
 //! Why no `disallowed-methods` ban enforces this: clippy's allow is per lint,
 //! not per method, so exempting `src/db/` from a ban on sqlx execution would
@@ -23,19 +32,25 @@
 //! repository functions, not sqlx, so such a ban would not reach them. The
 //! loops instead hold a `DeadlineDb` and no pool.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 /// The deadline production gives every shared-loop call. A lifecycle-pool
 /// read answers in milliseconds; past this the loop moves on and retries on
 /// its next pass.
 pub const SHARED_LOOP_DEADLINE: Duration = Duration::from_secs(3);
 
+/// Writes on one executor that hold a connection at once; the rest wait for
+/// a permit without one.
+pub const WRITE_PERMITS: usize = 2;
+
 /// Why a deadline-bounded call has no answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadlineError {
-    /// The call did not finish within the deadline. A write may still land.
+    /// The read did not finish within the deadline.
     Elapsed(Duration),
     /// The write task ended without an answer (it panicked).
     Aborted,
@@ -66,23 +81,25 @@ impl From<DeadlineError> for sqlx::Error {
     }
 }
 
-/// A pool whose every call answers within one deadline.
+/// A pool whose reads answer within one deadline and whose writes run to
+/// their outcome, at most [`WRITE_PERMITS`] at a time.
 #[derive(Clone)]
 pub struct DeadlineDb {
     pool: SqlitePool,
     deadline: Duration,
+    writes: Arc<Semaphore>,
 }
 
 impl DeadlineDb {
     pub fn new(pool: SqlitePool, deadline: Duration) -> Self {
-        Self { pool, deadline }
+        Self {
+            pool,
+            deadline,
+            writes: Arc::new(Semaphore::new(WRITE_PERMITS)),
+        }
     }
 
-    pub fn deadline(&self) -> Duration {
-        self.deadline
-    }
-
-    /// Bounds a call that is already built: a read through an application
+    /// Bounds a read that is already built: one through an application
     /// port whose adapter runs on this pool. Dropped at the deadline.
     pub async fn bound<T, E>(&self, call: impl Future<Output = Result<T, E>>) -> Result<T, E>
     where
@@ -105,33 +122,24 @@ impl DeadlineDb {
         self.bound(op(&self.pool)).await
     }
 
-    /// A write, run as its own task: the caller stops waiting at the
-    /// deadline, the write runs to completion. Its effect is observed by the
-    /// next read, never assumed from a timeout.
+    /// A write, run as its own task under a write permit and awaited to its
+    /// outcome: no deadline, since one that passed would not stop it
+    /// landing. Dropping the caller leaves it running to completion.
     pub async fn write<T, E, Fut>(&self, op: impl FnOnce(SqlitePool) -> Fut) -> Result<T, E>
     where
         Fut: Future<Output = Result<T, E>> + Send + 'static,
         T: Send + 'static,
         E: From<DeadlineError> + Send + 'static,
     {
-        match tokio::time::timeout(self.deadline, self.detached(op)).await {
-            Ok(Ok(answer)) => answer,
-            Ok(Err(_)) => Err(DeadlineError::Aborted.into()),
-            Err(_) => Err(DeadlineError::Elapsed(self.deadline).into()),
-        }
-    }
-
-    /// Writes no loop waits for (one entity's bookkeeping, written in
-    /// order), run as their own task.
-    pub fn detached<Fut>(
-        &self,
-        op: impl FnOnce(SqlitePool) -> Fut,
-    ) -> tokio::task::JoinHandle<Fut::Output>
-    where
-        Fut: Future + Send + 'static,
-        Fut::Output: Send + 'static,
-    {
-        tokio::spawn(op(self.pool.clone()))
+        let (pool, writes) = (self.pool.clone(), self.writes.clone());
+        let write = op(pool);
+        tokio::spawn(async move {
+            // Never closed, so the permit always comes.
+            let _permit = writes.acquire_owned().await;
+            write.await
+        })
+        .await
+        .unwrap_or_else(|_| Err(DeadlineError::Aborted.into()))
     }
 }
 

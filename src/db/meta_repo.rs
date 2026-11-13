@@ -19,7 +19,8 @@ pub async fn get_meta(
 
 /// Every meta row whose key starts with one of `prefixes`, in one statement:
 /// the per-pipeline switches a periodic loop needs, read once rather than
-/// one lookup per pipeline. A NULL or non-text value reads as absent.
+/// one lookup per pipeline. Each prefix is a key range, which the primary-key
+/// index serves. A NULL or non-text value reads as absent.
 pub async fn list_meta_with_prefixes(
     pool: impl sqlx::SqliteExecutor<'_>,
     prefixes: &[&str],
@@ -27,11 +28,26 @@ pub async fn list_meta_with_prefixes(
     if prefixes.is_empty() {
         return Ok(Vec::new());
     }
-    let filter = vec!["substr(key, 1, length(?)) = ?"; prefixes.len()].join(" OR ");
+    let ranges: Vec<(&str, Option<String>)> = prefixes
+        .iter()
+        .map(|prefix| (*prefix, prefix_end(prefix)))
+        .collect();
+    let filter = ranges
+        .iter()
+        .map(|(_, end)| match end {
+            Some(_) => "(key >= ? AND key < ?)",
+            None => "substr(key, 1, length(?)) = ?",
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
     let sql = format!("SELECT key, value FROM meta WHERE {filter}");
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for prefix in prefixes {
-        query = query.bind(*prefix).bind(*prefix);
+    for (prefix, end) in &ranges {
+        query = query.bind(*prefix);
+        query = match end {
+            Some(end) => query.bind(end.as_str()),
+            None => query.bind(*prefix),
+        };
     }
     query
         .fetch_all(pool)
@@ -44,6 +60,16 @@ pub async fn list_meta_with_prefixes(
             ))
         })
         .collect()
+}
+
+/// The least key above every key starting with `prefix`: its last character
+/// incremented (keys compare as UTF-8 bytes, which order like code points).
+/// `None` when there is no such character to increment.
+fn prefix_end(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    let last = chars.pop()?;
+    chars.push(char::from_u32(u32::from(last) + 1)?);
+    Some(chars.into_iter().collect())
 }
 
 pub async fn set_meta(pool: &SqlitePool, key: &str, value: &str) -> Result<String, sqlx::Error> {
@@ -104,5 +130,41 @@ mod tests {
         .await
         .expect("reading a non-text meta value does not panic");
         assert!(mistyped.is_err(), "{mistyped:?}");
+    }
+
+    /// A prefix read returns exactly the keys starting with a prefix,
+    /// including at the range's edges.
+    #[tokio::test]
+    async fn a_prefix_read_returns_exactly_the_keys_starting_with_a_prefix() {
+        let pool = test_pool().await;
+        for key in [
+            "recording_enabled:a",
+            "recording_enabled:",
+            "recording_enabled;",
+            "recording_enabled9",
+            "recording_settings",
+            "recording_settingt",
+            "other",
+        ] {
+            set_meta(&pool, key, "1").await.unwrap();
+        }
+
+        let mut keys: Vec<String> =
+            list_meta_with_prefixes(&pool, &["recording_enabled:", "recording_settings"])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect();
+        keys.sort();
+
+        assert_eq!(
+            keys,
+            [
+                "recording_enabled:",
+                "recording_enabled:a",
+                "recording_settings"
+            ]
+        );
     }
 }

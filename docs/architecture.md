@@ -469,13 +469,20 @@ One slow dependency stalls only the entity that needs it:
 
 - Each output's start (rings, stages, the MoQ `ca` file, the egress task)
   and retries-exhausted mark run in that output's own task. The pass skips
-  an output while its task runs; the task's end wakes the next pass. The job
-  row is written off the start path.
+  an output while its task runs; the task's end wakes the next pass. Only a
+  pass that reads the marked row clears the output's failures, so a pass
+  deciding from rows read before the mark cannot restart it. The job row is
+  written off the start path.
 - The pass and the other shared loops (housekeeping, scheduler, catalog
   reload) reach SQLite only through `db::DeadlineDb` on a lifecycle pool of
-  their own, which API load cannot exhaust. Acquire, statements and busy
-  retries share one 3 s deadline; a read is dropped at it, and a write runs as
-  its own task, landing or failing as a unit. A step that cannot read skips
+  their own, which API load cannot exhaust. A read's acquire, statements
+  and busy retries share one 3 s deadline and it is dropped there. A deadline
+  bounds a caller's wait, never a write's outcome: a write runs as its own
+  task and is awaited to its outcome by a task that may stall on it (an
+  output's task, housekeeping, the scheduler), never by the pass; at most two
+  writes hold a connection, so writes queued behind another writer's lock
+  leave the loops' read connections free. The startup catalog load retries
+  with backoff until it succeeds. A step that cannot read skips
   its convergence and the pass is retried after the gap, while the other
   steps (input selection, HLS pulls, SRT calls, key state, topology, egress)
   still run.
