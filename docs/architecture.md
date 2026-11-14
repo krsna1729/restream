@@ -495,7 +495,7 @@ One slow dependency stalls only the entity that needs it:
 - Recorders report catalog updates into a queue holding one entry per
   recording (its start and latest end); one supervised writer drains it, so
   a stalled SQLite grows no queue and a writer panic loses no update.
-- RTMP/SRT listener restarts and the dashboard listener's exit are handled
+- RTMP/SRT/MoQ listener restarts and the dashboard listener's exit are handled
   by a supervision task of their own, never between passes.
 
 Housekeeping that reads no outputs runs every interval in its own supervised
