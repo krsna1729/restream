@@ -150,10 +150,7 @@ pub async fn apply_recording_commands(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
-    use restream_domain::domain::ids::RecordingId;
     use restream_domain::domain::stage::StageKey;
-    use restream_domain::domain::state::RecordingPhase;
-    use sqlx::SqlitePool;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -382,37 +379,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    #[tokio::test]
-    async fn recording_metadata_reporter_persists_lifecycle_events() {
-        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-        crate::db::setup_database_schema(&pool).await.unwrap();
-        crate::db::create_pipeline(&pool, "pipeline-meta", "Pipeline", "stream-key", None, None)
-            .await
-            .unwrap();
-
-        let reporter = crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(
-            pool.clone(),
-        );
-        use restream_engine::recording::RecordingMetadataEvent;
-        reporter.report(RecordingMetadataEvent::Started {
-            recording_id: "recording-meta".to_string(),
-            pipeline_id: "pipeline-meta".to_string(),
-            started_at: "2026-01-01T00:00:00Z".to_string(),
-            temp_path: "/tmp/recording-meta.ts".to_string(),
-        });
-        reporter.report(RecordingMetadataEvent::Finalized {
-            recording_id: "recording-meta".to_string(),
-            ended_at: "2026-01-01T00:00:10Z".to_string(),
-            final_path: "/tmp/recording-meta.mp4".to_string(),
-        });
-
-        let row = wait_for_recording_final_path(&pool, "recording-meta").await;
-        assert_eq!(row.pipeline_id, "pipeline-meta");
-        assert_eq!(row.status, RecordingPhase::Ready.as_str());
-        assert_eq!(row.temp_path.as_deref(), Some("/tmp/recording-meta.ts"));
-        assert_eq!(row.final_path.as_deref(), Some("/tmp/recording-meta.mp4"));
-    }
-
     fn unique_test_media_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("{prefix}-{}", rand::random::<u64>()));
         std::fs::create_dir_all(&path).expect("test media dir should be created");
@@ -452,22 +418,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("recording stage snapshot did not appear for planned key");
-    }
-
-    async fn wait_for_recording_final_path(
-        pool: &SqlitePool,
-        recording_id: &str,
-    ) -> crate::db::RecordingRow {
-        let id = RecordingId::new(recording_id);
-        for _ in 0..50 {
-            if let Some(row) = crate::db::get_recording(pool, &id).await.unwrap()
-                && row.final_path.is_some()
-            {
-                return row;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("recording metadata reporter did not persist final path");
     }
 
     #[tokio::test]

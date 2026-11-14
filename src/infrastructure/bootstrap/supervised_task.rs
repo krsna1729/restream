@@ -1,8 +1,9 @@
 //! Background loops (event consumer, projector, samplers, notifier,
-//! scheduler) are restarted after a panic instead of staying dead while the
-//! process keeps serving: a bare `tokio::spawn` would drop the panic with the
-//! task, and dashboard state, reconcile triggers or schedules would silently
-//! stop. A loop that returns (shutdown) is not restarted.
+//! scheduler, recording catalog writer) are restarted after a panic instead
+//! of staying dead while the process keeps serving: a bare `tokio::spawn`
+//! would drop the panic with the task, and dashboard state, reconcile
+//! triggers, schedules or recording rows would silently stop. A loop that
+//! returns (shutdown) is not restarted.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -16,7 +17,7 @@ use super::listener_supervisor::RestartBackoff;
 
 /// Spawns the loop `run` builds, rebuilding and restarting it after the
 /// listener restart backoff each time it panics.
-pub(super) fn spawn_supervised<F, Fut>(name: &'static str, mut run: F) -> JoinHandle<()>
+pub(crate) fn spawn_supervised<F, Fut>(name: &'static str, mut run: F) -> JoinHandle<()>
 where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,

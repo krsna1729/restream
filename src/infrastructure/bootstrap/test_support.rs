@@ -1,5 +1,6 @@
-//! Setup shared by the reconciler and egress tests: production's two pools
-//! on a file database, held connections, and a live output.
+//! Setup shared by the reconciler, egress and recording catalog writer
+//! tests: production's two pools on a file database, held connections, and
+//! a live output.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,14 +8,14 @@ use std::time::Duration;
 use crate::db::{create_lifecycle_pool, create_pool, setup_database_schema};
 use restream_engine::engine::MediaEngine;
 
-pub(super) async fn memory_pool() -> sqlx::SqlitePool {
+pub(crate) async fn memory_pool() -> sqlx::SqlitePool {
     let pool = create_pool("sqlite::memory:").await.unwrap();
     setup_database_schema(&pool).await.unwrap();
     pool
 }
 
 /// A file database with production's two pools (API and lifecycle).
-pub(super) async fn file_pools(
+pub(crate) async fn file_pools(
     tag: &str,
 ) -> (sqlx::SqlitePool, sqlx::SqlitePool, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!(
@@ -48,7 +49,7 @@ pub(super) async fn hold_every_connection(
 
 /// The write lock another writer (an API transaction) holds until
 /// [`release_write_lock`].
-pub(super) async fn hold_write_lock(
+pub(crate) async fn hold_write_lock(
     pool: &sqlx::SqlitePool,
 ) -> sqlx::pool::PoolConnection<sqlx::Sqlite> {
     let mut connection = pool.acquire().await.unwrap();
@@ -59,7 +60,7 @@ pub(super) async fn hold_write_lock(
     connection
 }
 
-pub(super) async fn release_write_lock(mut connection: sqlx::pool::PoolConnection<sqlx::Sqlite>) {
+pub(crate) async fn release_write_lock(mut connection: sqlx::pool::PoolConnection<sqlx::Sqlite>) {
     sqlx::query("ROLLBACK")
         .execute(&mut *connection)
         .await

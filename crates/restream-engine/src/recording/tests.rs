@@ -592,7 +592,7 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
             cancel.clone(),
         )
         .await;
-    let (metadata_tx, mut metadata_rx) = mpsc::unbounded_channel();
+    let (reporter, queue) = recording_metadata_channel();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
         start_recording(
@@ -604,7 +604,7 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
                 media_dir: media_dir.to_string_lossy().into_owned(),
                 settings: RecordingSettings::default(),
                 stage_key: stage_key.clone(),
-                metadata: Some(RecordingMetadataReporter::new(metadata_tx)),
+                metadata: Some(reporter),
             },
             ring.clone(),
             engine.clone(),
@@ -614,25 +614,21 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
     .await
     .expect("failed writer must stop the feeder and finish the coordinator");
 
-    assert!(matches!(
-        metadata_rx.try_recv(),
-        Ok(RecordingMetadataEvent::Started { .. })
-    ));
-    let Ok(RecordingMetadataEvent::Failed {
-        recording_id,
-        error,
-    }) = metadata_rx.try_recv()
-    else {
+    // One entry: the start and the failure, never a finalization.
+    let update = queue.next().await.expect("the recording reported");
+    assert_eq!(update.recording_id, "writer-failure");
+    assert!(update.started.is_some());
+    let Some(RecordingEnd::Failed { error }) = update.end else {
         panic!("writer failure must report Failed instead of Finalized");
     };
-    assert_eq!(recording_id, "writer-failure");
     let snapshot = lifecycle.snapshot();
     assert_eq!(snapshot.phase, crate::stage_lifecycle::StagePhase::Failed);
     assert_eq!(snapshot.last_error, Some(error));
-    assert!(matches!(
-        metadata_rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Disconnected)
-    ));
+    assert_eq!(
+        queue.next().await,
+        None,
+        "nothing else, and the reporter is gone"
+    );
     assert!(cancel.is_cancelled());
     assert_eq!(ring.active_reader_count(), 0);
     assert!(!engine.stages.runtimes.read().await.contains_key(&stage_key));
@@ -653,7 +649,7 @@ async fn a_writer_thread_that_cannot_start_reports_failed_and_removes_the_stage(
         "spawn-failure",
         restream_domain::domain::stage::StageKind::Recording,
     );
-    let (metadata_tx, mut metadata_rx) = mpsc::unbounded_channel();
+    let (reporter, queue) = recording_metadata_channel();
     let coordinator = tokio::spawn(start_recording(
         RecordingStart {
             recording_id: super::INJECTED_SPAWN_FAILURE_RECORDING_ID.to_string(),
@@ -663,7 +659,7 @@ async fn a_writer_thread_that_cannot_start_reports_failed_and_removes_the_stage(
             media_dir: media_dir.to_string_lossy().into_owned(),
             settings: RecordingSettings::default(),
             stage_key: stage_key.clone(),
-            metadata: Some(RecordingMetadataReporter::new(metadata_tx)),
+            metadata: Some(reporter),
         },
         ring.clone(),
         engine.clone(),
@@ -674,11 +670,9 @@ async fn a_writer_thread_that_cannot_start_reports_failed_and_removes_the_stage(
         .expect("the coordinator finishes")
         .expect("the coordinator does not panic");
 
-    assert!(matches!(
-        metadata_rx.try_recv(),
-        Ok(RecordingMetadataEvent::Started { .. })
-    ));
-    let Ok(RecordingMetadataEvent::Failed { error, .. }) = metadata_rx.try_recv() else {
+    let update = queue.next().await.expect("the recording reported");
+    assert!(update.started.is_some());
+    let Some(RecordingEnd::Failed { error }) = update.end else {
         panic!("a writer that cannot start must report Failed");
     };
     assert!(error.contains("could not start"), "{error}");

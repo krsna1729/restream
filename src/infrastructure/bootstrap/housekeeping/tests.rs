@@ -65,7 +65,7 @@ fn housekeeping(catalog: Arc<dyn PipelineStore>, db: DeadlineDb) -> Housekeeping
         Arc::new(MediaEngine::new()),
         catalog,
         Arc::default(),
-        RecordingMetadataReporter::new(tokio::sync::mpsc::unbounded_channel().0),
+        restream_engine::recording::recording_metadata_channel().0,
     )
 }
 
