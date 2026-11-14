@@ -112,3 +112,61 @@ fn the_pinned_hash_is_the_leaf_of_the_chain() {
     assert_ne!(leaf_sha256_hex(&issuer).as_deref(), Some(hash.as_str()));
     assert_eq!(leaf_sha256_hex(b"not a certificate"), None);
 }
+
+/// A peer the listener never reads from can make it buffer at most
+/// `MAX_UNREAD_BYTES_PER_CONNECTION`, however many streams it opens: QUIC flow
+/// control stops the peer's writes there. Without the connection window each
+/// of the 16 streams below would take its own 1.25 MB, 20 MB in all.
+#[test]
+fn a_peer_cannot_make_the_listener_buffer_more_than_its_connection_window() {
+    use compio::io::AsyncWrite;
+
+    let (cert, key) = self_signed();
+    let server = server_config(&[ALPN], &cert, &key).unwrap();
+    let client = client_config(&[ALPN], Some(cert.as_slice()), false).unwrap();
+    let runtime = compio::runtime::Runtime::new().unwrap();
+    let written = runtime.block_on(async move {
+        let server_endpoint = Endpoint::server("127.0.0.1:0", server).await.unwrap();
+        let address = server_endpoint.local_addr().unwrap();
+        let client_endpoint = Endpoint::client("127.0.0.1:0").await.unwrap();
+        let accept = async { server_endpoint.wait_incoming().await?.await.ok() };
+        let dial = async {
+            client_endpoint
+                .connect(address, "localhost", Some(client))
+                .ok()?
+                .await
+                .ok()
+        };
+        let (accepted, dialed) = compio::time::timeout(
+            Duration::from_secs(10),
+            futures_util::future::join(accept, dial),
+        )
+        .await
+        .expect("the handshake settles");
+        // The listener side stays open and never accepts a stream.
+        let _accepted = accepted.expect("the listener accepts the connection");
+        let connection = dialed.expect("the client connects");
+        let chunk = vec![0_u8; 64 * 1024];
+        let mut written = 0_usize;
+        for _ in 0..16 {
+            let mut stream = connection.open_uni().expect("a stream under the cap opens");
+            // Write until flow control holds the stream.
+            while let Ok(compio::BufResult(result, _)) =
+                compio::time::timeout(Duration::from_millis(300), stream.write(chunk.clone())).await
+            {
+                written += result.expect("the stream accepts bytes");
+            }
+            std::mem::forget(stream);
+        }
+        written
+    });
+    let window = usize::try_from(MAX_UNREAD_BYTES_PER_CONNECTION).unwrap();
+    assert!(
+        written <= window,
+        "the peer wrote {written} unread bytes past the {window}-byte window"
+    );
+    assert!(
+        written >= window / 2,
+        "the window still admits real traffic: {written} bytes"
+    );
+}

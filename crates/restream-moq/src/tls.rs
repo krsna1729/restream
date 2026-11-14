@@ -15,6 +15,13 @@ use tokio_rustls::rustls::{
 };
 
 pub const MAX_INCOMING_UNI_STREAMS: u32 = 64;
+/// Bytes one connection's peer may have sent that the listener has not read
+/// yet, across all its streams: QUIC flow control stops the peer's writes
+/// there. quinn's default leaves this unbounded, so only each stream's own
+/// 1.25 MB window applied, times up to 100 bidirectional and 64
+/// unidirectional streams. Reading returns the credit, so 4 MiB still carries
+/// 335 Mbit/s at a 100 ms round trip.
+pub const MAX_UNREAD_BYTES_PER_CONNECTION: u32 = 4 << 20;
 
 fn provider() -> Arc<CryptoProvider> {
     Arc::new(crypto::ring::default_provider())
@@ -71,6 +78,7 @@ pub fn server_config(
         QuicServerConfig::try_from(config).map_err(|error| format!("MoQ TLS server: {error}"))?;
     let mut transport = TransportConfig::default();
     transport.max_concurrent_uni_streams(VarInt::from_u32(MAX_INCOMING_UNI_STREAMS));
+    transport.receive_window(VarInt::from_u32(MAX_UNREAD_BYTES_PER_CONNECTION));
     let mut server = ServerConfig::with_crypto(Arc::new(crypto));
     server.transport_config(Arc::new(transport));
     Ok(server)
