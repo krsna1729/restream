@@ -473,19 +473,28 @@ One slow dependency stalls only the entity that needs it:
   pass that reads the marked row clears the output's failures, so a pass
   deciding from rows read before the mark cannot restart it. The job row is
   written off the start path.
-- The pass and the other shared loops (housekeeping, scheduler, catalog
-  reload) reach SQLite only through `db::DeadlineDb` on a lifecycle pool of
-  their own, which API load cannot exhaust. A read's acquire, statements
-  and busy retries share one 3 s deadline and it is dropped there. A deadline
-  bounds a caller's wait, never a write's outcome: a write runs as its own
-  task and is awaited to its outcome by a task that may stall on it (an
-  output's task, housekeeping, the scheduler), never by the pass; at most two
-  writes hold a connection, so writes queued behind another writer's lock
-  leave the loops' read connections free. The startup catalog load retries
-  with backoff until it succeeds. A step that cannot read skips
-  its convergence and the pass is retried after the gap, while the other
-  steps (input selection, HLS pulls, SRT calls, key state, topology, egress)
-  still run.
+- Each output is planned behind a panic boundary of its own. A panic in the
+  pass's decision for one output, or in its start or mark task, skips that
+  output for the output retry backoff (growing per panic until it runs or is
+  no longer wanted); the pass goes on to the other outputs.
+- The pass and the other shared loops (housekeeping, scheduler, recording
+  catalog writer, catalog reload) reach SQLite only through `db::DeadlineDb`
+  on a lifecycle pool of their own, which API load cannot exhaust. A read's
+  acquire, statements and busy retries share one 3 s deadline and it is
+  dropped there. A deadline bounds a caller's wait, never a write's outcome:
+  a write runs as its own task and is awaited to its outcome by a task that
+  may stall on it (an output's task, housekeeping, a scheduled occurrence,
+  the recording catalog writer), never by the pass; at most two writes hold
+  a connection, so writes queued behind another writer's lock leave the
+  loops' read connections free. The startup catalog load retries with
+  backoff until it succeeds. A step that cannot read skips its convergence
+  and the pass is retried after the gap, while the other steps (input
+  selection, HLS pulls, SRT calls, key state, topology, egress) still run.
+- Each schedule's due occurrence runs in a task of its own, so a slow
+  action or record delays only its own schedule.
+- Recorders report catalog updates into a queue holding one entry per
+  recording (its start and latest end); one supervised writer drains it, so
+  a stalled SQLite grows no queue and a writer panic loses no update.
 - RTMP/SRT listener restarts and the dashboard listener's exit are handled
   by a supervision task of their own, never between passes.
 
@@ -493,7 +502,8 @@ Housekeeping that reads no outputs runs every interval in its own supervised
 task: sessions, log retention (in batches of at most 1000 rows per write),
 fabric sizing, recordings, stream checks, idle HLS and file-ingest reaping.
 A tick reads the pipelines and every pipeline's recording and stream-check
-switches in two statements. The pass does not manage shared stages; leases
+switches in two statements; when either read fails, no recording or stream
+check changes that tick. The pass does not manage shared stages; leases
 do.
 
 Failure isolation rules:

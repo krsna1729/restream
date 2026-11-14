@@ -19,7 +19,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
-- [Q-131 scheduler, recording and planning faults](#q-131-correctness-opus-scheduler-recording-and-planning-faults-stay-with-their-own-entity)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
 - [Not planned](#not-planned)
@@ -167,34 +166,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
   Disabling an existing boundary, for example the per-peer SRT containment,
   must fail the matching mode.
-
-### Q-131 [correctness] [opus] Scheduler, recording and planning faults stay with their own entity
-- Goal:
-  - The scheduler awaits `run_occurrence` serially (`src/api/schedules.rs`):
-    a slow statement or a file-ingest stop's `kill` + `wait` pushes other
-    pipelines' occurrences past `RUN_GRACE_MS`, recorded as Skip. Spawn each
-    `Due::Run` with a deadline around `execute`.
-  - A failed meta lookup reads as "stop" (`application/recording.rs`,
-    `stream_qa.rs`), so one pool timeout stops every recording and QA
-    sampler it hits. Make the lookup tri-state and keep on error.
-  - The per-output egress planning loop (`application/egress.rs`) has no
-    panic boundary; one panicking output aborts the pass on every retry.
-    Wrap each iteration in `contained`.
-  - Child processes awaited from async code go through one
-    `reap(child, grace)` helper (from `reap_external_child`) and `run_tool`;
-    `disallowed-methods` bans `tokio::process::Child::{wait,
-    wait_with_output}` and `tokio::process::Command::output` elsewhere.
-  - The recording-metadata writer (`infrastructure/recording_metadata.rs`)
-    is a bare `tokio::spawn` over an unbounded channel: a panic ends it
-    silently and a stalled SQLite grows its queue without limit. Supervise
-    it and bound the queue; a full queue must not lose a `Finalized` or
-    `Failed` row silently (the recording would stay `recording` in SQLite).
-- Gates: a stalled occurrence leaves another pipeline's due occurrence run,
-  not skipped; a pool timeout during housekeeping stops no recording or QA
-  sampler; an output whose planning panics leaves the later outputs started
-  and stopped as wanted in the same pass; a panicked recording-metadata
-  writer restarts and its queue stays within its bound while SQLite stalls;
-  clippy `-D warnings` with the ban.
 
 ### Q-132 [correctness] [opus] API handlers reach SQLite under a deadline, and a session survives a pool timeout
 - Goal: the shared loops (output pass, housekeeping, egress job rows, the
