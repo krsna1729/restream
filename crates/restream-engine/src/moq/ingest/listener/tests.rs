@@ -86,9 +86,71 @@ async fn an_unreadable_certificate_fails_the_start_and_leaves_nothing_running() 
         engine.clone(),
         security(),
     ));
-    let error = start(&config, server).await.unwrap_err();
+    let error = MoqListener::configured(config, server)
+        .start()
+        .await
+        .unwrap_err();
     assert!(error.contains("moq-cert.pem"), "{error}");
     assert!(engine.drain_os_thread_handles().is_empty());
+}
+
+#[tokio::test]
+async fn repeated_failed_starts_keep_only_one_shutdown_hook() {
+    let engine = Arc::new(MediaEngine::new());
+    let listener = MoqListener::new(
+        &MoqIngestSetting::On(MoqIngestConfig {
+            listen: SocketAddr::from(([127, 0, 0, 1], 0)),
+            tls_cert_path: "/nonexistent/moq-retry-cert.pem".to_string(),
+            tls_key_path: "/nonexistent/moq-retry-key.pem".to_string(),
+            max_connections: 4,
+            origin_max_viewers: 4,
+            max_connections_per_ip: 4,
+        }),
+        Arc::new(OneKey),
+        engine.clone(),
+        security(),
+    )
+    .unwrap();
+    for _ in 0..8 {
+        tokio::time::timeout(Duration::from_secs(5), listener.clone().run(None))
+            .await
+            .expect("a failed start returns to its supervisor");
+    }
+    assert_eq!(
+        restream_sync::lock::lock(&engine.runtime.listener_shutdowns).len(),
+        1,
+        "failed retries retain one listener shutdown hook, not one per run"
+    );
+    engine.shutdown_listeners();
+}
+
+#[tokio::test]
+async fn shutdown_before_start_still_stops_and_joins_the_listener() {
+    let certs = Certs::new("shutdown-before-start");
+    let engine = Arc::new(MediaEngine::new());
+    let listener = MoqListener::new(
+        &MoqIngestSetting::On(certs.config(4)),
+        Arc::new(OneKey),
+        engine.clone(),
+        security(),
+    )
+    .unwrap();
+    engine.shutdown_listeners();
+    tokio::time::timeout(Duration::from_secs(5), listener.run(None))
+        .await
+        .expect("shutdown remains visible when the listener starts");
+    let threads = engine.drain_os_thread_handles();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            for thread in threads {
+                thread.join().expect("the listener thread ends cleanly");
+            }
+        }),
+    )
+    .await
+    .expect("the stopped listener joins")
+    .unwrap();
 }
 
 /// Publish key `moq-key` (one AAC track) to `addr` until `done`.
@@ -226,7 +288,8 @@ fn server(engine: &Arc<MediaEngine>) -> Arc<MoqIngestServer> {
 async fn listen(max_connections: usize, name: &str) -> (Arc<MediaEngine>, SocketAddr) {
     let certs = Certs::new(name);
     let engine = Arc::new(MediaEngine::new());
-    let (addr, _ended) = start(&certs.config(max_connections), server(&engine))
+    let (addr, _ended) = MoqListener::configured(certs.config(max_connections), server(&engine))
+        .start()
         .await
         .unwrap();
     (engine, addr)
@@ -242,7 +305,10 @@ async fn one_client_cannot_take_every_moq_connection_slot() {
         ..certs.config(4)
     };
     let engine = Arc::new(MediaEngine::new());
-    let (addr, _ended) = start(&config, server(&engine)).await.unwrap();
+    let (addr, _ended) = MoqListener::configured(config, server(&engine))
+        .start()
+        .await
+        .unwrap();
     tokio::task::spawn_blocking(move || {
         run(async move {
             let tls = || loopback_client_tls(transport::MOQ_ALPNS);
@@ -283,6 +349,40 @@ async fn connections_past_the_cap_are_refused() {
                 .expect("the first connection is served");
             let second = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls()).await;
             assert!(second.is_err(), "a connection past the cap is refused");
+        });
+    })
+    .await
+    .unwrap();
+    engine.shutdown_listeners();
+}
+
+/// A client that completes the QUIC handshake but never sends its SETUP
+/// holds its connection slot only until the deadline
+/// (`transport::HANDSHAKE_TIMEOUT`); the next client is then served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_never_sends_setup_frees_its_slot_at_the_deadline() {
+    let (engine, addr) = listen(1, "setup-deadline").await;
+    tokio::task::spawn_blocking(move || {
+        run(async move {
+            let endpoint = transport::client_endpoint(AddressFamily::V4).await.unwrap();
+            let tls = || loopback_client_tls(transport::MOQ_ALPNS);
+            let _silent = transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls())
+                .await
+                .expect("the silent client is served");
+            let silent_since = Instant::now();
+            assert!(
+                transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls())
+                    .await
+                    .is_err(),
+                "the silent client holds the only slot"
+            );
+            compio::time::sleep_until(
+                silent_since + transport::HANDSHAKE_TIMEOUT + Duration::from_secs(1),
+            )
+            .await;
+            transport::connect(&endpoint, addr, LOOPBACK_SERVER_NAME, tls())
+                .await
+                .expect("the slot is free once the SETUP deadline passed");
         });
     })
     .await
@@ -379,10 +479,10 @@ async fn wait_for_media(engine: &MediaEngine, what: &str) {
 async fn a_faulted_listener_returns_and_its_restart_on_the_same_port_serves() {
     let certs = Certs::new("restart");
     let engine = Arc::new(MediaEngine::new());
-    let faulted = Arc::new(MoqListener {
-        config: certs.config(INJECTED_PANIC_MAX_CONNECTIONS),
-        server: server(&engine),
-    });
+    let faulted = MoqListener::configured(
+        certs.config(INJECTED_PANIC_MAX_CONNECTIONS),
+        server(&engine),
+    );
     let (started, addr) = tokio::sync::oneshot::channel();
     let faulted = tokio::spawn(faulted.run(Some(started)));
     let addr = addr.await.expect("the listener starts");
@@ -418,13 +518,13 @@ async fn a_faulted_listener_returns_and_its_restart_on_the_same_port_serves() {
 
     // What `SupervisedListener` does: run the listener again, on the port
     // the faulted one held (without the injected cap).
-    let restarted = Arc::new(MoqListener {
-        config: MoqIngestConfig {
+    let restarted = MoqListener::configured(
+        MoqIngestConfig {
             listen: addr,
             ..certs.config(4)
         },
-        server: server(&engine),
-    });
+        server(&engine),
+    );
     let (started, restarted_addr) = tokio::sync::oneshot::channel();
     let restarted = tokio::spawn(restarted.run(Some(started)));
     assert_eq!(restarted_addr.await.expect("the restart binds"), addr);

@@ -428,6 +428,71 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
         .unwrap();
 }
 
+/// A publisher that completes SETUP but never announces a broadcast is cut
+/// off at the announce bound, before it is admitted to anything.
+#[test]
+fn a_publisher_that_never_announces_is_cut_off_at_the_announce_bound() {
+    use crate::moq::transport::test_support::{Loopback, run};
+
+    // The publish/connect futures are large in a debug build; see above.
+    std::thread::Builder::new()
+        .name("moq-silent-publisher".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            run(async {
+                let loopback = Loopback::new().await;
+                let (client, accepted) = loopback.native().await;
+                let (origin, origin_driver) =
+                    moq_net::origin::Producer::new(moq_net::origin::Config::default());
+                compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
+                let recorder = Recorder::default();
+                let shutdown = CancellationToken::new();
+                let limits = SessionLimits {
+                    announce_timeout: Duration::from_millis(200),
+                    ..SessionLimits::default()
+                };
+                let peer: SocketAddr = "198.51.100.9:4443".parse().unwrap();
+                let server = async {
+                    let handshake = moq_net::Server::new()
+                        .accept_request(Instant::now(), accepted.session.clone())
+                        .await
+                        .unwrap();
+                    publish(
+                        &recorder,
+                        peer,
+                        &accepted.path,
+                        handshake,
+                        limits,
+                        &shutdown,
+                    )
+                    .await
+                };
+                // Connects (the server answers its SETUP) and announces nothing.
+                let publisher = async {
+                    let (session, driver) = moq_net::Client::new()
+                        .with_publisher(&origin)
+                        .connect(Instant::now(), client)
+                        .await
+                        .unwrap();
+                    compio::runtime::spawn(transport::run_driver(driver)).detach();
+                    session
+                };
+                let (end, _session) = compio::time::timeout(
+                    Duration::from_secs(2),
+                    futures_util::future::join(server, publisher),
+                )
+                .await
+                .expect("the announcement deadline ends the silent session");
+                assert!(matches!(end.error, Error::Timeout), "{end:?}");
+                assert_eq!(end.reason, "no broadcast was announced");
+                assert!(recorder.admitted.borrow().is_empty());
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
     crate::moq::transport::test_support::run(async {
@@ -436,6 +501,23 @@ fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
         let end = idle_watch(&last_frame, Duration::from_millis(50)).await;
         assert!(matches!(end.error, Error::Timeout), "{end:?}");
         assert!(started.elapsed() >= Duration::from_millis(50));
+    });
+}
+
+#[test]
+fn an_admitted_publisher_without_a_catalog_times_out() {
+    crate::moq::transport::test_support::run(async {
+        let end = compio::time::timeout(
+            Duration::from_secs(2),
+            first_catalog(
+                std::future::pending::<hang::Result<Option<hang::Catalog>>>(),
+                Duration::from_millis(50),
+            ),
+        )
+        .await
+        .expect("the catalog deadline ends the stalled read")
+        .unwrap_err();
+        assert!(matches!(end.error, Error::Timeout), "{end:?}");
     });
 }
 

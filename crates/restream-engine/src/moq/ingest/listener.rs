@@ -84,6 +84,7 @@ impl Drop for CapSlot {
 pub struct MoqListener {
     config: MoqIngestConfig,
     server: Arc<MoqIngestServer>,
+    shutdown: CancellationToken,
 }
 
 impl MoqListener {
@@ -109,17 +110,30 @@ impl MoqListener {
             }
             MoqIngestSetting::On(config) => config.clone(),
         };
-        Some(Arc::new(Self {
+        Some(Self::configured(
             config,
-            server: Arc::new(MoqIngestServer::new(pipeline_access, engine, security)),
-        }))
+            Arc::new(MoqIngestServer::new(pipeline_access, engine, security)),
+        ))
+    }
+
+    fn configured(config: MoqIngestConfig, server: Arc<MoqIngestServer>) -> Arc<Self> {
+        let shutdown = CancellationToken::new();
+        server.engine().register_listener_shutdown({
+            let shutdown = shutdown.clone();
+            move || shutdown.cancel()
+        });
+        Arc::new(Self {
+            config,
+            server,
+            shutdown,
+        })
     }
 
     /// Start the listener thread, send its bound address on `started`, then
     /// wait until the thread ends. A failed start is logged and returns at
     /// once, dropping `started`.
     pub async fn run(self: Arc<Self>, started: Option<tokio::sync::oneshot::Sender<SocketAddr>>) {
-        let (local, ended) = match start(&self.config, self.server.clone()).await {
+        let (local, ended) = match self.start().await {
             Ok(running) => running,
             Err(reason) => {
                 error!(
@@ -145,41 +159,36 @@ impl MoqListener {
         // Resolves when the thread's closure ends, however it ends.
         let _ = ended.await;
     }
-}
 
-/// Start the listener thread and wait until its endpoint is bound; the
-/// receiver resolves once the thread has ended. The thread is joined and
-/// stopped with the engine's other listeners: its shutdown is registered
-/// before it starts, so a shutdown during the start still reaches it. An
-/// error leaves no thread running.
-async fn start(
-    config: &MoqIngestConfig,
-    server: Arc<MoqIngestServer>,
-) -> Result<(SocketAddr, tokio::sync::oneshot::Receiver<()>), String> {
-    let engine = server.engine().clone();
-    let tokio = tokio::runtime::Handle::current();
-    let shutdown = CancellationToken::new();
-    engine.register_listener_shutdown({
-        let shutdown = shutdown.clone();
-        move || shutdown.cancel()
-    });
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-    let (ended_tx, ended_rx) = tokio::sync::oneshot::channel::<()>();
-    let thread = std::thread::Builder::new()
-        .name("moq-ingest".to_string())
-        .spawn({
-            let config = config.clone();
-            move || {
-                let _ended = ended_tx;
-                run_thread(&config, server, tokio, shutdown, ready_tx);
-            }
-        })
-        .map_err(|error| format!("spawn the MoQ listener thread: {error}"))?;
-    let local = ready_rx
-        .await
-        .unwrap_or_else(|_| Err("the MoQ listener thread exited before binding".to_string()))?;
-    engine.register_os_thread(thread);
-    Ok((local, ended_rx))
+    /// Start the listener thread and wait until its endpoint is bound; the
+    /// receiver resolves once the thread has ended. The thread is joined and
+    /// stopped with the engine's other listeners: its shutdown is registered
+    /// before it starts, so a shutdown during the start still reaches it. An
+    /// error leaves no thread running.
+    async fn start(&self) -> Result<(SocketAddr, tokio::sync::oneshot::Receiver<()>), String> {
+        let config = &self.config;
+        let server = self.server.clone();
+        let engine = server.engine().clone();
+        let tokio = tokio::runtime::Handle::current();
+        let shutdown = self.shutdown.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ended_tx, ended_rx) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("moq-ingest".to_string())
+            .spawn({
+                let config = config.clone();
+                move || {
+                    let _ended = ended_tx;
+                    run_thread(&config, server, tokio, shutdown, ready_tx);
+                }
+            })
+            .map_err(|error| format!("spawn the MoQ listener thread: {error}"))?;
+        let local = ready_rx
+            .await
+            .unwrap_or_else(|_| Err("the MoQ listener thread exited before binding".to_string()))?;
+        engine.register_os_thread(thread);
+        Ok((local, ended_rx))
+    }
 }
 
 fn run_thread(

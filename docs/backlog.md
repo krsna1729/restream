@@ -16,7 +16,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
-- [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
@@ -134,13 +133,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: per candidate, a layering-audit read of every call site; the egress
   unit tests, proptests and Kani proofs unchanged and passing; the
   `egress_visit` benchmark before and after for any change on the visit path.
-
-### Q-125 [correctness] [opus] The isolation audit covers HLS push and MoQ
-- Goal: close the audit's open scope. HLS push ingest and MoQ ingest/origin
-  get shared-resource rows with per-entity bounds, total bounds and proofs,
-  as RTMP, SRT and egress already have. Q-120 (MoQ listener supervision)
-  is part of this.
-- Gates: the rows exist and each one names a test that passes.
 
 ### Q-126 [correctness] [opus] Live fault gates prove siblings are unaffected
 - Goal: contract modes that inject one fault into one entity and assert on
