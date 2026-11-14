@@ -16,7 +16,9 @@
 //! from its first packet to its close, so it cannot take every slot of
 //! either cap. Shutdown closes the endpoint, gives the
 //! sessions a moment to close cleanly and ends every remaining one with its
-//! input released.
+//! input released. The bootstrap supervises the listener as it does RTMP and
+//! SRT: [`MoqListener::run`] returns once the thread has ended, and a listener
+//! that ends without a shutdown is started again after a backoff.
 
 use std::cell::Cell;
 use std::net::SocketAddr;
@@ -75,72 +77,109 @@ impl Drop for CapSlot {
     }
 }
 
-/// Start the listener the setting asks for, logging the outcome. Nothing
-/// runs when it is off; an invalid setting or a failed start is logged and
-/// leaves MoQ off without affecting the other listeners.
-pub async fn launch(
-    setting: &MoqIngestSetting,
-    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
-    engine: Arc<MediaEngine>,
-    security: Arc<IngestSecurityService>,
-) {
-    let config = match setting {
-        MoqIngestSetting::Off => return,
-        MoqIngestSetting::Invalid(reason) => {
-            error!(
-                event_class = "lifecycle",
-                event_type = "restream.moq.ingest.config_invalid",
-                reason = %reason,
-                "MoQ listener not started: invalid configuration",
-            );
-            return;
-        }
-        MoqIngestSetting::On(config) => config,
-    };
-    let server = Arc::new(MoqIngestServer::new(pipeline_access, engine, security));
-    match start(config, server).await {
-        Ok(local) => info!(
+/// The MoQ ingest listener the bootstrap supervises. [`Self::run`] serves
+/// until the listener thread ends, so its caller restarts it after a fault:
+/// a thread-entry panic, an accept loop that ended without a shutdown, or a
+/// failed start.
+pub struct MoqListener {
+    config: MoqIngestConfig,
+    server: Arc<MoqIngestServer>,
+}
+
+impl MoqListener {
+    /// The listener the setting asks for: `None` when MoQ is off, or when
+    /// the setting is invalid, which is logged and leaves the other
+    /// listeners alone.
+    pub fn new(
+        setting: &MoqIngestSetting,
+        pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
+        engine: Arc<MediaEngine>,
+        security: Arc<IngestSecurityService>,
+    ) -> Option<Arc<Self>> {
+        let config = match setting {
+            MoqIngestSetting::Off => return None,
+            MoqIngestSetting::Invalid(reason) => {
+                error!(
+                    event_class = "lifecycle",
+                    event_type = "restream.moq.ingest.config_invalid",
+                    reason = %reason,
+                    "MoQ listener not started: invalid configuration",
+                );
+                return None;
+            }
+            MoqIngestSetting::On(config) => config.clone(),
+        };
+        Some(Arc::new(Self {
+            config,
+            server: Arc::new(MoqIngestServer::new(pipeline_access, engine, security)),
+        }))
+    }
+
+    /// Start the listener thread, send its bound address on `started`, then
+    /// wait until the thread ends. A failed start is logged and returns at
+    /// once, dropping `started`.
+    pub async fn run(self: Arc<Self>, started: Option<tokio::sync::oneshot::Sender<SocketAddr>>) {
+        let (local, ended) = match start(&self.config, self.server.clone()).await {
+            Ok(running) => running,
+            Err(reason) => {
+                error!(
+                    event_class = "lifecycle",
+                    event_type = "restream.moq.ingest.start_failed",
+                    addr = %self.config.listen,
+                    reason = %reason,
+                    "MoQ listener failed to start",
+                );
+                return;
+            }
+        };
+        info!(
             event_class = "lifecycle",
             event_type = "restream.moq.ingest.ready",
             addr = %local,
-            max_connections = config.max_connections,
+            max_connections = self.config.max_connections,
             "MoQ listener ready (QUIC and WebTransport)",
-        ),
-        Err(reason) => error!(
-            event_class = "lifecycle",
-            event_type = "restream.moq.ingest.start_failed",
-            addr = %config.listen,
-            reason = %reason,
-            "MoQ listener failed to start",
-        ),
+        );
+        if let Some(started) = started {
+            let _ = started.send(local);
+        }
+        // Resolves when the thread's closure ends, however it ends.
+        let _ = ended.await;
     }
 }
 
-/// Start the listener thread and wait until its endpoint is bound. The
-/// thread is joined and stopped with the engine's other listeners. An
-/// error leaves nothing running.
+/// Start the listener thread and wait until its endpoint is bound; the
+/// receiver resolves once the thread has ended. The thread is joined and
+/// stopped with the engine's other listeners: its shutdown is registered
+/// before it starts, so a shutdown during the start still reaches it. An
+/// error leaves no thread running.
 async fn start(
     config: &MoqIngestConfig,
     server: Arc<MoqIngestServer>,
-) -> Result<SocketAddr, String> {
+) -> Result<(SocketAddr, tokio::sync::oneshot::Receiver<()>), String> {
     let engine = server.engine().clone();
     let tokio = tokio::runtime::Handle::current();
     let shutdown = CancellationToken::new();
+    engine.register_listener_shutdown({
+        let shutdown = shutdown.clone();
+        move || shutdown.cancel()
+    });
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let (ended_tx, ended_rx) = tokio::sync::oneshot::channel::<()>();
     let thread = std::thread::Builder::new()
         .name("moq-ingest".to_string())
         .spawn({
             let config = config.clone();
-            let shutdown = shutdown.clone();
-            move || run_thread(&config, server, tokio, shutdown, ready_tx)
+            move || {
+                let _ended = ended_tx;
+                run_thread(&config, server, tokio, shutdown, ready_tx);
+            }
         })
         .map_err(|error| format!("spawn the MoQ listener thread: {error}"))?;
     let local = ready_rx
         .await
         .unwrap_or_else(|_| Err("the MoQ listener thread exited before binding".to_string()))?;
     engine.register_os_thread(thread);
-    engine.register_listener_shutdown(move || shutdown.cancel());
-    Ok(local)
+    Ok((local, ended_rx))
 }
 
 fn run_thread(
@@ -159,9 +198,9 @@ fn run_thread(
     };
     // Thread-entry boundary: a panic outside a connection task (the accept
     // loop, origin code it runs, compio's driver-error panic) is counted and
-    // reported instead of ending the thread unseen. compio's `block_on`
-    // clears its executor before re-raising, so no task is polled during
-    // this unwind.
+    // reported, and ends the thread, so its supervisor restarts the
+    // listener. compio's `block_on` clears its executor before re-raising,
+    // so no task is polled during this unwind.
     let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         serve(config, server, tokio, shutdown, ready, runtime);
     }));
@@ -171,7 +210,7 @@ fn run_thread(
             event_class = "lifecycle",
             event_type = "restream.moq.ingest.faulted",
             panic,
-            "MoQ listener panicked; MoQ ingest is stopped",
+            "MoQ listener panicked; its supervisor restarts it",
         );
     }
 }

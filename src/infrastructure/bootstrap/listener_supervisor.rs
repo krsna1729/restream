@@ -1,11 +1,12 @@
 //! Ingest listeners are restarted, not fatal.
 //!
-//! A listener task (RTMP or SRT) that ends without a shutdown request is
+//! A listener task (RTMP, SRT or MoQ) that ends without a shutdown request is
 //! respawned after a backoff instead of shutting the process down: one
 //! failed listener must not stop egress, the API, or the other protocol.
 //! Per-entity panics are contained inside the listener (`panic_boundary`);
 //! this layer covers whole-listener failures (accept errors, an Owner
-//! fault) so they are reported and recovered, not escalated.
+//! fault, a MoQ listener thread that panicked or whose start failed) so they
+//! are reported and recovered, not escalated.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

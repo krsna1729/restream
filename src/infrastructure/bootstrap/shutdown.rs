@@ -62,6 +62,7 @@ pub(super) async fn cleanup(
         http: http_handle,
         rtmp: rtmp_handle,
         srt: srt_handle,
+        moq: moq_handle,
     } = listeners;
     info!(
         event_class = "lifecycle",
@@ -106,6 +107,13 @@ pub(super) async fn cleanup(
     let _ = rtmp_handle.await;
     if !srt_handle.is_finished() {
         let _ = srt_handle.await;
+    }
+    // The MoQ listener's run only waits for its thread, joined above.
+    if let Some(moq_handle) = moq_handle {
+        if !moq_handle.is_finished() {
+            moq_handle.abort();
+        }
+        let _ = moq_handle.await;
     }
 
     // The listener threads (RTMP, SRT, MoQ) are joined and their tasks have

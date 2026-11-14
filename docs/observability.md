@@ -121,6 +121,7 @@ view is serialized straight from its typed form.
 | `hostSettings` | Sampled host tuning rows (cached 15 s) |
 | `rtmpListener` | `acceptErrors`, `fdExhaustionErrors`, `restarts`, `ingressOwners` |
 | `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
+| `moqListener` | `restarts`: the MoQ ingest listener restarted after it ended without a shutdown (0 while MoQ ingest is off) |
 | `egressFabricShards` | Per-shard state, progress age, command depth, resyncs |
 | `containedPanics` | Panics contained at a per-entity boundary since start |
 | `nameResolver` | `lookups`, `timeouts`, `overflows`, `threads`, `hungThreads`, `capReached` of the one process name resolver; a rising `overflows` means more distinct names are waiting than its queue holds; a high `hungThreads` means name servers are black-holing lookups (each is replaced once it runs past the 500 ms slow threshold); a rising `capReached` means 128 threads are hung and other names wait until their deadline |

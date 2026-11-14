@@ -65,7 +65,7 @@ async fn nothing_runs_when_moq_is_off_or_invalid() {
         MoqIngestSetting::Off,
         MoqIngestSetting::Invalid("RESTREAM_MOQ_TLS_KEY is missing".to_string()),
     ] {
-        launch(&setting, Arc::new(OneKey), engine.clone(), security()).await;
+        assert!(MoqListener::new(&setting, Arc::new(OneKey), engine.clone(), security()).is_none());
     }
     assert!(engine.drain_os_thread_handles().is_empty());
 }
@@ -226,7 +226,7 @@ fn server(engine: &Arc<MediaEngine>) -> Arc<MoqIngestServer> {
 async fn listen(max_connections: usize, name: &str) -> (Arc<MediaEngine>, SocketAddr) {
     let certs = Certs::new(name);
     let engine = Arc::new(MediaEngine::new());
-    let addr = start(&certs.config(max_connections), server(&engine))
+    let (addr, _ended) = start(&certs.config(max_connections), server(&engine))
         .await
         .unwrap();
     (engine, addr)
@@ -242,7 +242,7 @@ async fn one_client_cannot_take_every_moq_connection_slot() {
         ..certs.config(4)
     };
     let engine = Arc::new(MediaEngine::new());
-    let addr = start(&config, server(&engine)).await.unwrap();
+    let (addr, _ended) = start(&config, server(&engine)).await.unwrap();
     tokio::task::spawn_blocking(move || {
         run(async move {
             let tls = || loopback_client_tls(transport::MOQ_ALPNS);
@@ -357,12 +357,40 @@ async fn an_admitted_viewer_leaves_the_connection_cap_to_publishers() {
     engine.shutdown_listeners();
 }
 
-/// A panic in the accept loop, outside every connection task, is caught at
-/// the thread entry: counted, and the thread ends without a panic escaping
-/// its join handle.
+/// Wait until a publisher on key `moq-key` feeds the input.
+async fn wait_for_media(engine: &MediaEngine, what: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while input_bytes(engine)
+        .await
+        .is_none_or(|(_, bytes)| bytes == 0)
+    {
+        assert!(tokio::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Q-120: a faulted listener is restarted. The accept loop panics on its
+/// first connection (`INJECTED_PANIC_MAX_CONNECTIONS`), outside every
+/// connection task: the thread-entry boundary counts it, the thread ends and
+/// `MoqListener::run` returns, which is what `SupervisedListener` waits on.
+/// Running the listener again on the same port, as the supervisor does,
+/// serves a publisher, and at shutdown its thread joins and its run returns.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_accept_loop_panic_is_contained_at_the_thread_entry() {
-    let (engine, addr) = listen(INJECTED_PANIC_MAX_CONNECTIONS, "panic").await;
+async fn a_faulted_listener_returns_and_its_restart_on_the_same_port_serves() {
+    let certs = Certs::new("restart");
+    let engine = Arc::new(MediaEngine::new());
+    let faulted = Arc::new(MoqListener {
+        config: certs.config(INJECTED_PANIC_MAX_CONNECTIONS),
+        server: server(&engine),
+    });
+    let (started, addr) = tokio::sync::oneshot::channel();
+    let faulted = tokio::spawn(faulted.run(Some(started)));
+    let addr = addr.await.expect("the listener starts");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !faulted.is_finished(),
+        "a healthy listener's run keeps waiting on its thread"
+    );
     let before = crate::panic_boundary::contained_panics();
     tokio::task::spawn_blocking(move || {
         run(async move {
@@ -379,25 +407,61 @@ async fn an_accept_loop_panic_is_contained_at_the_thread_entry() {
     })
     .await
     .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), faulted)
+        .await
+        .expect("a faulted listener's run returns, so its supervisor restarts it")
+        .expect("no panic escapes the listener thread");
+    assert!(
+        crate::panic_boundary::contained_panics() > before,
+        "the accept-loop panic is counted at the thread entry"
+    );
 
+    // What `SupervisedListener` does: run the listener again, on the port
+    // the faulted one held (without the injected cap).
+    let restarted = Arc::new(MoqListener {
+        config: MoqIngestConfig {
+            listen: addr,
+            ..certs.config(4)
+        },
+        server: server(&engine),
+    });
+    let (started, restarted_addr) = tokio::sync::oneshot::channel();
+    let restarted = tokio::spawn(restarted.run(Some(started)));
+    assert_eq!(restarted_addr.await.expect("the restart binds"), addr);
+    let done = Arc::new(AtomicBool::new(false));
+    let publisher = tokio::task::spawn_blocking({
+        let done = done.clone();
+        move || publish_until(addr, done)
+    });
+    wait_for_media(
+        &engine,
+        "a publisher on the restarted listener never fed the input",
+    )
+    .await;
+    done.store(true, Ordering::Release);
+    publisher.await.unwrap();
+
+    engine.shutdown_listeners();
     let threads = engine.drain_os_thread_handles();
-    assert_eq!(threads.len(), 1, "the listener registered its thread");
+    assert!(
+        !threads.is_empty(),
+        "the restarted listener registered its thread"
+    );
     tokio::time::timeout(
         Duration::from_secs(5),
         tokio::task::spawn_blocking(move || {
             threads
                 .into_iter()
-                .for_each(|thread| thread.join().expect("no panic escapes the thread"))
+                .for_each(|thread| thread.join().expect("no panic escapes a listener thread"))
         }),
     )
     .await
-    .expect("the faulted listener thread ends")
+    .expect("every listener thread joins at shutdown")
     .unwrap();
-    assert!(
-        crate::panic_boundary::contained_panics() > before,
-        "the listener panic is counted"
-    );
-    engine.shutdown_listeners();
+    tokio::time::timeout(Duration::from_secs(1), restarted)
+        .await
+        .expect("the restarted listener's run returns once its thread joined")
+        .unwrap();
 }
 
 /// A panic while serving one connection (injected in a publisher session

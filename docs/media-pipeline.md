@@ -977,7 +977,11 @@ runtime; the lower-crate dependency does not imply a task or thread handoff.
 
 An invalid setting logs `restream.moq.ingest.config_invalid` and the listener
 stays off. An unreadable PEM or a bind error logs
-`restream.moq.ingest.start_failed`. `moqt://` egress does not need the
+`restream.moq.ingest.start_failed`; the listener supervisor then retries the
+start, and restarts a listener whose thread panicked
+(`restream.moq.ingest.faulted`) or whose accept loop ended without a shutdown,
+after 1 s doubling to 30 s, counted in `moqListener.restarts` on
+`/api/v1/engine/health`. `moqt://` egress does not need the
 listener.
 
 ### MoQ ingest

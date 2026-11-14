@@ -1,5 +1,5 @@
 //! Launches the dashboard and ingest listeners, and supervises them in a
-//! task of their own: a faulted RTMP or SRT listener restarts after its
+//! task of their own: a faulted RTMP, SRT or MoQ listener restarts after its
 //! backoff, and a dashboard listener that exits ends the process, whatever
 //! the reconciler or housekeeping is doing.
 
@@ -41,6 +41,8 @@ pub(super) struct Listeners {
     http: Option<JoinHandle<()>>,
     rtmp: SupervisedListener,
     srt: SupervisedListener,
+    /// `None` when MoQ ingest is off or its setting is invalid.
+    moq: Option<SupervisedListener>,
 }
 
 /// The listener handles shutdown cleanup ends.
@@ -49,6 +51,8 @@ pub(super) struct ListenerHandles {
     pub http: Option<JoinHandle<()>>,
     pub rtmp: JoinHandle<()>,
     pub srt: JoinHandle<()>,
+    /// `None` when MoQ ingest is off.
+    pub moq: Option<JoinHandle<()>>,
 }
 
 /// The running supervision task and the listeners it owns.
@@ -146,13 +150,27 @@ impl RuntimeTasks {
             rtmp_restarts,
         );
 
-        restream_engine::moq::ingest::listener::launch(
+        let moq = match restream_engine::moq::ingest::listener::MoqListener::new(
             &config.engine.moq_ingest,
             pipeline_access.clone(),
             engine.clone(),
             security.clone(),
-        )
-        .await;
+        ) {
+            Some(moq) => {
+                let moq_restarts = Arc::clone(&engine.runtime.moq_listener_restarts);
+                let spawn_moq = move |started| tokio::spawn(Arc::clone(&moq).run(started));
+                let (moq_started_tx, moq_started_rx) = tokio::sync::oneshot::channel();
+                let moq_task = spawn_moq(Some(moq_started_tx));
+                let _ = moq_started_rx.await;
+                Some(SupervisedListener::new(
+                    "moq",
+                    moq_task,
+                    Box::new(move || spawn_moq(None)),
+                    moq_restarts,
+                ))
+            }
+            None => None,
+        };
 
         let srt_restarts = Arc::clone(&engine.runtime.listener_stats.restarts);
         let srt_server = Arc::new(restream_engine::srt::SrtServer::new(
@@ -167,7 +185,7 @@ impl RuntimeTasks {
 
         Ok(Self {
             http_stop,
-            listeners: Listeners::new(http, rtmp, srt),
+            listeners: Listeners::new(http, rtmp, srt, moq),
         })
     }
 }
@@ -177,11 +195,13 @@ impl Listeners {
         http: JoinHandle<()>,
         rtmp: SupervisedListener,
         srt: SupervisedListener,
+        moq: Option<SupervisedListener>,
     ) -> Self {
         Self {
             http: Some(http),
             rtmp,
             srt,
+            moq,
         }
     }
 
@@ -209,6 +229,7 @@ impl ListenerSupervision {
             http: listeners.http.take(),
             rtmp: listeners.rtmp.take_handle(),
             srt: listeners.srt.take_handle(),
+            moq: listeners.moq.as_mut().map(SupervisedListener::take_handle),
         }
     }
 }
@@ -225,15 +246,27 @@ enum ListenerEvent {
 )]
 async fn supervise(listeners: Arc<tokio::sync::Mutex<Listeners>>, shutdown: CancellationToken) {
     let mut listeners = listeners.lock().await;
-    let Listeners { http, rtmp, srt } = &mut *listeners;
+    let Listeners {
+        http,
+        rtmp,
+        srt,
+        moq,
+    } = &mut *listeners;
     loop {
         let now = Instant::now();
         rtmp.restart_if_due(now);
         srt.restart_if_due(now);
-        let restart_due = [rtmp.restart_due(), srt.restart_due()]
-            .into_iter()
-            .flatten()
-            .min();
+        if let Some(moq) = moq.as_mut() {
+            moq.restart_if_due(now);
+        }
+        let restart_due = [
+            rtmp.restart_due(),
+            srt.restart_due(),
+            moq.as_ref().and_then(SupervisedListener::restart_due),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let event = tokio::select! {
             () = shutdown.cancelled() => ListenerEvent::Shutdown,
             result = async {
@@ -244,6 +277,12 @@ async fn supervise(listeners: Arc<tokio::sync::Mutex<Listeners>>, shutdown: Canc
             } => ListenerEvent::HttpExited(result),
             () = rtmp.exited() => ListenerEvent::Changed,
             () = srt.exited() => ListenerEvent::Changed,
+            () = async {
+                match moq.as_mut() {
+                    Some(moq) => moq.exited().await,
+                    None => std::future::pending().await,
+                }
+            } => ListenerEvent::Changed,
             () = async {
                 match restart_due {
                     Some(at) => tokio::time::sleep_until(at).await,
