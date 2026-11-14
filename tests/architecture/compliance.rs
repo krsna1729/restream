@@ -444,7 +444,7 @@ fn recording_metadata_persistence_is_infrastructure_owned() {
     }
 
     let infrastructure = include_str!("../../src/infrastructure/recording_metadata.rs");
-    assert!(infrastructure.contains("SqlitePool"));
+    assert!(infrastructure.contains("DeadlineDb"));
     assert!(infrastructure.contains("persist_recording_metadata_event"));
 }
 

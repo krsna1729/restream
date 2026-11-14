@@ -401,15 +401,17 @@ impl AttemptJob {
             if let Err(err) = create.await {
                 warn!(job_id = %job_id, error = %err, "failed to create the attempt's job row");
             }
-            // An attempt dropped without an end (process exit) leaves the
-            // row running, for startup's `reset_running_jobs`.
-            if let Ok((status, ended_at)) = finished.await {
-                let finish = db.write(move |pool| async move {
-                    crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await
-                });
-                if let Err(err) = finish.await {
-                    warn!(error = %err, "failed to finish the attempt's job row");
-                }
+            // An attempt dropped without an end (its start task panicked)
+            // failed; at process exit this task ends with it and startup's
+            // `reset_running_jobs` closes the row.
+            let (status, ended_at) = finished
+                .await
+                .unwrap_or_else(|_| (JobStatus::Failed, chrono::Utc::now().to_rfc3339()));
+            let finish = db.write(move |pool| async move {
+                crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await
+            });
+            if let Err(err) = finish.await {
+                warn!(error = %err, "failed to finish the attempt's job row");
             }
         });
         Self { finish }

@@ -41,12 +41,23 @@ pub use metadata::{
 
 const MIN_DURATION_SECS: u64 = 5;
 
-/// How long the MP4 remux may run before FFmpeg is killed and the `.ts`
-/// kept. It copies streams, so it is disk-bound: the `.ts` is read once and
-/// the MP4 written twice (`+faststart` moves the index to the front). At a
-/// sustained 50 MB/s, 4 h covers about 240 GB of `.ts`, a day of 20 Mbit/s;
-/// the bound only stops a wedged FFmpeg from holding the remux forever.
-const REMUX_WITHIN: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
+/// The MP4 remux's floor: it is killed past [`remux_limit`] and the `.ts`
+/// kept. The bound only stops a wedged FFmpeg from holding the remux
+/// forever, never a long recording's honest copy.
+const REMUX_MIN_WITHIN: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
+/// The slowest copy rate the remux limit allows for: it copies streams, so
+/// it is disk-bound (the `.ts` is read once and the MP4 written twice for
+/// `+faststart`), well above 5 MB/s on any disk that can record.
+const REMUX_MIN_BYTES_PER_SEC: u64 = 5_000_000;
+
+/// How long the remux of a `.ts` of `ts_len` bytes may run: at least
+/// [`REMUX_MIN_WITHIN`], and long enough to copy it at
+/// [`REMUX_MIN_BYTES_PER_SEC`].
+fn remux_limit(ts_len: u64) -> std::time::Duration {
+    REMUX_MIN_WITHIN.max(std::time::Duration::from_secs(
+        ts_len / REMUX_MIN_BYTES_PER_SEC,
+    ))
+}
 
 pub struct RecordingStart {
     pub recording_id: String,
@@ -195,7 +206,10 @@ async fn remux_recording_to_mp4(
         "starting recording mp4 remux"
     );
 
-    match crate::ffmpeg_binary::run_tool(&ffmpeg_path, &args, REMUX_WITHIN).await {
+    let ts_len = tokio::fs::metadata(&ts_path)
+        .await
+        .map_or(0, |meta| meta.len());
+    match crate::ffmpeg_binary::run_tool(&ffmpeg_path, &args, remux_limit(ts_len)).await {
         Ok(_) => {
             if let Err(error) = tokio::fs::rename(&temp_path, &mp4_path).await {
                 let _ = tokio::fs::remove_file(&temp_path).await;

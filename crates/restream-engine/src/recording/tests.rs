@@ -795,3 +795,17 @@ async fn drain_ready_bursts_drains_full_backlog_when_not_cancelled() {
 
     assert_eq!(drained, backlog);
 }
+
+/// A recording too long to copy in 4 h at the floor rate gets the time its
+/// size needs; a short one keeps the 4 h floor.
+#[test]
+fn the_remux_limit_grows_with_the_recording() {
+    let floor = std::time::Duration::from_secs(4 * 60 * 60);
+    assert_eq!(remux_limit(0), floor);
+    assert_eq!(remux_limit(1_000_000_000), floor);
+    // 200 GB at 5 MB/s: 40 000 s, over 11 h.
+    assert_eq!(
+        remux_limit(200_000_000_000),
+        std::time::Duration::from_secs(40_000)
+    );
+}

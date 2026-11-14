@@ -33,6 +33,13 @@ pub const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 /// pipeline in neither state.
 pub const ACTION_DEADLINE: Duration = Duration::from_secs(30);
 
+/// How long shutdown waits for occurrences still running; one still running
+/// then is aborted and recorded `interrupted: shutdown` (not run again).
+pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
+
+/// A running occurrence's schedule, and its time when it runs an action.
+type Running = HashMap<tokio::task::Id, (String, Option<i64>)>;
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -228,7 +235,8 @@ async fn record_run(
 /// another pipeline's occurrence past its grace. A schedule with a task
 /// still running is left alone: its rows are read only after its finished
 /// tasks are collected, so a tick never sees an occurrence as due that a
-/// finished task already recorded, and never starts one twice.
+/// finished task already recorded, and never starts one twice. At shutdown
+/// running occurrences get [`SHUTDOWN_DRAIN`] to finish.
 pub async fn run_scheduler(
     state: Arc<AppState>,
     db: DeadlineDb,
@@ -238,12 +246,13 @@ pub async fn run_scheduler(
 ) {
     let mut ticks = tokio::time::interval(tick);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // Dropped at shutdown, which aborts the occurrences still running.
     let mut occurrences = tokio::task::JoinSet::new();
-    let mut running: HashMap<tokio::task::Id, String> = HashMap::new();
+    let mut running = Running::new();
     loop {
         tokio::select! {
-            () = shutdown.cancelled() => return,
+            () = shutdown.cancelled() => {
+                return interrupt_at_shutdown(occurrences, running, &db).await;
+            }
             _ = ticks.tick() => {}
         }
         while let Some(joined) = occurrences.try_join_next_with_id() {
@@ -251,7 +260,9 @@ pub async fn run_scheduler(
                 Ok((task, ())) => task,
                 Err(join_error) => {
                     error!(
-                        schedule = running.get(&join_error.id()).map_or("", String::as_str),
+                        schedule = running
+                            .get(&join_error.id())
+                            .map_or("", |(id, _)| id.as_str()),
                         event_class = "lifecycle",
                         event_type = "scheduler.occurrence_panicked",
                         "a scheduled occurrence panicked"
@@ -266,11 +277,11 @@ pub async fn run_scheduler(
             continue;
         };
         for schedule in all {
-            if running.values().any(|id| *id == schedule.id) {
+            if running.values().any(|(id, _)| *id == schedule.id) {
                 continue;
             }
             let id = schedule.id.clone();
-            let task = match schedules::due(
+            let (task, occurrence) = match schedules::due(
                 schedule.at_ms,
                 schedule.repeat,
                 schedule.enabled,
@@ -278,18 +289,52 @@ pub async fn run_scheduler(
                 now,
             ) {
                 Due::Nothing => continue,
-                Due::Run(occurrence) => occurrences.spawn(run_occurrence(
-                    state.clone(),
-                    db.clone(),
-                    schedule,
-                    occurrence,
-                    action_deadline,
-                )),
-                Due::Skip(occurrence) => {
-                    occurrences.spawn(record_skip(db.clone(), schedule.id, occurrence))
-                }
+                Due::Run(occurrence) => (
+                    occurrences.spawn(run_occurrence(
+                        state.clone(),
+                        db.clone(),
+                        schedule,
+                        occurrence,
+                        action_deadline,
+                    )),
+                    Some(occurrence),
+                ),
+                Due::Skip(occurrence) => (
+                    occurrences.spawn(record_skip(db.clone(), schedule.id, occurrence)),
+                    None,
+                ),
             };
-            running.insert(task.id(), id);
+            running.insert(task.id(), (id, occurrence));
+        }
+    }
+}
+
+/// Gives the running occurrences [`SHUTDOWN_DRAIN`] to finish, then aborts
+/// the rest and records each one that was running an action as
+/// `interrupted: shutdown`; its time counts as run, so it is not started
+/// again on the next start.
+async fn interrupt_at_shutdown(
+    mut occurrences: tokio::task::JoinSet<()>,
+    mut running: Running,
+    db: &DeadlineDb,
+) {
+    let _ = tokio::time::timeout(SHUTDOWN_DRAIN, async {
+        while let Some(joined) = occurrences.join_next_with_id().await {
+            let task = joined.map_or_else(|join_error| join_error.id(), |(task, ())| task);
+            running.remove(&task);
+        }
+    })
+    .await;
+    occurrences.abort_all();
+    for (id, occurrence) in running.into_values() {
+        let Some(occurrence) = occurrence else {
+            continue;
+        };
+        warn!(schedule = %id, "scheduled action interrupted by shutdown");
+        if let Err(error) =
+            record_run(db, &id, occurrence, "interrupted: shutdown".to_string()).await
+        {
+            warn!(schedule = %id, err = %error, "failed to record an interrupted schedule run");
         }
     }
 }

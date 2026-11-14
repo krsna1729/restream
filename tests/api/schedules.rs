@@ -347,7 +347,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     );
 
     let stop = tokio_util::sync::CancellationToken::new();
-    let scheduler = tokio::spawn(api::schedules::run_scheduler(
+    let mut scheduler = tokio::spawn(api::schedules::run_scheduler(
         scheduler_state_with(&pool, services),
         db::DeadlineDb::new(lifecycle, Duration::from_millis(200)),
         Duration::from_secs(1),
@@ -379,10 +379,15 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     })
     .await;
     stop.cancel();
-    // A's action never ends: abort rather than wait for a scheduler that
-    // might be stuck in it.
+    // A's action never ends: the scheduler records it interrupted once the
+    // drain runs out (bounded here in case it is stuck in it).
+    let _ = tokio::time::timeout(
+        api::schedules::SHUTDOWN_DRAIN + Duration::from_secs(5),
+        &mut scheduler,
+    )
+    .await;
     scheduler.abort();
-    let _ = scheduler.await;
+    let interrupted = last_result(&pool, "sch_a").await;
     let _ = std::fs::remove_dir_all(dir);
     assert_eq!(
         b.ok().as_deref(),
@@ -393,6 +398,11 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         a.ok().as_deref(),
         Some("running: not finished after 1 s"),
         "A's row does not say its action is still running"
+    );
+    assert_eq!(
+        interrupted.as_deref(),
+        Some("interrupted: shutdown"),
+        "A's action, aborted at shutdown, is recorded as interrupted"
     );
 }
 
