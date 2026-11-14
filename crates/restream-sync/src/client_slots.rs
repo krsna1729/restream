@@ -1,6 +1,7 @@
-//! Per-client RTMP connection slots, shared by every ingress owner.
+//! Per-client connection slots for a listener (RTMP, shared by every ingress
+//! owner; MoQ).
 //!
-//! The listener-wide connection cap is a resource every client shares; this
+//! A listener-wide connection cap is a resource every client shares; this
 //! bounds what one client can take of it. A client is an IPv4 address, or an
 //! IPv6 /64 (one host is routinely given a whole /64, so a per-address IPv6
 //! cap would not bound anything). A slot is held for the connection's whole
@@ -46,7 +47,7 @@ impl ClientSlots {
     /// already holds its share.
     pub fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<ClientSlot> {
         let key = ClientKey::of(ip);
-        let mut held = restream_sync::lock(&self.held);
+        let mut held = crate::lock(&self.held);
         let count = held.entry(key).or_insert(0);
         if *count >= self.per_client {
             return None;
@@ -60,7 +61,7 @@ impl ClientSlots {
 
     #[cfg(test)]
     fn held_by(&self, ip: IpAddr) -> usize {
-        let held = restream_sync::lock(&self.held);
+        let held = crate::lock(&self.held);
         held.get(&ClientKey::of(ip)).copied().unwrap_or(0)
     }
 }
@@ -74,7 +75,7 @@ pub struct ClientSlot {
 
 impl Drop for ClientSlot {
     fn drop(&mut self) {
-        let mut held = restream_sync::lock(&self.slots.held);
+        let mut held = crate::lock(&self.slots.held);
         if let Some(count) = held.get_mut(&self.key) {
             *count = count.saturating_sub(1);
             if *count == 0 {

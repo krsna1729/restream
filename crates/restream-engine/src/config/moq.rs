@@ -14,6 +14,7 @@ pub const MOQ_TLS_CERT_ENV: &str = "RESTREAM_MOQ_TLS_CERT";
 pub const MOQ_TLS_KEY_ENV: &str = "RESTREAM_MOQ_TLS_KEY";
 pub const MOQ_MAX_CONNECTIONS_ENV: &str = "RESTREAM_MOQ_MAX_CONNECTIONS";
 pub const MOQ_ORIGIN_MAX_VIEWERS_ENV: &str = "RESTREAM_MOQ_ORIGIN_MAX_VIEWERS";
+pub const MOQ_MAX_CONNECTIONS_PER_IP_ENV: &str = "RESTREAM_MOQ_MAX_CONNECTIONS_PER_IP";
 
 /// Concurrent MoQ handshakes and publishers when
 /// `RESTREAM_MOQ_MAX_CONNECTIONS` is unset or unparseable.
@@ -23,6 +24,10 @@ const MOQ_MAX_CONNECTIONS_CEILING: usize = 4096;
 /// `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` is unset or unparseable.
 pub const MOQ_DEFAULT_ORIGIN_MAX_VIEWERS: usize = 64;
 const MOQ_ORIGIN_MAX_VIEWERS_CEILING: usize = 4096;
+/// Connections (handshakes, publishers and viewers) one client may hold when
+/// `RESTREAM_MOQ_MAX_CONNECTIONS_PER_IP` is unset or unparseable: a quarter
+/// of the default connection cap, so one client cannot take every slot.
+pub const MOQ_DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 16;
 
 /// A configured MoQ ingest listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +44,11 @@ pub struct MoqIngestConfig {
     /// Origin subscribers (direct viewers over native QUIC or WebTransport)
     /// served at once across every pipeline; further viewers are refused.
     pub origin_max_viewers: usize,
+    /// Connections one client (an IPv4 address or an IPv6 /64) may hold at
+    /// once, from its first packet to its close, whether handshaking,
+    /// publishing or viewing; further ones are refused, so one client cannot
+    /// take every `max_connections` or `origin_max_viewers` slot.
+    pub max_connections_per_ip: usize,
 }
 
 /// Whether the MoQ ingest listener runs.
@@ -60,16 +70,18 @@ impl MoqIngestSetting {
             env_var(MOQ_TLS_KEY_ENV).as_deref(),
             env_var(MOQ_MAX_CONNECTIONS_ENV).as_deref(),
             env_var(MOQ_ORIGIN_MAX_VIEWERS_ENV).as_deref(),
+            env_var(MOQ_MAX_CONNECTIONS_PER_IP_ENV).as_deref(),
         )
     }
 
-    /// The setting the five variables describe; blank counts as unset.
+    /// The setting the six variables describe; blank counts as unset.
     pub fn parse(
         listen: Option<&str>,
         tls_cert: Option<&str>,
         tls_key: Option<&str>,
         max_connections: Option<&str>,
         origin_max_viewers: Option<&str>,
+        max_connections_per_ip: Option<&str>,
     ) -> Self {
         fn present(value: Option<&str>) -> Option<&str> {
             value.map(str::trim).filter(|value| !value.is_empty())
@@ -104,12 +116,17 @@ impl MoqIngestSetting {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(MOQ_DEFAULT_ORIGIN_MAX_VIEWERS)
             .clamp(1, MOQ_ORIGIN_MAX_VIEWERS_CEILING);
+        let max_connections_per_ip = present(max_connections_per_ip)
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(MOQ_DEFAULT_MAX_CONNECTIONS_PER_IP)
+            .clamp(1, MOQ_MAX_CONNECTIONS_CEILING);
         Self::On(MoqIngestConfig {
             listen,
             tls_cert_path: tls_cert.to_string(),
             tls_key_path: tls_key.to_string(),
             max_connections,
             origin_max_viewers,
+            max_connections_per_ip,
         })
     }
 
@@ -135,6 +152,7 @@ impl MoqIngestSetting {
                 "tlsKey": config.tls_key_path,
                 "maxConnections": config.max_connections,
                 "originMaxViewers": config.origin_max_viewers,
+                "maxConnectionsPerIp": config.max_connections_per_ip,
             }),
             Self::Invalid(error) => serde_json::json!({ "ingest": "invalid", "error": error }),
         }
@@ -148,11 +166,18 @@ mod tests {
     #[test]
     fn an_unset_or_blank_listen_address_leaves_moq_off_whatever_else_is_set() {
         assert_eq!(
-            MoqIngestSetting::parse(None, None, None, None, None),
+            MoqIngestSetting::parse(None, None, None, None, None, None),
             MoqIngestSetting::Off
         );
         assert_eq!(
-            MoqIngestSetting::parse(Some("  "), Some("c.pem"), Some("k.pem"), Some("8"), None),
+            MoqIngestSetting::parse(
+                Some("  "),
+                Some("c.pem"),
+                Some("k.pem"),
+                Some("8"),
+                None,
+                None
+            ),
             MoqIngestSetting::Off
         );
         assert_eq!(MoqIngestSetting::Off.port(), None);
@@ -166,6 +191,7 @@ mod tests {
             Some(" k.pem "),
             None,
             None,
+            None,
         );
         assert_eq!(
             setting,
@@ -175,11 +201,18 @@ mod tests {
                 tls_key_path: "k.pem".to_string(),
                 max_connections: MOQ_DEFAULT_MAX_CONNECTIONS,
                 origin_max_viewers: MOQ_DEFAULT_ORIGIN_MAX_VIEWERS,
+                max_connections_per_ip: MOQ_DEFAULT_MAX_CONNECTIONS_PER_IP,
             })
         );
         assert_eq!(setting.port(), Some(4443));
-        let ipv6 =
-            MoqIngestSetting::parse(Some("[::1]:9443"), Some("c"), Some("k"), Some("3"), None);
+        let ipv6 = MoqIngestSetting::parse(
+            Some("[::1]:9443"),
+            Some("c"),
+            Some("k"),
+            Some("3"),
+            None,
+            None,
+        );
         assert_eq!(
             ipv6.config().map(|c| (c.listen.port(), c.max_connections)),
             Some((9443, 3))
@@ -195,20 +228,35 @@ mod tests {
                 Some("k"),
                 Some(value),
                 Some(value),
+                Some(value),
             )
             .config()
-            .map(|config| (config.max_connections, config.origin_max_viewers))
+            .map(|config| {
+                (
+                    config.max_connections,
+                    config.origin_max_viewers,
+                    config.max_connections_per_ip,
+                )
+            })
         };
-        assert_eq!(caps("0"), Some((1, 1)));
+        assert_eq!(caps("0"), Some((1, 1, 1)));
         assert_eq!(
             caps("1000000"),
-            Some((MOQ_MAX_CONNECTIONS_CEILING, MOQ_ORIGIN_MAX_VIEWERS_CEILING))
+            Some((
+                MOQ_MAX_CONNECTIONS_CEILING,
+                MOQ_ORIGIN_MAX_VIEWERS_CEILING,
+                MOQ_MAX_CONNECTIONS_CEILING
+            ))
         );
         assert_eq!(
             caps("many"),
-            Some((MOQ_DEFAULT_MAX_CONNECTIONS, MOQ_DEFAULT_ORIGIN_MAX_VIEWERS))
+            Some((
+                MOQ_DEFAULT_MAX_CONNECTIONS,
+                MOQ_DEFAULT_ORIGIN_MAX_VIEWERS,
+                MOQ_DEFAULT_MAX_CONNECTIONS_PER_IP
+            ))
         );
-        assert_eq!(caps("7"), Some((7, 7)));
+        assert_eq!(caps("7"), Some((7, 7, 7)));
     }
 
     #[test]
@@ -225,7 +273,7 @@ mod tests {
             ("0.0.0.0:4443", None, Some("k"), MOQ_TLS_CERT_ENV),
             ("0.0.0.0:4443", Some("c"), Some(""), MOQ_TLS_KEY_ENV),
         ] {
-            let setting = MoqIngestSetting::parse(Some(listen), cert, key, None, None);
+            let setting = MoqIngestSetting::parse(Some(listen), cert, key, None, None, None);
             let MoqIngestSetting::Invalid(error) = &setting else {
                 panic!("{listen} listener config should be invalid");
             };
@@ -238,14 +286,15 @@ mod tests {
     #[test]
     fn the_summary_names_the_state_without_reading_the_files() {
         assert_eq!(MoqIngestSetting::Off.summary()["ingest"], "off");
-        let on = MoqIngestSetting::parse(Some("0.0.0.0:4443"), Some("c"), Some("k"), None, None);
+        let on =
+            MoqIngestSetting::parse(Some("0.0.0.0:4443"), Some("c"), Some("k"), None, None, None);
         assert_eq!(on.summary()["listen"], "0.0.0.0:4443");
         assert_eq!(on.summary()["maxConnections"], MOQ_DEFAULT_MAX_CONNECTIONS);
         assert_eq!(
             on.summary()["originMaxViewers"],
             MOQ_DEFAULT_ORIGIN_MAX_VIEWERS
         );
-        let invalid = MoqIngestSetting::parse(Some("x"), None, None, None, None);
+        let invalid = MoqIngestSetting::parse(Some("x"), None, None, None, None, None);
         assert_eq!(invalid.summary()["ingest"], "invalid");
     }
 }

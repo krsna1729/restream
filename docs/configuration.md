@@ -163,6 +163,7 @@ MoQ ingest is off unless `RESTREAM_MOQ_INGEST_LISTEN` is set. Source:
 | `RESTREAM_MOQ_TLS_KEY` | unset | PEM file path | Private key; required when listening |
 | `RESTREAM_MOQ_MAX_CONNECTIONS` | `64` | `1..=4096` | Concurrent handshakes plus publishers. An admitted viewer leaves this count |
 | `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` | `64` | `1..=4096` | Concurrent direct viewers across all pipelines |
+| `RESTREAM_MOQ_MAX_CONNECTIONS_PER_IP` | `16` | `1..=4096` | Connections one client (an IPv4 address or an IPv6 /64) holds at once, whether handshaking, publishing or viewing; past it its next connection is refused, so one client cannot take every slot of either cap |
 | `RESTREAM_MOQ_CA_DIR` | unset (custom CA reads denied) | Operator-controlled directory | Permits MoQ output `ca=` files relative to this directory; independent of the ingest listener |
 
 An unparseable address, port `0`, or a missing certificate or key gives

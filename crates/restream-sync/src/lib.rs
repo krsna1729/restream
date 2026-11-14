@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 pub mod byte_queue;
+pub mod client_slots;
 pub mod frame_units;
 pub mod keyed_lock;
 pub mod lock;

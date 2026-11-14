@@ -67,7 +67,7 @@ pub async fn start_rtmp_server_on_with_shutdown(
     let addr = format!("0.0.0.0:{port}");
     let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
     let client_slots =
-        restream_rtmp::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
+        restream_sync::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
     let parser_budget = engine.config.rtmp_ingest_parser_budget_bytes;
     let owners = engine
         .config
@@ -241,7 +241,7 @@ impl Drop for RunningOwners<'_> {
 struct OwnerLimits {
     connections: usize,
     parser_budget_bytes: usize,
-    client_slots: Arc<restream_rtmp::client_slots::ClientSlots>,
+    client_slots: Arc<restream_sync::client_slots::ClientSlots>,
 }
 
 fn owner_share(total: usize, index: usize, owners: usize) -> usize {

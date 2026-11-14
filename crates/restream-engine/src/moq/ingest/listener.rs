@@ -11,7 +11,10 @@
 //! ([`super::session::publish`]). At most `max_connections` handshakes and
 //! publishers run at once; further handshakes are refused. An admitted
 //! viewer leaves that count (the origin's viewer cap bounds viewers), so an
-//! audience never locks publishers out. Shutdown closes the endpoint, gives the
+//! audience never locks publishers out. One client (an IPv4 address or an
+//! IPv6 /64) holds at most `max_connections_per_ip` connections of any kind,
+//! from its first packet to its close, so it cannot take every slot of
+//! either cap. Shutdown closes the endpoint, gives the
 //! sessions a moment to close cleanly and ends every remaining one with its
 //! input released.
 
@@ -34,6 +37,7 @@ use crate::moq::origin::{Origin, request_token};
 use crate::moq::transport;
 use crate::security::IngestSecurityService;
 use restream_moq::tls;
+use restream_sync::client_slots::ClientSlots;
 
 /// How long shutdown waits for sessions to close before dropping them.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(1);
@@ -47,6 +51,8 @@ struct Listener {
     active: Cell<usize>,
     /// Handshakes in progress and publishers, under `max_connections`.
     capped: Cell<usize>,
+    /// Connections of any kind per client, under `max_connections_per_ip`.
+    clients: Arc<ClientSlots>,
 }
 
 /// Counts one connection task for the shutdown drain.
@@ -200,6 +206,7 @@ fn serve(
             shutdown,
             active: Cell::new(0),
             capped: Cell::new(0),
+            clients: ClientSlots::new(config.max_connections_per_ip),
         });
         if ready.send(Ok(local)).is_err() {
             return;
@@ -257,13 +264,21 @@ async fn accept_loop(endpoint: &Endpoint, listener: &Rc<Listener>, max_connectio
             incoming.refuse();
             continue;
         }
+        let Some(client) = listener.clients.try_acquire(incoming.remote_address().ip()) else {
+            debug!(
+                peer = %incoming.remote_address(),
+                "MoQ connection refused: the client holds its share of the connections",
+            );
+            incoming.refuse();
+            continue;
+        };
         listener.active.set(listener.active.get() + 1);
         listener.capped.set(listener.capped.get() + 1);
         let active = Active(listener.clone());
         let slot = CapSlot(listener.clone());
         compio::runtime::spawn(async move {
             serve_connection(incoming, &active.0, slot).await;
-            drop(active);
+            drop((client, active));
         })
         .detach();
     }

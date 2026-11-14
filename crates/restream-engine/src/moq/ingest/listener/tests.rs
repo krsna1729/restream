@@ -73,6 +73,7 @@ async fn an_unreadable_certificate_fails_the_start_and_leaves_nothing_running() 
         tls_key_path: "/nonexistent/moq-key.pem".to_string(),
         max_connections: 4,
         origin_max_viewers: 4,
+        max_connections_per_ip: 4,
     };
     let server = Arc::new(MoqIngestServer::new(
         Arc::new(OneKey),
@@ -173,30 +174,94 @@ async fn input_bytes(engine: &MediaEngine) -> Option<(String, u64)> {
     })
 }
 
-/// A listener on an ephemeral loopback port with the loopback certificate.
-async fn listen(max_connections: usize, name: &str) -> (Arc<MediaEngine>, SocketAddr) {
-    let dir = std::env::temp_dir().join(format!("restream-moq-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (cert, key) = &*LOOPBACK_CERT;
-    let (cert_path, key_path) = (dir.join("cert.pem"), dir.join("key.pem"));
-    std::fs::write(&cert_path, cert).unwrap();
-    std::fs::write(&key_path, key).unwrap();
-    let config = MoqIngestConfig {
-        listen: SocketAddr::from(([127, 0, 0, 1], 0)),
-        tls_cert_path: cert_path.display().to_string(),
-        tls_key_path: key_path.display().to_string(),
-        max_connections,
-        origin_max_viewers: 4,
-    };
-    let engine = Arc::new(MediaEngine::new());
-    let server = Arc::new(MoqIngestServer::new(
+/// The loopback certificate's PEM files in a directory of their own,
+/// removed on drop. A listener reads them at every start.
+struct Certs(std::path::PathBuf);
+
+impl Certs {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("restream-moq-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (cert, key) = &*LOOPBACK_CERT;
+        std::fs::write(dir.join("cert.pem"), cert).unwrap();
+        std::fs::write(dir.join("key.pem"), key).unwrap();
+        Self(dir)
+    }
+
+    /// A loopback listener on an ephemeral port. Every test client is
+    /// 127.0.0.1, so its share covers both caps unless a test narrows it.
+    fn config(&self, max_connections: usize) -> MoqIngestConfig {
+        MoqIngestConfig {
+            listen: SocketAddr::from(([127, 0, 0, 1], 0)),
+            tls_cert_path: self.0.join("cert.pem").display().to_string(),
+            tls_key_path: self.0.join("key.pem").display().to_string(),
+            max_connections,
+            origin_max_viewers: 4,
+            max_connections_per_ip: max_connections + 4,
+        }
+    }
+}
+
+impl Drop for Certs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn server(engine: &Arc<MediaEngine>) -> Arc<MoqIngestServer> {
+    Arc::new(MoqIngestServer::new(
         Arc::new(OneKey),
         engine.clone(),
         security(),
-    ));
-    let addr = start(&config, server).await.unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
+    ))
+}
+
+/// A listener on an ephemeral loopback port with the loopback certificate.
+async fn listen(max_connections: usize, name: &str) -> (Arc<MediaEngine>, SocketAddr) {
+    let certs = Certs::new(name);
+    let engine = Arc::new(MediaEngine::new());
+    let addr = start(&certs.config(max_connections), server(&engine))
+        .await
+        .unwrap();
     (engine, addr)
+}
+
+/// One client (127.0.0.1) holds at most its share of the connections, and
+/// another client (127.0.0.2) still connects while it does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_client_cannot_take_every_moq_connection_slot() {
+    let certs = Certs::new("per-client");
+    let config = MoqIngestConfig {
+        max_connections_per_ip: 2,
+        ..certs.config(4)
+    };
+    let engine = Arc::new(MediaEngine::new());
+    let addr = start(&config, server(&engine)).await.unwrap();
+    tokio::task::spawn_blocking(move || {
+        run(async move {
+            let tls = || loopback_client_tls(transport::MOQ_ALPNS);
+            let greedy = Endpoint::client("127.0.0.1:0").await.unwrap();
+            // Each holds a slot while the listener awaits its SETUP.
+            let _first = transport::connect(&greedy, addr, LOOPBACK_SERVER_NAME, tls())
+                .await
+                .expect("the client's first connection is served");
+            let _second = transport::connect(&greedy, addr, LOOPBACK_SERVER_NAME, tls())
+                .await
+                .expect("the client's second connection is served");
+            let third = transport::connect(&greedy, addr, LOOPBACK_SERVER_NAME, tls()).await;
+            assert!(
+                third.is_err(),
+                "a connection past the client's share is refused"
+            );
+            let other = Endpoint::client("127.0.0.2:0").await.unwrap();
+            transport::connect(&other, addr, LOOPBACK_SERVER_NAME, tls())
+                .await
+                .expect("another client connects while the first holds its share");
+        });
+    })
+    .await
+    .unwrap();
+    engine.shutdown_listeners();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

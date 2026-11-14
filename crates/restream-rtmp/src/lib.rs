@@ -2,7 +2,6 @@
 
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
-pub mod client_slots;
 pub mod egress_connection;
 pub mod egress_engine;
 pub mod egress_metadata;
@@ -17,7 +16,6 @@ pub mod parser_budget;
 #[forbid(unsafe_code)]
 pub mod timestamps;
 
-pub use client_slots::ClientSlots;
 pub use egress_connection::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
 pub use egress_engine::{RtmpMediaAction, RtmpMediaEncoder};
 pub use egress_metadata::{
