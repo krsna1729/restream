@@ -973,6 +973,7 @@ runtime; the lower-crate dependency does not imply a task or thread handoff.
 | `RESTREAM_MOQ_TLS_KEY` | none | PEM private key; required when listening |
 | `RESTREAM_MOQ_MAX_CONNECTIONS` | 64 | clamp 1–4096; handshakes and publishers |
 | `RESTREAM_MOQ_ORIGIN_MAX_VIEWERS` | 64 | clamp 1–4096; viewers across all pipelines |
+| `RESTREAM_MOQ_MAX_CONNECTIONS_PER_IP` | 16 | clamp 1–4096; connections of any kind per IPv4 address or IPv6 /64 |
 
 An invalid setting logs `restream.moq.ingest.config_invalid` and the listener
 stays off. An unreadable PEM or a bind error logs
