@@ -22,11 +22,11 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 mod catalog;
+mod metadata;
 
 pub use catalog::{RecordingConversionState, RecordingConversionStatus};
 pub use catalog::{
@@ -34,6 +34,10 @@ pub use catalog::{
     load_conversion_state,
 };
 use catalog::{now_rfc3339, write_conversion_state};
+pub use metadata::{
+    RecordingEnd, RecordingMetadataEvent, RecordingMetadataQueue, RecordingMetadataReporter,
+    RecordingMetadataUpdate, RecordingStarted, recording_metadata_channel,
+};
 
 const MIN_DURATION_SECS: u64 = 5;
 
@@ -53,40 +57,6 @@ pub struct RecordingStart {
     pub settings: RecordingSettings,
     pub stage_key: StageKey,
     pub metadata: Option<RecordingMetadataReporter>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RecordingMetadataEvent {
-    Started {
-        recording_id: String,
-        pipeline_id: String,
-        started_at: String,
-        temp_path: String,
-    },
-    Finalized {
-        recording_id: String,
-        ended_at: String,
-        final_path: String,
-    },
-    Failed {
-        recording_id: String,
-        error: String,
-    },
-}
-
-#[derive(Clone)]
-pub struct RecordingMetadataReporter {
-    sender: mpsc::UnboundedSender<RecordingMetadataEvent>,
-}
-
-impl RecordingMetadataReporter {
-    pub fn new(sender: mpsc::UnboundedSender<RecordingMetadataEvent>) -> Self {
-        Self { sender }
-    }
-
-    pub fn report(&self, event: RecordingMetadataEvent) {
-        let _ = self.sender.send(event);
-    }
 }
 
 fn sanitize_name(name: &str) -> String {

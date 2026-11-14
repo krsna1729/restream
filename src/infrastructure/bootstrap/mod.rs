@@ -40,9 +40,9 @@ mod listener_supervisor;
 mod reconcile;
 mod runtime;
 mod shutdown;
-mod supervised_task;
+pub(crate) mod supervised_task;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use auth::initialize_auth_for_test;
 
@@ -212,7 +212,7 @@ async fn serve(
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
     let services_factory =
-        crate::infrastructure::service_wiring::SqliteServiceFactory::with_catalog_db(
+        crate::infrastructure::service_wiring::SqliteServiceFactory::with_lifecycle_db(
             &pool,
             lifecycle.clone(),
         );
@@ -251,8 +251,9 @@ async fn serve(
     engine.set_event_sink(event_tx);
 
     let sessions_for_reconciler = sessions.clone();
-    let recording_metadata =
-        crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(pool.clone());
+    // The one recording catalog writer: the media library's and
+    // housekeeping's recordings report to it.
+    let recording_metadata = services_factory.recording_metadata();
     let services = services_factory.compose();
     let state = Arc::new(crate::api::AppState::new(
         services,

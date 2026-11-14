@@ -19,6 +19,7 @@ use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteNotifyStore, SqlitePipelineStore,
     SqliteRecordingStore, SqliteSessionStore, SqliteTeamStore,
 };
+use restream_engine::recording::RecordingMetadataReporter;
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
 ///
@@ -26,28 +27,40 @@ use crate::infrastructure::sqlite_ports::{
 /// write through any of them refreshes the index the ingest listeners read.
 pub struct SqliteServiceFactory<'pool> {
     db: &'pool SqlitePool,
+    lifecycle: DeadlineDb,
     catalog_auth: Arc<CatalogAuth>,
+    recording_metadata: std::sync::OnceLock<RecordingMetadataReporter>,
 }
 
 impl<'pool> SqliteServiceFactory<'pool> {
     /// The index starts empty; production startup fills it with
-    /// [`CatalogAuth::load`] before any listener starts. Its reloads read
-    /// `db` under the shared-loop deadline.
+    /// [`CatalogAuth::load`] before any listener starts. Its reloads and the
+    /// recording catalog writer use `db` under the shared-loop deadline.
     pub fn new(db: &'pool SqlitePool) -> Self {
-        Self::with_catalog_db(
+        Self::with_lifecycle_db(
             db,
             DeadlineDb::new(db.clone(), crate::db::SHARED_LOOP_DEADLINE),
         )
     }
 
-    /// As [`Self::new`], with the admission index reloading from
-    /// `catalog_db` (production: the lifecycle pool, which API load cannot
-    /// exhaust).
-    pub fn with_catalog_db(db: &'pool SqlitePool, catalog_db: DeadlineDb) -> Self {
+    /// As [`Self::new`], with the admission index reloading from and the
+    /// recording catalog writer writing through `lifecycle` (production:
+    /// the lifecycle pool, which API load cannot exhaust).
+    pub fn with_lifecycle_db(db: &'pool SqlitePool, lifecycle: DeadlineDb) -> Self {
         Self {
             db,
-            catalog_auth: CatalogAuth::new(Arc::new(SqliteCatalogSource::new(catalog_db))),
+            catalog_auth: CatalogAuth::new(Arc::new(SqliteCatalogSource::new(lifecycle.clone()))),
+            lifecycle,
+            recording_metadata: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The reporter of this factory's one recording catalog writer, started
+    /// on first use.
+    pub fn recording_metadata(&self) -> RecordingMetadataReporter {
+        self.recording_metadata
+            .get_or_init(|| spawn_recording_metadata_reporter(self.lifecycle.clone()))
+            .clone()
     }
 
     pub fn catalog_auth(&self) -> Arc<CatalogAuth> {
@@ -164,7 +177,7 @@ impl<'pool> SqliteServiceFactory<'pool> {
             pipeline_service,
             ingest_service,
         )
-        .with_recording_metadata(spawn_recording_metadata_reporter(self.db.clone()))
+        .with_recording_metadata(self.recording_metadata())
     }
 
     pub fn agent_service(&self) -> AgentService {
