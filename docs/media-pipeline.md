@@ -1135,7 +1135,7 @@ The diagram shows a dashboard preview subscribing to a pipeline.
 
 | Side | Trust |
 |---|---|
-| Listener | TLS 1.3 with `RESTREAM_MOQ_TLS_CERT` and `RESTREAM_MOQ_TLS_KEY`; no client certificates; at most 64 incoming unidirectional streams per connection |
+| Listener | TLS 1.3 with `RESTREAM_MOQ_TLS_CERT` and `RESTREAM_MOQ_TLS_KEY`; no client certificates; at most 64 incoming unidirectional streams per connection, and at most 4 MiB a peer has sent that Restream has not read yet across all of a connection's streams (QUIC connection flow-control window) |
 | Browser viewer | normal WebPKI validation; on failure, `serverCertificateHashes` with the SHA-256 of the leaf certificate DER (`certificateSha256`, `null` if unreadable). Browsers accept a pinned certificate only when it is valid for at most 14 days |
 | `moqt://` egress | TLS 1.3 with bundled web roots plus `ca=` PEM files confined to operator-set `RESTREAM_MOQ_CA_DIR`; `insecure=1` skips chain and name checks but still verifies handshake signatures |
 
