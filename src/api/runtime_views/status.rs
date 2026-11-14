@@ -228,6 +228,13 @@ struct SrtListenerHealthJson {
     ingress_owner: restream_engine::snapshots::SrtIngressOwnerSnapshot,
 }
 
+/// The MoQ ingest listener (0 restarts while MoQ ingest is off).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MoqListenerHealthJson {
+    restarts: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TuningHealthJson {
@@ -285,6 +292,7 @@ pub(crate) struct EngineHealthView {
     host_settings: Vec<HostSettingRow>,
     rtmp_listener: RtmpListenerHealthJson,
     srt_listener: SrtListenerHealthJson,
+    moq_listener: MoqListenerHealthJson,
     egress_fabric_shards:
         Vec<restream_engine::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
     /// Panics contained at a per-entity boundary since start
@@ -637,6 +645,9 @@ pub(crate) async fn health_snapshot_view(
                 .restarts
                 .load(Ordering::Relaxed),
             ingress_owner,
+        },
+        moq_listener: MoqListenerHealthJson {
+            restarts: engine.runtime.moq_listener_restarts.load(Ordering::Relaxed),
         },
         egress_fabric_shards,
         contained_panics: restream_engine::panic_boundary::contained_panics(),

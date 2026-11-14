@@ -59,11 +59,13 @@ async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is
             restarts,
         )
     };
-    let restarts = Arc::new(AtomicU64::new(0));
+    // RTMP, SRT and MoQ, each faulted.
+    let restarts: [Arc<AtomicU64>; 3] = Default::default();
     let listeners = super::super::runtime::Listeners::new(
         tokio::spawn(std::future::pending()),
-        listener(restarts.clone()),
-        listener(Arc::new(AtomicU64::new(0))),
+        listener(restarts[0].clone()),
+        listener(restarts[1].clone()),
+        Some(listener(restarts[2].clone())),
     );
     let shutdown = CancellationToken::new();
     let control = tokio::spawn({
@@ -73,7 +75,10 @@ async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is
 
     let started = Instant::now();
     let restarted = tokio::time::timeout(Duration::from_secs(3), async {
-        while restarts.load(Ordering::Relaxed) == 0 {
+        while restarts
+            .iter()
+            .any(|restarts| restarts.load(Ordering::Relaxed) == 0)
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -84,7 +89,7 @@ async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is
     let _ = std::fs::remove_dir_all(dir);
     assert!(
         restarted.is_ok(),
-        "the faulted listener did not restart within its 1 s backoff (+2 s) while the pass was stalled; waited {:?}",
+        "a faulted listener did not restart within its 1 s backoff (+2 s) while the pass was stalled; waited {:?}, restarts {restarts:?}",
         started.elapsed()
     );
 }

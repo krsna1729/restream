@@ -378,6 +378,9 @@ export interface HealthData {
     /** Summed over every running SRT ingress Owner. */
     ingressOwner?: SrtIngressOwnerHealth;
   } | null;
+  moqListener?: {
+    restarts?: number;
+  };
   egressFabricShards?: EgressShardStatus[];
   containedPanics?: number;
 }

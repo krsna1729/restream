@@ -16,7 +16,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
-- [Q-120 supervise the MoQ ingest listener](#q-120-correctness-opus-a-faulted-moq-ingest-listener-is-restarted)
 - [Q-125 HLS push and MoQ isolation rows](#q-125-correctness-opus-the-isolation-audit-covers-hls-push-and-moq)
 - [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
@@ -135,17 +134,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: per candidate, a layering-audit read of every call site; the egress
   unit tests, proptests and Kani proofs unchanged and passing; the
   `egress_visit` benchmark before and after for any change on the visit path.
-
-### Q-120 [correctness] [opus] A faulted MoQ ingest listener is restarted
-- Goal: a MoQ ingest listener that faults (a thread-entry panic, reported as
-  `restream.moq.ingest.faulted`, or an accept loop that ends without a
-  shutdown) is restarted with backoff, as RTMP and SRT are by
-  `SupervisedListener` (`src/infrastructure/bootstrap/listener_supervisor.rs`).
-  Today `moq::ingest::listener::launch` starts one thread and nothing
-  watches it, so MoQ ingest stays down until the process restarts.
-- Gates: a test that injects the accept-loop panic
-  (`INJECTED_PANIC_MAX_CONNECTIONS`) then publishes successfully to the same
-  port after the restart; the listener thread still joins at shutdown.
 
 ### Q-125 [correctness] [opus] The isolation audit covers HLS push and MoQ
 - Goal: close the audit's open scope. HLS push ingest and MoQ ingest/origin

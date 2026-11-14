@@ -1426,6 +1426,7 @@ Returns `EngineHealthView`:
 | `hostSettings` | Rows `{ key, label, current, required, unit, status, detail }` (nofile, socket buffer ceilings, Tokio threads, CPU parallelism, cpuset, cgroup quota) |
 | `rtmpListener` | `acceptErrors`, `fdExhaustionErrors`, `restarts`, `ingressOwners` |
 | `srtListener` | `bondingAvailable`, `restarts`, `ingressOwner` counters |
+| `moqListener` | `restarts` (0 while MoQ ingest is off) |
 | `egressFabricShards` | One row per live shard: `protocol`, `feedId`, `shardIndex`, `state`, loop and command-queue counters |
 | `containedPanics` | Panics contained at a per-entity boundary since start |
 | `nameResolver` | The process name resolver: `lookups` (system lookups started), `timeouts` (requests answered at their deadline), `overflows` (requests refused because its queue was full), `threads` (live lookup threads, gauge), `hungThreads` (threads still inside a lookup past the slow threshold, 500 ms or half its earliest caller's remaining time; each replaced; gauge), `capReached` (hung threads left unreplaced because the pool was at its 128-thread cap) |

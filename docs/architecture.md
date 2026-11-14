@@ -532,7 +532,7 @@ many entities, so each entity has a panic boundary where its bytes enter:
 | MoQ connection (handshake, publisher or origin viewer) | Connection task in `moq::ingest::listener::accept_loop` | That connection closes (`restream.moq.ingest.connection_panicked`). Its connection and per-client slots, its viewer slot and generation attachment drop with it; an admitted publisher's attempt ends as `abandoned`. The listener thread keeps serving the rest |
 | HLS push session | The MEDIA task its supervisor awaits (`hls_ingest::registry::supervise_session` through `executor::run_with_class`) | That session ends as failed (`media-executor`) and is counted. Its attempt is released; the key's next object starts a new session. Other keys' sessions keep running |
 | HLS push object | The upload's connection task (`api::http_server::serve`); its playlist parse on the blocking pool (`hls_ingest::registry::parse_playlist_off_worker`) | That connection closes, or that playlist is refused with `503` and counted. Its upload slot and buffer claims drop with it |
-| RTMP and SRT listener | `bootstrap::listener_supervisor` | A listener that ends without shutdown restarts after 1 s, doubling to 30 s; the delay resets after 60 s of healthy running |
+| RTMP, SRT and MoQ listener | `bootstrap::listener_supervisor` (a MoQ listener thread panic is first caught at its thread entry, `restream.moq.ingest.faulted`) | A listener that ends without shutdown, or fails to start again, restarts after 1 s, doubling to 30 s; the delay resets after 60 s of healthy running |
 | Ingest attempt, any protocol | `ingest_lease::IngestLease` drop | The attempt ends as `abandoned` and its stream key is free for the next publisher. Other attempts on the pipeline keep running |
 
 This diagram shows what a contained panic ends and what keeps running.
@@ -565,7 +565,7 @@ Rules for code behind a boundary:
   the level is disabled.
 
 `/api/v1/engine/health` reports `containedPanics`, `rtmpListener.restarts`,
-`srtListener.restarts`, `rtmpListener.ingressOwners` and
+`srtListener.restarts`, `moqListener.restarts`, `rtmpListener.ingressOwners` and
 `srtListener.ingressOwner.owners` (0 while a listener is stopped). Shared
 resources and their per-entity bounds are in the
 [isolation audit](isolation-audit.md). Proof expectations are in
