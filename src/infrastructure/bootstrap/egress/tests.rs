@@ -1,5 +1,6 @@
 use super::super::test_support::{
-    file_pools, hold_write_lock, live_output, output_starts_within, outputs, release_write_lock,
+    file_pools, hold_write_lock, live_output, memory_pool, output_starts_within, outputs,
+    release_write_lock,
 };
 use super::*;
 use crate::config::AppConfig;
@@ -166,5 +167,97 @@ async fn concurrent_starts_behind_a_write_lock_hold_at_most_the_write_permits_wh
     assert!(
         landed.is_ok(),
         "the job rows landed after the lock was released"
+    );
+}
+
+/// Armed by [`an_output_whose_planning_panics_leaves_the_others_planned_in_the_same_pass`].
+static PANIC_FOR_A: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Times the armed decision ran for `out-a`.
+static PANICKED_FOR_A: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Production's start decision, except that once armed it panics for
+/// `out-a`.
+#[allow(clippy::too_many_arguments)]
+fn panicking_for_a(
+    desired_state: DesiredOutputState,
+    retries_exhausted: bool,
+    is_active: bool,
+    effective_has_ingest: bool,
+    ingest_tracks_ready: bool,
+    failure: Option<OutputFailureWindow>,
+    policy: OutputRetryPolicy,
+    output_id: &str,
+) -> OutputStartAction {
+    use std::sync::atomic::Ordering;
+    if output_id == "out-a" && PANIC_FOR_A.load(Ordering::SeqCst) {
+        PANICKED_FOR_A.fetch_add(1, Ordering::SeqCst);
+        // `resume_unwind` skips the panic hook: quiet logs.
+        std::panic::resume_unwind(Box::new("injected output planning panic"));
+    }
+    decide_output_start_action(
+        desired_state,
+        retries_exhausted,
+        is_active,
+        effective_has_ingest,
+        ingest_tracks_ready,
+        failure,
+        policy,
+        output_id,
+    )
+}
+
+/// Output A's planning panics. In that same pass output B, after it,
+/// starts and output C stops as wanted; A backs off, so the next pass does
+/// not plan it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_output_whose_planning_panics_leaves_the_others_planned_in_the_same_pass() {
+    use std::sync::atomic::Ordering;
+    let pool = memory_pool().await;
+    let engine = Arc::new(MediaEngine::new());
+    // Rows in creation order: the pass reaches A first.
+    let _a = live_output(&engine, &pool, "a", "sink://local/discard").await;
+    let _b = live_output(&engine, &pool, "b", "sink://local/discard").await;
+    let _c = live_output(&engine, &pool, "c", "sink://local/discard").await;
+    crate::application::outputs::request_stop(&pool, "b", "out-b")
+        .await
+        .unwrap();
+    let egress = egress(&engine, DeadlineDb::new(pool.clone(), SHARED_LOOP_DEADLINE))
+        .with_start_decision(panicking_for_a);
+    egress.reconcile(&outputs(&pool).await).await;
+    assert!(output_starts_within(&engine, "out-a", Duration::from_secs(2)).await);
+    assert!(output_starts_within(&engine, "out-c", Duration::from_secs(2)).await);
+
+    crate::application::outputs::request_start(&pool, "b", "out-b")
+        .await
+        .unwrap();
+    crate::application::outputs::request_stop(&pool, "c", "out-c")
+        .await
+        .unwrap();
+    PANIC_FOR_A.store(true, Ordering::SeqCst);
+    let wait = egress.reconcile(&outputs(&pool).await).await;
+    let b_started = output_starts_within(&engine, "out-b", Duration::from_secs(2)).await;
+    let c_running = engine.has_active_egress("out-c").await;
+    egress.reconcile(&outputs(&pool).await).await;
+
+    assert!(
+        b_started,
+        "B did not start in the pass where A's planning panicked"
+    );
+    assert!(
+        !c_running,
+        "C was not stopped in the pass where A's planning panicked"
+    );
+    assert!(
+        wait.is_some(),
+        "the pass asked to come back after A's backoff"
+    );
+    assert_eq!(
+        PANICKED_FOR_A.load(Ordering::SeqCst),
+        1,
+        "A is not planned again before its backoff"
+    );
+    assert!(
+        engine.has_active_egress("out-a").await,
+        "A was left as it was"
     );
 }
