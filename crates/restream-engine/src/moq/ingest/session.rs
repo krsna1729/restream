@@ -326,6 +326,10 @@ async fn ingest<L: Lifecycle + Clone>(
         Err(rejection) => return SessionEnd::rejected(&rejection),
     };
     *slot.borrow_mut() = Some(Ingest::new(lifecycle.clone(), admission, limits));
+    #[cfg(test)]
+    if key == INJECTED_PANIC_STREAM_KEY {
+        std::panic::resume_unwind(Box::new("injected MoQ connection panic"));
+    }
 
     let preference = CatalogFormat::detect(broadcast.as_str());
     let broadcast = match compio::time::timeout(
@@ -569,6 +573,10 @@ async fn idle_watch(last_frame: &Cell<Instant>, idle: Duration) -> SessionEnd {
         compio::time::sleep_until(deadline).await;
     }
 }
+
+/// A stream key whose admitted session panics, inside its connection task.
+#[cfg(test)]
+pub(super) const INJECTED_PANIC_STREAM_KEY: &str = "moq-injected-panic";
 
 #[cfg(test)]
 mod tests;
