@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use crate::application::ports::MetaStore;
 use crate::application::reconcile::{
     HousekeepingSwitches, RecordingAction, decide_recording_action,
 };
@@ -15,15 +14,6 @@ pub const STREAM_QA_ENABLED_META_PREFIX: &str = "stream_qa_enabled:";
 
 pub fn stream_qa_enabled_meta_key(pipeline_id: &str) -> String {
     format!("{STREAM_QA_ENABLED_META_PREFIX}{pipeline_id}")
-}
-
-pub async fn load_stream_qa_enabled(meta_store: &dyn MetaStore, pipeline_id: &str) -> bool {
-    meta_store
-        .get_meta(&stream_qa_enabled_meta_key(pipeline_id))
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|value| value == "1")
 }
 
 /// Starts the sampler for `pipeline_id` unless it runs already; its entry

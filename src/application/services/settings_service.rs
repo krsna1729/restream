@@ -181,12 +181,14 @@ impl SettingsService {
     }
 
     /// Loads the per-pipeline recording toggle map used by health and settings
-    /// views that need to annotate many pipelines at once.
+    /// views that need to annotate many pipelines at once; a toggle that
+    /// cannot be read keeps the pipeline's current recording state.
     pub async fn recording_enabled_map(
         &self,
+        engine: &restream_engine::engine::MediaEngine,
         pipeline_ids: &[String],
     ) -> std::collections::HashMap<String, bool> {
-        load_recording_enabled_map(self.meta_store.as_ref(), pipeline_ids).await
+        load_recording_enabled_map(self.meta_store.as_ref(), engine, pipeline_ids).await
     }
 }
 
@@ -331,7 +333,12 @@ mod tests {
         assert_eq!(service.list_jobs().await.unwrap()[0].id, "job-1");
         assert!(service.list_pipelines().await.unwrap().is_empty());
 
-        let recording_enabled = service.recording_enabled_map(&["pipe-1".to_string()]).await;
+        let recording_enabled = service
+            .recording_enabled_map(
+                &restream_engine::engine::MediaEngine::new(),
+                &["pipe-1".to_string()],
+            )
+            .await;
         assert_eq!(recording_enabled.get("pipe-1"), Some(&false));
 
         service
