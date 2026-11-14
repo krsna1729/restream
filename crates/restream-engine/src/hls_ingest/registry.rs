@@ -843,15 +843,37 @@ impl HlsIngest {
 
 /// Parse a pushed or pulled playlist on the blocking pool, so the session
 /// turn that applies it on the shared MEDIA worker never parses: parsing is
-/// linear in the playlist, about 29 ms for a 1 MiB one.
+/// linear in the playlist, about 29 ms for a 1 MiB one. A parser panic is
+/// that playlist's fault domain: counted as contained, and the object is
+/// refused (`503`) while its session and every other key carry on.
 async fn parse_playlist_off_worker(
     bytes: bytes::Bytes,
     path: String,
 ) -> Result<Result<super::playlist::Playlist, super::playlist::PlaylistError>, DispatchError> {
-    tokio::task::spawn_blocking(move || super::playlist::parse(&bytes, &path))
-        .await
-        .map_err(|_| DispatchError::Unavailable)
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if path == INJECTED_PANIC_PLAYLIST_PATH {
+            std::panic::resume_unwind(Box::new("injected HLS playlist parser panic"));
+        }
+        super::playlist::parse(&bytes, &path)
+    })
+    .await
+    .map_err(|error| {
+        if error.is_panic() {
+            let payload = error.into_panic();
+            let panic = crate::panic_boundary::record_contained(payload.as_ref());
+            warn!(
+                panic,
+                "HLS playlist parser panicked; the playlist is refused"
+            );
+        }
+        DispatchError::Unavailable
+    })
 }
+
+/// A playlist path whose parse panics on the blocking pool.
+#[cfg(test)]
+const INJECTED_PANIC_PLAYLIST_PATH: &str = "live/injected-panic.m3u8";
 
 /// Tests live in `registry/tests.rs` (this file is at the line cap); the
 /// pull-registry cases live in `registry/tests/pull.rs`, and the session-start
