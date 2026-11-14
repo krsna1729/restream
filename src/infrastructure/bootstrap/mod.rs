@@ -405,6 +405,7 @@ async fn serve(
                 state.clone(),
                 db.clone(),
                 crate::api::schedules::SCHEDULER_TICK,
+                crate::api::schedules::ACTION_DEADLINE,
                 stop.clone(),
             )
         }

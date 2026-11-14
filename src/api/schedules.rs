@@ -10,9 +10,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use futures_util::FutureExt as _;
+use std::collections::HashMap;
 use std::path::Path as FsPath;
 use std::sync::Arc;
-use tracing::{info, warn};
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 use super::error::ApiError;
 use super::state::{AppState, require_authenticated, to_hex};
@@ -22,7 +25,13 @@ use crate::db::DeadlineDb;
 use restream_domain::domain::role::Role;
 
 /// How often the scheduler looks for due events: well inside the grace.
-pub const SCHEDULER_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+pub const SCHEDULER_TICK: Duration = Duration::from_secs(5);
+
+/// How long an occurrence's action may run before its schedule says so:
+/// the row then reads "running: …" until the action ends. The action is
+/// never cut short; a start or stop abandoned halfway would leave the
+/// pipeline in neither state.
+pub const ACTION_DEADLINE: Duration = Duration::from_secs(30);
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -137,29 +146,62 @@ async fn audit_run(state: &AppState, schedule: &Schedule, ok: bool) {
 
 /// Runs, records and audits one occurrence.
 async fn run_occurrence(
-    state: &AppState,
-    db: &DeadlineDb,
-    schedule: &Schedule,
+    state: Arc<AppState>,
+    db: DeadlineDb,
+    schedule: Schedule,
     occurrence_ms: i64,
+    action_deadline: Duration,
 ) {
     // Recorded first: a slow action must not be started twice. The record
-    // is awaited to its outcome (behind another writer this stalls only the
-    // scheduler); only a record that failed skips the action, and then the
-    // row still says the occurrence is due, so the next tick runs it.
-    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, "running".to_string()).await {
+    // is awaited to its outcome (behind another writer this stalls only
+    // this occurrence); only a record that failed skips the action, and then
+    // the row still says the occurrence is due, so the next tick runs it.
+    if let Err(error) = record_run(&db, &schedule.id, occurrence_ms, "running".to_string()).await {
         warn!(schedule = %schedule.id, err = %error, "could not record a schedule run; retried next tick");
         return;
     }
-    let outcome = execute(state, schedule).await;
+    // A panicking action is this occurrence's failure, recorded as one.
+    let action = std::panic::AssertUnwindSafe(execute(&state, &schedule))
+        .catch_unwind()
+        .map(|outcome| outcome.unwrap_or_else(|_| Err("the action panicked".to_string())));
+    tokio::pin!(action);
+    let outcome = match tokio::time::timeout(action_deadline, &mut action).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            let note = format!(
+                "running: not finished after {} s",
+                action_deadline.as_secs()
+            );
+            warn!(schedule = %schedule.id, name = %schedule.name, "{note}");
+            if let Err(error) = record_run(&db, &schedule.id, occurrence_ms, note).await {
+                warn!(err = %error, "failed to record a slow schedule run");
+            }
+            action.await
+        }
+    };
     let (ok, result) = match &outcome {
         Ok(summary) => (true, format!("ok: {summary}")),
         Err(error) => (false, format!("failed: {error}")),
     };
     info!(schedule = %schedule.id, name = %schedule.name, result = %result, "scheduled event ran");
-    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, result).await {
+    if let Err(error) = record_run(&db, &schedule.id, occurrence_ms, result).await {
         warn!(err = %error, "failed to record a schedule run");
     }
-    audit_run(state, schedule, ok).await;
+    audit_run(&state, &schedule, ok).await;
+}
+
+/// Records that an occurrence was missed by more than the grace.
+async fn record_skip(db: DeadlineDb, schedule_id: String, occurrence_ms: i64) {
+    let missed = chrono::DateTime::from_timestamp_millis(occurrence_ms)
+        .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_default();
+    let _ = record_run(
+        &db,
+        &schedule_id,
+        occurrence_ms,
+        format!("skipped: the engine was not running at {missed}"),
+    )
+    .await;
 }
 
 /// Records an occurrence's outcome, awaited to its outcome.
@@ -180,46 +222,74 @@ async fn record_run(
 /// more than the grace (the engine was down) is recorded as skipped. Its
 /// reads and writes go through `db`, the shared loops' executor: reads end
 /// at the deadline, writes are awaited to their outcome.
+///
+/// Each schedule's occurrence runs (or is recorded skipped) in a task of its
+/// own, so a slow record or action delays only its own schedule, never
+/// another pipeline's occurrence past its grace. A schedule with a task
+/// still running is left alone: its rows are read only after its finished
+/// tasks are collected, so a tick never sees an occurrence as due that a
+/// finished task already recorded, and never starts one twice.
 pub async fn run_scheduler(
     state: Arc<AppState>,
     db: DeadlineDb,
-    tick: std::time::Duration,
+    tick: Duration,
+    action_deadline: Duration,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
     let mut ticks = tokio::time::interval(tick);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Dropped at shutdown, which aborts the occurrences still running.
+    let mut occurrences = tokio::task::JoinSet::new();
+    let mut running: HashMap<tokio::task::Id, String> = HashMap::new();
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,
             _ = ticks.tick() => {}
+        }
+        while let Some(joined) = occurrences.try_join_next_with_id() {
+            let task = match joined {
+                Ok((task, ())) => task,
+                Err(join_error) => {
+                    error!(
+                        schedule = running.get(&join_error.id()).map_or("", String::as_str),
+                        event_class = "lifecycle",
+                        event_type = "scheduler.occurrence_panicked",
+                        "a scheduled occurrence panicked"
+                    );
+                    join_error.id()
+                }
+            };
+            running.remove(&task);
         }
         let now = now_ms();
         let Ok(all) = db.read(|pool| schedules::list(pool, now)).await else {
             continue;
         };
         for schedule in all {
-            match schedules::due(
+            if running.values().any(|id| *id == schedule.id) {
+                continue;
+            }
+            let id = schedule.id.clone();
+            let task = match schedules::due(
                 schedule.at_ms,
                 schedule.repeat,
                 schedule.enabled,
                 schedule.last_run_ms,
                 now,
             ) {
-                Due::Nothing => {}
-                Due::Run(occurrence) => run_occurrence(&state, &db, &schedule, occurrence).await,
+                Due::Nothing => continue,
+                Due::Run(occurrence) => occurrences.spawn(run_occurrence(
+                    state.clone(),
+                    db.clone(),
+                    schedule,
+                    occurrence,
+                    action_deadline,
+                )),
                 Due::Skip(occurrence) => {
-                    let missed = chrono::DateTime::from_timestamp_millis(occurrence)
-                        .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
-                        .unwrap_or_default();
-                    let _ = record_run(
-                        &db,
-                        &schedule.id,
-                        occurrence,
-                        format!("skipped: the engine was not running at {missed}"),
-                    )
-                    .await;
+                    occurrences.spawn(record_skip(db.clone(), schedule.id, occurrence))
                 }
-            }
+            };
+            running.insert(task.id(), id);
         }
     }
 }

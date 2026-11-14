@@ -206,8 +206,15 @@ async fn file_pools() -> (SqlitePool, SqlitePool, std::path::PathBuf) {
 }
 
 fn scheduler_state(pool: &SqlitePool) -> Arc<api::AppState> {
-    Arc::new(api::AppState::test_new(
+    scheduler_state_with(
+        pool,
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(pool).compose(),
+    )
+}
+
+fn scheduler_state_with(pool: &SqlitePool, services: api::AppServices) -> Arc<api::AppState> {
+    Arc::new(api::AppState::test_new(
+        services,
         pool.clone(),
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
@@ -220,11 +227,179 @@ fn scheduler_state(pool: &SqlitePool) -> Arc<api::AppState> {
     ))
 }
 
+/// A file-source catalog whose every read never answers: one pipeline's
+/// hung database read.
+struct StalledIngestLookup;
+
+impl restream::application::ports::IngestLookup for StalledIngestLookup {
+    fn get_ingest<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> restream::application::ports::IngestLookupFuture<'a> {
+        Box::pin(std::future::pending())
+    }
+    fn get_ingest_by_stream_key<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> restream::application::ports::IngestLookupFuture<'a> {
+        Box::pin(std::future::pending())
+    }
+    fn list_ingests<'a>(&'a self) -> restream::application::ports::IngestCatalogFuture<'a> {
+        Box::pin(std::future::pending())
+    }
+    fn list_ingests_for_filename<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> restream::application::ports::IngestCatalogFuture<'a> {
+        Box::pin(std::future::pending())
+    }
+    fn list_ingests_for_stream_key<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> restream::application::ports::IngestCatalogFuture<'a> {
+        Box::pin(std::future::pending())
+    }
+}
+
+async fn last_result(pool: &SqlitePool, id: &str) -> Option<String> {
+    schedules::get(pool, id, chrono::Utc::now().timestamp_millis())
+        .await
+        .unwrap()
+        .last_result
+}
+
+/// Pipeline A's occurrence stalls in its action: its file source's catalog
+/// read never answers. Pipeline B's occurrence, due at the same tick and
+/// listed after A's, still runs in its window; once A's action deadline
+/// passes, A's row says it is still running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
+    use restream::infrastructure::{pipeline_input_store, sqlite_ports};
+    let (pool, lifecycle, dir) = file_pools().await;
+    for pipeline in ["pipe-a", "pipe-b"] {
+        db::create_pipeline(
+            &pool,
+            pipeline,
+            pipeline,
+            &format!("key-{pipeline}"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    db::create_output(
+        &pool,
+        "out-b",
+        "pipe-b",
+        "B",
+        "rtmp://127.0.0.1:9/live/b",
+        None,
+        DesiredOutputState::Stopped,
+        &OutputConfig::source(),
+    )
+    .await
+    .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    for (id, pipeline, action, at_ms, output_ids) in [
+        (
+            "sch_a",
+            "pipe-a",
+            schedules::ScheduleAction::StartFile,
+            now + 300,
+            vec![],
+        ),
+        (
+            "sch_b",
+            "pipe-b",
+            schedules::ScheduleAction::StartOutputs,
+            now + 400,
+            vec!["out-b".to_string()],
+        ),
+    ] {
+        schedules::create(
+            &pool,
+            id,
+            &schedules::ScheduleDraft {
+                pipeline_id: pipeline.to_string(),
+                name: id.to_string(),
+                action,
+                output_ids,
+                at_ms,
+                repeat: schedules::Repeat::Once,
+                enabled: true,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    }
+    let mut services =
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
+    services.file_ingest_service = restream::application::services::FileIngestService::with_ports(
+        Arc::new(StalledIngestLookup),
+        Arc::new(sqlite_ports::SqliteIngestLookup::new(pool.clone())),
+        Arc::new(sqlite_ports::SqlitePipelineStore::new(pool.clone())),
+        Arc::new(pipeline_input_store::SqlitePipelineInputStore::new(
+            pool.clone(),
+        )),
+        services.pipeline_service.clone(),
+    );
+
+    let stop = tokio_util::sync::CancellationToken::new();
+    let scheduler = tokio::spawn(api::schedules::run_scheduler(
+        scheduler_state_with(&pool, services),
+        db::DeadlineDb::new(lifecycle, Duration::from_millis(200)),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        stop.clone(),
+    ));
+    // Both are due at the tick at 1 s; B must run long before its grace.
+    let b = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            if let Some(result) = last_result(&pool, "sch_b").await
+                && result != "running"
+            {
+                return result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    // A's deadline is 1 s after its tick.
+    let a = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(result) = last_result(&pool, "sch_a").await
+                && result.starts_with("running: ")
+            {
+                return result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    stop.cancel();
+    // A's action never ends: abort rather than wait for a scheduler that
+    // might be stuck in it.
+    scheduler.abort();
+    let _ = scheduler.await;
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(
+        b.ok().as_deref(),
+        Some("ok: 1 of 1 destinations wanted running"),
+        "B's occurrence did not run while A's was stalled"
+    );
+    assert_eq!(
+        a.ok().as_deref(),
+        Some("running: not finished after 1 s"),
+        "A's row does not say its action is still running"
+    );
+}
+
 /// The occurrence's "running" record waits behind another writer's lock
 /// past its deadline. Once the lock is released the action runs, exactly
-/// once, and its outcome replaces "running". Ticks are 1 s apart, so no
-/// tick between the deadline and the record landing can re-run it: an
-/// occurrence skipped at the deadline is never run.
+/// once, and its outcome replaces "running": a tick while the record waits
+/// leaves the schedule alone, since its occurrence is still running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() {
     let (pool, lifecycle, dir) = file_pools().await;
@@ -271,6 +446,7 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
         scheduler_state(&pool),
         db::DeadlineDb::new(lifecycle, Duration::from_millis(200)),
         Duration::from_secs(1),
+        api::schedules::ACTION_DEADLINE,
         stop.clone(),
     ));
     // The tick at 1 s finds the occurrence due; its record waits well past
