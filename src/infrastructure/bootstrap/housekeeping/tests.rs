@@ -121,3 +121,46 @@ async fn a_housekeeping_ticks_reads_return_at_their_deadlines_while_every_connec
     assert!(completed);
     drop(held);
 }
+
+/// The switch read fails (every connection of the loops' pool held) while
+/// the pipeline catalog answers: the running recording and stream check keep
+/// running; an unreadable switch is never read as switched off.
+#[tokio::test]
+async fn an_unreadable_switch_read_stops_no_recording_or_stream_check() {
+    let catalog = memory_pool().await;
+    crate::db::create_pipeline(&catalog, "pipe", "Show", "key-pipe", None, None)
+        .await
+        .unwrap();
+    let pool = memory_pool().await;
+    let housekeeping = housekeeping(
+        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(catalog)),
+        DeadlineDb::new(pool.clone(), Duration::from_millis(200)),
+    );
+    let _recording = housekeeping
+        .engine
+        .register_recording("pipe")
+        .await
+        .expect("the recording registers");
+    let _stream_check = housekeeping
+        .engine
+        .register_stream_qa("pipe")
+        .expect("the stream check registers");
+    let held = super::super::test_support::hold_every_connection(&pool).await;
+
+    let completed = tokio::time::timeout(
+        Duration::from_secs(5),
+        housekeeping.contained_tick(1, u64::MAX),
+    )
+    .await
+    .expect("the tick answers at its deadlines");
+    drop(held);
+    assert!(completed);
+    assert!(
+        housekeeping.engine.is_recording_active("pipe").await,
+        "an unreadable switch stopped the recording"
+    );
+    assert!(
+        housekeeping.engine.is_stream_qa_active("pipe"),
+        "an unreadable switch stopped the stream check"
+    );
+}

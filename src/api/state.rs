@@ -540,14 +540,15 @@ pub fn hash_session_token(token: &str) -> String {
 }
 
 /// Loads the persisted recording-enabled flags for the requested pipelines so
-/// runtime views can merge desired recording state with live snapshots.
+/// runtime views can merge desired recording state with live snapshots; an
+/// unreadable flag keeps the pipeline's current recording state.
 pub async fn recording_enabled_map(
     state: &AppState,
     pipeline_ids: &[String],
 ) -> std::collections::HashMap<String, bool> {
     state
         .settings_service
-        .recording_enabled_map(pipeline_ids)
+        .recording_enabled_map(&state.engine, pipeline_ids)
         .await
 }
 

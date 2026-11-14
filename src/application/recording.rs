@@ -17,25 +17,33 @@ pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
     format!("{RECORDING_ENABLED_META_PREFIX}{pipeline_id}")
 }
 
-pub async fn load_recording_enabled(meta_store: &dyn MetaStore, pipeline_id: &str) -> bool {
-    meta_store
+/// Whether recording is switched on for `pipeline_id`; an error when the
+/// switch could not be read, which is neither on nor off.
+pub async fn load_recording_enabled(
+    meta_store: &dyn MetaStore,
+    pipeline_id: &str,
+) -> Result<bool, MetaLookupError> {
+    Ok(meta_store
         .get_meta(&recording_enabled_meta_key(pipeline_id))
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|value| value == "1")
+        .await?
+        .is_some_and(|value| value == "1"))
 }
 
+/// Each pipeline's recording switch. One whose switch cannot be read keeps
+/// its current state: on while its recording runs, so a pool timeout never
+/// shows a running recording as switched off.
 pub async fn load_recording_enabled_map(
     meta_store: &dyn MetaStore,
+    engine: &MediaEngine,
     pipeline_ids: &[String],
 ) -> HashMap<String, bool> {
     let mut enabled = HashMap::with_capacity(pipeline_ids.len());
     for pipeline_id in pipeline_ids {
-        enabled.insert(
-            pipeline_id.clone(),
-            load_recording_enabled(meta_store, pipeline_id).await,
-        );
+        let on = match load_recording_enabled(meta_store, pipeline_id).await {
+            Ok(on) => on,
+            Err(_) => engine.is_recording_active(pipeline_id).await,
+        };
+        enabled.insert(pipeline_id.clone(), on);
     }
     enabled
 }
@@ -198,31 +206,48 @@ mod tests {
             fail_keys: HashMap::new(),
         };
 
-        assert!(load_recording_enabled(&store, "pipeline-a").await);
-        assert!(!load_recording_enabled(&store, "pipeline-b").await);
+        assert!(load_recording_enabled(&store, "pipeline-a").await.unwrap());
+        assert!(!load_recording_enabled(&store, "pipeline-b").await.unwrap());
     }
 
+    /// A switch that cannot be read keeps the pipeline's current state: a
+    /// running recording reads as on, an idle pipeline as off.
     #[tokio::test]
-    async fn load_recording_enabled_map_treats_lookup_errors_as_disabled() {
+    async fn an_unreadable_recording_switch_keeps_the_current_state() {
+        let unreadable = |pipeline: &str| {
+            (
+                format!("recording_enabled:{pipeline}"),
+                "db unavailable".to_string(),
+            )
+        };
         let store = FakeMetaStore {
             values: Mutex::new(HashMap::from([(
                 "recording_enabled:pipeline-a".to_string(),
                 "1".to_string(),
             )])),
-            fail_keys: HashMap::from([(
-                "recording_enabled:pipeline-b".to_string(),
-                "db unavailable".to_string(),
-            )]),
+            fail_keys: HashMap::from([unreadable("pipeline-b"), unreadable("pipeline-c")]),
         };
+        let engine = MediaEngine::new();
+        let _recording = engine.register_recording("pipeline-b").await;
 
         let enabled = load_recording_enabled_map(
             &store,
-            &["pipeline-a".to_string(), "pipeline-b".to_string()],
+            &engine,
+            &[
+                "pipeline-a".to_string(),
+                "pipeline-b".to_string(),
+                "pipeline-c".to_string(),
+            ],
         )
         .await;
 
         assert_eq!(enabled.get("pipeline-a"), Some(&true));
-        assert_eq!(enabled.get("pipeline-b"), Some(&false));
+        assert_eq!(
+            enabled.get("pipeline-b"),
+            Some(&true),
+            "a running recording must not read as switched off"
+        );
+        assert_eq!(enabled.get("pipeline-c"), Some(&false));
     }
 
     #[tokio::test]
