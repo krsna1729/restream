@@ -41,11 +41,22 @@ const CONTRACT_MODES: &[(&str, &str)] = &[
         "fault.srt-output-stall",
         ".local/artifacts/concurrency-fault-srt-output-stall",
     ),
+    (
+        "fault.sibling-isolation",
+        ".local/artifacts/concurrency-fault-sibling-isolation",
+    ),
     ("recovery", ".local/artifacts/concurrency-recovery"),
 ];
 
 /// Process names a harness run may start; none may survive it.
-const RUNTIME_PROCESSES: &[&str] = &["restream", "mediamtx", "ffmpeg", "ffprobe", "test_harness"];
+const RUNTIME_PROCESSES: &[&str] = &[
+    "restream",
+    "restream-fault",
+    "mediamtx",
+    "ffmpeg",
+    "ffprobe",
+    "test_harness",
+];
 
 const LOG_DIR: &str = ".local/artifacts/concurrency-contract-logs";
 
@@ -82,6 +93,7 @@ fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
             "test_harness",
         ])
     })?;
+    let fault_tests = prepare_live_fault_tests(None, "target/debug")?;
     let extra = std::env::var("CONCURRENCY_HARNESS_ARGS").unwrap_or_default();
     for (mode, work_dir) in CONTRACT_MODES {
         stop_new_processes(baseline);
@@ -94,6 +106,7 @@ fn contract_steps(baseline: &HashSet<u32>) -> StepResult {
                 &[
                     ("RESTREAM_BIN", "target/debug/restream"),
                     ("WORK_DIR", work_dir),
+                    ("RESTREAM_FAULT_TEST_BIN", &fault_tests),
                 ],
             )
         });
@@ -198,6 +211,45 @@ fn loom_executable(messages: &str, target: &str) -> Option<String> {
         })
         .filter_map(|message| message["executable"].as_str().map(str::to_owned))
         .next_back()
+}
+
+/// Compile cfg(test) fault seams before any media starts, then run only the
+/// named live cases from the executable (never cargo during media).
+pub(crate) fn prepare_live_fault_tests(profile: Option<&str>, dir: &str) -> Result<String, String> {
+    let mut command = Command::new("cargo");
+    command.args([
+        "test",
+        "-p",
+        "restream-engine",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+    ]);
+    if let Some(profile) = profile {
+        command.args(["--profile", profile]);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("build live fault test target: {error}"))?;
+    if !output.status.success() {
+        let diagnostics: String = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|message| message["message"]["rendered"].as_str().map(str::to_owned))
+            .collect();
+        return Err(format!(
+            "live fault test target build failed: {}{diagnostics}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let executable = loom_executable(&String::from_utf8_lossy(&output.stdout), "restream_engine")
+        .ok_or("engine lib-test executable missing from Cargo artifacts")?;
+    fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    // Fits Linux's 15-byte comm limit, so survivor cleanup can identify it.
+    let destination = format!("{dir}/restream-fault");
+    fs::copy(&executable, &destination)
+        .map_err(|error| format!("copy live fault executable: {error}"))?;
+    Ok(destination)
 }
 
 struct RuntimeProcess {

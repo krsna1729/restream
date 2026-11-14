@@ -66,6 +66,28 @@ pub(crate) async fn start_restream_child_opts(
     media_dir: Option<&Path>,
     env_overrides: &[(&str, String)],
 ) -> Result<Child, String> {
+    start_restream_child_with_stdout(
+        bin,
+        ports,
+        db_path,
+        (log_path, None),
+        clean_db,
+        media_dir,
+        env_overrides,
+    )
+    .await
+}
+
+/// A retained, unread stdout pipe exercises the real bounded console sink.
+pub(crate) async fn start_restream_child_with_stdout(
+    bin: &Path,
+    ports: &TestPorts,
+    db_path: &Path,
+    (log_path, stdout): (&Path, Option<Stdio>),
+    clean_db: bool,
+    media_dir: Option<&Path>,
+    env_overrides: &[(&str, String)],
+) -> Result<Child, String> {
     if !bin.exists() {
         return Err(format!("restream binary not found at {}", bin.display()));
     }
@@ -95,7 +117,7 @@ pub(crate) async fn start_restream_child_opts(
             "RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM",
             absolute_path(&rtmps_cert)?.to_string_lossy().to_string(),
         )
-        .stdout(Stdio::from(log))
+        .stdout(stdout.unwrap_or_else(|| Stdio::from(log)))
         .stderr(Stdio::from(stderr_log))
         .kill_on_drop(true);
     for (key, value) in env_overrides {

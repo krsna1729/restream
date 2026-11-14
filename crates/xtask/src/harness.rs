@@ -59,18 +59,48 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     let Some(mode) = parsed.mode.filter(|_| !parsed.prepare_only) else {
         return Ok(());
     };
+    let fault_tests = if requires_fault_tests(&binary, mode, parsed.args)? {
+        Some(
+            crate::concurrency::prepare_live_fault_tests(Some("bench"), "target/bench")
+                .map_err(Error::from)?,
+        )
+    } else {
+        None
+    };
     if env::var("HARNESS_USE_CGROUP_WRAPPER")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
     {
         // The harness execs this path (core/setup.rs CGROUP_WRAP_BIN).
         crate::container::install_executable(&root.join(".local/bin"), "restream-cgroup-wrap")?;
     }
-    workflow::checked(
+    let mut command = Command::new(binary);
+    command.current_dir(root).arg(mode).args(parsed.args);
+    if let Some(binary) = fault_tests {
+        command.env("RESTREAM_FAULT_TEST_BIN", binary);
+    }
+    workflow::checked(&mut command)
+}
+
+fn requires_fault_tests(binary: &Path, mode: &str, args: &[&str]) -> Result<bool, Error> {
+    if mode == "fault.sibling-isolation" {
+        return Ok(true);
+    }
+    if mode != "suite" {
+        return Ok(false);
+    }
+    // Ask the harness's shared runtime selector, including catalog defaults,
+    // repeated --only-modes (last wins), whitespace and preflight semantics.
+    let output = workflow::output(
         Command::new(binary)
-            .current_dir(root)
-            .arg(mode)
-            .args(parsed.args),
-    )
+            .args(["catalog", "selection", "suite"])
+            .args(args),
+    )?;
+    let selection: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| Error::from(format!("harness suite selection: {error}")))?;
+    Ok(selection["preflightOnly"] == false
+        && selection["modes"]
+            .as_array()
+            .is_some_and(|modes| modes.iter().any(|mode| mode == "fault.sibling-isolation")))
 }
 
 pub(super) fn env_default(name: &str, default: &str) -> std::ffi::OsString {

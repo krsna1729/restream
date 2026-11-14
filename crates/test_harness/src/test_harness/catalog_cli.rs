@@ -19,6 +19,19 @@ struct CatalogCli {
 }
 
 pub(crate) fn run_catalog_cli(raw: &[String]) -> AppResult<()> {
+    // Runtime suite options are opaque to catalog-global option parsing (a
+    // work-root value may itself start with "--"). Use its actual selector.
+    if raw.first().is_some_and(|command| command == "selection") {
+        if raw.get(1).map(String::as_str) != Some("suite") {
+            return Err("usage: test_harness catalog selection suite [suite options]".into());
+        }
+        let (modes, preflight_only) = crate::suite_selected_modes(&raw[2..])?;
+        println!(
+            "{}",
+            json!({"modes": modes, "preflightOnly": preflight_only})
+        );
+        return Ok(());
+    }
     let cli = parse_catalog_cli(raw)?;
 
     match cli.command.as_str() {
@@ -130,6 +143,7 @@ Usage:
   test_harness catalog [--root test/harness] list-modes [--json]
   test_harness catalog [--root test/harness] resolve <mode>
   test_harness catalog [--root test/harness] plan <mode>
+  test_harness catalog selection suite [suite options]
 
 Environment:
   HARNESS_CATALOG_DIR  Defaults the manifest root, usually test/harness.

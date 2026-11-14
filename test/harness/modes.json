@@ -183,6 +183,31 @@
           },
           "purpose": "SRT destinations that stop taking data: bounded RSS against a frozen receiver, and the backpressured-but-connected stall path against a raw undrained SRT listener"
         },
+        "fault.sibling-isolation": {
+          "suiteDefault": false,
+          "suiteTimeoutSecs": 300,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "Continuous sampled consumer delivery and healthy selected/standby inputs on the same and another pipeline through entity and environmental faults",
+          "assurance": {
+            "victims": ["same-pipeline output", "selected input", "healthy standby input", "other pipeline"],
+            "sampleIntervalMs": 250,
+            "maxObservedGapMs": 1500,
+            "cases": [
+              "cfg(test) per-peer SRT media panic: same Owner remains live",
+              "cfg(test) fatal Owner fault: independently owned RTMP victims on the same MediaEngine remain live; affected SRT pipeline releases its old registration, restarts and delivers new media on the same key/port",
+              "shared RTMP destination-stall case: output status and health reach stalled",
+              "malformed RTMP standby publisher: offending connection retires within 5 s",
+              "silent RTMP standby publisher: held for 8 s",
+              "RTMP reader stops draining: receive buffer fills during 20 s hold",
+              "file-backed SQLite BEGIN IMMEDIATE: write pending, snapshot SRT admission, write converges after rollback",
+              "stdout pipe read end retained, never drained: lifecycle events fill logger queue, consoleDropped rises through SRT connect/disconnect within 5 s each"
+            ],
+            "nonShippingTarget": "prebuilt engine lib-test executable, compiled before media starts"
+          }
+        },
         "srt.slow-peer": {
           "suiteDefault": false,
           "requires": {

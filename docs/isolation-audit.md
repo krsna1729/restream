@@ -10,6 +10,7 @@ bound or a test is an open finding. Panic containment is described in
 
 - [Threat model](#threat-model)
 - [Shared resources](#shared-resources)
+- [Live sibling fault gate](#live-sibling-fault-gate)
 - [Findings](#findings)
 - [Compile-time guards](#compile-time-guards)
 
@@ -84,6 +85,32 @@ destination.
 | SQLite pool | the API, and the shared loops (output pass, housekeeping, egress job rows, scheduler, recording catalog writer, catalog reload) | the shared loops use a lifecycle pool of their own (6 connections) through `DeadlineDb` (`src/db/deadline.rs`), which bounds a read's acquire, statements and busy retries by one deadline (3 s) and drops it there; a write runs as its own task, awaited to its outcome by a task that may stall on it (an output's task, housekeeping, a scheduled occurrence, the recording catalog writer; never the pass), and at most 2 writes hold a connection, so writes behind another writer's lock never take the loops' read connections; the startup catalog load retries until it succeeds; API handlers keep the main pool (10 connections, 30 s acquire, 30 s busy) | — | `a_read_returns_at_its_deadline_while_every_connection_is_held`, `a_write_behind_a_held_write_lock_answers_with_its_outcome_after_release`, `concurrent_starts_behind_a_write_lock_hold_at_most_the_write_permits_while_reads_answer`, `an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once`, `a_failing_startup_load_retries_until_a_load_succeeds` |
 | Allocator, FDs, CPU | everything | the per-entity bounds above | `nofile`, cgroup | capacity ramps |
 
+## Live sibling fault gate
+
+`fault.sibling-isolation` is in `CONTRACT_MODES`. It checks already-flowing
+consumers, not just process survival or bytes accumulated before the fault.
+
+| Fault | Faulted entity | Continuously checked victims and outcome |
+|---|---|---|
+| Panic | SRT standby publisher's production media step (`cfg(test)` poison payload) | same-Owner selected/standby inputs, two same-pipeline SRT readers and another pipeline's input/reader; faulty peer disconnects, Owner remains live |
+| Stall | shared RTMP destination-stall case; separate silent standby publisher | same-pipeline healthy output and selected/standby inputs, and another pipeline; destination reaches `stalled` in status and health |
+| Malformed media | RTMP standby publisher declares an oversized video message | offending connection retires within 5 s; the healthy inputs, same-pipeline output and other pipeline keep advancing |
+| Stopped reader | real RTMP play connection whose receive buffer fills without application reads | selected/standby inputs and SRT output on that pipeline, and another pipeline |
+| SQLite writer stall | file-backed `BEGIN IMMEDIATE`, with a pending API write | existing victims continue, SRT standby admits from the catalog snapshot; pending write converges after release |
+| Stdout never drained | retained pipe read end and full bounded logger queue, filled by real play/close lifecycle logs | existing victims continue; `logging.consoleDropped` rises before and through SRT connect/disconnect within 5 s each |
+| Fatal Owner fault | admission resolver unwind outside the peer boundary (`cfg(test)`), while a same-pipeline SRT standby and another pipeline's SRT selected input are flowing | RTMP selected/standby inputs and three RTMP readers on independent RTMP Owners, sharing the same `MediaEngine`, continue; both old SRT registrations release; replacements on the same keys/port and a real SRT reader deliver after restart |
+
+Consumer and input progress have a 1.5 s maximum observed gap, sampled every
+250 ms in the real-process cases and 100 ms in the test-target cases.
+Selected/standby forwarding states and health are checked throughout;
+standby inputs must keep receiving rather than forwarding into the selected
+source. A fatal Owner cannot preserve its own sessions uninterrupted:
+recovery of that fault domain is distinct from entity-level containment.
+The test target explicitly restarts the affected listener; automatic restart
+is covered separately by the listener-supervisor proofs. The harness runs a
+prebuilt engine lib-test executable, not a production injection endpoint or
+environment switch. See [live fault modes](concurrency-proofing.md#live-fault-modes).
+
 ## Findings
 
 Closed findings are rows in the table above (per-client RTMP and SRT caps,
@@ -112,8 +139,8 @@ the RTMP admission deadline, lock poisoning, the `ts_demux` fuzz target).
   pipeline. Several HLS keys can exhaust the global byte budget, HTTP slots
   have no per-client partition, and a MoQ broadcast's current group is not
   hard-capped by its adaptive cache budget. Quota/accounting policy is
-  separate from fault containment; the live sibling-fault gates remain
-  tracked in [Q-126](backlog.md#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected).
+  separate from fault containment; the [live sibling fault gate](#live-sibling-fault-gate)
+  checks entity-level containment without claiming per-tenant resource reservation.
 
 ## Compile-time guards
 

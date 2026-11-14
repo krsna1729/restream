@@ -371,6 +371,12 @@ impl HarnessSrtSinkPool {
     }
 }
 
+impl Drop for HarnessSrtSinkPool {
+    fn drop(&mut self) {
+        self.halt();
+    }
+}
+
 /// The single-Owner (`PerPort`) listener plan for `port`, shaped as the
 /// ingress shapes a one-Owner listener.
 fn build_listener_plan(port: u16, udp_buffer: usize) -> Result<OwnerListenerPlan, String> {
