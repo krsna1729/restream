@@ -22,7 +22,6 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -37,6 +36,13 @@ pub use catalog::{
 use catalog::{now_rfc3339, write_conversion_state};
 
 const MIN_DURATION_SECS: u64 = 5;
+
+/// How long the MP4 remux may run before FFmpeg is killed and the `.ts`
+/// kept. It copies streams, so it is disk-bound: the `.ts` is read once and
+/// the MP4 written twice (`+faststart` moves the index to the front). At a
+/// sustained 50 MB/s, 4 h covers about 240 GB of `.ts`, a day of 20 Mbit/s;
+/// the bound only stops a wedged FFmpeg from holding the remux forever.
+const REMUX_WITHIN: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
 
 pub struct RecordingStart {
     pub recording_id: String,
@@ -219,8 +225,8 @@ async fn remux_recording_to_mp4(
         "starting recording mp4 remux"
     );
 
-    match Command::new(&ffmpeg_path).args(&args).output().await {
-        Ok(output) if output.status.success() => {
+    match crate::ffmpeg_binary::run_tool(&ffmpeg_path, &args, REMUX_WITHIN).await {
+        Ok(_) => {
             if let Err(error) = tokio::fs::rename(&temp_path, &mp4_path).await {
                 let _ = tokio::fs::remove_file(&temp_path).await;
                 let error_message = format!("Finalized MP4 rename failed: {error}");
@@ -280,51 +286,26 @@ async fn remux_recording_to_mp4(
                 });
             }
         }
-        Ok(output) => {
+        Err(error) => {
             let _ = tokio::fs::remove_file(&temp_path).await;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let error = stderr.trim().to_string();
             write_conversion_state(
                 &ts_path,
                 RecordingConversionStatus::Failed,
                 Some(error.clone()),
             )
             .await;
+            warn!(
+                source = %ts_path.display(),
+                output = %mp4_path.display(),
+                err = %error,
+                "recording remux failed; keeping original ts"
+            );
             if let Some(metadata) = &metadata {
                 metadata.report(RecordingMetadataEvent::Failed {
                     recording_id,
                     error,
                 });
             }
-            warn!(
-                source = %ts_path.display(),
-                output = %mp4_path.display(),
-                status = %output.status,
-                stderr = %stderr.trim(),
-                "recording remux failed; keeping original ts"
-            );
-        }
-        Err(error) => {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            let error_message = format!("Failed to spawn ffmpeg: {error}");
-            write_conversion_state(
-                &ts_path,
-                RecordingConversionStatus::Failed,
-                Some(error_message.clone()),
-            )
-            .await;
-            if let Some(metadata) = &metadata {
-                metadata.report(RecordingMetadataEvent::Failed {
-                    recording_id,
-                    error: error_message,
-                });
-            }
-            warn!(
-                source = %ts_path.display(),
-                output = %mp4_path.display(),
-                err = %error,
-                "failed to spawn ffmpeg for recording remux; keeping original ts"
-            );
         }
     }
 }

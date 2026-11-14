@@ -423,9 +423,11 @@ async fn run_child(
         let start = text.len().saturating_sub(600);
         String::from_utf8_lossy(&text[start..]).trim().to_string()
     });
+    // No grace: QA runs until the child exits, the input ends or QA is
+    // cancelled; `reap_external_child` below bounds the teardown.
     let cancelled = tokio::select! {
         () = cancel.cancelled() => true,
-        _ = child.wait() => false,
+        _ = crate::child_process::reap(&mut child, Duration::MAX) => false,
         _ = input_result => false,
     };
     child_cancel.cancel();

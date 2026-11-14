@@ -18,6 +18,12 @@ use restream_sync::RingBuffer;
 use crate::ingest_publisher::IngestTimestamps;
 use process::SpawnedExternalFileIngest;
 
+/// How long FFmpeg may take to exit once its stdout and stderr have closed:
+/// its output is fully written, so only process teardown remains. Past this
+/// it is killed, so a child wedged after closing its pipes cannot hold up
+/// the next playlist item or the ingest's cleanup.
+const CHILD_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct ExternalFileIngestSource {
     /// The files to play in order; one file, or a playlist.
     pub files: Vec<PathBuf>,
@@ -174,8 +180,7 @@ async fn take_owned_child(
 
 async fn stop_owned_child(runtime: &ExternalFileIngestRuntime, child_pid: Option<u32>) {
     if let Some(mut child) = take_owned_child(runtime, child_pid).await {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+        crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
     }
 }
 
@@ -297,7 +302,7 @@ async fn run_external_file_ingest(
 
         let mut exit_status = None;
         if let Some(mut child) = take_owned_child(&runtime, child_pid).await {
-            exit_status = child.wait().await.ok();
+            exit_status = crate::child_process::reap(&mut child, CHILD_EXIT_GRACE).await;
         }
         cleanup.child_pid = None;
 

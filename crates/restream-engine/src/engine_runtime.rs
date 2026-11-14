@@ -64,8 +64,7 @@ impl MediaEngine {
         let Some(mut child) = child else {
             return false;
         };
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+        crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
         true
     }
 
