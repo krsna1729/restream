@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use compio::quic::{Endpoint, Incoming, VarInt};
+use futures_util::FutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
@@ -277,7 +278,24 @@ async fn accept_loop(endpoint: &Endpoint, listener: &Rc<Listener>, max_connectio
         let active = Active(listener.clone());
         let slot = CapSlot(listener.clone());
         compio::runtime::spawn(async move {
-            serve_connection(incoming, &active.0, slot).await;
+            let peer = incoming.remote_address();
+            // Fault domain: a panic while serving one connection (its
+            // handshake, publisher session or origin viewer) ends only that
+            // connection. Its slots, input attempt and viewer drop with it
+            // after the unwind, and the panic is counted and reported.
+            let served = std::panic::AssertUnwindSafe(serve_connection(incoming, &active.0, slot))
+                .catch_unwind()
+                .await;
+            if let Err(payload) = served {
+                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                error!(
+                    event_class = "media",
+                    event_type = "restream.moq.ingest.connection_panicked",
+                    %peer,
+                    panic,
+                    "MoQ connection panicked; only that connection was closed",
+                );
+            }
             drop((client, active));
         })
         .detach();

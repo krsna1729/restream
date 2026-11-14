@@ -11,6 +11,7 @@ use crate::ingest_auth::{
 };
 use crate::moq::egress::media::MediaFrame;
 use crate::moq::egress::publish::HangBroadcast;
+use crate::moq::ingest::session::INJECTED_PANIC_STREAM_KEY;
 use crate::moq::transport::test_support::{
     LOOPBACK_CERT, LOOPBACK_SERVER_NAME, loopback_client_tls, run,
 };
@@ -24,7 +25,8 @@ use restream_srt::address_family::AddressFamily;
 
 const INPUT_ID: &str = "input-moq";
 
-/// Accepts stream key `moq-key` for MoQ publish only.
+/// Accepts stream key `moq-key` for MoQ publish only, and the injected-panic
+/// key for another pipeline's input.
 struct OneKey;
 
 impl PipelineAccessAuthenticator for OneKey {
@@ -35,15 +37,19 @@ impl PipelineAccessAuthenticator for OneKey {
         _client_ip: &'a str,
     ) -> PipelineAccessFuture<'a> {
         Box::pin(async move {
-            if mode == PipelineAccessMode::MoqPublish && stream_key == "moq-key" {
-                Ok(AuthenticatedPipeline {
-                    id: "pipe-moq".to_string(),
-                    input_id: INPUT_ID.to_string(),
-                    selected: true,
-                })
-            } else {
-                Err(PipelineAccessError::InvalidStreamKey)
+            let (id, input_id) = match stream_key {
+                "moq-key" => ("pipe-moq", INPUT_ID),
+                INJECTED_PANIC_STREAM_KEY => ("pipe-doomed", "input-doomed"),
+                _ => return Err(PipelineAccessError::InvalidStreamKey),
+            };
+            if mode != PipelineAccessMode::MoqPublish {
+                return Err(PipelineAccessError::InvalidStreamKey);
             }
+            Ok(AuthenticatedPipeline {
+                id: id.to_string(),
+                input_id: input_id.to_string(),
+                selected: true,
+            })
         })
     }
 }
@@ -391,6 +397,71 @@ async fn an_accept_loop_panic_is_contained_at_the_thread_entry() {
         crate::panic_boundary::contained_panics() > before,
         "the listener panic is counted"
     );
+    engine.shutdown_listeners();
+}
+
+/// A panic while serving one connection (injected in a publisher session
+/// right after its admission) ends only that connection: counted, its input
+/// attempt released, and a publisher already feeding another input on the
+/// same listener thread keeps feeding it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panicking_connection_ends_alone_and_the_listener_keeps_serving() {
+    let (engine, addr) = listen(4, "connection-panic").await;
+    let done = Arc::new(AtomicBool::new(false));
+    let healthy = tokio::task::spawn_blocking({
+        let done = done.clone();
+        move || publish_until(addr, done)
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while input_bytes(&engine)
+        .await
+        .is_none_or(|(_, bytes)| bytes == 0)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the healthy publisher never fed its input"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let before = crate::panic_boundary::contained_panics();
+    tokio::task::spawn_blocking(move || {
+        publish_raw_catalog(
+            addr,
+            INJECTED_PANIC_STREAM_KEY,
+            hang::Catalog::DEFAULT_NAME,
+            Bytes::from_static(b"{}"),
+        )
+    })
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while crate::panic_boundary::contained_panics() == before
+        || engine
+            .input_has_session("pipe-doomed", "input-doomed")
+            .await
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the panic was not counted at the connection boundary, or its input stayed registered"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let (_, fed) = input_bytes(&engine).await.expect("the healthy input stays");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while input_bytes(&engine)
+        .await
+        .is_none_or(|(_, bytes)| bytes <= fed)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the healthy publisher stopped feeding after the panic"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    done.store(true, Ordering::Release);
+    healthy.await.unwrap();
     engine.shutdown_listeners();
 }
 
