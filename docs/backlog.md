@@ -16,7 +16,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
-- [Q-126 sibling fault gates](#q-126-correctness-opus-live-fault-gates-prove-siblings-are-unaffected)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
 - [Not planned](#not-planned)
@@ -133,19 +132,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: per candidate, a layering-audit read of every call site; the egress
   unit tests, proptests and Kani proofs unchanged and passing; the
   `egress_visit` benchmark before and after for any change on the visit path.
-
-### Q-126 [correctness] [opus] Live fault gates prove siblings are unaffected
-- Goal: contract modes that inject one fault into one entity and assert on
-  its siblings. The faults are a panic, a stall, malformed media, a stalled
-  reader, a stalled database, a stdout collector that never reads, and an
-  Owner fault. The siblings checked are a sibling output of the same
-  pipeline, a sibling input of the same pipeline and another pipeline: each
-  keeps media flowing without a gap, and its status stays healthy. With the
-  stalled stdout, an SRT publisher also connects and disconnects on time
-  while `logging.consoleDropped` rises.
-- Gates: the modes are listed in `CONTRACT_MODES` and pass on master pushes.
-  Disabling an existing boundary, for example the per-peer SRT containment,
-  must fail the matching mode.
 
 ### Q-132 [correctness] [opus] API handlers reach SQLite under a deadline, and a session survives a pool timeout
 - Goal: the shared loops (output pass, housekeeping, egress job rows, the

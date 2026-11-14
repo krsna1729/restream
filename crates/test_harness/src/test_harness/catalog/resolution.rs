@@ -102,6 +102,7 @@ impl HarnessCatalog {
                 "kind": "runner",
                 "group": entry.group,
                 "purpose": entry.spec.get("purpose").cloned().unwrap_or(Value::Null),
+                "assurance": entry.spec.get("assurance").cloned().unwrap_or(Value::Null),
                 "requires": entry.spec.get("requires").cloned().unwrap_or_else(|| json!({}))
             })),
             other => Err(format!("unsupported static mode kind {other}")),
@@ -179,6 +180,7 @@ impl HarnessCatalog {
                 "mode": mode,
                 "kind": "runner",
                 "purpose": resolved["purpose"].clone(),
+                "assurance": resolved["assurance"].clone(),
                 "steps": [
                     {
                         "op": "runner",

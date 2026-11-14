@@ -43,6 +43,7 @@ compio = { version = "0.19", default-features = false, features = ["runtime", "t
 moq-msf = "0.5"
 hang = "=0.21.16"
 moq-net = { version = "=0.3.15", features = ["unsend"] }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
 [dev-dependencies]
 proptest = "1"

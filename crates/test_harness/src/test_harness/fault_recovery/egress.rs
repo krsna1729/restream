@@ -290,16 +290,6 @@ pub(super) async fn fault_rtmp_egress_sink_stalls(
 ) -> Result<Value, String> {
     let pid = create_pipeline(api, "fault-egress-rtmp-stall").await?;
 
-    let oid = create_output(
-        api,
-        &pid,
-        "rtmp-stall-sink",
-        &format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-stall-sink"),
-        "source",
-    )
-    .await?;
-
-    let stall_server = start_stalled_rtmp_sink_server(sink_port).await?;
     let mut pub_child = spawn_publisher(
         fixture_h264,
         &format!(
@@ -312,49 +302,9 @@ pub(super) async fn fault_rtmp_egress_sink_stalls(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    start_output(api, &pid, &oid).await?;
-
-    let accept_deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < accept_deadline && !stall_server.publish_accepted.load(Ordering::Relaxed)
-    {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    let accepted = stall_server.publish_accepted.load(Ordering::Relaxed);
-    let stalled_result =
-        wait_for_output_stalled_status(api, &pid, &oid, Duration::from_secs(45)).await;
-    let (status_snapshot, health_snapshot) = stalled_result
-        .as_ref()
-        .map(|(status, health)| (status.clone(), health.clone()))
-        .unwrap_or((Value::Null, Value::Null));
-    let passed = accepted && stalled_result.is_ok();
-
-    println!(
-        "[fault] RTMP egress sink stalls: {} (publishAccepted={} status={} phase={} targetAddr={} totalSize={} lastProgressAgeMs={})",
-        if passed { "PASS" } else { "FAIL" },
-        accepted,
-        status_snapshot["status"].as_str().unwrap_or("unknown"),
-        status_snapshot["phase"].as_str().unwrap_or("unknown"),
-        status_snapshot["targetAddr"].as_str().unwrap_or(""),
-        status_snapshot["totalSize"].as_u64().unwrap_or(0),
-        status_snapshot["lastProgressAgeMs"]
-            .as_u64()
-            .map(|age| age.to_string())
-            .unwrap_or_else(|| "null".to_string()),
-    );
-
-    stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
+    let result = super::destination_stall::rtmp_destination_stalls(api, &pid, sink_port).await;
     stop_child(&mut pub_child).await;
-    stop_stalled_rtmp_sink_server(stall_server);
-
-    Ok(json!({
-        "test": "rtmp-egress-sink-stalls",
-        "passed": passed,
-        "publishAccepted": accepted,
-        "status": status_snapshot,
-        "healthOutput": health_snapshot,
-        "error": stalled_result.err(),
-    }))
+    result
 }
 
 pub(crate) async fn wait_for_outputs_live_and_progressing(

@@ -466,6 +466,13 @@ pub(crate) struct StalledRtmpSinkServer {
     pub(crate) publish_accepted: Arc<std::sync::atomic::AtomicBool>,
 }
 
+impl Drop for StalledRtmpSinkServer {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+
 fn set_socket_recv_buffer(socket: &TcpStream, size: libc::c_int) -> Result<(), String> {
     // SAFETY: `socket.as_raw_fd()` is a live socket descriptor for the duration
     // of this call, and `size` points to initialized stack memory of the

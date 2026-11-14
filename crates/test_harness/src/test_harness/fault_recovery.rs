@@ -1,11 +1,21 @@
+#[path = "fault_recovery/destination_stall.rs"]
+mod destination_stall;
 #[path = "fault_recovery/egress.rs"]
 mod egress;
 #[path = "fault_recovery/resilience.rs"]
 mod resilience;
 #[path = "fault_recovery/rtmps_egress.rs"]
 mod rtmps_egress;
+#[path = "fault_recovery/sibling_sampler.rs"]
+mod sibling_sampler;
+#[path = "fault_recovery/sibling_wire.rs"]
+mod sibling_wire;
+#[path = "fault_recovery/siblings.rs"]
+mod siblings;
 #[path = "fault_recovery/srt_stall.rs"]
 mod srt_stall;
+
+pub(crate) use siblings::fault_sibling_isolation;
 
 #[cfg(test)]
 pub(crate) use egress::{

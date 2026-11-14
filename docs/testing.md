@@ -633,7 +633,7 @@ Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
   step with a "kTLS unavailable" annotation, not a test result.
 - `master` pushes: `master-transport-shards` and `concurrency-contract`
   (`fault.resilience`, `fault.egress-retry`, `fault.output-stall`,
-  `fault.srt-output-stall`, `recovery`). `fault.resilience` also proves
+  `fault.srt-output-stall`, `fault.sibling-isolation`, `recovery`). `fault.resilience` also proves
   RTMPS delivery, sink loss
   reaching `retrying`, and SIGTERM shutdown with `restream.shutdown.completed`
   within 5 s.
@@ -645,6 +645,16 @@ Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
   sweeps and fault modes. Artifacts upload on every result.
 - Artifact retention: pull-request shards 3 days and `master` shards 7 days,
   on failure or cancel.
+
+`cargo xtask harness fault.sibling-isolation` builds its non-shipping engine
+fault-test executable before launching any media. The mode checks live
+same-pipeline output and selected/standby input isolation, and another
+pipeline, throughout destination/publisher stalls, malformed media, an
+unread reader, a held SQLite writer and a never-drained stdout pipe. Delivery
+is sampled with a 1.5 s gap bound rather than inferred from cumulative
+before/after counters. Real SRT peers also exercise per-peer panic and fatal
+Owner recovery through `cfg(test)` seams. See the exact scope and fatal-Owner
+limitation in [live fault modes](concurrency-proofing.md#live-fault-modes).
 
 A capability failure means the runner cannot qualify that transport. Do not
 skip it or swap transports. RTMPS ingest is not in the product contract; the

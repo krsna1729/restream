@@ -27,8 +27,8 @@ pub(crate) use process::{
     mediamtx_udp_read_buffer_line, pinned_mediamtx, pinned_mediamtx_version, plain_mediamtx_config,
     proc_net_has_listening_port, process_cpu_pct, process_rss_kb, spawn_logged_ffmpeg,
     spawn_mediamtx, start_restream_api, start_restream_child, start_restream_child_in_media_dir,
-    start_restream_child_opts, start_restream_child_with_env, udp_read_buffer_line,
-    wait_for_http_ok, wait_for_tcp_listener_ready,
+    start_restream_child_opts, start_restream_child_with_env, start_restream_child_with_stdout,
+    udp_read_buffer_line, wait_for_http_ok, wait_for_tcp_listener_ready,
 };
 #[allow(unused_imports)]
 pub(crate) use profile::{

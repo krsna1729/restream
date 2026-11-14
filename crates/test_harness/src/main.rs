@@ -267,6 +267,7 @@ async fn run() -> Result<(), String> {
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
             "fault.srt-output-stall" => fault_srt_output_stall().await,
+            "fault.sibling-isolation" => fault_sibling_isolation().await,
             "srt.slow-peer" => srt_slow_peer().await,
             "srt.backup-failover" => srt_backup_failover().await,
             "srt.admission" => admission(AdmissionFabric::Srt).await,

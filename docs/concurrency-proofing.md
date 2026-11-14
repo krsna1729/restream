@@ -87,9 +87,49 @@ means the ownership model was broken.
 | `fault.output-stall` | a connected RTMP sink that stops draining shows `stalled` in output status and health | `contract` |
 | `recovery` | hung HLS PUT destinations time out and recover; rapid SRT publisher replacement; repeated RTMP/SRT sink flaps show as recovered but unstable; a killed transcoder FFmpeg is retried from a new stage process | `contract` |
 | `fault.srt-output-stall` | bounded RSS while retrying a frozen SRT receiver; against `crates/test_harness/src/test_harness/srt_raw_sink.rs`, a real handshake and data while siblings progress; the retired output stops and two sibling receivers keep advancing | `contract`, nightly and release shards |
+| `fault.sibling-isolation` | continuous consumer samples and healthy selected/standby inputs during a destination stall, malformed standby publisher, silent publisher, stopped reader, real SQLite writer lock and an unread stdout pipe; a prebuilt test target exercises per-peer panic and fatal Owner boundaries over real SRT sockets | `contract` |
 
 srt-rs exposes no hook for an application-unread receive buffer, so
 `fault.srt-output-stall` does not claim that backpressure shape.
+
+`fault.sibling-isolation` samples real sink delivery every 250 ms and input
+receive counters plus health throughout each fault, with a 1.5 s maximum
+observed delivery/receive gap, including the fault's end. This is a bounded
+live-continuity assertion, not a claim of zero packet loss or literal zero
+scheduling gaps. Each pipeline has an active and a warm standby input; their
+selection and forwarding states must not change. The destination-stall case
+is shared with `fault.output-stall`, not a second implementation.
+
+The stdout collector retains the pipe read end without draining it. Repeated
+real RTMP play/close lifecycles fill the pipe and the 16,384-line console
+queue; `logging.consoleDropped` must increase before and through bounded SRT
+publisher connect/disconnect. No packet logging or production injection flag
+is enabled. The SQLite case holds a file-backed `BEGIN IMMEDIATE`, proves an
+API write remains pending, admits an SRT standby from the catalog snapshot,
+then releases the lock and requires the pending write to converge. It does
+not equate an API waiting for persistence with a media outage.
+
+Panic injection remains `cfg(test)`: xtask builds the engine lib-test
+executable **before** media starts, and the harness runs only
+`live_sibling_fault_gate_peer_panic` and `live_sibling_fault_gate_owner_fault`
+from that executable. These drive production `SrtServer`, its Owner and
+real SRT publishers/readers, checking consumer progress every 100 ms under
+the same 1.5 s bound. The peer-panic case has already flowing same-pipeline
+readers, selected/standby inputs and another pipeline on the same Owner.
+A fatal Owner fault necessarily interrupts sessions on that Owner: that case
+instead requires RTMP selected/standby publishers and three real RTMP readers
+on independently owned RTMP threads, sharing the **same `MediaEngine`**, to
+continue. The SRT Owner serves both a standby input on the RTMP victims'
+pipeline and a selected input on another pipeline before the fault. Both old
+registrations must release without stopping their RTMP siblings. Replacement
+publishers on the same keys/port must deliver again; a real SRT reader must
+receive media and the selected source ring must advance beyond its pre-restart
+tail.
+The test explicitly performs the restart; the existing listener-supervisor
+tests separately prove automatic supervision. Neither fault seam ships.
+The prebuilt `restream-fault` target runs in an owned process group; the
+harness kills that group on every exit, including a target timeout, so a
+terminated test target cannot leave its FFmpeg descendants running.
 
 ## Gate commands
 
@@ -102,8 +142,8 @@ cargo xtask concurrency contract   # CI: concurrency-contract, master only
 |---|---|---|
 | All loom models | yes | — |
 | Process-lifecycle guard over `crates/test_harness/src/main.rs` (every spawn armed for kill-and-wait) | — | yes |
-| Build `restream` and `test_harness`, run the five `CONTRACT_MODES` | — | yes |
-| No new `restream`, `mediamtx`, `ffmpeg`, `ffprobe` or `test_harness` process survives a mode | — | yes |
+| Build `restream`, `test_harness` and the engine lib-test fault target before media, then run `CONTRACT_MODES` | — | yes |
+| No new `restream`, `restream-fault`, `mediamtx`, `ffmpeg`, `ffprobe` or `test_harness` process survives a mode | — | yes |
 
 Unit, integration and property tests, including the mandatory surfaces
 below, run in the CI `test` job (`cargo test --workspace`) on every run; the

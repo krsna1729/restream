@@ -59,18 +59,26 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
     let Some(mode) = parsed.mode.filter(|_| !parsed.prepare_only) else {
         return Ok(());
     };
+    let fault_tests = if mode == "fault.sibling-isolation" {
+        Some(
+            crate::concurrency::prepare_live_fault_tests(Some("bench"), "target/bench")
+                .map_err(Error::from)?,
+        )
+    } else {
+        None
+    };
     if env::var("HARNESS_USE_CGROUP_WRAPPER")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
     {
         // The harness execs this path (core/setup.rs CGROUP_WRAP_BIN).
         crate::container::install_executable(&root.join(".local/bin"), "restream-cgroup-wrap")?;
     }
-    workflow::checked(
-        Command::new(binary)
-            .current_dir(root)
-            .arg(mode)
-            .args(parsed.args),
-    )
+    let mut command = Command::new(binary);
+    command.current_dir(root).arg(mode).args(parsed.args);
+    if let Some(binary) = fault_tests {
+        command.env("RESTREAM_FAULT_TEST_BIN", binary);
+    }
+    workflow::checked(&mut command)
 }
 
 pub(super) fn env_default(name: &str, default: &str) -> std::ffi::OsString {
