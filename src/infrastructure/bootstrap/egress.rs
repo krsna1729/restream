@@ -4,25 +4,30 @@
 //! The pass leaves an output alone while its task runs, and the task's end
 //! wakes the next pass, so one output's slow start or write never holds the
 //! pass for the others. The job row is written off the start path entirely
-//! ([`AttemptJob`]).
+//! ([`AttemptJob`]). Each output is planned behind a panic boundary of its
+//! own ([`PlanningPanics`]): one whose planning panics backs off, and the
+//! pass goes on to the rest.
 
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::FutureExt as _;
 use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
 use crate::application::reconcile::{
-    OutputFailureWindow, OutputStartAction, OutputStopAction, decide_output_start_action,
-    decide_output_stop_action, load_output_runtime_snapshot,
+    OutputFailureWindow, OutputRetryPolicy, OutputStartAction, OutputStopAction,
+    decide_output_start_action, decide_output_stop_action, load_output_runtime_snapshot,
 };
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::topology::ReconcileRequests;
 use crate::config::RuntimeTuning;
 use crate::db::DeadlineDb;
 use restream_domain::domain::output_spec::OutputUrlScheme;
+use restream_domain::domain::state::DesiredOutputState;
 use restream_domain::models::{JobStatus, Output};
 use restream_engine::engine::MediaEngine;
 
@@ -32,8 +37,23 @@ use egress_task::{
     EgressTask, HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask,
     SrtFabricTask, prepare_moq_fabric_task,
 };
+mod planning_panics;
+use planning_panics::PlanningPanics;
 
 pub(super) type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
+
+/// How a pass decides whether to start an output; production's is
+/// [`decide_output_start_action`].
+type DecideStart = fn(
+    DesiredOutputState,
+    bool,
+    bool,
+    bool,
+    bool,
+    Option<OutputFailureWindow>,
+    OutputRetryPolicy,
+    &str,
+) -> OutputStartAction;
 
 pub(super) struct EgressReconciler {
     starter: EgressStarter,
@@ -44,6 +64,8 @@ pub(super) struct EgressReconciler {
     /// Outputs whose start or retries-exhausted mark runs in its own task.
     in_flight: InFlight,
     tasks: TaskTracker,
+    planning_panics: PlanningPanics,
+    decide_start: DecideStart,
 }
 
 /// What an output's start needs, cloned into its task.
@@ -100,10 +122,22 @@ impl EgressReconciler {
             requests,
             in_flight: InFlight::default(),
             tasks: TaskTracker::new(),
+            planning_panics: PlanningPanics::default(),
+            decide_start: decide_output_start_action,
         }
     }
 
+    /// The reconciler with another start decision: a test's, that panics
+    /// for one output and defers to production's for the rest.
+    #[cfg(test)]
+    fn with_start_decision(mut self, decide_start: DecideStart) -> Self {
+        self.decide_start = decide_start;
+        self
+    }
+
     /// Runs `work` for the output in its own task, unless one runs already.
+    /// A panic in it is the output's planning panic: whatever it registered
+    /// is unregistered, and the output backs off.
     fn spawn_for(&self, output_id: &str, work: impl Future<Output = ()> + Send + 'static) {
         if !restream_sync::lock::lock(&self.in_flight.0).insert(output_id.to_string()) {
             return;
@@ -113,9 +147,18 @@ impl EgressReconciler {
             output_id: output_id.to_string(),
             requests: self.requests.clone(),
         };
+        let (engine, tuning, panics) = (
+            self.starter.engine.clone(),
+            self.starter.tuning,
+            self.planning_panics.clone(),
+        );
         self.tasks.spawn(async move {
-            let _claim = claim;
-            work.await;
+            // Released last: the pass it wakes sees the backoff.
+            let claim = claim;
+            if AssertUnwindSafe(work).catch_unwind().await.is_err() {
+                engine.unregister_egress(&claim.output_id).await;
+                panics.record(&claim.output_id, tuning);
+            }
         });
     }
 
@@ -131,141 +174,159 @@ impl EgressReconciler {
 
     /// Starts, stops and retries outputs. Returns how long until the earliest
     /// output waiting out its retry backoff may start, so the reconciler can
-    /// run then.
+    /// run then. Each output is planned behind its own panic boundary: one
+    /// that panics backs off, and the pass goes on to the next.
     pub async fn reconcile(&self, outputs: &[Output]) -> Option<std::time::Duration> {
-        let mut next_retry: Option<u64> = None;
-        let engine = &self.starter.engine;
-        let tuning = self.starter.tuning;
+        self.planning_panics.retain_outputs(outputs);
+        let mut next_retry: Option<Duration> = None;
         for output in outputs {
             // Its task decides; the task's end wakes the next pass.
             if self.in_flight.contains(&output.id) {
                 continue;
             }
-            // Its failures end here, and only here: from the row this pass
-            // read. A mark that landed after this pass read the rows leaves
-            // them tracked, so the stale row decides `MarkFailed` again, not
-            // a start; the next pass reads the mark and clears them, so the
-            // operator's next Start is a fresh attempt.
-            if output.retries_exhausted
-                && self
-                    .starter
-                    .last_failed
-                    .lock()
+            let wait = match self.planning_panics.remaining(&output.id, Instant::now()) {
+                Some(remaining) => Some(remaining),
+                None => AssertUnwindSafe(self.reconcile_output(output))
+                    .catch_unwind()
                     .await
-                    .remove(&output.id)
-                    .is_some()
-            {
-                engine.clear_egress_retry_state(&output.id).await;
-            }
-            let snapshot =
-                load_output_runtime_snapshot(engine, output, tuning.ingest_disconnect_grace_ms)
-                    .await;
-            // Restart backoff is the reconciler's; while an output is active,
-            // its retry state is its uploader's, so it is cleared only here.
-            if !output.wants_running() {
-                engine.clear_egress_retry_state(&output.id).await;
-            }
-            let failure = {
-                let last_failed = self.starter.last_failed.lock().await;
-                last_failed
-                    .get(&output.id)
-                    .map(|(failed_at, retries)| OutputFailureWindow {
-                        retries: *retries,
-                        elapsed_ms: failed_at.elapsed().as_millis().min(u128::from(u64::MAX))
-                            as u64,
-                    })
+                    .unwrap_or_else(|_| {
+                        Some(self.planning_panics.record(&output.id, self.starter.tuning))
+                    }),
             };
-
-            match decide_output_start_action(
-                output.desired_state,
-                output.retries_exhausted,
-                snapshot.is_active,
-                snapshot.effective_has_ingest,
-                snapshot.ingest_tracks_ready,
-                failure,
-                tuning.output_retry_policy(),
-                &output.id,
-            ) {
-                OutputStartAction::NotApplicable => {}
-                OutputStartAction::SkipNoIngest => {
-                    engine.clear_egress_retry_state(&output.id).await;
-                    continue;
-                }
-                OutputStartAction::SkipProbePending => {
-                    // The probe landing emits `ingest.probed`, which wakes a
-                    // pass. Also re-check on the next interval the pass gap
-                    // allows: a source that never probes opens the gate only
-                    // when its probe grace from the first media byte runs
-                    // out, and nothing wakes a pass for that.
-                    let interval_ms = tuning.reconciler_interval_ms;
-                    next_retry = Some(next_retry.map_or(interval_ms, |next| next.min(interval_ms)));
-                    continue;
-                }
-                OutputStartAction::MarkFailed => {
-                    self.spawn_for(
-                        &output.id,
-                        mark_retries_exhausted(
-                            self.starter.clone(),
-                            self.runtime_state.clone(),
-                            output.clone(),
-                        ),
-                    );
-                    continue;
-                }
-                OutputStartAction::WaitRetry {
-                    retries,
-                    backoff_ms,
-                    remaining_ms,
-                } => {
-                    engine
-                        .update_egress_retry_state(&output.id, retries, backoff_ms, remaining_ms)
-                        .await;
-                    next_retry =
-                        Some(next_retry.map_or(remaining_ms, |next| next.min(remaining_ms)));
-                    continue;
-                }
-                OutputStartAction::StartNow => {
-                    // A fresh attempt carries no restart backoff.
-                    engine.clear_egress_retry_state(&output.id).await;
-                    self.spawn_for(&output.id, self.starter.clone().start(output.clone()));
-                }
-            }
-
-            match decide_output_stop_action(
-                output.desired_state,
-                snapshot.is_active,
-                snapshot.effective_has_ingest,
-            ) {
-                OutputStopAction::KeepRunning => {}
-                OutputStopAction::StopBecauseIngestLost => {
-                    info!(
-                        correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                        output_id = %output.id,
-                        output_name = %output.name,
-                        pipeline_id = %output.pipeline_id,
-                        event_class = "lifecycle",
-                        event_type = "lifecycle.stop",
-                        "output job stopped because ingest is no longer active",
-                    );
-                    engine.unregister_egress(&output.id).await;
-                    engine.clear_egress_retry_state(&output.id).await;
-                }
-                OutputStopAction::StopRequested => {
-                    info!(
-                        correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                        output_id = %output.id,
-                        output_name = %output.name,
-                        pipeline_id = %output.pipeline_id,
-                        event_class = "lifecycle",
-                        event_type = "lifecycle.stop",
-                        "output job stopped",
-                    );
-                    engine.unregister_egress(&output.id).await;
-                    engine.clear_egress_retry_state(&output.id).await;
-                }
+            if let Some(wait) = wait {
+                next_retry = Some(next_retry.map_or(wait, |next| next.min(wait)));
             }
         }
-        next_retry.map(Duration::from_millis)
+        next_retry
+    }
+
+    /// Plans one output: starts, stops or retries it. Returns how long until
+    /// it should be planned again, when that is a deadline of its own.
+    async fn reconcile_output(&self, output: &Output) -> Option<Duration> {
+        let engine = &self.starter.engine;
+        let tuning = self.starter.tuning;
+        // Its failures end here, and only here: from the row this pass
+        // read. A mark that landed after this pass read the rows leaves
+        // them tracked, so the stale row decides `MarkFailed` again, not
+        // a start; the next pass reads the mark and clears them, so the
+        // operator's next Start is a fresh attempt.
+        if output.retries_exhausted
+            && self
+                .starter
+                .last_failed
+                .lock()
+                .await
+                .remove(&output.id)
+                .is_some()
+        {
+            engine.clear_egress_retry_state(&output.id).await;
+        }
+        let snapshot =
+            load_output_runtime_snapshot(engine, output, tuning.ingest_disconnect_grace_ms).await;
+        // Running, or no longer wanted: past panics no longer grow its backoff.
+        if snapshot.is_active || !output.wants_running() {
+            self.planning_panics.clear(&output.id);
+        }
+        // Restart backoff is the reconciler's; while an output is active,
+        // its retry state is its uploader's, so it is cleared only here.
+        if !output.wants_running() {
+            engine.clear_egress_retry_state(&output.id).await;
+        }
+        let failure = {
+            let last_failed = self.starter.last_failed.lock().await;
+            last_failed
+                .get(&output.id)
+                .map(|(failed_at, retries)| OutputFailureWindow {
+                    retries: *retries,
+                    elapsed_ms: failed_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                })
+        };
+
+        match (self.decide_start)(
+            output.desired_state,
+            output.retries_exhausted,
+            snapshot.is_active,
+            snapshot.effective_has_ingest,
+            snapshot.ingest_tracks_ready,
+            failure,
+            tuning.output_retry_policy(),
+            &output.id,
+        ) {
+            OutputStartAction::NotApplicable => {}
+            OutputStartAction::SkipNoIngest => {
+                engine.clear_egress_retry_state(&output.id).await;
+                return None;
+            }
+            OutputStartAction::SkipProbePending => {
+                // The probe landing emits `ingest.probed`, which wakes a
+                // pass. Also re-check on the next interval the pass gap
+                // allows: a source that never probes opens the gate only
+                // when its probe grace from the first media byte runs
+                // out, and nothing wakes a pass for that.
+                return Some(Duration::from_millis(tuning.reconciler_interval_ms));
+            }
+            OutputStartAction::MarkFailed => {
+                self.spawn_for(
+                    &output.id,
+                    mark_retries_exhausted(
+                        self.starter.clone(),
+                        self.runtime_state.clone(),
+                        output.clone(),
+                    ),
+                );
+                return None;
+            }
+            OutputStartAction::WaitRetry {
+                retries,
+                backoff_ms,
+                remaining_ms,
+            } => {
+                engine
+                    .update_egress_retry_state(&output.id, retries, backoff_ms, remaining_ms)
+                    .await;
+                return Some(Duration::from_millis(remaining_ms));
+            }
+            OutputStartAction::StartNow => {
+                // A fresh attempt carries no restart backoff.
+                engine.clear_egress_retry_state(&output.id).await;
+                self.spawn_for(&output.id, self.starter.clone().start(output.clone()));
+            }
+        }
+
+        match decide_output_stop_action(
+            output.desired_state,
+            snapshot.is_active,
+            snapshot.effective_has_ingest,
+        ) {
+            OutputStopAction::KeepRunning => {}
+            OutputStopAction::StopBecauseIngestLost => {
+                info!(
+                    correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
+                    output_id = %output.id,
+                    output_name = %output.name,
+                    pipeline_id = %output.pipeline_id,
+                    event_class = "lifecycle",
+                    event_type = "lifecycle.stop",
+                    "output job stopped because ingest is no longer active",
+                );
+                engine.unregister_egress(&output.id).await;
+                engine.clear_egress_retry_state(&output.id).await;
+            }
+            OutputStopAction::StopRequested => {
+                info!(
+                    correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
+                    output_id = %output.id,
+                    output_name = %output.name,
+                    pipeline_id = %output.pipeline_id,
+                    event_class = "lifecycle",
+                    event_type = "lifecycle.stop",
+                    "output job stopped",
+                );
+                engine.unregister_egress(&output.id).await;
+                engine.clear_egress_retry_state(&output.id).await;
+            }
+        }
+        None
     }
 }
 
