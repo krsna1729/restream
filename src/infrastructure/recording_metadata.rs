@@ -3,10 +3,17 @@
 //!
 //! It is supervised: a panic restarts it after the restart backoff, and the
 //! update it was writing is restored first, so the latest state of every
-//! recording still lands. Writes go through the lifecycle [`DeadlineDb`]
-//! and are awaited to their outcome here, in the writer: a stalled database
-//! holds only this task, while recorders keep reporting into the queue,
-//! which holds at most one entry per recording.
+//! recording still lands. A write that may succeed later (busy, I/O, a
+//! panic in the write task) puts its update back and is retried with a
+//! 100 ms..30 s backoff; one that never can (a constraint or decode error)
+//! is dropped, logged and counted ([`dropped_updates`]). Writes go through
+//! the lifecycle [`DeadlineDb`] and are awaited to their outcome here, in
+//! the writer: a stalled database holds only this task, while recorders
+//! keep reporting into the queue, which holds at most one entry per
+//! recording.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use restream_domain::domain::ids::RecordingId;
 use restream_domain::domain::state::RecordingPhase;
@@ -23,12 +30,12 @@ use crate::infrastructure::bootstrap::supervised_task::spawn_supervised;
 /// drained.
 pub fn spawn_recording_metadata_reporter(db: DeadlineDb) -> RecordingMetadataReporter {
     let (reporter, queue) = recording_metadata_channel();
-    spawn_writer(queue, db, persist_recording_metadata);
+    spawn_writer(queue, db, persist_recording_metadata_event);
     reporter
 }
 
 /// The supervised writer draining `queue` with its persist step;
-/// production's is [`persist_recording_metadata`].
+/// production's is [`persist_recording_metadata_event`].
 fn spawn_writer<P, Fut>(
     queue: RecordingMetadataQueue,
     db: DeadlineDb,
@@ -43,6 +50,34 @@ where
     })
 }
 
+/// Backoff after a write that may succeed later, doubled per failure.
+const RETRY_MIN: Duration = Duration::from_millis(100);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// Updates dropped because their write can never succeed (a constraint or
+/// decode error); each is logged too.
+static DROPPED_UPDATES: AtomicU64 = AtomicU64::new(0);
+
+/// Recording catalog updates dropped since start.
+pub fn dropped_updates() -> u64 {
+    DROPPED_UPDATES.load(Ordering::Relaxed)
+}
+
+/// Whether a failed write may succeed if tried again: the database busy or
+/// locked, an I/O or pool error, or the write task panicking
+/// (`DeadlineError::Aborted` arrives as I/O).
+fn is_transient(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Database(error) => matches!(
+            error.code().as_deref().and_then(|code| code.parse::<i32>().ok()),
+            // SQLITE_BUSY, SQLITE_LOCKED and their extended codes.
+            Some(code) if code & 0xff == 5 || code & 0xff == 6
+        ),
+        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
+        _ => false,
+    }
+}
+
 async fn run_writer<P, Fut>(queue: RecordingMetadataQueue, db: DeadlineDb, persist: P)
 where
     P: Fn(DeadlineDb, RecordingMetadataUpdate) -> Fut,
@@ -50,21 +85,38 @@ where
 {
     // A previous run that panicked mid-write left its update unacknowledged.
     queue.restore();
+    let mut retry = RETRY_MIN;
     while let Some(update) = queue.next().await {
         let recording_id = update.recording_id.clone();
-        if let Err(error) = persist(db.clone(), update).await {
-            tracing::warn!(
-                recording_id = %recording_id,
-                err = %error,
-                "failed to persist recording metadata"
-            );
+        match persist(db.clone(), update).await {
+            Ok(()) => retry = RETRY_MIN,
+            Err(error) if is_transient(&error) => {
+                tracing::warn!(
+                    recording_id = %recording_id,
+                    err = %error,
+                    retry_in_ms = retry.as_millis() as u64,
+                    "recording metadata write failed; retried"
+                );
+                // Back first, merged under anything reported since.
+                queue.restore();
+                tokio::time::sleep(retry).await;
+                retry = (retry * 2).min(RETRY_MAX);
+            }
+            Err(error) => {
+                DROPPED_UPDATES.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    recording_id = %recording_id,
+                    err = %error,
+                    "recording metadata update dropped: its write cannot succeed"
+                );
+            }
         }
     }
 }
 
 /// Writes one recording's update in one write task: its row first (already
 /// there when a restarted writer replays it), then its end.
-async fn persist_recording_metadata(
+async fn persist_recording_metadata_event(
     db: DeadlineDb,
     update: RecordingMetadataUpdate,
 ) -> Result<(), sqlx::Error> {

@@ -63,7 +63,7 @@ async fn updates_behind_a_held_write_lock_stay_one_entry_and_the_latest_lands() 
     let writer = spawn_writer(
         queue.clone(),
         DeadlineDb::new(lifecycle, SHARED_LOOP_DEADLINE),
-        persist_recording_metadata,
+        persist_recording_metadata_event,
     );
     let lock = hold_write_lock(&api).await;
 
@@ -126,7 +126,7 @@ async fn a_panicking_writer_is_restarted_and_its_update_still_lands() {
                     // `resume_unwind` skips the panic hook: quiet logs.
                     std::panic::resume_unwind(Box::new("injected recording metadata writer panic"));
                 }
-                persist_recording_metadata(db, update).await
+                persist_recording_metadata_event(db, update).await
             }
         },
     );
@@ -141,4 +141,83 @@ async fn a_panicking_writer_is_restarted_and_its_update_still_lands() {
     assert_eq!(row.pipeline_id, PIPELINE);
     assert_eq!(row.temp_path.as_deref(), Some("/tmp/rec-panic.ts"));
     assert_eq!(row.final_path.as_deref(), Some("/tmp/rec-panic-7.mp4"));
+}
+
+/// The write fails twice with errors that may pass (a pool timeout, then
+/// an I/O error): the update goes back to the queue each time and lands
+/// on the third try.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_that_fails_transiently_is_retried_until_its_update_lands() {
+    let pool = memory_pool().await;
+    with_pipeline(&pool).await;
+    let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (reporter, queue) = recording_metadata_channel();
+    let _writer = spawn_writer(
+        queue,
+        DeadlineDb::new(pool.clone(), SHARED_LOOP_DEADLINE),
+        move |db, update| {
+            let attempt = failures.fetch_add(1, Ordering::SeqCst);
+            async move {
+                match attempt {
+                    0 => Err(sqlx::Error::PoolTimedOut),
+                    1 => Err(sqlx::Error::Io(std::io::Error::from(
+                        std::io::ErrorKind::TimedOut,
+                    ))),
+                    _ => persist_recording_metadata_event(db, update).await,
+                }
+            }
+        },
+    );
+
+    reporter.report(started("rec-retry"));
+    reporter.report(finalized("rec-retry", 3));
+
+    let row = wait_for_row(&pool, "rec-retry", |row| row.final_path.is_some())
+        .await
+        .expect("the update landed after its transient failures");
+    assert_eq!(row.status, RecordingPhase::Ready.as_str());
+    assert_eq!(row.final_path.as_deref(), Some("/tmp/rec-retry-3.mp4"));
+}
+
+/// The write task itself panics (inside what `DeadlineDb::write` spawns,
+/// where production's statements run): the writer gets `Aborted`, puts the
+/// update back, and the retry writes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_inside_the_write_task_does_not_lose_the_update() {
+    let pool = memory_pool().await;
+    with_pipeline(&pool).await;
+    let panic_next = Arc::new(AtomicBool::new(true));
+    let (reporter, queue) = recording_metadata_channel();
+    let _writer = spawn_writer(
+        queue,
+        DeadlineDb::new(pool.clone(), SHARED_LOOP_DEADLINE),
+        move |db: DeadlineDb, update| {
+            let panic_now = panic_next.swap(false, Ordering::SeqCst);
+            async move {
+                if panic_now {
+                    return db
+                        .write(|_pool| async move {
+                            if panic_now {
+                                // `resume_unwind` skips the panic hook: quiet logs.
+                                std::panic::resume_unwind(Box::new(
+                                    "injected recording metadata write panic",
+                                ));
+                            }
+                            Ok::<(), sqlx::Error>(())
+                        })
+                        .await;
+                }
+                persist_recording_metadata_event(db, update).await
+            }
+        },
+    );
+
+    reporter.report(started("rec-write-panic"));
+    reporter.report(finalized("rec-write-panic", 4));
+
+    let row = wait_for_row(&pool, "rec-write-panic", |row| row.final_path.is_some())
+        .await
+        .expect("the update landed after the write task panicked");
+    assert_eq!(row.status, RecordingPhase::Ready.as_str());
+    assert_eq!(row.temp_path.as_deref(), Some("/tmp/rec-write-panic.ts"));
 }

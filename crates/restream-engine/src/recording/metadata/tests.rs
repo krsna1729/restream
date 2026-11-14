@@ -113,7 +113,11 @@ struct Row {
     end: Option<RecordingEnd>,
 }
 
-/// The writer's effect: the row is created once; the end overwrites.
+/// The writer's effect, field by field as production's SQL: the row is
+/// created once (a replayed create is a unique violation, ignored) and the
+/// end overwrites. The queue's own merge replaces a pending start with a
+/// newer one; a recording starts once (the ops below report one start per
+/// id), so the two agree for every sequence production can produce.
 fn write(rows: &mut HashMap<String, Row>, update: RecordingMetadataUpdate) {
     let row = rows.entry(update.recording_id).or_default();
     if row.started.is_none() {

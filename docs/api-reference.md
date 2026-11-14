@@ -1738,8 +1738,9 @@ Responses add `id`, `lastRunMs`, `lastResult`, `createdAtMs` and `nextAtMs`.
   `skipped: the engine was not running at …` and never fired late.
 - Occurrences already past when a schedule is added or edited are not run.
 - `lastResult` is `running`, `running: not finished after 30 s` (the action
-  is still going; it is never cut short), `ok: …` (what it did), `failed: …`
-  or `skipped: …`. Each run is also in the audit log as member `scheduler`,
+  is still going; it is never cut short), `ok: …` (what it did), `failed: …`,
+  `skipped: …` or `interrupted: shutdown` (the process stopped while the
+  action ran; it is not run again). Each run is also in the audit log as member `scheduler`,
   method `RUN`.
 
 ## Share links

@@ -845,7 +845,7 @@ export interface ScheduleDraft {
 export interface Schedule extends ScheduleDraft {
   id: string;
   lastRunMs: number | null;
-  /** "ok: …", "failed: …", "skipped: …" or "running". */
+  /** "ok: …", "failed: …", "skipped: …", "interrupted: shutdown", "running", or "running: not finished after 30 s" (the action is still going). */
   lastResult: string | null;
   createdAtMs: number;
   nextAtMs: number | null;
