@@ -1707,8 +1707,9 @@ alert, and a click opens the incident view.
 
 Scheduled events start or stop a pipeline's destinations or its file
 source at set times (`src/application/schedules.rs`). The scheduler task
-(`run_scheduler`, every 5 s) runs each due occurrence, whether or not a
-dashboard is open.
+(`run_scheduler`, every 5 s) runs each due occurrence in a task of its own,
+whether or not a dashboard is open, so one slow schedule never delays
+another.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -1736,8 +1737,9 @@ Responses add `id`, `lastRunMs`, `lastResult`, `createdAtMs` and `nextAtMs`.
   (`RUN_GRACE_MS`). One missed by more (the engine was down) is recorded as
   `skipped: the engine was not running at …` and never fired late.
 - Occurrences already past when a schedule is added or edited are not run.
-- `lastResult` is `running`, `ok: …` (what it did), `failed: …` or
-  `skipped: …`. Each run is also in the audit log as member `scheduler`,
+- `lastResult` is `running`, `running: not finished after 30 s` (the action
+  is still going; it is never cut short), `ok: …` (what it did), `failed: …`
+  or `skipped: …`. Each run is also in the audit log as member `scheduler`,
   method `RUN`.
 
 ## Share links
