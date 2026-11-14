@@ -302,6 +302,10 @@ async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
 /// video playlist ahead of the master looks like another variant's. Its
 /// first segment stays held until the master selects it, so every frame
 /// reaches the ring, both renditions merged in DTS order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads FFmpeg's stderr on success, which `run_tool` drops; bounded by the timeout below"
+)]
 #[tokio::test]
 async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     let dir =

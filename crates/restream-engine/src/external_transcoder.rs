@@ -216,8 +216,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         Some(s) => s,
         None => {
             error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stdin unavailable");
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
             ctx.engine
                 .runtime
                 .event_log
@@ -232,8 +231,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         Some(s) => s,
         None => {
             error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stdout unavailable");
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
             ctx.engine
                 .runtime
                 .event_log
@@ -248,8 +246,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         Some(s) => s,
         None => {
             error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stderr unavailable");
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
             return Err(BackendError("stderr unavailable".into()));
         }
     };

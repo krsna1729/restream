@@ -26,6 +26,7 @@ compile_error!(
 );
 
 pub mod audio_router;
+pub mod child_process;
 #[forbid(unsafe_code)]
 pub mod codec;
 pub mod config;

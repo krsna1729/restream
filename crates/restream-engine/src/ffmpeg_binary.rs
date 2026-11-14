@@ -137,6 +137,10 @@ pub fn ffprobe_bin_path() -> &'static Path {
 /// Runs an FFmpeg tool to completion and returns its stdout. It is killed
 /// past `within` (and if this future is dropped); a non-zero exit is an
 /// error carrying the end of its stderr.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the single bounded `Child::wait_with_output` (clippy.toml)"
+)]
 pub async fn run_tool(
     program: &Path,
     args: &[String],

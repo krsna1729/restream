@@ -146,11 +146,12 @@ pub(super) const EXTERNAL_EOF_GRACE: std::time::Duration = std::time::Duration::
 /// released when the child goes away.
 pub(super) const EXTERNAL_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Reap the external FFmpeg child, then join its I/O threads. The child
-/// gets [`EXTERNAL_EOF_GRACE`] after a normal end of input and
-/// [`EXTERNAL_CANCEL_GRACE`] after cancellation, and is killed past that.
-/// Once it is gone its pipes are broken, so a writer blocked in `write_all`
-/// fails and the stdout reader sees EOF: the joins are bounded.
+/// Reap the external FFmpeg child ([`crate::child_process::reap`]), then
+/// join its I/O threads. The child gets [`EXTERNAL_EOF_GRACE`] after a
+/// normal end of input and [`EXTERNAL_CANCEL_GRACE`] after cancellation,
+/// and is killed past that. Once it is gone its pipes are broken, so a
+/// writer blocked in `write_all` fails and the stdout reader sees EOF: the
+/// joins are bounded.
 pub(crate) async fn reap_external_child(
     child: &mut tokio::process::Child,
     cancelled: bool,
@@ -161,10 +162,7 @@ pub(crate) async fn reap_external_child(
     } else {
         EXTERNAL_EOF_GRACE
     };
-    if tokio::time::timeout(grace, child.wait()).await.is_err() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
+    crate::child_process::reap(child, grace).await;
     for thread in io_threads {
         let _ = tokio::task::spawn_blocking(move || thread.join()).await;
     }

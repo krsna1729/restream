@@ -5,6 +5,9 @@ disallowed-methods = [
   { path = "sqlx::Row::get", reason = "use Row::try_get with ?: a NULL or mistyped column (SQLite stores any type) must be an error, not a panic" },
   { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "blocking getaddrinfo with no deadline: resolve through restream_engine::resolver (Resolver::resolve / Resolver::submit)" },
   { path = "tokio::net::lookup_host", reason = "no deadline, and each hung call holds a blocking-pool thread: resolve through restream_engine::resolver (Resolver::resolve)" },
+  { path = "tokio::process::Child::wait", reason = "unbounded: await a child through restream_engine::child_process::reap (grace, then SIGKILL)" },
+  { path = "tokio::process::Child::wait_with_output", reason = "unbounded: run a tool to completion through restream_engine::ffmpeg_binary::run_tool (bounded, killed past it)" },
+  { path = "tokio::process::Command::output", reason = "unbounded: run a tool to completion through restream_engine::ffmpeg_binary::run_tool (bounded, killed past it)" },
 ]
 # `clippy::await_holding_invalid_type`: a tokio guard held across an await
 # (another lock's acquisition included) is how a registry read re-acquired
