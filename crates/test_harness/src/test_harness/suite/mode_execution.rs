@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::super::{
-    measurement_mode_requires_bench_profile, mode_spec, netns_available, suite_default_modes,
+    measurement_mode_requires_bench_profile, mode_spec, netns_available, suite_selected_modes,
 };
 use super::process_reporting::{
     suite_append_result, suite_mode_status, suite_spawn_mode, suite_status_line,
@@ -133,9 +133,8 @@ async fn suite_run_parallel_batch(
 
 pub(crate) async fn suite_run() -> Result<Value, String> {
     let raw: Vec<String> = std::env::args().skip(2).collect();
-    let mut modes = suite_default_modes();
+    let (modes, preflight_only) = suite_selected_modes(&raw)?;
     let mut continue_on_fail = false;
-    let mut preflight_only = false;
     let mut use_host_net = std::env::var("TEST_HARNESS_USE_HOST_NET")
         .ok()
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
@@ -155,14 +154,8 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
     while i < raw.len() {
         match raw[i].as_str() {
             "--only-modes" => {
+                // Selection and validation are shared with preparation/inspection.
                 i += 1;
-                modes = raw
-                    .get(i)
-                    .ok_or("--only-modes requires a value")?
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
             }
             "--run-id" => {
                 i += 1;
@@ -184,7 +177,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
             }
             "--no-netns" => use_host_net = true,
             "--continue-on-fail" => continue_on_fail = true,
-            "--preflight-only" => preflight_only = true,
+            "--preflight-only" => {}
             other => return Err(format!("unknown suite option: {other}")),
         }
         i += 1;

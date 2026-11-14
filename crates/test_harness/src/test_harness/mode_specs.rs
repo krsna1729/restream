@@ -130,7 +130,7 @@ pub(crate) fn measurement_mode_requires_bench_profile(mode: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn suite_modes_require_bench_profile(raw: &[String]) -> Result<bool, String> {
+pub(crate) fn suite_selected_modes(raw: &[String]) -> Result<(Vec<String>, bool), String> {
     let mut modes = suite_default_modes();
     let mut preflight_only = false;
 
@@ -164,6 +164,11 @@ pub(crate) fn suite_modes_require_bench_profile(raw: &[String]) -> Result<bool, 
         return Err("--only-modes produced an empty mode list".to_string());
     }
 
+    Ok((modes, preflight_only))
+}
+
+pub(crate) fn suite_modes_require_bench_profile(raw: &[String]) -> Result<bool, String> {
+    let (modes, preflight_only) = suite_selected_modes(raw)?;
     Ok(preflight_only
         || modes
             .iter()

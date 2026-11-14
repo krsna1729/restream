@@ -1,3 +1,5 @@
+#[path = "fault_recovery/boundary_target.rs"]
+mod boundary_target;
 #[path = "fault_recovery/destination_stall.rs"]
 mod destination_stall;
 #[path = "fault_recovery/egress.rs"]

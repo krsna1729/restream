@@ -11,40 +11,17 @@ use super::sibling_wire;
 
 const MODE: &str = "fault.sibling-isolation";
 
-/// The test target owns FFmpeg descendants too: killing only its leader on
-/// timeout would bypass the target's Rust cleanup and orphan those children.
-struct BoundaryProcessGroup(u32);
-
-impl Drop for BoundaryProcessGroup {
-    fn drop(&mut self) {
-        // SAFETY: the target was created as leader of this owned process group;
-        // negative PID signalling addresses only that group's descendants.
-        unsafe {
-            libc::kill(-(self.0 as libc::pid_t), libc::SIGKILL);
-        }
-    }
-}
-
 pub(crate) async fn fault_sibling_isolation() -> Result<Value, String> {
     let dir = artifact_path(MODE);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let test_binary = std::env::var_os("RESTREAM_FAULT_TEST_BIN").ok_or(
         "prebuilt live fault target missing; run cargo xtask harness fault.sibling-isolation",
     )?;
-    let child = Command::new(test_binary)
-        .args(["live_sibling_fault_gate_", "--test-threads=1"])
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let group = BoundaryProcessGroup(child.id().ok_or("live fault target PID missing")?);
-    let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
-        .await
-        .map_err(|_| "live fault target exceeded 120 s")?
-        .map_err(|error| error.to_string())?;
-    drop(group);
+    let mut command = Command::new(test_binary);
+    command.args(["live_sibling_fault_gate_", "--test-threads=1"]);
+    let output = super::boundary_target::BoundaryTarget::spawn(&mut command)?
+        .run(Duration::from_secs(120))
+        .await?;
     std::fs::write(
         dir.join("live-boundaries.log"),
         [&output.stdout[..], &output.stderr[..]].concat(),
@@ -295,48 +272,4 @@ async fn stop_srt_publisher(child: &mut Child) -> Result<(), String> {
         .map_err(|_| "SRT publisher did not exit within 3 s after SIGINT")?
         .map_err(|error| error.to_string())?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    #[tokio::test]
-    async fn boundary_process_group_drop_stops_a_live_descendant() {
-        let mut child = Command::new("sh")
-            .args(["-c", "sleep 60 & echo $!; wait"])
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("owned process group");
-        let group = BoundaryProcessGroup(child.id().expect("group leader PID"));
-        let mut stdout = BufReader::new(child.stdout.take().expect("descendant PID pipe")).lines();
-        let descendant: u32 = tokio::time::timeout(Duration::from_secs(2), stdout.next_line())
-            .await
-            .expect("descendant starts on time")
-            .expect("PID pipe readable")
-            .expect("descendant PID")
-            .parse()
-            .expect("numeric PID");
-        drop(group);
-        tokio::time::timeout(Duration::from_secs(3), child.wait())
-            .await
-            .expect("group leader exits")
-            .expect("leader reaped");
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let running = std::fs::read_to_string(format!("/proc/{descendant}/stat"))
-                .is_ok_and(|stat| !stat.contains(") Z "));
-            if !running {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the target's descendant survived its group"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    }
 }

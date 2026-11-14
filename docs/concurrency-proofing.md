@@ -127,9 +127,18 @@ receive media and the selected source ring must advance beyond its pre-restart
 tail.
 The test explicitly performs the restart; the existing listener-supervisor
 tests separately prove automatic supervision. Neither fault seam ships.
-The prebuilt `restream-fault` target runs in an owned process group; the
-harness kills that group on every exit, including a target timeout, so a
-terminated test target cannot leave its FFmpeg descendants running.
+The prebuilt `restream-fault` target runs in an owned process group. Its runner
+observes leader exit with nonblocking `waitid(WNOWAIT)` without reaping it;
+the retained leader pins the group identity through final group termination.
+Stdout and stderr drain concurrently, including pipes inherited by descendants.
+Both normal exit and timeout terminate live descendants and explicitly reap
+the leader before returning (the harness may immediately `process::exit`).
+Cancellation signals the group before dropping the owned child; no delayed
+numeric-PGID signal can target a reused identity. Scoped real-process runner
+tests assert the leader is reaped (`ECHILD`) and the descendant has exited.
+Cleanup must await OS process exit: an unkillable kernel D-state process
+cannot have a strict cleanup deadline. The ordinary-target runner tests impose
+a 10 s outer bound; they do not claim arbitrary kernel-fault reaping guarantees.
 
 ## Gate commands
 

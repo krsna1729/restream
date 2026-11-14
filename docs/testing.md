@@ -647,7 +647,10 @@ Port overrides: `MOQ_MOXYGEN_INTEROP_D16`, `MOQ_MOXYGEN_INTEROP_D18`.
   on failure or cancel.
 
 `cargo xtask harness fault.sibling-isolation` builds its non-shipping engine
-fault-test executable before launching any media. The mode checks live
+fault-test executable before launching any media. Suite selection uses the
+same preparation, including
+`cargo xtask harness suite -- --only-modes fault.sibling-isolation`;
+preflight-only suites do not build the unused test target. The mode checks live
 same-pipeline output and selected/standby input isolation, and another
 pipeline, throughout destination/publisher stalls, malformed media, an
 unread reader, a held SQLite writer and a never-drained stdout pipe. Delivery
