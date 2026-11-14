@@ -1,5 +1,5 @@
 //! The listener's per-connection half-close policy, admission, header
-//! deadline, progress budgets and shutdown drain.
+//! deadline, progress budgets, panic containment and shutdown drain.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -275,6 +275,46 @@ async fn a_connection_past_the_limit_waits_for_a_free_permit() {
         .expect("the waiting connection is served once the permit is released")
         .unwrap();
     assert!(response.starts_with(b"HTTP/1.1 200"));
+}
+
+/// A handler that panics (here on an HLS upload route) closes only its own
+/// connection: the panic unwinds that connection's task, its admission
+/// permit returns, and the listener serves the next client with that permit.
+#[tokio::test]
+async fn a_panicking_handler_closes_only_its_connection_and_frees_its_permit() {
+    let shutdown = CancellationToken::new();
+    let app = ping_app().route(
+        "/ingest/hls/{key}/{*path}",
+        put(|| async {
+            if true {
+                std::panic::resume_unwind(Box::new("injected upload handler panic"));
+            }
+            "stored"
+        }),
+    );
+    let address = start_with(app, options(1, &shutdown)).await;
+    let mut upload = TcpStream::connect(address).await.unwrap();
+    upload
+        .write_all(
+            b"PUT /ingest/hls/key/index.m3u8 HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), upload.read_to_end(&mut response))
+        .await
+        .expect("the panicking connection is closed");
+    assert!(
+        response.is_empty(),
+        "no response follows a panic: {response:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), ping(address))
+            .await
+            .unwrap_or(false),
+        "the next client is served with the one permit"
+    );
+    shutdown.cancel();
 }
 
 /// Shutdown lets an in-flight request finish, closes its keep-alive

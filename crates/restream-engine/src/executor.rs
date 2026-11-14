@@ -593,7 +593,9 @@ where
     spawn_with_class(MediaService::other(), cancel, future)
 }
 
-/// Await a media service from the control runtime.
+/// Await a media service from the control runtime. A panic in the service
+/// ends only that service: it is counted as contained (`containedPanics`)
+/// and returned as its error.
 pub(crate) async fn run_with_class<F>(
     service: MediaService,
     cancel: CancellationToken,
@@ -618,7 +620,11 @@ where
         }
         Err(error) => {
             error!(%error, "media service failed");
-            Err(error.to_string())
+            let reason = error.to_string();
+            if error.is_panic() {
+                crate::panic_boundary::record_contained(error.into_panic().as_ref());
+            }
+            Err(reason)
         }
     }
 }

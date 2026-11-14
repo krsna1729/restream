@@ -27,6 +27,10 @@
 //! slower than [`progress::PACE`] ends after its grace, so a client that
 //! trickles bytes cannot hold a permit either ([`progress`]).
 //!
+//! Faults: each connection runs in a task of its own, so a handler panic
+//! (an HLS push upload's included) unwinds only that connection; its permit
+//! and whatever its handler held (upload slot, buffer claims) drop with it.
+//!
 //! Shutdown: once `shutdown` is cancelled the listener closes, every live
 //! connection finishes its in-flight response and then closes, and `serve`
 //! returns when all have, or after `drain_timeout`.
