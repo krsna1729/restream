@@ -9,7 +9,8 @@ use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
+    SharedFabricRuntime, subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 use crate::engine::MediaEngine;
@@ -19,6 +20,7 @@ use crate::moq::egress::{MoqPublishStartup, SharedMoqStartupSource, moq_shard_ba
 pub enum MoqFabricEnsureError {
     Spawn(MoqFabricShardGroupError),
     Runtime(EgressFabricRuntimeError),
+    Worker(FabricWorkerError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,7 @@ pub enum MoqFabricDispatchError {
     /// Admission refused the new output; nothing was dispatched.
     Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+    Worker(FabricWorkerError),
 }
 
 impl MoqFabricDispatchError {
@@ -46,45 +49,62 @@ impl MediaEngine {
         feed_id: FeedId,
         feed: &RingFeed,
     ) -> Result<bool, MoqFabricEnsureError> {
-        let mut registry = self.fabric.moq.lock().await;
-        let created = if registry.runtimes.contains_key(&feed_id) {
-            false
-        } else {
-            let config = &self.config.egress_fabric;
+        let generation = {
+            let mut registry = self.fabric.moq.lock().await;
+            if registry.runtimes.contains_key(&feed_id) {
+                let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+                *outputs = outputs.saturating_add(1);
+                return Ok(false);
+            }
+            registry.generation
+        };
+        let engine_config = self.config.clone();
+        let candidate_feed = feed.clone_reader();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let config = &engine_config.egress_fabric;
             let startup_source = SharedMoqStartupSource::default();
             let group = spawn_moq_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 startup_source.clone(),
-                |_| feed.clone_reader(),
+                |_| candidate_feed.clone_reader(),
             )
             .map_err(MoqFabricEnsureError::Spawn)?;
-            // Least-loaded placement: see the SRT fabric.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
                 .map_err(MoqFabricEnsureError::Runtime)?;
+            Ok((SharedFabricRuntime::new(runtime), startup_source))
+        })
+        .await
+        .map_err(|error| {
+            MoqFabricEnsureError::Worker(FabricWorkerError::Join(error.to_string()))
+        })??;
+        let (runtime, startup_source) = candidate;
+        let mut registry = self.fabric.moq.lock().await;
+        if registry.generation != generation {
+            return Err(MoqFabricEnsureError::Worker(FabricWorkerError::Closed));
+        }
+        let created = !registry.runtimes.contains_key(&feed_id);
+        if created {
             let wakes = subscribe_fabric_wakes(
                 "moq",
                 feed_id.clone(),
                 feed.publication_ring().publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
-
-            tracing::info!(feed_id = %feed_id, "moq fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry
                 .startup_sources
                 .insert(feed_id.clone(), startup_source);
-            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
-            true
-        };
-
-        let active_outputs = registry.active_outputs.entry(feed_id).or_insert(0);
-        *active_outputs = active_outputs.saturating_add(1);
+            tracing::info!(feed_id = %feed_id, "moq fabric runtime created");
+        }
+        let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+        *outputs = outputs.saturating_add(1);
         Ok(created)
     }
 
@@ -96,12 +116,20 @@ impl MediaEngine {
         output_id: OutputId,
         startup: MoqPublishStartup,
     ) -> bool {
-        let registry = self.fabric.moq.lock().await;
-        let Some(source) = registry.startup_sources.get(feed_id) else {
-            return false;
+        let (runtime, source) = {
+            let registry = self.fabric.moq.lock().await;
+            let (Some(runtime), Some(source)) = (
+                registry.runtimes.get(feed_id),
+                registry.startup_sources.get(feed_id),
+            ) else {
+                return false;
+            };
+            (runtime.clone(), source.clone())
         };
-        source.set(output_id, startup);
-        true
+        runtime
+            .with(move |_| source.set(output_id, startup))
+            .await
+            .is_ok()
     }
 
     pub async fn dispatch_moq_fabric_command(
@@ -109,90 +137,105 @@ impl MediaEngine {
         feed_id: &FeedId,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, MoqFabricDispatchError> {
-        let mut registry = self.fabric.moq.lock().await;
-        if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) = &command
-            && let Some(source) = registry.startup_sources.get(feed_id)
-        {
-            source.remove(output_id);
-        }
-        let mut rescale_inputs = registry
-            .startup_sources
-            .get(feed_id)
-            .cloned()
-            .zip(registry.feeds.get(feed_id).map(RingFeed::clone_reader));
-        let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
-            return Err(MoqFabricDispatchError::MissingFeed {
-                feed_id: feed_id.clone(),
-            });
+        let (runtime, source, rescale_inputs) = {
+            let registry = self.fabric.moq.lock().await;
+            let runtime = registry.runtimes.get(feed_id).cloned().ok_or_else(|| {
+                MoqFabricDispatchError::MissingFeed {
+                    feed_id: feed_id.clone(),
+                }
+            })?;
+            let source = registry.startup_sources.get(feed_id).cloned();
+            let inputs = source
+                .clone()
+                .zip(registry.feeds.get(feed_id).map(RingFeed::clone_reader));
+            (runtime, source, inputs)
         };
-
-        // Size the pool for an `Add` before dispatching it, so a fresh QUIC
-        // connection lands on its final shard the first time (see
-        // `dispatch_rtmp_fabric_command`).
-        let mut startup = None;
-        if let EgressCommand::Add(spec) = &command
-            && let Some(inputs) = rescale_inputs.take()
-        {
-            let reason = runtime.reason_for(&command);
-            let source = inputs.0.clone();
-            self.rescale_moq_fabric(feed_id, runtime, inputs, reason);
-            if matches!(reason, ResizeReason::Add)
-                && let Err(saturated) = runtime.admit_add(
-                    crate::config::EgressShardProfile::OutputCount,
-                    self.config.egress_fabric.shard_config(),
-                    &spec.id,
-                )
-            {
-                source.remove(&spec.id);
-                return Err(MoqFabricDispatchError::Saturated(saturated));
-            }
-            startup = Some((source, spec.id.clone()));
-        }
-
-        let outcome = runtime.dispatch(command).map_err(|error| {
-            if let Some((source, output_id)) = &startup {
-                source.remove(output_id);
-            }
-            MoqFabricDispatchError::Dispatch(error)
-        })?;
-
-        if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_moq_fabric(feed_id, runtime, inputs, ResizeReason::Remove);
-        }
-        Ok(outcome)
+        let config = self.config.clone();
+        let feed_id = feed_id.clone();
+        runtime
+            .with(move |runtime| {
+                if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) =
+                    &command
+                    && let Some(source) = &source
+                {
+                    source.remove(output_id);
+                }
+                let mut rescale_inputs = rescale_inputs;
+                let mut startup = None;
+                // Resize before placement; a fresh QUIC connection must not be rehomed.
+                if let EgressCommand::Add(spec) = &command
+                    && let Some(inputs) = rescale_inputs.take()
+                {
+                    let reason = runtime.reason_for(&command);
+                    let source = inputs.0.clone();
+                    Self::rescale_moq_fabric(&config, &feed_id, runtime, inputs, reason);
+                    if matches!(reason, ResizeReason::Add)
+                        && let Err(saturated) = runtime.admit_add(
+                            crate::config::EgressShardProfile::OutputCount,
+                            config.egress_fabric.shard_config(),
+                            &spec.id,
+                        )
+                    {
+                        source.remove(&spec.id);
+                        return Err(MoqFabricDispatchError::Saturated(saturated));
+                    }
+                    startup = Some((source, spec.id.clone()));
+                }
+                let outcome = runtime.dispatch(command).map_err(|error| {
+                    if let Some((source, output_id)) = &startup {
+                        source.remove(output_id);
+                    }
+                    MoqFabricDispatchError::Dispatch(error)
+                })?;
+                if let Some(inputs) = rescale_inputs {
+                    Self::rescale_moq_fabric(
+                        &config,
+                        &feed_id,
+                        runtime,
+                        inputs,
+                        ResizeReason::Remove,
+                    );
+                }
+                Ok(outcome)
+            })
+            .await
+            .map_err(MoqFabricDispatchError::Worker)?
     }
 
     pub async fn resize_moq_fabrics(&self) {
-        let mut registry = self.fabric.moq.lock().await;
-        let crate::engine_registries::MoqFabricRegistry {
-            runtimes,
-            feeds,
-            startup_sources,
-            ..
-        } = &mut *registry;
-        for (id, runtime) in runtimes {
-            if !runtime.observation_due() && !runtime.has_panicked_shard() {
-                continue;
-            }
-            if let (Some(feed), Some(startup)) = (feeds.get(id), startup_sources.get(id)) {
-                self.rescale_moq_fabric(
-                    id,
-                    runtime,
-                    (startup.clone(), feed.clone_reader()),
-                    ResizeReason::Observe,
-                );
-            }
+        let inputs: Vec<_> = {
+            let registry = self.fabric.moq.lock().await;
+            registry
+                .runtimes
+                .iter()
+                .filter_map(|(id, runtime)| {
+                    Some((
+                        id.clone(),
+                        runtime.clone(),
+                        (
+                            registry.startup_sources.get(id)?.clone(),
+                            registry.feeds.get(id)?.clone_reader(),
+                        ),
+                    ))
+                })
+                .collect()
+        };
+        for (id, runtime, inputs) in inputs {
+            let config = self.config.clone();
+            runtime.try_observe(move |runtime| {
+                Self::rescale_moq_fabric(&config, &id, runtime, inputs, ResizeReason::Observe);
+            });
         }
     }
 
     fn rescale_moq_fabric(
-        &self,
+        engine_config: &crate::config::EngineConfig,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         (startup_source, feed): (SharedMoqStartupSource, RingFeed),
         reason: ResizeReason,
     ) {
-        let config = &self.config.egress_fabric;
+        let config = &engine_config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         runtime.forecast_feed(&feed.publication_ring());
@@ -263,15 +306,19 @@ impl MediaEngine {
     pub(crate) async fn shutdown_all_moq_fabric_runtimes(&self) -> usize {
         let runtimes = {
             let mut registry = self.fabric.moq.lock().await;
+            registry.generation = registry.generation.wrapping_add(1);
+            registry.feeds.clear();
             registry.active_outputs.clear();
             registry.startup_sources.clear();
             registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();
+        let mut jobs = tokio::task::JoinSet::new();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown_off_worker().await;
+            jobs.spawn(runtime.shutdown_off_worker());
         }
+        while jobs.join_next().await.is_some() {}
         count
     }
 }

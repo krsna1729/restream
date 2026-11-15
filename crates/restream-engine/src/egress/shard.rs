@@ -455,10 +455,9 @@ impl EgressShardHandle {
     /// drain window (up to `EgressShardConfig::drain_timeout`) -- used by
     /// `EgressShardGroup::shrink` (`EgressFabricRuntime::rescale`'s
     /// scale-in path) and `EgressShardGroup::replace_with` (a panicked
-    /// shard's replacement), which run under the caller's shared
-    /// per-protocol registry lock. Blocking there would stall every other
-    /// feed's dispatch on that lock for however long this one shard takes to
-    /// drain. Dropping a `JoinHandle` without joining it is safe and
+    /// shard's replacement). These run on the feed's blocking control worker;
+    /// detaching keeps that feed's next control operation from waiting for a
+    /// retired shard's drain. Dropping a `JoinHandle` without joining is safe and
     /// well-defined: the OS thread keeps running independently and
     /// reclaims its own resources on exit; nothing here needs the join to
     /// observe a panic either, since that's recorded in the shared

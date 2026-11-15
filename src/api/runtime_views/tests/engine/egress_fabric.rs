@@ -2,7 +2,7 @@ use super::*;
 use restream_engine::egress::command::{EgressCommand, FeedId};
 use restream_engine::egress::journal::{FeedEpoch, TsFeed};
 use restream_engine::egress::manager::EgressManagerConfig;
-use restream_engine::egress::runtime::EgressFabricRuntime;
+use restream_engine::egress::runtime::{EgressFabricRuntime, SharedFabricRuntime};
 use restream_engine::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardGroup,
 };
@@ -96,9 +96,9 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
                 .lock()
                 .await
                 .runtimes
-                .insert(id.clone(), failed)
+                .insert(id.clone(), SharedFabricRuntime::new(failed))
                 .unwrap();
-            old.shutdown();
+            old.shutdown_off_worker().await;
             let before = test_health_snapshot(&engine, &[], &HashMap::new()).await;
             assert!(
                 restream_health::alerts::derive_alerts(&before)
@@ -108,20 +108,20 @@ async fn every_fabric_recovers_panics_without_adaptive_observation() {
                 stringify!($registry)
             );
             engine.$recover().await;
-            let registry = engine.fabric.$registry.lock().await;
-            let recovered = &registry.runtimes[&id];
-            assert!(
-                ended.load(Ordering::Acquire),
-                "{} must release its outputs",
-                stringify!($registry)
-            );
-            assert!(
-                recovered
-                    .snapshots()
-                    .iter()
-                    .all(|s| !s.panicked && !s.stopped)
-            );
-            drop(registry);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let recovered = engine.fabric.$registry.lock().await.runtimes[&id]
+                        .snapshots()
+                        .iter()
+                        .all(|snapshot| !snapshot.panicked && !snapshot.stopped);
+                    if ended.load(Ordering::Acquire) && recovered {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the scheduled replacement must finish");
             let after = test_health_snapshot(&engine, &[], &HashMap::new()).await;
             assert!(
                 !restream_health::alerts::derive_alerts(&after)

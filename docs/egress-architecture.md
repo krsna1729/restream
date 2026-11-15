@@ -54,7 +54,8 @@ The diagram shows who owns what, from the Tokio output task down to one leaf.
 ```mermaid
 flowchart TD
     Task["EgressTask (Tokio, one per output attempt)"] --> Registry["MediaEngine fabric registry (engine_*_egress_fabric.rs)"]
-    Registry --> Runtime["EgressFabricRuntime (one per feed)"]
+    Registry --> Shared["SharedFabricRuntime (one control owner per feed)"]
+    Shared -->|"owned guard; blocking pool"| Runtime["EgressFabricRuntime"]
     Runtime --> Manager["EgressManager"]
     Runtime --> Group["EgressShardGroup"]
     Runtime --> Sizer["ShardSizer"]
@@ -69,7 +70,8 @@ flowchart TD
 | Owner | Owns | Must not |
 |---|---|---|
 | `EgressTask` (Tokio) | One output attempt: `Add`, wait, `Remove`, retry bookkeeping | Touch media or sockets |
-| `EgressFabricRuntime` | One feed's manager, shard group, sizer and wake handles | Run on a shard thread |
+| `SharedFabricRuntime` | One feed's control mutex, last-owner cleanup and read-only observation handles | Wait for the feed mutex on a blocking worker |
+| `EgressFabricRuntime` | One feed's manager, shard group, sizer and wake handles | Construct backends or join threads on Tokio or a shard thread |
 | `EgressManager` | Desired outputs, output-to-shard placement, generation checks | Move a live output |
 | `EgressShardRuntime` | Command batch, ready backlog, `TimerWheel`, drain deadline, snapshot | Know protocol state |
 | `EgressShardBackend` | Leaves, `ReadyQueue`, transport runtime, stall sweep | Leave its shard thread |
@@ -80,6 +82,31 @@ The backend is built, used and dropped on its shard thread.
 `EgressShardHandle::spawn_with` or `try_spawn_with` crosses threads. This lets
 a backend own a per-thread Compio runtime and `Rc` state without locks.
 `EgressShardHandle::spawn` (for already-built `Send` backends) is for tests.
+
+All six fabric kinds use the same control ownership rule. Retain first checks
+the protocol registry, then loads TLS trust roots and builds a candidate on
+the blocking pool without a registry guard. Before publication it rechecks
+the registry generation and the winning runtime. A competing candidate never
+replaces the winner; its last owner shuts down and joins its shards off-worker.
+A whole-registry shutdown advances the generation so an earlier constructor
+cannot insert a runtime after the drain.
+
+Commands acquire one feed's owned Tokio mutex asynchronously, then move the
+guard into a blocking-pool job. Queued commands on that feed consume no
+blocking worker while waiting for the mutex. This includes growth and panic
+replacement: backend construction stays on the new shard thread, but its
+readiness wait is on the blocking pool. A cancelled caller does not drop the
+running job's ownership.
+
+Periodic sizing only schedules eligible idle control owners. It skips a busy
+feed instead of waiting for it, and never waits for a scheduled job before
+checking other feeds or continuing housekeeping. Read-only shard snapshots
+and direct publication wakes do not acquire the control mutex; topology
+changes update their shared handle lists.
+
+A held control job still occupies one blocking worker and serializes that
+feed's other control operations. It does not stop already-running shard media.
+The blocking pool is shared, not a per-pipeline resource reservation.
 
 Leaves live in a fixed-capacity `LeafArena` (`leaf_arena.rs`). A `LeafKey`
 names a slot and its epoch. Removing a leaf bumps the epoch, so a stale queue

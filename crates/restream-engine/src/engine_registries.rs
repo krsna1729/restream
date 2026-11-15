@@ -33,6 +33,13 @@
 //! changed under one write guard set, so two pipelines naming one input id
 //! cannot interleave a check and its change.
 //!
+//! Fabric protocol guards protect only map/refcount transactions and snapshots.
+//! Construction runs off-lock; publication rechecks the registry generation and
+//! winner. `SharedFabricRuntime` serializes one feed's mutations with an owned
+//! async mutex guard transferred to the blocking pool. No protocol guard crosses
+//! that wait. Health reads use independent snapshot handles, and periodic sizing
+//! skips a busy feed instead of delaying the other feeds or housekeeping.
+//!
 //! `clippy::await_holding_invalid_type` (`clippy.toml`) flags a tokio guard
 //! or a [`restream_sync::keyed_lock::KeyedGuard`] bound directly to a local
 //! across an await; each such section carries an `#[expect]` naming its
@@ -50,7 +57,7 @@ use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::egress::FeedId;
-use crate::egress::runtime::{EgressFabricRuntime, FeedWakeSubscription};
+use crate::egress::runtime::{FeedWakeSubscription, SharedFabricRuntime};
 use crate::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
@@ -142,7 +149,9 @@ impl EgressRegistry {
 }
 
 pub struct SrtFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    /// Fences constructors started before a whole-registry shutdown.
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One publication wake subscription per feed runtime; dropped on release.
     pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
@@ -156,6 +165,7 @@ impl SrtFabricRegistry {
     fn new() -> Self {
         Self {
             runtimes: HashMap::new(),
+            generation: 0,
             active_outputs: HashMap::new(),
             feed_wakes: HashMap::new(),
             feeds: HashMap::new(),
@@ -164,7 +174,8 @@ impl SrtFabricRegistry {
 }
 
 pub struct RtmpFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One publish-startup source per feed runtime, shared (cloned) across
     /// that runtime's shards; the bootstrap path writes into it before
@@ -191,6 +202,7 @@ impl RtmpFabricRegistry {
     fn new() -> Self {
         Self {
             runtimes: HashMap::new(),
+            generation: 0,
             active_outputs: HashMap::new(),
             startup_sources: HashMap::new(),
             feed_wakes: HashMap::new(),
@@ -204,7 +216,8 @@ impl RtmpFabricRegistry {
 /// source the bootstrap path writes before `Add`, one wake subscription and
 /// one dedicated reader (for shards grown later) per runtime.
 pub struct MoqFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     pub(crate) startup_sources: HashMap<FeedId, crate::moq::egress::SharedMoqStartupSource>,
     pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
@@ -215,6 +228,7 @@ impl MoqFabricRegistry {
     fn new() -> Self {
         Self {
             runtimes: HashMap::new(),
+            generation: 0,
             active_outputs: HashMap::new(),
             startup_sources: HashMap::new(),
             feed_wakes: HashMap::new(),
@@ -224,7 +238,8 @@ impl MoqFabricRegistry {
 }
 
 pub struct SinkFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One publication wake subscription per feed runtime; dropped on release.
     pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
@@ -235,6 +250,7 @@ impl SinkFabricRegistry {
     fn new() -> Self {
         Self {
             runtimes: HashMap::new(),
+            generation: 0,
             active_outputs: HashMap::new(),
             feed_wakes: HashMap::new(),
             feeds: HashMap::new(),
@@ -243,7 +259,8 @@ impl SinkFabricRegistry {
 }
 
 pub struct PipelineFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One target source per feed runtime, shared (cloned) across that
     /// runtime's shards — see `RtmpFabricRegistry::startup_sources` for
@@ -260,6 +277,7 @@ impl PipelineFabricRegistry {
     fn new() -> Self {
         Self {
             runtimes: HashMap::new(),
+            generation: 0,
             active_outputs: HashMap::new(),
             target_sources: HashMap::new(),
             feed_wakes: HashMap::new(),
@@ -271,7 +289,8 @@ impl PipelineFabricRegistry {
 /// HLS PUT fabric runtimes, one per HLS store.
 #[derive(Default)]
 pub struct HlsPutFabricRegistry {
-    pub runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
+    pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One store publication wake subscription per runtime; dropped on release.
     pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
