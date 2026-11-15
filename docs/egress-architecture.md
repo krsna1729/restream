@@ -84,10 +84,11 @@ a backend own a per-thread Compio runtime and `Rc` state without locks.
 `EgressShardHandle::spawn` (for already-built `Send` backends) is for tests.
 
 All six fabric kinds use the same control ownership rule. Retain first checks
-the protocol registry, then loads TLS trust roots and builds a candidate on
-the blocking pool without a registry guard. Before publication it rechecks
-the registry generation and the winning runtime. A competing candidate never
-replaces the winner; its last owner shuts down and joins its shards off-worker.
+the protocol registry, then builds a candidate on the blocking pool without a
+registry guard. RTMP and HLS PUT load TLS trust roots during that step. Before
+publication retain rechecks the registry generation and the winning runtime.
+A competing candidate never replaces the winner; its last owner shuts down
+and joins its shards off-worker.
 A whole-registry shutdown advances the generation so an earlier constructor
 cannot insert a runtime after the drain.
 
