@@ -17,7 +17,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
 - [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
-- [Q-133 fabric construction off the registry lock](#q-133-correctness-opus-fabric-runtimes-are-built-outside-the-per-protocol-registry-lock)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -150,20 +149,6 @@ the [assurance roadmap](assurance-roadmap.md).
     drop its `Row::get` and `Mutex::lock` bans (`src/db/deadline.rs`).
 - Gates: with every main-pool connection held, an API read answers at its
   deadline; a session survives a pool timeout.
-
-### Q-133 [correctness] [opus] Fabric runtimes are built outside the per-protocol registry lock
-- Goal: `retain_*_fabric_runtime` (`engine_*_egress_fabric.rs`) reads the
-  RTMPS/HLS PUT trust roots from disk (`resolve_client_config`) and builds
-  the shard group, waiting on each shard's backend construction
-  (`EgressShardHandle::try_spawn_with` blocks in `ready_rx.recv()`), under
-  the `fabric.<proto>` tokio mutex and on a Tokio worker; `rescale`'s
-  `grow_with` does the same. A hung filesystem behind
-  `rtmps_extra_trust_roots_pem_path` stalls every feed's dispatch for that
-  protocol. Load the trust roots once off-lock, build the runtime on the
-  blocking pool, then insert after a re-check (shutting down the loser off
-  the worker).
-- Gates: with the trust-roots read held, another feed's dispatch on the same
-  protocol completes; no `try_spawn_with` wait runs on a Tokio worker.
 
 ## Not planned
 

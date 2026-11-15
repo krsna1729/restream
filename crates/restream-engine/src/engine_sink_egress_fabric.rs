@@ -6,7 +6,8 @@ use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
+    SharedFabricRuntime, subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -17,6 +18,7 @@ use crate::engine::MediaEngine;
 pub enum SinkFabricEnsureError {
     Spawn(EgressShardGroupError),
     Runtime(EgressFabricRuntimeError),
+    Worker(FabricWorkerError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +29,7 @@ pub enum SinkFabricDispatchError {
     /// Admission refused the new output; nothing was dispatched.
     Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+    Worker(FabricWorkerError),
 }
 
 impl SinkFabricDispatchError {
@@ -44,47 +47,57 @@ impl MediaEngine {
         feed_id: FeedId,
         feed: &RingFeed,
     ) -> Result<bool, SinkFabricEnsureError> {
-        let mut registry = self.fabric.sink.lock().await;
-        let created = if registry.runtimes.contains_key(&feed_id) {
-            false
-        } else {
-            let config = &self.config.egress_fabric;
+        let generation = {
+            let mut registry = self.fabric.sink.lock().await;
+            if registry.runtimes.contains_key(&feed_id) {
+                let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+                *outputs = outputs.saturating_add(1);
+                return Ok(false);
+            }
+            registry.generation
+        };
+        let engine_config = self.config.clone();
+        let candidate_feed = feed.clone_reader();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let config = &engine_config.egress_fabric;
             let group = spawn_sink_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
-                |_| feed.clone_reader(),
+                |_| candidate_feed.clone_reader(),
             )
             .map_err(SinkFabricEnsureError::Spawn)?;
-            // Least-loaded placement, as for the other fabrics: a shard grown
-            // for new outputs takes them, and admission's per-shard ceiling
-            // can only refuse when every shard is full.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
                 .map_err(SinkFabricEnsureError::Runtime)?;
-
-            // Sink leaves have no poller at all (see `sink_shard.rs`'s
-            // module doc), so this subscription's `FeedWake` delivery is their
-            // *only* readiness signal, not just an interest-widening hint
-            // the way it is for RTMP/SRT.
+            Ok(SharedFabricRuntime::new(runtime))
+        })
+        .await
+        .map_err(|error| {
+            SinkFabricEnsureError::Worker(FabricWorkerError::Join(error.to_string()))
+        })??;
+        let runtime = candidate;
+        let mut registry = self.fabric.sink.lock().await;
+        if registry.generation != generation {
+            return Err(SinkFabricEnsureError::Worker(FabricWorkerError::Closed));
+        }
+        let created = !registry.runtimes.contains_key(&feed_id);
+        if created {
             let wakes = subscribe_fabric_wakes(
                 "sink",
                 feed_id.clone(),
                 feed.publication_ring().publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
-
-            tracing::info!(feed_id = %feed_id, "sink fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
-            true
-        };
-
-        let active_outputs = registry.active_outputs.entry(feed_id).or_insert(0);
-        *active_outputs = active_outputs.saturating_add(1);
+            tracing::info!(feed_id = %feed_id, "sink fabric runtime created");
+        }
+        let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+        *outputs = outputs.saturating_add(1);
         Ok(created)
     }
 
@@ -93,47 +106,55 @@ impl MediaEngine {
         feed_id: &FeedId,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, SinkFabricDispatchError> {
-        let mut registry = self.fabric.sink.lock().await;
-        // Owned upfront (see `dispatch_rtmp_fabric_command`'s identical
-        // comment): disjoint from the `runtimes` borrow below, and no
-        // lingering reference into `registry` for `rescale` to hold.
-        let rescale_feed = registry.feeds.get(feed_id).map(|feed| feed.clone_reader());
-        let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
-            return Err(SinkFabricDispatchError::MissingFeed {
-                feed_id: feed_id.clone(),
-            });
+        let (runtime, rescale_feed) = {
+            let registry = self.fabric.sink.lock().await;
+            let runtime = registry.runtimes.get(feed_id).cloned().ok_or_else(|| {
+                SinkFabricDispatchError::MissingFeed {
+                    feed_id: feed_id.clone(),
+                }
+            })?;
+            (
+                runtime,
+                registry.feeds.get(feed_id).map(RingFeed::clone_reader),
+            )
         };
-
-        // See `dispatch_rtmp_fabric_command`'s identical comment: size the
-        // pool for an `Add` before dispatching it so it lands on its final
-        // shard the first time, instead of connecting once and immediately
-        // getting rehomed onto a different shard.
-        let mut rescale_feed = rescale_feed;
-        if let EgressCommand::Add(spec) = &command
-            && let Some(feed) = rescale_feed.take()
-        {
-            let reason = runtime.reason_for(&command);
-            self.rescale_sink_fabric(feed_id, runtime, feed, reason);
-            if matches!(reason, ResizeReason::Add) {
-                runtime
-                    .admit_add(
-                        crate::config::EgressShardProfile::SinkOutputCount,
-                        self.config.egress_fabric.shard_config(),
-                        &spec.id,
-                    )
-                    .map_err(SinkFabricDispatchError::Saturated)?;
-            }
-        }
-
-        let outcome = runtime
-            .dispatch(command)
-            .map_err(SinkFabricDispatchError::Dispatch)?;
-
-        if let Some(feed) = rescale_feed.take() {
-            self.rescale_sink_fabric(feed_id, runtime, feed, ResizeReason::Remove);
-        }
-
-        Ok(outcome)
+        let config = self.config.clone();
+        let feed_id = feed_id.clone();
+        runtime
+            .with(move |runtime| {
+                let mut rescale_feed = rescale_feed;
+                // Resize before placement/admission; do not reconnect a fresh output.
+                if let EgressCommand::Add(spec) = &command
+                    && let Some(feed) = rescale_feed.take()
+                {
+                    let reason = runtime.reason_for(&command);
+                    Self::rescale_sink_fabric(&config, &feed_id, runtime, feed, reason);
+                    if matches!(reason, ResizeReason::Add) {
+                        runtime
+                            .admit_add(
+                                crate::config::EgressShardProfile::SinkOutputCount,
+                                config.egress_fabric.shard_config(),
+                                &spec.id,
+                            )
+                            .map_err(SinkFabricDispatchError::Saturated)?;
+                    }
+                }
+                let outcome = runtime
+                    .dispatch(command)
+                    .map_err(SinkFabricDispatchError::Dispatch)?;
+                if let Some(feed) = rescale_feed {
+                    Self::rescale_sink_fabric(
+                        &config,
+                        &feed_id,
+                        runtime,
+                        feed,
+                        ResizeReason::Remove,
+                    );
+                }
+                Ok(outcome)
+            })
+            .await
+            .map_err(SinkFabricDispatchError::Worker)?
     }
 
     /// The reconciler's periodic look: learn what this feed's sink outputs
@@ -141,21 +162,30 @@ impl MediaEngine {
     /// and replace a panicked shard, releasing its outputs to retry (see
     /// `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
     pub async fn resize_sink_fabrics(&self) {
-        let mut registry = self.fabric.sink.lock().await;
-        let crate::engine_registries::SinkFabricRegistry {
-            runtimes, feeds, ..
-        } = &mut *registry;
-        for (id, runtime) in runtimes {
-            if (runtime.observation_due() || runtime.has_panicked_shard())
-                && let Some(feed) = feeds.get(id)
-            {
-                self.rescale_sink_fabric(id, runtime, feed.clone_reader(), ResizeReason::Observe);
-            }
+        let inputs: Vec<_> = {
+            let registry = self.fabric.sink.lock().await;
+            registry
+                .runtimes
+                .iter()
+                .filter_map(|(id, runtime)| {
+                    Some((
+                        id.clone(),
+                        runtime.clone(),
+                        registry.feeds.get(id)?.clone_reader(),
+                    ))
+                })
+                .collect()
+        };
+        for (id, runtime, inputs) in inputs {
+            let config = self.config.clone();
+            runtime.try_observe(move |runtime| {
+                Self::rescale_sink_fabric(&config, &id, runtime, inputs, ResizeReason::Observe);
+            });
         }
     }
 
     fn rescale_sink_fabric(
-        &self,
+        engine_config: &crate::config::EngineConfig,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         feed: RingFeed,
@@ -163,7 +193,7 @@ impl MediaEngine {
     ) {
         // Price unmeasured outputs at this feed's rate, as the other fabrics do.
         runtime.forecast_feed(&feed.publication_ring());
-        let config = &self.config.egress_fabric;
+        let config = &engine_config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let result = runtime.rescale(
@@ -222,7 +252,7 @@ impl MediaEngine {
         registry
             .runtimes
             .get(feed_id)
-            .map(EgressFabricRuntime::snapshots)
+            .map(SharedFabricRuntime::snapshots)
     }
 
     /// Per-shard health across every live sink fabric runtime, for
@@ -243,14 +273,18 @@ impl MediaEngine {
     pub(crate) async fn shutdown_all_sink_fabric_runtimes(&self) -> usize {
         let runtimes = {
             let mut registry = self.fabric.sink.lock().await;
+            registry.generation = registry.generation.wrapping_add(1);
+            registry.feeds.clear();
             registry.active_outputs.clear();
             registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();
+        let mut jobs = tokio::task::JoinSet::new();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown_off_worker().await;
+            jobs.spawn(runtime.shutdown_off_worker());
         }
+        while jobs.join_next().await.is_some() {}
         count
     }
 }

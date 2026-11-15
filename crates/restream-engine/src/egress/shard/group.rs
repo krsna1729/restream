@@ -161,6 +161,17 @@ impl EgressShardGroup {
             .collect()
     }
 
+    /// Read-only snapshots remain observable while a feed's control job waits
+    /// for a new backend. These handles do not keep command channels alive.
+    pub(crate) fn snapshot_handles(
+        &self,
+    ) -> Vec<std::sync::Arc<std::sync::Mutex<EgressShardSnapshot>>> {
+        self.handles
+            .iter()
+            .map(|handle| std::sync::Arc::clone(&handle.snapshot))
+            .collect()
+    }
+
     pub fn heartbeat(&self, now: Instant, stall_after: Duration) -> Vec<EgressShardHeartbeat> {
         self.snapshots()
             .into_iter()
@@ -179,8 +190,8 @@ impl EgressShardGroup {
     }
 
     /// Give `shard_id` a new thread whose backend `factory` builds on it,
-    /// then detach the old thread as [`Self::shrink`] does: this runs under
-    /// the per-protocol registry lock, so it never joins a shard's drain.
+    /// then detach the old thread as [`Self::shrink`] does. Engine callers run
+    /// this on the feed's blocking control worker, outside registry locks.
     /// A construction error, or an unknown shard, leaves the group unchanged.
     pub fn replace_with<B, E, F>(
         &mut self,

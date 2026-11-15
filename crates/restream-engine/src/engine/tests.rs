@@ -19,6 +19,7 @@ mod stage;
 mod dependencies;
 mod egress;
 pub(crate) mod egress_fabric;
+mod fabric_construction;
 mod graph;
 mod ingest_registry;
 mod snapshots;

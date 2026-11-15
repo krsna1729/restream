@@ -12,7 +12,8 @@ use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, SharedFabricRuntime,
+    subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub enum RtmpFabricEnsureError {
     Spawn(RtmpFabricShardGroupError<TcpEgressPollError>),
     Runtime(EgressFabricRuntimeError),
     TrustRoots(String),
+    Worker(FabricWorkerError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +36,7 @@ pub enum RtmpFabricDispatchError {
     /// Admission refused the new output; nothing was dispatched.
     Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+    Worker(FabricWorkerError),
 }
 
 impl RtmpFabricDispatchError {
@@ -51,56 +54,76 @@ impl MediaEngine {
         feed_id: FeedId,
         feed: &RingFeed,
     ) -> Result<bool, RtmpFabricEnsureError> {
-        let mut registry = self.fabric.rtmp.lock().await;
-        let created = if registry.runtimes.contains_key(&feed_id) {
-            false
-        } else {
-            let config = &self.config.egress_fabric;
+        let generation = {
+            let mut registry = self.fabric.rtmp.lock().await;
+            if registry.runtimes.contains_key(&feed_id) {
+                let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+                *outputs = outputs.saturating_add(1);
+                return Ok(false);
+            }
+            registry.generation
+        };
+        let engine_config = self.config.clone();
+        let candidate_feed = feed.clone_reader();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let config = &engine_config.egress_fabric;
             let startup_source = SharedRtmpPublishStartupSource::new();
             let rtmps_client_config = crate::egress::tls::resolve_client_config(
-                self.config.rtmps_extra_trust_roots_pem_path.as_deref(),
+                engine_config.rtmps_extra_trust_roots_pem_path.as_deref(),
             )
             .map_err(RtmpFabricEnsureError::TrustRoots)?;
             let group = spawn_rtmp_fabric_shard_group(
-                std::num::NonZeroU32::new(1).unwrap(),
+                std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.tcp_poller_max_events,
                 config.work_budget(),
-                self.config.rtmp_egress_chunk_size,
+                engine_config.rtmp_egress_chunk_size,
                 rtmps_client_config.clone(),
                 startup_source.clone(),
-                |_| feed.clone_reader(),
+                |_| candidate_feed.clone_reader(),
             )
             .map_err(RtmpFabricEnsureError::Spawn)?;
-            // Least-loaded placement: see the SRT fabric.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
                 .map_err(RtmpFabricEnsureError::Runtime)?;
-
+            Ok((
+                SharedFabricRuntime::new(runtime),
+                startup_source,
+                rtmps_client_config,
+            ))
+        })
+        .await
+        .map_err(|error| {
+            RtmpFabricEnsureError::Worker(FabricWorkerError::Join(error.to_string()))
+        })??;
+        let (runtime, startup_source, rtmps_client_config) = candidate;
+        let mut registry = self.fabric.rtmp.lock().await;
+        if registry.generation != generation {
+            return Err(RtmpFabricEnsureError::Worker(FabricWorkerError::Closed));
+        }
+        let created = !registry.runtimes.contains_key(&feed_id);
+        if created {
             let wakes = subscribe_fabric_wakes(
                 "rtmp",
                 feed_id.clone(),
                 feed.publication_ring().publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
-
-            tracing::info!(feed_id = %feed_id, "rtmp fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry
                 .startup_sources
                 .insert(feed_id.clone(), startup_source);
-            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             registry
                 .rtmps_client_configs
                 .insert(feed_id.clone(), rtmps_client_config);
-            true
-        };
-
-        let active_outputs = registry.active_outputs.entry(feed_id).or_insert(0);
-        *active_outputs = active_outputs.saturating_add(1);
+            tracing::info!(feed_id = %feed_id, "rtmp fabric runtime created");
+        }
+        let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+        *outputs = outputs.saturating_add(1);
         Ok(created)
     }
 
@@ -114,12 +137,20 @@ impl MediaEngine {
         output_id: OutputId,
         startup: RtmpPublishStartup,
     ) -> bool {
-        let registry = self.fabric.rtmp.lock().await;
-        let Some(source) = registry.startup_sources.get(feed_id) else {
-            return false;
+        let (runtime, source) = {
+            let registry = self.fabric.rtmp.lock().await;
+            let (Some(runtime), Some(source)) = (
+                registry.runtimes.get(feed_id),
+                registry.startup_sources.get(feed_id),
+            ) else {
+                return false;
+            };
+            (runtime.clone(), source.clone())
         };
-        source.set(output_id, startup);
-        true
+        runtime
+            .with(move |_| source.set(output_id, startup))
+            .await
+            .is_ok()
     }
 
     pub async fn dispatch_rtmp_fabric_command(
@@ -127,109 +158,112 @@ impl MediaEngine {
         feed_id: &FeedId,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, RtmpFabricDispatchError> {
-        let mut registry = self.fabric.rtmp.lock().await;
-        if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) = &command
-            && let Some(source) = registry.startup_sources.get(feed_id)
-        {
-            source.remove(output_id);
-        }
-        // Snapshot what a freshly grown shard would need before taking
-        // `runtime` mutably below -- these are separate `registry` fields,
-        // so this is disjoint from the `runtimes` borrow, not a conflict.
-        let rescale_inputs = registry.startup_sources.get(feed_id).cloned().zip(
-            registry
-                .feeds
-                .get(feed_id)
-                .map(|feed| feed.clone_reader())
-                .zip(registry.rtmps_client_configs.get(feed_id).cloned()),
-        );
-        let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
-            return Err(RtmpFabricDispatchError::MissingFeed {
-                feed_id: feed_id.clone(),
-            });
-        };
-
-        // Placement uses the shard count live right now. If rescale below is
-        // about to resize the pool anyway, dispatching first would place the
-        // output, then immediately rehome it -- for a connection-oriented
-        // protocol like RTMP that means tearing down and reconnecting a
-        // socket that was just established (surfaced by the live concurrency
-        // harness as a spurious extra reconnect right after a fresh output
-        // starts). Size the pool for an `Add` *before* dispatching it so it
-        // lands on its final shard the first time, then admit it there.
-        // Remove defers shrinking until the periodic controller has observed
-        // sustained headroom.
-        let mut rescale_inputs = rescale_inputs;
-        // An Add that is not dispatched leaves its publish startup to nobody.
-        let mut startup = None;
-        if let EgressCommand::Add(spec) = &command
-            && let Some(inputs) = rescale_inputs.take()
-        {
-            let reason = runtime.reason_for(&command);
-            let source = inputs.0.clone();
-            self.rescale_rtmp_fabric(feed_id, runtime, inputs, reason);
-            if matches!(reason, crate::egress::runtime::ResizeReason::Add)
-                && let Err(saturated) = runtime.admit_add(
-                    crate::config::EgressShardProfile::OutputCount,
-                    self.config.egress_fabric.shard_config(),
-                    &spec.id,
-                )
-            {
-                source.remove(&spec.id);
-                return Err(RtmpFabricDispatchError::Saturated(saturated));
-            }
-            startup = Some((source, spec.id.clone()));
-        }
-
-        let outcome = runtime.dispatch(command).map_err(|error| {
-            if let Some((source, output_id)) = &startup {
-                source.remove(output_id);
-            }
-            RtmpFabricDispatchError::Dispatch(error)
-        })?;
-
-        if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_rtmp_fabric(
-                feed_id,
-                runtime,
-                inputs,
-                crate::egress::runtime::ResizeReason::Remove,
+        let (runtime, source, rescale_inputs) = {
+            let registry = self.fabric.rtmp.lock().await;
+            let runtime = registry.runtimes.get(feed_id).cloned().ok_or_else(|| {
+                RtmpFabricDispatchError::MissingFeed {
+                    feed_id: feed_id.clone(),
+                }
+            })?;
+            let source = registry.startup_sources.get(feed_id).cloned();
+            let inputs = source.clone().zip(
+                registry
+                    .feeds
+                    .get(feed_id)
+                    .map(RingFeed::clone_reader)
+                    .zip(registry.rtmps_client_configs.get(feed_id).cloned()),
             );
-        }
-
-        Ok(outcome)
+            (runtime, source, inputs)
+        };
+        let config = self.config.clone();
+        let feed_id = feed_id.clone();
+        runtime
+            .with(move |runtime| {
+                if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) =
+                    &command
+                    && let Some(source) = &source
+                {
+                    source.remove(output_id);
+                }
+                let mut rescale_inputs = rescale_inputs;
+                let mut startup = None;
+                // Resize before placement; a fresh TCP connection must not be rehomed.
+                if let EgressCommand::Add(spec) = &command
+                    && let Some(inputs) = rescale_inputs.take()
+                {
+                    let reason = runtime.reason_for(&command);
+                    let source = inputs.0.clone();
+                    Self::rescale_rtmp_fabric(&config, &feed_id, runtime, inputs, reason);
+                    if matches!(reason, crate::egress::runtime::ResizeReason::Add)
+                        && let Err(saturated) = runtime.admit_add(
+                            crate::config::EgressShardProfile::OutputCount,
+                            config.egress_fabric.shard_config(),
+                            &spec.id,
+                        )
+                    {
+                        source.remove(&spec.id);
+                        return Err(RtmpFabricDispatchError::Saturated(saturated));
+                    }
+                    startup = Some((source, spec.id.clone()));
+                }
+                let outcome = runtime.dispatch(command).map_err(|error| {
+                    if let Some((source, output_id)) = &startup {
+                        source.remove(output_id);
+                    }
+                    RtmpFabricDispatchError::Dispatch(error)
+                })?;
+                if let Some(inputs) = rescale_inputs {
+                    Self::rescale_rtmp_fabric(
+                        &config,
+                        &feed_id,
+                        runtime,
+                        inputs,
+                        crate::egress::runtime::ResizeReason::Remove,
+                    );
+                }
+                Ok(outcome)
+            })
+            .await
+            .map_err(RtmpFabricDispatchError::Worker)?
     }
 
     pub async fn resize_rtmp_fabrics(&self) {
-        let mut registry = self.fabric.rtmp.lock().await;
-        let crate::engine_registries::RtmpFabricRegistry {
-            runtimes,
-            feeds,
-            startup_sources,
-            rtmps_client_configs,
-            ..
-        } = &mut *registry;
-        for (id, runtime) in runtimes {
-            if !runtime.observation_due() && !runtime.has_panicked_shard() {
-                continue;
-            }
-            if let (Some(feed), Some(startup), Some(tls)) = (
-                feeds.get(id),
-                startup_sources.get(id),
-                rtmps_client_configs.get(id),
-            ) {
-                self.rescale_rtmp_fabric(
-                    id,
+        let inputs: Vec<_> = {
+            let registry = self.fabric.rtmp.lock().await;
+            registry
+                .runtimes
+                .iter()
+                .filter_map(|(id, runtime)| {
+                    Some((
+                        id.clone(),
+                        runtime.clone(),
+                        (
+                            registry.startup_sources.get(id)?.clone(),
+                            (
+                                registry.feeds.get(id)?.clone_reader(),
+                                registry.rtmps_client_configs.get(id)?.clone(),
+                            ),
+                        ),
+                    ))
+                })
+                .collect()
+        };
+        for (id, runtime, inputs) in inputs {
+            let config = self.config.clone();
+            runtime.try_observe(move |runtime| {
+                Self::rescale_rtmp_fabric(
+                    &config,
+                    &id,
                     runtime,
-                    (startup.clone(), (feed.clone_reader(), tls.clone())),
+                    inputs,
                     crate::egress::runtime::ResizeReason::Observe,
                 );
-            }
+            });
         }
     }
 
     fn rescale_rtmp_fabric(
-        &self,
+        engine_config: &crate::config::EngineConfig,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         (startup_source, (feed, rtmps_client_config)): (
@@ -238,10 +272,10 @@ impl MediaEngine {
         ),
         reason: crate::egress::runtime::ResizeReason,
     ) {
-        let config = &self.config.egress_fabric;
+        let config = &engine_config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
-        let chunk_size = self.config.rtmp_egress_chunk_size;
+        let chunk_size = engine_config.rtmp_egress_chunk_size;
         let poller_max_events = config.tcp_poller_max_events;
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
@@ -316,7 +350,7 @@ impl MediaEngine {
         registry
             .runtimes
             .get(feed_id)
-            .map(EgressFabricRuntime::snapshots)
+            .map(SharedFabricRuntime::snapshots)
     }
 
     /// Per-shard health across every live RTMP fabric runtime, for
@@ -337,15 +371,20 @@ impl MediaEngine {
     pub(crate) async fn shutdown_all_rtmp_fabric_runtimes(&self) -> usize {
         let runtimes = {
             let mut registry = self.fabric.rtmp.lock().await;
+            registry.generation = registry.generation.wrapping_add(1);
+            registry.feeds.clear();
+            registry.rtmps_client_configs.clear();
             registry.active_outputs.clear();
             registry.startup_sources.clear();
             registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();
+        let mut jobs = tokio::task::JoinSet::new();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown_off_worker().await;
+            jobs.spawn(runtime.shutdown_off_worker());
         }
+        while jobs.join_next().await.is_some() {}
         count
     }
 }

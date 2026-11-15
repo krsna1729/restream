@@ -11,7 +11,8 @@ use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
+    SharedFabricRuntime, subscribe_fabric_wakes,
 };
 use crate::egress::shard::{EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError};
 use crate::engine::MediaEngine;
@@ -23,6 +24,7 @@ pub enum HlsPutFabricEnsureError {
     Group(EgressShardGroupError),
     Runtime(EgressFabricRuntimeError),
     TrustRoots(String),
+    Worker(FabricWorkerError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub enum HlsPutFabricDispatchError {
     /// Admission refused the new output; nothing was dispatched.
     Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+    Worker(FabricWorkerError),
 }
 
 impl HlsPutFabricDispatchError {
@@ -75,17 +78,25 @@ impl MediaEngine {
         feed_id: FeedId,
         store: &Arc<HlsStore>,
     ) -> Result<bool, HlsPutFabricEnsureError> {
-        let mut registry = self.fabric.hls_put.lock().await;
-        let created = if registry.runtimes.contains_key(&feed_id) {
-            false
-        } else {
-            let config = &self.config.egress_fabric;
+        let generation = {
+            let mut registry = self.fabric.hls_put.lock().await;
+            if registry.runtimes.contains_key(&feed_id) {
+                let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+                *outputs = outputs.saturating_add(1);
+                return Ok(false);
+            }
+            registry.generation
+        };
+        let engine_config = self.config.clone();
+        let candidate_store = store.clone();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let config = &engine_config.egress_fabric;
             let client_config = crate::egress::tls::resolve_client_config(
-                self.config.rtmps_extra_trust_roots_pem_path.as_deref(),
+                engine_config.rtmps_extra_trust_roots_pem_path.as_deref(),
             )
             .map_err(HlsPutFabricEnsureError::TrustRoots)?;
             let shard_config = config.shard_config();
-            let shared: Shared = (Arc::clone(store), client_config.clone());
+            let shared: Shared = (candidate_store, client_config);
             let max_events = config.tcp_poller_max_events;
             let leaf_capacity = shard_config.leaf_capacity().get();
             let group =
@@ -100,28 +111,37 @@ impl MediaEngine {
                         HlsPutFabricEnsureError::Group(error)
                     }
                 })?;
-            // HLS outputs of one feed cost alike; least-loaded placement
-            // spreads them over shards that join the pool after the first.
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
                 .map_err(HlsPutFabricEnsureError::Runtime)?;
-            // The store wakes the shards from the segmenter on every publish.
+            Ok((SharedFabricRuntime::new(runtime), shared))
+        })
+        .await
+        .map_err(|error| {
+            HlsPutFabricEnsureError::Worker(FabricWorkerError::Join(error.to_string()))
+        })??;
+        let (runtime, shared) = candidate;
+        let mut registry = self.fabric.hls_put.lock().await;
+        if registry.generation != generation {
+            return Err(HlsPutFabricEnsureError::Worker(FabricWorkerError::Closed));
+        }
+        let created = !registry.runtimes.contains_key(&feed_id);
+        if created {
             let wakes = subscribe_fabric_wakes(
                 "hls-put",
                 feed_id.clone(),
                 store.publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
-            tracing::info!(feed_id = %feed_id, "hls put fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.shared.insert(feed_id.clone(), shared);
-            true
-        };
-        let active_outputs = registry.active_outputs.entry(feed_id).or_insert(0);
-        *active_outputs = active_outputs.saturating_add(1);
+            tracing::info!(feed_id = %feed_id, "hls put fabric runtime created");
+        }
+        let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+        *outputs = outputs.saturating_add(1);
         Ok(created)
     }
 
@@ -130,38 +150,52 @@ impl MediaEngine {
         feed_id: &FeedId,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, HlsPutFabricDispatchError> {
-        let mut registry = self.fabric.hls_put.lock().await;
-        let shared = registry.shared.get(feed_id).cloned();
-        let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
-            return Err(HlsPutFabricDispatchError::MissingFeed {
-                feed_id: feed_id.clone(),
-            });
+        let (runtime, shared) = {
+            let registry = self.fabric.hls_put.lock().await;
+            let runtime = registry.runtimes.get(feed_id).cloned().ok_or_else(|| {
+                HlsPutFabricDispatchError::MissingFeed {
+                    feed_id: feed_id.clone(),
+                }
+            })?;
+            (runtime, registry.shared.get(feed_id).cloned())
         };
-        let is_add = matches!(command, EgressCommand::Add(_));
-        // Size the pool before an Add so it lands on its final shard (see
-        // `dispatch_rtmp_fabric_command`), then admit a new output.
-        if let EgressCommand::Add(spec) = &command
-            && let Some(shared) = shared.clone()
-        {
-            let reason = runtime.reason_for(&command);
-            self.rescale_hls_put_fabric(feed_id, runtime, shared, reason);
-            if matches!(reason, ResizeReason::Add) {
-                runtime
-                    .admit_add(
-                        crate::config::EgressShardProfile::HlsPutOutputCount,
-                        self.config.egress_fabric.shard_config(),
-                        &spec.id,
-                    )
-                    .map_err(HlsPutFabricDispatchError::Saturated)?;
-            }
-        }
-        let outcome = runtime
-            .dispatch(command)
-            .map_err(HlsPutFabricDispatchError::Dispatch)?;
-        if !is_add && let Some(shared) = shared {
-            self.rescale_hls_put_fabric(feed_id, runtime, shared, ResizeReason::Remove);
-        }
-        Ok(outcome)
+        let config = self.config.clone();
+        let feed_id = feed_id.clone();
+        runtime
+            .with(move |runtime| {
+                let is_add = matches!(command, EgressCommand::Add(_));
+                // Resize before placement/admission; reconnecting a fresh output is wasteful.
+                if let EgressCommand::Add(spec) = &command
+                    && let Some(shared) = shared.clone()
+                {
+                    let reason = runtime.reason_for(&command);
+                    Self::rescale_hls_put_fabric(&config, &feed_id, runtime, shared, reason);
+                    if matches!(reason, ResizeReason::Add) {
+                        runtime
+                            .admit_add(
+                                crate::config::EgressShardProfile::HlsPutOutputCount,
+                                config.egress_fabric.shard_config(),
+                                &spec.id,
+                            )
+                            .map_err(HlsPutFabricDispatchError::Saturated)?;
+                    }
+                }
+                let outcome = runtime
+                    .dispatch(command)
+                    .map_err(HlsPutFabricDispatchError::Dispatch)?;
+                if !is_add && let Some(shared) = shared {
+                    Self::rescale_hls_put_fabric(
+                        &config,
+                        &feed_id,
+                        runtime,
+                        shared,
+                        ResizeReason::Remove,
+                    );
+                }
+                Ok(outcome)
+            })
+            .await
+            .map_err(HlsPutFabricDispatchError::Worker)?
     }
 
     /// The reconciler's periodic look: learn what this feed's HLS PUT
@@ -169,27 +203,36 @@ impl MediaEngine {
     /// refuses by), and replace a panicked shard, releasing its outputs to
     /// retry (see `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
     pub async fn resize_hls_put_fabrics(&self) {
-        let mut registry = self.fabric.hls_put.lock().await;
-        let crate::engine_registries::HlsPutFabricRegistry {
-            runtimes, shared, ..
-        } = &mut *registry;
-        for (id, runtime) in runtimes {
-            if (runtime.observation_due() || runtime.has_panicked_shard())
-                && let Some(shared) = shared.get(id)
-            {
-                self.rescale_hls_put_fabric(id, runtime, shared.clone(), ResizeReason::Observe);
-            }
+        let inputs: Vec<_> = {
+            let registry = self.fabric.hls_put.lock().await;
+            registry
+                .runtimes
+                .iter()
+                .filter_map(|(id, runtime)| {
+                    Some((
+                        id.clone(),
+                        runtime.clone(),
+                        registry.shared.get(id)?.clone(),
+                    ))
+                })
+                .collect()
+        };
+        for (id, runtime, inputs) in inputs {
+            let config = self.config.clone();
+            runtime.try_observe(move |runtime| {
+                Self::rescale_hls_put_fabric(&config, &id, runtime, inputs, ResizeReason::Observe);
+            });
         }
     }
 
     fn rescale_hls_put_fabric(
-        &self,
+        engine_config: &crate::config::EngineConfig,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         shared: Shared,
         reason: ResizeReason,
     ) {
-        let config = &self.config.egress_fabric;
+        let config = &engine_config.egress_fabric;
         let shard_config = config.shard_config();
         let max_events = config.tcp_poller_max_events;
         let leaf_capacity = shard_config.leaf_capacity().get();
@@ -248,21 +291,20 @@ impl MediaEngine {
     }
 
     pub(crate) async fn shutdown_all_hls_put_fabric_runtimes(&self) -> usize {
-        let runtimes: Vec<_> = {
+        let runtimes = {
             let mut registry = self.fabric.hls_put.lock().await;
+            registry.generation = registry.generation.wrapping_add(1);
             registry.active_outputs.clear();
             registry.shared.clear();
             registry.feed_wakes.clear();
-            registry
-                .runtimes
-                .drain()
-                .map(|(_, runtime)| runtime)
-                .collect()
+            std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();
-        for runtime in runtimes {
-            let _ = runtime.shutdown_off_worker().await;
+        let mut jobs = tokio::task::JoinSet::new();
+        for runtime in runtimes.into_values() {
+            jobs.spawn(runtime.shutdown_off_worker());
         }
+        while jobs.join_next().await.is_some() {}
         count
     }
 }

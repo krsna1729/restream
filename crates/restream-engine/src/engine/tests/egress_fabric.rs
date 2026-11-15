@@ -468,18 +468,20 @@ async fn reconciler_recovery_replaces_a_panicked_sink_shard() {
     }
 
     engine.resize_sink_fabrics().await;
-    assert!(
-        ended.load(Ordering::Acquire),
-        "the output's task must see it end, or it never retries"
-    );
-    assert!(
-        engine
-            .sink_fabric_runtime_snapshots(&feed_id)
-            .await
-            .unwrap()
-            .iter()
-            .all(|snapshot| !snapshot.panicked && !snapshot.stopped)
-    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ended.load(Ordering::Acquire)
+            || engine
+                .sink_fabric_runtime_snapshots(&feed_id)
+                .await
+                .unwrap()
+                .iter()
+                .any(|snapshot| snapshot.panicked || snapshot.stopped)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the independently scheduled replacement recovers the output");
 
     // The application task's retry runs on the replacement.
     spec.generation = 2;

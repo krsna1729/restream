@@ -9,12 +9,17 @@ use crate::egress::command::{EgressCommand, FeedId, ShardId};
 use crate::egress::manager::{
     EgressManager, EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
+#[cfg(test)]
+use crate::egress::shard::EgressShardHeartbeat;
 use crate::egress::shard::{
     EgressShardBackend, EgressShardConfig, EgressShardGroup, EgressShardGroupError,
-    EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle,
+    EgressShardSnapshot, FeedWakeHandle,
 };
 use crate::egress::sizing::{Saturated, ServiceSample, ShardSizer};
 use restream_sync::{PublishSubscribers, PublishWake, RingBuffer};
+
+mod owned;
+pub use owned::{FabricWorkerError, SharedFabricRuntime};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EgressFabricRuntimeError {
@@ -43,6 +48,7 @@ pub struct EgressFabricRuntime {
     last_observation: Option<Instant>,
     feed_mark: Option<(usize, u64, Instant)>,
     shard_ceiling: u32,
+    observer: owned::FabricObserver,
 }
 
 impl EgressFabricRuntime {
@@ -63,6 +69,10 @@ impl EgressFabricRuntime {
         let wake_handles = Arc::new(ArcSwap::from_pointee(group.feed_wake_handles()));
         let mut sizer = ShardSizer::default();
         sizer.resized(Instant::now());
+        let observer = owned::FabricObserver::new(
+            &group,
+            manager_config.command_channel_capacity().get() as u32,
+        );
         Ok(Self {
             manager: EgressManager::new(manager_config),
             group,
@@ -73,6 +83,7 @@ impl EgressFabricRuntime {
             last_observation: None,
             feed_mark: None,
             shard_ceiling: shard_ceiling.max(1),
+            observer,
         })
     }
 
@@ -391,6 +402,7 @@ impl EgressFabricRuntime {
             // failure is still real and needs a wake path.
             self.wake_handles
                 .store(Arc::new(self.group.feed_wake_handles()));
+            self.observer.update(&self.group);
         }
 
         match grow_error {
@@ -408,40 +420,17 @@ impl EgressFabricRuntime {
     /// be tuned to the caller's own poll cadence, not a fixed constant —
     /// too short flags healthy-but-quiet shards (nothing to send right
     /// now) as stalled.
+    #[cfg(test)]
     pub(crate) fn heartbeat(
         &self,
         now: Instant,
         stall_after: Duration,
     ) -> Vec<EgressShardHeartbeat> {
-        let command_capacity = self.manager.config().command_channel_capacity().get() as u32;
-        self.group
-            .snapshots()
-            .into_iter()
-            .map(|snapshot| {
-                EgressShardHeartbeat::from_snapshot_with_capacity(
-                    snapshot,
-                    now,
-                    stall_after,
-                    command_capacity,
-                )
-            })
-            .collect()
+        self.observer.heartbeat(now, stall_after)
     }
 
     pub fn shutdown(self) -> Vec<EgressShardSnapshot> {
         self.group.shutdown_and_join()
-    }
-
-    /// [`Self::shutdown`] from async code: the joins (each shard's drain,
-    /// bounded by its drain timeout) run on the blocking pool, never on a
-    /// Tokio worker.
-    pub async fn shutdown_off_worker(self) -> Vec<EgressShardSnapshot> {
-        tokio::task::spawn_blocking(move || self.shutdown())
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "egress fabric shutdown did not finish cleanly");
-                Vec::new()
-            })
     }
 }
 
@@ -485,7 +474,7 @@ impl Drop for FeedWakeSubscription {
 /// Wake a fabric's shards directly from the feed's producer: each
 /// publication (and each seal or end of stream) calls into the shards'
 /// coalescing wake gates on the publishing thread, with no watcher task or
-/// runtime hop in between. Shared by all four
+/// runtime hop in between. Shared by all six
 /// `engine_*_egress_fabric.rs` callers (`kind` only labels the log line).
 ///
 /// `wake_handles` is shared with `EgressFabricRuntime::rescale`, so shards

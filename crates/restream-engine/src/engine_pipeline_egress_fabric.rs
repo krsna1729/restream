@@ -7,7 +7,8 @@ use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
 use crate::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, ResizeReason, subscribe_fabric_wakes,
+    EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
+    SharedFabricRuntime, subscribe_fabric_wakes,
 };
 use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -18,6 +19,7 @@ use crate::engine::MediaEngine;
 pub enum PipelineFabricEnsureError {
     Spawn(EgressShardGroupError),
     Runtime(EgressFabricRuntimeError),
+    Worker(FabricWorkerError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,7 @@ pub enum PipelineFabricDispatchError {
     /// pending target was dropped.
     Saturated(crate::egress::sizing::Saturated),
     Dispatch(EgressManagerDispatchError<EgressShardGroupError>),
+    Worker(FabricWorkerError),
 }
 
 impl PipelineFabricDispatchError {
@@ -46,50 +49,62 @@ impl MediaEngine {
         feed_id: FeedId,
         feed: &RingFeed,
     ) -> Result<bool, PipelineFabricEnsureError> {
-        let mut registry = self.fabric.pipeline.lock().await;
-        let created = if registry.runtimes.contains_key(&feed_id) {
-            false
-        } else {
-            let config = &self.config.egress_fabric;
+        let generation = {
+            let mut registry = self.fabric.pipeline.lock().await;
+            if registry.runtimes.contains_key(&feed_id) {
+                let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+                *outputs = outputs.saturating_add(1);
+                return Ok(false);
+            }
+            registry.generation
+        };
+        let engine_config = self.config.clone();
+        let candidate_feed = feed.clone_reader();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let config = &engine_config.egress_fabric;
             let target_source = SharedPipelineTargetSource::new();
             let group = spawn_pipeline_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
                 config.shard_config(),
                 config.work_budget(),
                 target_source.clone(),
-                |_| feed.clone_reader(),
+                |_| candidate_feed.clone_reader(),
             )
             .map_err(PipelineFabricEnsureError::Spawn)?;
-            // Least-loaded, as for the other fabrics (see
-            // `retain_sink_fabric_runtime`).
             let manager_config = EgressManagerConfig::new(1, config.command_channel_capacity)
                 .expect("egress fabric manager config is clamped nonzero")
                 .with_placement_policy(PlacementPolicy::LeastLoaded);
             let runtime = EgressFabricRuntime::new(manager_config, group, config.shards)
                 .map_err(PipelineFabricEnsureError::Runtime)?;
-
-            // Pipeline leaves have no poller either (see
-            // `retain_sink_fabric_runtime`'s identical comment), so this is
-            // their only readiness signal too.
+            Ok((SharedFabricRuntime::new(runtime), target_source))
+        })
+        .await
+        .map_err(|error| {
+            PipelineFabricEnsureError::Worker(FabricWorkerError::Join(error.to_string()))
+        })??;
+        let (runtime, target_source) = candidate;
+        let mut registry = self.fabric.pipeline.lock().await;
+        if registry.generation != generation {
+            return Err(PipelineFabricEnsureError::Worker(FabricWorkerError::Closed));
+        }
+        let created = !registry.runtimes.contains_key(&feed_id);
+        if created {
             let wakes = subscribe_fabric_wakes(
                 "pipeline",
                 feed_id.clone(),
                 feed.publication_ring().publication_subscribers(),
                 runtime.feed_wake_handles(),
             );
-
-            tracing::info!(feed_id = %feed_id, "pipeline fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry
                 .target_sources
                 .insert(feed_id.clone(), target_source);
-            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
-            true
-        };
-
-        let active_outputs = registry.active_outputs.entry(feed_id).or_insert(0);
-        *active_outputs = active_outputs.saturating_add(1);
+            tracing::info!(feed_id = %feed_id, "pipeline fabric runtime created");
+        }
+        let outputs = registry.active_outputs.entry(feed_id).or_insert(0);
+        *outputs = outputs.saturating_add(1);
         Ok(created)
     }
 
@@ -103,12 +118,20 @@ impl MediaEngine {
         output_id: OutputId,
         target: PipelineTarget,
     ) -> bool {
-        let registry = self.fabric.pipeline.lock().await;
-        let Some(source) = registry.target_sources.get(feed_id) else {
-            return false;
+        let (runtime, source) = {
+            let registry = self.fabric.pipeline.lock().await;
+            let (Some(runtime), Some(source)) = (
+                registry.runtimes.get(feed_id),
+                registry.target_sources.get(feed_id),
+            ) else {
+                return false;
+            };
+            (runtime.clone(), source.clone())
         };
-        source.set(output_id, target);
-        true
+        runtime
+            .with(move |_| source.set(output_id, target))
+            .await
+            .is_ok()
     }
 
     pub async fn dispatch_pipeline_fabric_command(
@@ -116,60 +139,66 @@ impl MediaEngine {
         feed_id: &FeedId,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, PipelineFabricDispatchError> {
-        let mut registry = self.fabric.pipeline.lock().await;
-        if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) = &command
-            && let Some(source) = registry.target_sources.get(feed_id)
-        {
-            source.remove(output_id);
-        }
-        // Owned upfront (see `dispatch_rtmp_fabric_command`'s identical
-        // comment): disjoint from the `runtimes` borrow below, and no
-        // lingering reference into `registry` for `rescale` to hold.
-        let rescale_inputs = registry
-            .feeds
-            .get(feed_id)
-            .map(|feed| feed.clone_reader())
-            .zip(registry.target_sources.get(feed_id).cloned());
-        let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
-            return Err(PipelineFabricDispatchError::MissingFeed {
-                feed_id: feed_id.clone(),
-            });
+        let (runtime, source, rescale_inputs) = {
+            let registry = self.fabric.pipeline.lock().await;
+            let runtime = registry.runtimes.get(feed_id).cloned().ok_or_else(|| {
+                PipelineFabricDispatchError::MissingFeed {
+                    feed_id: feed_id.clone(),
+                }
+            })?;
+            let source = registry.target_sources.get(feed_id).cloned();
+            let inputs = registry
+                .feeds
+                .get(feed_id)
+                .map(RingFeed::clone_reader)
+                .zip(source.clone());
+            (runtime, source, inputs)
         };
-
-        // See `dispatch_rtmp_fabric_command`'s identical comment: size the
-        // pool for an `Add` before dispatching it so it lands on its final
-        // shard the first time, instead of connecting once and immediately
-        // getting rehomed onto a different shard.
-        let mut rescale_inputs = rescale_inputs;
-        if let EgressCommand::Add(spec) = &command
-            && let Some(inputs) = rescale_inputs.take()
-        {
-            let reason = runtime.reason_for(&command);
-            let target_source = inputs.1.clone();
-            self.rescale_pipeline_fabric(feed_id, runtime, inputs, reason);
-            if matches!(reason, ResizeReason::Add)
-                && let Err(saturated) = runtime.admit_add(
-                    crate::config::EgressShardProfile::PipelineOutputCount,
-                    self.config.egress_fabric.shard_config(),
-                    &spec.id,
-                )
-            {
-                // No shard will take the target: release the ring and the
-                // claimed input's registration it holds.
-                target_source.remove(&spec.id);
-                return Err(PipelineFabricDispatchError::Saturated(saturated));
-            }
-        }
-
-        let outcome = runtime
-            .dispatch(command)
-            .map_err(PipelineFabricDispatchError::Dispatch)?;
-
-        if let Some(inputs) = rescale_inputs.take() {
-            self.rescale_pipeline_fabric(feed_id, runtime, inputs, ResizeReason::Remove);
-        }
-
-        Ok(outcome)
+        let config = self.config.clone();
+        let feed_id = feed_id.clone();
+        runtime
+            .with(move |runtime| {
+                if let EgressCommand::Remove(output_id) | EgressCommand::Abandon(output_id) =
+                    &command
+                    && let Some(source) = &source
+                {
+                    source.remove(output_id);
+                }
+                let mut rescale_inputs = rescale_inputs;
+                if let EgressCommand::Add(spec) = &command
+                    && let Some(inputs) = rescale_inputs.take()
+                {
+                    let reason = runtime.reason_for(&command);
+                    let target_source = inputs.1.clone();
+                    Self::rescale_pipeline_fabric(&config, &feed_id, runtime, inputs, reason);
+                    if matches!(reason, ResizeReason::Add)
+                        && let Err(saturated) = runtime.admit_add(
+                            crate::config::EgressShardProfile::PipelineOutputCount,
+                            config.egress_fabric.shard_config(),
+                            &spec.id,
+                        )
+                    {
+                        // No shard will take the target or its claimed input registration.
+                        target_source.remove(&spec.id);
+                        return Err(PipelineFabricDispatchError::Saturated(saturated));
+                    }
+                }
+                let outcome = runtime
+                    .dispatch(command)
+                    .map_err(PipelineFabricDispatchError::Dispatch)?;
+                if let Some(inputs) = rescale_inputs {
+                    Self::rescale_pipeline_fabric(
+                        &config,
+                        &feed_id,
+                        runtime,
+                        inputs,
+                        ResizeReason::Remove,
+                    );
+                }
+                Ok(outcome)
+            })
+            .await
+            .map_err(PipelineFabricDispatchError::Worker)?
     }
 
     /// The reconciler's periodic look: learn what this feed's pipeline
@@ -177,29 +206,33 @@ impl MediaEngine {
     /// refuses by), and replace a panicked shard, releasing its outputs to
     /// retry (see `EgressFabricRuntime::rescale`), on an otherwise quiet feed.
     pub async fn resize_pipeline_fabrics(&self) {
-        let mut registry = self.fabric.pipeline.lock().await;
-        let crate::engine_registries::PipelineFabricRegistry {
-            runtimes,
-            feeds,
-            target_sources,
-            ..
-        } = &mut *registry;
-        for (id, runtime) in runtimes {
-            if (runtime.observation_due() || runtime.has_panicked_shard())
-                && let (Some(feed), Some(targets)) = (feeds.get(id), target_sources.get(id))
-            {
-                self.rescale_pipeline_fabric(
-                    id,
-                    runtime,
-                    (feed.clone_reader(), targets.clone()),
-                    ResizeReason::Observe,
-                );
-            }
+        let inputs: Vec<_> = {
+            let registry = self.fabric.pipeline.lock().await;
+            registry
+                .runtimes
+                .iter()
+                .filter_map(|(id, runtime)| {
+                    Some((
+                        id.clone(),
+                        runtime.clone(),
+                        (
+                            registry.feeds.get(id)?.clone_reader(),
+                            registry.target_sources.get(id)?.clone(),
+                        ),
+                    ))
+                })
+                .collect()
+        };
+        for (id, runtime, inputs) in inputs {
+            let config = self.config.clone();
+            runtime.try_observe(move |runtime| {
+                Self::rescale_pipeline_fabric(&config, &id, runtime, inputs, ResizeReason::Observe);
+            });
         }
     }
 
     fn rescale_pipeline_fabric(
-        &self,
+        engine_config: &crate::config::EngineConfig,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
         (feed, target_source): (RingFeed, SharedPipelineTargetSource),
@@ -207,7 +240,7 @@ impl MediaEngine {
     ) {
         // Price unmeasured outputs at this feed's rate, as the other fabrics do.
         runtime.forecast_feed(&feed.publication_ring());
-        let config = &self.config.egress_fabric;
+        let config = &engine_config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let result = runtime.rescale(
@@ -269,7 +302,7 @@ impl MediaEngine {
         registry
             .runtimes
             .get(feed_id)
-            .map(EgressFabricRuntime::snapshots)
+            .map(SharedFabricRuntime::snapshots)
     }
 
     /// Per-shard health across every live pipeline-recirculation fabric
@@ -290,15 +323,19 @@ impl MediaEngine {
     pub(crate) async fn shutdown_all_pipeline_fabric_runtimes(&self) -> usize {
         let runtimes = {
             let mut registry = self.fabric.pipeline.lock().await;
+            registry.generation = registry.generation.wrapping_add(1);
+            registry.feeds.clear();
             registry.active_outputs.clear();
             registry.target_sources.clear();
             registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();
+        let mut jobs = tokio::task::JoinSet::new();
         for runtime in runtimes.into_values() {
-            let _ = runtime.shutdown_off_worker().await;
+            jobs.spawn(runtime.shutdown_off_worker());
         }
+        while jobs.join_next().await.is_some() {}
         count
     }
 }

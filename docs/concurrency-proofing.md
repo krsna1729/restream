@@ -201,9 +201,18 @@ job; loom models also run in `cargo xtask concurrency fast`.
 | RTMP listener (`crates/restream-engine/src/rtmp/listener.rs`) | `restream_engine::rtmp::listener::tests` |
 | Egress feed wakes | `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (`rtmp_shard/tests.rs`), `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (`egress/runtime.rs`), and in `egress/shard/tests/feed_wake.rs`: `publication_after_a_wake_head_check_rearms_the_shared_shard_gate`, `a_full_command_queue_cannot_strand_a_feeds_final_publication`, `full_fallback_preserves_an_already_queued_publication_wake` |
 | Egress shard recovery | `a_panicked_shard_is_replaced_and_its_retried_outputs_are_delivered`, `placement_skips_a_dead_shard_until_its_replacement_starts`, `every_fabric_recovers_panics_without_adaptive_observation`, `reconciler_recovery_replaces_a_panicked_sink_shard`, `a_retried_output_delivers_again_after_its_shard_panics` |
+| Fabric construction and control | `engine::tests::fabric_construction` (real held PEM reads, competing creators, shutdown fencing, quiet-sibling recovery); `egress::runtime::owned::tests` (held real backend growth with two blocking workers, caller cancellation, last-owner cleanup with retained wakes, control-job panic, stale-handle rejection) |
 | SRT stream id | `restream_engine::srt_stream_id::tests` |
 | TS chunk ring | `live_reader_starts_after_existing_chunks` |
 | Harness (`crates/test_harness/src/main.rs`) | `kill_and_wait_child_terminates_spawned_process`, and the live modes above |
+
+Fabric control reuses Tokio's owned mutex guard and the existing publication
+wake path, rather than introducing a custom synchronization primitive.
+Controlled current-thread tests exercise the actual blocking-pool handoff and
+registry publication races. The existing feed-wake loom model still guards
+packet publication; `fault.sibling-isolation` exercises the migrated production
+construction and command paths over live media. Its live cases do not hold the
+PEM filesystem read: the deterministic FIFO tests cover that failure.
 
 ## Open gaps
 
