@@ -9,11 +9,11 @@ pub use team::SqliteTeamStore;
 
 use self::records::{ingest_model, job_model, pipeline_model};
 use crate::application::ports::*;
+use crate::db::DeadlineDb;
 use restream_domain::models::Pipeline;
-use sqlx::SqlitePool;
 
-/// A port call bounded by the shared loops' [`crate::db::DeadlineDb`] that
-/// missed its deadline fails as a store error.
+/// A read that misses the adapter's [`DeadlineDb`] deadline fails as a
+/// store error; writes retain their actual outcome without a read deadline.
 impl From<crate::db::DeadlineError> for StoreError {
     fn from(error: crate::db::DeadlineError) -> Self {
         Self::new(error.to_string())
@@ -22,74 +22,75 @@ impl From<crate::db::DeadlineError> for StoreError {
 
 #[derive(Clone)]
 pub struct SqlitePipelineStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 #[derive(Clone)]
 pub struct SqliteIngestLookup {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 #[derive(Clone)]
 pub struct SqliteMetaStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 #[derive(Clone)]
 pub struct SqliteSessionStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 #[derive(Clone)]
 pub struct SqliteJobStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 #[derive(Clone)]
 pub struct SqliteRecordingStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 impl SqlitePipelineStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl SqliteIngestLookup {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl SqliteMetaStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl SqliteSessionStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl SqliteJobStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl SqliteRecordingStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl PipelineStore for SqlitePipelineStore {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_pipeline(&self.pool, id)
+            self.db
+                .read(|pool| crate::db::get_pipeline(pool, id))
                 .await
                 .map(|record| record.map(pipeline_model))
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
@@ -98,7 +99,8 @@ impl PipelineStore for SqlitePipelineStore {
 
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_pipeline_by_stream_key(&self.pool, stream_key)
+            self.db
+                .read(|pool| crate::db::get_pipeline_by_stream_key(pool, stream_key))
                 .await
                 .map(|record| record.map(pipeline_model))
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
@@ -107,7 +109,8 @@ impl PipelineStore for SqlitePipelineStore {
 
     fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
         Box::pin(async move {
-            crate::db::list_pipelines(&self.pool)
+            self.db
+                .read(crate::db::list_pipelines)
                 .await
                 .map(|records| records.into_iter().map(pipeline_model).collect())
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
@@ -123,17 +126,24 @@ impl PipelineStore for SqlitePipelineStore {
         srt_ingest_policy: Option<&'a str>,
     ) -> PipelineCreateFuture<'a> {
         Box::pin(async move {
-            crate::db::create_pipeline(
-                &self.pool,
-                id,
-                name,
-                stream_key,
-                input_source,
-                srt_ingest_policy,
-            )
-            .await
-            .map(pipeline_model)
-            .map_err(|err| PipelineStoreError::new(err.to_string()))
+            let (id, name, stream_key) = (id.to_owned(), name.to_owned(), stream_key.to_owned());
+            let input_source = input_source.map(str::to_owned);
+            let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
+            self.db
+                .write(move |pool| async move {
+                    crate::db::create_pipeline(
+                        &pool,
+                        &id,
+                        &name,
+                        &stream_key,
+                        input_source.as_deref(),
+                        srt_ingest_policy.as_deref(),
+                    )
+                    .await
+                })
+                .await
+                .map(pipeline_model)
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
 
@@ -146,23 +156,32 @@ impl PipelineStore for SqlitePipelineStore {
         srt_ingest_policy: Option<&'a str>,
     ) -> PipelineUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_pipeline(
-                &self.pool,
-                id,
-                name,
-                stream_key,
-                input_source,
-                srt_ingest_policy,
-            )
-            .await
-            .map(|record| record.map(pipeline_model))
-            .map_err(|err| PipelineStoreError::new(err.to_string()))
+            let (id, name, stream_key) = (id.to_owned(), name.to_owned(), stream_key.to_owned());
+            let input_source = input_source.map(str::to_owned);
+            let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
+            self.db
+                .write(move |pool| async move {
+                    crate::db::update_pipeline(
+                        &pool,
+                        &id,
+                        &name,
+                        &stream_key,
+                        input_source.as_deref(),
+                        srt_ingest_policy.as_deref(),
+                    )
+                    .await
+                })
+                .await
+                .map(|record| record.map(pipeline_model))
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
 
     fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a> {
         Box::pin(async move {
-            crate::db::delete_pipeline(&self.pool, id)
+            let id = id.to_owned();
+            self.db
+                .write(move |pool| async move { crate::db::delete_pipeline(&pool, &id).await })
                 .await
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
@@ -170,7 +189,8 @@ impl PipelineStore for SqlitePipelineStore {
 
     fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
         Box::pin(async move {
-            crate::db::get_ingest_host(&self.pool)
+            self.db
+                .read(crate::db::get_ingest_host)
                 .await
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
@@ -182,7 +202,13 @@ impl PipelineStore for SqlitePipelineStore {
         input_source: Option<&'a str>,
     ) -> PipelineUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_pipeline_input_source(&self.pool, &pipeline.id, input_source)
+            let id = pipeline.id.clone();
+            let input_source = input_source.map(str::to_owned);
+            self.db
+                .write(move |pool| async move {
+                    crate::db::update_pipeline_input_source(&pool, &id, input_source.as_deref())
+                        .await
+                })
                 .await
                 .map(|record| record.map(pipeline_model))
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
@@ -193,7 +219,8 @@ impl PipelineStore for SqlitePipelineStore {
 impl IngestLookup for SqliteIngestLookup {
     fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_ingest(&self.pool, id)
+            self.db
+                .read(|pool| crate::db::get_ingest(pool, id))
                 .await
                 .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestLookupError::new(err.to_string()))
@@ -202,7 +229,8 @@ impl IngestLookup for SqliteIngestLookup {
 
     fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_ingest_by_stream_key(&self.pool, stream_key)
+            self.db
+                .read(|pool| crate::db::get_ingest_by_stream_key(pool, stream_key))
                 .await
                 .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestLookupError::new(err.to_string()))
@@ -211,7 +239,8 @@ impl IngestLookup for SqliteIngestLookup {
 
     fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
         Box::pin(async move {
-            crate::db::list_ingests(&self.pool)
+            self.db
+                .read(crate::db::list_ingests)
                 .await
                 .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
@@ -220,7 +249,8 @@ impl IngestLookup for SqliteIngestLookup {
 
     fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
         Box::pin(async move {
-            crate::db::list_ingests_for_filename(&self.pool, filename)
+            self.db
+                .read(|pool| crate::db::list_ingests_for_filename(pool, filename))
                 .await
                 .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
@@ -229,7 +259,8 @@ impl IngestLookup for SqliteIngestLookup {
 
     fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
         Box::pin(async move {
-            crate::db::list_ingests_for_stream_key(&self.pool, stream_key)
+            self.db
+                .read(|pool| crate::db::list_ingests_for_stream_key(pool, stream_key))
                 .await
                 .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
@@ -249,19 +280,29 @@ impl IngestWriter for SqliteIngestLookup {
         target_gop_seconds: u32,
     ) -> IngestWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::create_ingest(
-                &self.pool,
-                id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
-            )
-            .await
-            .map(ingest_model)
-            .map_err(|err| IngestWriteError::new(err.to_string()))
+            let (id, filename, stream_key, start_time) = (
+                id.to_owned(),
+                filename.to_owned(),
+                stream_key.to_owned(),
+                start_time.to_owned(),
+            );
+            self.db
+                .write(move |pool| async move {
+                    crate::db::create_ingest(
+                        &pool,
+                        &id,
+                        &filename,
+                        &stream_key,
+                        loop_flag,
+                        &start_time,
+                        live_optimized,
+                        target_gop_seconds,
+                    )
+                    .await
+                })
+                .await
+                .map(ingest_model)
+                .map_err(|err| IngestWriteError::new(err.to_string()))
         })
     }
 
@@ -276,19 +317,29 @@ impl IngestWriter for SqliteIngestLookup {
         target_gop_seconds: u32,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_ingest(
-                &self.pool,
-                id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
-            )
-            .await
-            .map(|record| record.map(ingest_model))
-            .map_err(|err| IngestWriteError::new(err.to_string()))
+            let (id, filename, stream_key, start_time) = (
+                id.to_owned(),
+                filename.to_owned(),
+                stream_key.to_owned(),
+                start_time.to_owned(),
+            );
+            self.db
+                .write(move |pool| async move {
+                    crate::db::update_ingest(
+                        &pool,
+                        &id,
+                        &filename,
+                        &stream_key,
+                        loop_flag,
+                        &start_time,
+                        live_optimized,
+                        target_gop_seconds,
+                    )
+                    .await
+                })
+                .await
+                .map(|record| record.map(ingest_model))
+                .map_err(|err| IngestWriteError::new(err.to_string()))
         })
     }
 
@@ -298,7 +349,11 @@ impl IngestWriter for SqliteIngestLookup {
         filename: &'a str,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_ingest_filename(&self.pool, id, filename)
+            let (id, filename) = (id.to_owned(), filename.to_owned());
+            self.db
+                .write(move |pool| async move {
+                    crate::db::update_ingest_filename(&pool, &id, &filename).await
+                })
                 .await
                 .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestWriteError::new(err.to_string()))
@@ -315,7 +370,11 @@ impl IngestWriter for SqliteIngestLookup {
                 .then(|| serde_json::to_string(playlist))
                 .transpose()
                 .map_err(|err| IngestWriteError::new(err.to_string()))?;
-            crate::db::set_ingest_playlist(&self.pool, id, json.as_deref())
+            let id = id.to_owned();
+            self.db
+                .write(move |pool| async move {
+                    crate::db::set_ingest_playlist(&pool, &id, json.as_deref()).await
+                })
                 .await
                 .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestWriteError::new(err.to_string()))
@@ -329,7 +388,11 @@ impl IngestWriter for SqliteIngestLookup {
         to: &'a str,
     ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::rename_ingest_file(&self.pool, id, from, to)
+            let (id, from, to) = (id.to_owned(), from.to_owned(), to.to_owned());
+            self.db
+                .write(move |pool| async move {
+                    crate::db::rename_ingest_file(&pool, &id, &from, &to).await
+                })
                 .await
                 .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestWriteError::new(err.to_string()))
@@ -338,7 +401,9 @@ impl IngestWriter for SqliteIngestLookup {
 
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
-            crate::db::delete_ingest(&self.pool, id)
+            let id = id.to_owned();
+            self.db
+                .write(move |pool| async move { crate::db::delete_ingest(&pool, &id).await })
                 .await
                 .map_err(|err| IngestWriteError::new(err.to_string()))
         })
@@ -348,7 +413,8 @@ impl IngestWriter for SqliteIngestLookup {
 impl MetaStore for SqliteMetaStore {
     fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_meta(&self.pool, key)
+            self.db
+                .read(|pool| crate::db::get_meta(pool, key))
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
         })
@@ -358,7 +424,9 @@ impl MetaStore for SqliteMetaStore {
 impl MetaStoreWriter for SqliteMetaStore {
     fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::set_meta(&self.pool, key, value)
+            let (key, value) = (key.to_owned(), value.to_owned());
+            self.db
+                .write(move |pool| async move { crate::db::set_meta(&pool, &key, &value).await })
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
         })
@@ -368,7 +436,8 @@ impl MetaStoreWriter for SqliteMetaStore {
 impl IngestHostStore for SqliteMetaStore {
     fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_ingest_host(&self.pool)
+            self.db
+                .read(crate::db::get_ingest_host)
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
         })
@@ -376,7 +445,9 @@ impl IngestHostStore for SqliteMetaStore {
 
     fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::set_ingest_host(&self.pool, host)
+            let host = host.to_owned();
+            self.db
+                .write(move |pool| async move { crate::db::set_ingest_host(&pool, &host).await })
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
         })
@@ -386,7 +457,11 @@ impl IngestHostStore for SqliteMetaStore {
 impl SessionStore for SqliteSessionStore {
     fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::create_session(&self.pool, token, ts)
+            let token = token.to_owned();
+            self.db
+                .write(
+                    move |pool| async move { crate::db::create_session(&pool, &token, ts).await },
+                )
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -394,7 +469,9 @@ impl SessionStore for SqliteSessionStore {
 
     fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::delete_session(&self.pool, token)
+            let token = token.to_owned();
+            self.db
+                .write(move |pool| async move { crate::db::delete_session(&pool, &token).await })
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -402,7 +479,10 @@ impl SessionStore for SqliteSessionStore {
 
     fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::delete_sessions_except(&self.pool, token)
+            let token = token.to_owned();
+            self.db.write(move |pool| async move {
+                crate::db::delete_sessions_except(&pool, &token).await
+            })
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -410,7 +490,8 @@ impl SessionStore for SqliteSessionStore {
 
     fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_session_created_at(&self.pool, token)
+            self.db
+                .read(|pool| crate::db::get_session_created_at(pool, token))
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -418,7 +499,10 @@ impl SessionStore for SqliteSessionStore {
 
     fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::prune_expired_sessions(&self.pool, max_age_ms)
+            self.db
+                .write(move |pool| async move {
+                    crate::db::prune_expired_sessions(&pool, max_age_ms).await
+                })
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -426,7 +510,8 @@ impl SessionStore for SqliteSessionStore {
 
     fn list_sessions<'a>(&'a self) -> SessionListFuture<'a> {
         Box::pin(async move {
-            crate::db::list_sessions(&self.pool)
+            self.db
+                .read(crate::db::list_sessions)
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
@@ -436,7 +521,8 @@ impl SessionStore for SqliteSessionStore {
 impl JobStore for SqliteJobStore {
     fn list_jobs<'a>(&'a self) -> JobListFuture<'a> {
         Box::pin(async move {
-            crate::db::list_jobs(&self.pool)
+            self.db
+                .read(crate::db::list_jobs)
                 .await
                 .map(|records| records.into_iter().map(job_model).collect())
                 .map_err(|err| JobStoreError::new(err.to_string()))
@@ -447,7 +533,8 @@ impl JobStore for SqliteJobStore {
 impl RecordingStore for SqliteRecordingStore {
     fn list_recordings<'a>(&'a self) -> RecordingListFuture<'a> {
         Box::pin(async move {
-            crate::db::list_recordings(&self.pool)
+            self.db
+                .read(crate::db::list_recordings)
                 .await
                 .map(|rows| rows.into_iter().map(recording_catalog_row).collect())
                 .map_err(|err| RecordingStoreError::new(err.to_string()))
@@ -472,6 +559,7 @@ fn recording_catalog_row(row: crate::db::RecordingRow) -> RecordingCatalogRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::SqlitePool;
 
     async fn test_pool() -> SqlitePool {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
@@ -485,7 +573,7 @@ mod tests {
         crate::db::create_pipeline(&pool, "p1", "Pipeline", "stream-key", None, None)
             .await
             .unwrap();
-        let store = SqlitePipelineStore::new(pool);
+        let store = SqlitePipelineStore::new(DeadlineDb::api(pool.clone()));
 
         let pipeline = store
             .get_pipeline_by_stream_key("stream-key")
@@ -498,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_pipeline_store_returns_none_for_missing_stream_key() {
         let pool = test_pool().await;
-        let store = SqlitePipelineStore::new(pool);
+        let store = SqlitePipelineStore::new(DeadlineDb::api(pool.clone()));
 
         let pipeline = store.get_pipeline_by_stream_key("missing").await.unwrap();
 
@@ -519,7 +607,7 @@ mod tests {
         crate::db::create_pipeline(&pool, "p1", "Original Name", "sk_original", None, None)
             .await
             .unwrap();
-        let store = SqlitePipelineStore::new(pool.clone());
+        let store = SqlitePipelineStore::new(DeadlineDb::api(pool.clone()));
         let stale_snapshot = store.get_pipeline("p1").await.unwrap().unwrap();
 
         // Simulate a concurrent request rotating the stream key and renaming
@@ -549,7 +637,7 @@ mod tests {
         crate::db::create_pipeline(&pool, "p2", "Pipeline Two", "stream-two", None, None)
             .await
             .unwrap();
-        let store = SqlitePipelineStore::new(pool);
+        let store = SqlitePipelineStore::new(DeadlineDb::api(pool.clone()));
 
         let pipelines = store.list_pipelines().await.unwrap();
 
@@ -584,7 +672,7 @@ mod tests {
             2,
         )
         .await;
-        let lookup = SqliteIngestLookup::new(pool);
+        let lookup = SqliteIngestLookup::new(DeadlineDb::api(pool.clone()));
 
         let by_id = lookup.get_ingest("i1").await.unwrap();
         let by_stream_key = lookup.get_ingest_by_stream_key("stream-key").await.unwrap();
@@ -609,7 +697,7 @@ mod tests {
         let duplicate =
             crate::db::create_ingest(&pool, "i3", "clip-3.mp4", "stream-key", false, "", false, 2)
                 .await;
-        let lookup = SqliteIngestLookup::new(pool);
+        let lookup = SqliteIngestLookup::new(DeadlineDb::api(pool.clone()));
 
         let ingests = lookup
             .list_ingests_for_stream_key("stream-key")
@@ -627,7 +715,7 @@ mod tests {
         crate::db::set_meta(&pool, "test-key", "test-value")
             .await
             .unwrap();
-        let store = SqliteMetaStore::new(pool);
+        let store = SqliteMetaStore::new(DeadlineDb::api(pool.clone()));
 
         let value = store.get_meta("test-key").await.unwrap();
 
@@ -637,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_meta_store_writes_meta_value() {
         let pool = test_pool().await;
-        let store = SqliteMetaStore::new(pool.clone());
+        let store = SqliteMetaStore::new(DeadlineDb::api(pool.clone()));
 
         store.set_meta("test-key", "test-value").await.unwrap();
 
@@ -661,7 +749,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let store = SqliteRecordingStore::new(pool);
+        let store = SqliteRecordingStore::new(DeadlineDb::api(pool.clone()));
 
         let rows = store.list_recordings().await.unwrap();
 

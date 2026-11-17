@@ -15,7 +15,6 @@ async fn health_shows_registered_egress() {
         let (log_broadcast, _) = broadcast::channel(32);
         let state = Arc::new(api::AppState::test_new(
             restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-            pool.clone(),
             security,
             ingest_policy_store,
             sessions,
@@ -365,7 +364,6 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
-        auth_pool.clone(),
         security,
         ingest_policy_store,
         sessions,

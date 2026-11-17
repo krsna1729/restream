@@ -106,7 +106,7 @@ async fn a_rotation_whose_caller_is_cancelled_after_commit_is_still_enforced() {
         .unwrap();
     let (open, gate) = tokio::sync::watch::channel(false);
     let store = Arc::new(CommitThenWait {
-        inner: SqlitePipelineStore::new(c.pool.clone()),
+        inner: SqlitePipelineStore::new(crate::db::DeadlineDb::api(c.pool.clone())),
         committed: tokio::sync::Notify::new(),
         gate,
     });

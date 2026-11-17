@@ -19,7 +19,9 @@ use tracing::{error, info, warn};
 
 use super::error::ApiError;
 use super::state::{AppState, require_authenticated, to_hex};
-use crate::application::schedules::{self, Due, Schedule, ScheduleAction, ScheduleDraft};
+use crate::application::schedules::{
+    self, Due, Schedule, ScheduleAction, ScheduleDraft, record_run,
+};
 use crate::application::team::AuditEntry;
 use crate::db::DeadlineDb;
 use restream_domain::domain::role::Role;
@@ -211,20 +213,6 @@ async fn record_skip(db: DeadlineDb, schedule_id: String, occurrence_ms: i64) {
     .await;
 }
 
-/// Records an occurrence's outcome, awaited to its outcome.
-async fn record_run(
-    db: &DeadlineDb,
-    id: &str,
-    occurrence_ms: i64,
-    result: String,
-) -> crate::application::services::ServiceResult<()> {
-    let id = id.to_string();
-    db.write(
-        move |pool| async move { schedules::record_run(&pool, &id, occurrence_ms, &result).await },
-    )
-    .await
-}
-
 /// Looks for due events every `tick` and runs them; an occurrence missed by
 /// more than the grace (the engine was down) is recorded as skipped. Its
 /// reads and writes go through `db`, the shared loops' executor: reads end
@@ -273,7 +261,7 @@ pub async fn run_scheduler(
             running.remove(&task);
         }
         let now = now_ms();
-        let Ok(all) = db.read(|pool| schedules::list(pool, now)).await else {
+        let Ok(all) = schedules::list(&db, now).await else {
             continue;
         };
         for schedule in all {

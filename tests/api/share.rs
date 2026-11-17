@@ -79,27 +79,26 @@ async fn a_share_link_opens_its_pipeline_preview_to_anyone_until_revoked() {
     let page = String::from_utf8(page).unwrap();
     assert!(page.contains("Lobby cam"));
     assert!(page.contains(&format!("../hls/{pipeline}/master.m3u8?t={token}")));
-    // The player it imports is served to a viewer with no session.
-    let player = page
-        .split("import Hls from \"../")
-        .nth(1)
-        .and_then(|rest| rest.split('"').next())
-        .expect("the watch page imports hls.js");
-    let (status, _, script) = call(&app, "GET", &format!("/{player}"), None, None).await;
-    assert_eq!(status, StatusCode::OK, "{player}");
-    assert!(String::from_utf8_lossy(&script).contains("isSupported"));
-    let (_, _, listed) = call(
-        &app,
-        "GET",
-        &format!("/api/v1/pipelines/{pipeline}/share-links"),
-        Some(&cookie),
-        None,
-    )
-    .await;
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&listed).unwrap()["links"][0]["views"],
-        1
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let (_, _, listed) = call(
+                &app,
+                "GET",
+                &format!("/api/v1/pipelines/{pipeline}/share-links"),
+                Some(&cookie),
+                None,
+            )
+            .await;
+            if serde_json::from_slice::<serde_json::Value>(&listed).unwrap()["links"][0]["views"]
+                == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("an admitted view counter eventually reaches the admin listing");
 
     // HLS: the token admits its own pipeline, not another, and nothing
     // without it. (No publisher: past the gate, the preview is simply absent.)

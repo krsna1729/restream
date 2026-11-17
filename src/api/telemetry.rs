@@ -7,7 +7,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -19,9 +19,7 @@ use restream_engine::events;
 use restream_health::alerts;
 
 use super::health::{build_health_snapshot_for_pipeline_ids, list_dashboard_runtime_pipeline_ids};
-use super::state::{
-    AppState, get_session_token_from_headers, recording_enabled_map, require_authenticated,
-};
+use super::state::{AppState, recording_enabled_map, require_authenticated};
 
 mod system;
 
@@ -73,14 +71,6 @@ impl ResourceMapQuery {
         };
         ResourceMapOptions::new(view, self.top_n)
     }
-}
-
-fn unauthorized_json_response() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({ "error": "Unauthorized" })),
-    )
-        .into_response()
 }
 
 fn summary_view_requested(view: Option<&str>) -> bool {
@@ -173,14 +163,8 @@ pub async fn pipeline_diagnostics_run_handler(
     Path(pipeline_id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return unauthorized_json_response();
-        }
-    } else {
-        // Diagnostics runs are API-only callers, so auth failures must stay on
-        // the JSON contract instead of inheriting any HTML/session redirect flow.
-        return unauthorized_json_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let probe_protocol = match state
@@ -602,10 +586,8 @@ mod tests {
     use super::{
         DashboardRuntimeQuery, ResourceMapQuery, configured_media_root,
         dashboard_runtime_requested_pipeline, snapshot_generated_at, summary_view_requested,
-        unauthorized_json_response,
     };
     use crate::api::runtime_views::ResourceMapView;
-    use axum::http::StatusCode;
 
     #[test]
     fn resource_map_query_defaults_to_grouped_view() {
@@ -627,14 +609,6 @@ mod tests {
         let ids = vec!["pipe-1".to_string()];
 
         assert_eq!(dashboard_runtime_requested_pipeline(&query, &ids), None);
-    }
-
-    #[test]
-    fn diagnostics_unauthorized_response_uses_json_contract() {
-        assert_eq!(
-            unauthorized_json_response().status(),
-            StatusCode::UNAUTHORIZED
-        );
     }
 
     #[test]

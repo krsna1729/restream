@@ -102,7 +102,7 @@ async fn a_housekeeping_ticks_reads_return_at_their_deadlines_while_every_connec
     let pool = memory_pool().await;
     let db = DeadlineDb::new(pool.clone(), Duration::from_millis(200));
     let housekeeping = housekeeping(
-        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone())),
+        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(db.clone())),
         db,
     );
     let mut held = Vec::new();
@@ -133,7 +133,9 @@ async fn an_unreadable_switch_read_stops_no_recording_or_stream_check() {
         .unwrap();
     let pool = memory_pool().await;
     let housekeeping = housekeeping(
-        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(catalog)),
+        Arc::new(
+            crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(DeadlineDb::api(catalog)),
+        ),
         DeadlineDb::new(pool.clone(), Duration::from_millis(200)),
     );
     let _recording = housekeeping

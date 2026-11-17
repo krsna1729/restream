@@ -10,8 +10,8 @@
 //! time. One missed by more (the engine was down) is recorded as skipped and
 //! never fired late: a "go live at 9:00" must not go live at 11:40.
 
+use crate::db::DeadlineDb;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 use crate::application::services::error::{ServiceError, ServiceResult};
 
@@ -231,8 +231,9 @@ fn internal(context: &'static str) -> impl Fn(sqlx::Error) -> ServiceError {
     move |err| ServiceError::internal(format!("{context}: {err}"))
 }
 
-pub async fn list(pool: &SqlitePool, now_ms: i64) -> ServiceResult<Vec<Schedule>> {
-    Ok(crate::db::schedule_repo::list(pool)
+pub async fn list(db: &DeadlineDb, now_ms: i64) -> ServiceResult<Vec<Schedule>> {
+    Ok(db
+        .read(crate::db::schedule_repo::list)
         .await
         .map_err(internal("list schedules"))?
         .into_iter()
@@ -240,8 +241,8 @@ pub async fn list(pool: &SqlitePool, now_ms: i64) -> ServiceResult<Vec<Schedule>
         .collect())
 }
 
-pub async fn get(pool: &SqlitePool, id: &str, now_ms: i64) -> ServiceResult<Schedule> {
-    crate::db::schedule_repo::get(pool, id)
+pub async fn get(db: &DeadlineDb, id: &str, now_ms: i64) -> ServiceResult<Schedule> {
+    db.read(|pool| crate::db::schedule_repo::get(pool, id))
         .await
         .map_err(internal("get schedule"))?
         .and_then(|record| from_record(record, now_ms))
@@ -271,7 +272,7 @@ fn record_of(
 /// Adds a schedule. Its occurrences before now are not run: the first to
 /// run is the next one.
 pub async fn create(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     id: &str,
     draft: &ScheduleDraft,
     now_ms: i64,
@@ -279,34 +280,52 @@ pub async fn create(
     check(draft)?;
     let mut record = record_of(id, draft, now_ms);
     record.last_run_ms = latest_occurrence(draft.at_ms, draft.repeat, now_ms);
-    crate::db::schedule_repo::save(pool, &record)
-        .await
-        .map_err(internal("save schedule"))?;
-    get(pool, id, now_ms).await
+    db.write(move |pool| async move {
+        crate::db::schedule_repo::save(&pool, &record)
+            .await
+            .map_err(internal("save schedule"))?;
+        crate::db::schedule_repo::get(&pool, &record.id)
+            .await
+            .map_err(internal("get schedule"))?
+            .and_then(|record| from_record(record, now_ms))
+            .ok_or_else(|| ServiceError::not_found(format!("no schedule {}", record.id)))
+    })
+    .await
 }
 
 /// Replaces a schedule's settings. As on create, occurrences already past
 /// are not run.
 pub async fn update(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     id: &str,
     draft: &ScheduleDraft,
     now_ms: i64,
 ) -> ServiceResult<Schedule> {
     check(draft)?;
-    let current = get(pool, id, now_ms).await?;
+    let current = get(db, id, now_ms).await?;
     let mut record = record_of(id, draft, current.created_at_ms);
     record.last_run_ms =
         latest_occurrence(draft.at_ms, draft.repeat, now_ms).max(current.last_run_ms);
     record.last_result = current.last_result;
-    crate::db::schedule_repo::save(pool, &record)
-        .await
-        .map_err(internal("save schedule"))?;
-    get(pool, id, now_ms).await
+    db.write(move |pool| async move {
+        crate::db::schedule_repo::save(&pool, &record)
+            .await
+            .map_err(internal("save schedule"))?;
+        crate::db::schedule_repo::get(&pool, &record.id)
+            .await
+            .map_err(internal("get schedule"))?
+            .and_then(|record| from_record(record, now_ms))
+            .ok_or_else(|| ServiceError::not_found(format!("no schedule {}", record.id)))
+    })
+    .await
 }
 
-pub async fn delete(pool: &SqlitePool, id: &str) -> ServiceResult<()> {
-    if !crate::db::schedule_repo::delete(pool, id)
+pub async fn delete(db: &DeadlineDb, id: &str) -> ServiceResult<()> {
+    let schedule_id = id.to_owned();
+    if !db
+        .write(
+            move |pool| async move { crate::db::schedule_repo::delete(&pool, &schedule_id).await },
+        )
         .await
         .map_err(internal("delete schedule"))?
     {
@@ -317,14 +336,17 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> ServiceResult<()> {
 
 /// Records that an occurrence ran (or was skipped) and how.
 pub async fn record_run(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     id: &str,
     occurrence_ms: i64,
-    result: &str,
+    result: String,
 ) -> ServiceResult<()> {
-    crate::db::schedule_repo::record_run(pool, id, occurrence_ms, result)
-        .await
-        .map_err(internal("record schedule run"))
+    let id = id.to_owned();
+    db.write(move |pool| async move {
+        crate::db::schedule_repo::record_run(&pool, &id, occurrence_ms, &result).await
+    })
+    .await
+    .map_err(internal("record schedule run"))
 }
 
 #[cfg(test)]

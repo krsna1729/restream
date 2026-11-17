@@ -25,7 +25,6 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
 
     let state = Arc::new(restream::api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose(),
-        db.clone(),
         security,
         ingest_policy_store,
         sessions,
@@ -395,7 +394,6 @@ fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
     assert!(infrastructure_mod.contains("pub mod recording_metadata;"));
 
     let sqlite_ports = include_str!("../../src/infrastructure/sqlite_ports.rs");
-    assert!(sqlite_ports.contains("SqlitePool"));
     assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
     assert!(
         !sqlite_ports.contains("SqliteOutputStore"),
@@ -641,7 +639,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
     let oid = "test-out-service";
     let config = OutputConfig::default();
     restream::application::outputs::create_output(
-        &db,
+        &services.db,
         oid,
         pid,
         "rtmp-push",

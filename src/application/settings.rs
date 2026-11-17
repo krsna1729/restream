@@ -69,7 +69,7 @@ mod tests {
             .unwrap();
 
         let security = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
-        let store = SqliteMetaStore::new(pool);
+        let store = SqliteMetaStore::new(crate::db::DeadlineDb::api(pool.clone()));
         let snapshot = load_settings_snapshot(&store, &store, &security)
             .await
             .unwrap();

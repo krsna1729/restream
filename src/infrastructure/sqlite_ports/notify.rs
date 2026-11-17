@@ -1,16 +1,16 @@
 //! SQLite adapter for notification channels, push subscriptions and deliveries.
 
 use crate::application::ports::*;
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 
 #[derive(Clone)]
 pub struct SqliteNotifyStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 impl SqliteNotifyStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
@@ -26,7 +26,9 @@ fn severity(value: &str) -> crate::application::notify::NotifySeverity {
 impl NotifyStore for SqliteNotifyStore {
     fn list_channels(&self) -> NotifyFuture<'_, Vec<crate::application::notify::NotifyChannel>> {
         Box::pin(async move {
-            let rows = crate::db::notify_repo::list_channels(&self.pool)
+            let rows = self
+                .db
+                .read(crate::db::notify_repo::list_channels)
                 .await
                 .map_err(notify_error)?;
             Ok(rows
@@ -76,7 +78,10 @@ impl NotifyStore for SqliteNotifyStore {
                 channel.enabled,
                 channel.created_at_ms,
             );
-            crate::db::notify_repo::save_channel(&self.pool, &row)
+            self.db
+                .write(move |pool| async move {
+                    crate::db::notify_repo::save_channel(&pool, &row).await
+                })
                 .await
                 .map_err(notify_error)
         })
@@ -84,7 +89,11 @@ impl NotifyStore for SqliteNotifyStore {
 
     fn delete_channel<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::notify_repo::delete_channel(&self.pool, id)
+            let id = id.to_owned();
+            self.db
+                .write(move |pool| async move {
+                    crate::db::notify_repo::delete_channel(&pool, &id).await
+                })
                 .await
                 .map_err(notify_error)
         })
@@ -94,7 +103,9 @@ impl NotifyStore for SqliteNotifyStore {
         &self,
     ) -> NotifyFuture<'_, Vec<crate::application::notify::PushSubscription>> {
         Box::pin(async move {
-            let rows = crate::db::notify_repo::list_subscriptions(&self.pool)
+            let rows = self
+                .db
+                .read(crate::db::notify_repo::list_subscriptions)
                 .await
                 .map_err(notify_error)?;
             Ok(rows
@@ -130,7 +141,10 @@ impl NotifyStore for SqliteNotifyStore {
                 subscription.min_severity.as_str().to_string(),
                 subscription.created_at_ms,
             );
-            crate::db::notify_repo::save_subscription(&self.pool, &row)
+            self.db
+                .write(move |pool| async move {
+                    crate::db::notify_repo::save_subscription(&pool, &row).await
+                })
                 .await
                 .map_err(notify_error)
         })
@@ -138,7 +152,11 @@ impl NotifyStore for SqliteNotifyStore {
 
     fn delete_subscription<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::notify_repo::delete_subscription(&self.pool, id)
+            let id = id.to_owned();
+            self.db
+                .write(move |pool| async move {
+                    crate::db::notify_repo::delete_subscription(&pool, &id).await
+                })
                 .await
                 .map_err(notify_error)
         })
@@ -160,7 +178,10 @@ impl NotifyStore for SqliteNotifyStore {
                 i64::from(delivery.attempts),
                 delivery.detail.clone(),
             );
-            crate::db::notify_repo::append_delivery(&self.pool, &row)
+            self.db
+                .write(move |pool| async move {
+                    crate::db::notify_repo::append_delivery(&pool, &row).await
+                })
                 .await
                 .map_err(notify_error)
         })
@@ -171,7 +192,9 @@ impl NotifyStore for SqliteNotifyStore {
         limit: u32,
     ) -> NotifyFuture<'_, Vec<crate::application::notify::Delivery>> {
         Box::pin(async move {
-            let rows = crate::db::notify_repo::list_deliveries(&self.pool, i64::from(limit))
+            let rows = self
+                .db
+                .read(|pool| crate::db::notify_repo::list_deliveries(pool, i64::from(limit)))
                 .await
                 .map_err(notify_error)?;
             Ok(rows

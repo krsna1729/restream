@@ -84,7 +84,8 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
     )
     .await
     .unwrap();
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let held = hub.snapshot().await;
     assert_eq!(held.inputs.len(), 2);
     let backup = held
@@ -126,7 +127,8 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
         .try_register_pipeline_input_attempt("pipe", &primary_id, "key-main", "srt", true)
         .await
         .expect("the primary registers");
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let connected = hub.snapshot().await;
     assert_eq!(connected.revision, held.revision + 1);
     let deltas = deltas_after(&hub, &held).await;
@@ -156,7 +158,8 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
         )
         .await;
     hub.mark_changed();
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     assert_eq!(
         hub.snapshot().await.revision,
         connected.revision,
@@ -174,7 +177,8 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
     )
     .await
     .unwrap();
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let deltas = deltas_after(&hub, &connected).await;
     assert_eq!(deltas.len(), 1, "an input-only change is published");
     assert_eq!(deltas[0].inputs.len(), 1);
@@ -188,7 +192,8 @@ async fn inputs_follow_rows_and_sessions_but_not_counters() {
             .await
             .unwrap()
     );
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let deltas = deltas_after(&hub, &spared).await;
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].removed_inputs, ["backup"]);
@@ -214,7 +219,8 @@ async fn a_deleted_pipeline_takes_its_inputs_and_graph_with_it() {
             .await
             .unwrap();
     }
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let held = hub.snapshot().await;
     let gone: Vec<String> = held
         .inputs
@@ -225,7 +231,8 @@ async fn a_deleted_pipeline_takes_its_inputs_and_graph_with_it() {
     assert_eq!(gone.len(), 1);
 
     assert!(crate::db::delete_pipeline(&pool, "pipe").await.unwrap());
-    hub.refresh(&pool, &engine).await;
+    hub.refresh(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     let deltas = deltas_after(&hub, &held).await;
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].removed_inputs, gone);
@@ -303,12 +310,12 @@ async fn the_graph_is_the_running_structure_without_counters() {
 #[tokio::test]
 async fn a_keyed_input_names_its_moq_url_only_while_moq_ingest_is_on() {
     async fn urls(
-        pool: &sqlx::SqlitePool,
+        db: &crate::db::DeadlineDb,
         engine: &MediaEngine,
         ports: crate::config::ServerPorts,
     ) -> IngestUrls {
         let hub = StateHub::new(ports, max_retries());
-        hub.refresh(pool, engine).await;
+        hub.refresh(db, engine).await;
         hub.snapshot().await.inputs[0].ingest_urls.clone().unwrap()
     }
     let pool = database().await;
@@ -317,14 +324,19 @@ async fn a_keyed_input_names_its_moq_url_only_while_moq_ingest_is_on() {
         .await
         .unwrap();
 
-    let off = urls(&pool, &engine, ports()).await;
+    let off = urls(&crate::db::DeadlineDb::api(pool.clone()), &engine, ports()).await;
     assert_eq!(off.moq, None);
 
     let moq_ports = crate::config::ServerPorts {
         moq: Some(4443),
         ..ports()
     };
-    let on = urls(&pool, &engine, moq_ports).await;
+    let on = urls(
+        &crate::db::DeadlineDb::api(pool.clone()),
+        &engine,
+        moq_ports,
+    )
+    .await;
     assert_eq!(on.moq.as_deref(), Some("https://localhost:4443/key-main"));
     assert_eq!((on.rtmp, on.srt, on.hls), (off.rtmp, off.srt, off.hls));
 }

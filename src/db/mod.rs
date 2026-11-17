@@ -21,7 +21,9 @@ pub(crate) mod session_repo;
 pub(crate) mod share_repo;
 pub(crate) mod team_repo;
 
-pub use deadline::{DeadlineDb, DeadlineError, SHARED_LOOP_DEADLINE, WRITE_PERMITS};
+pub use deadline::{
+    API_READ_DEADLINE, DeadlineDb, DeadlineError, SHARED_LOOP_DEADLINE, WRITE_PERMITS,
+};
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
     list_ingests_for_filename, list_ingests_for_stream_key, rename_ingest_file,

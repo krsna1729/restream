@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 
 use crate::application::catalog_auth::{CatalogAuthLoadFuture, CatalogAuthSource, UnreadableInput};
 use crate::application::ingest::{PipelineInputLookup, PipelineInputLookupFuture};
@@ -11,39 +11,50 @@ use restream_domain::domain::pipeline_input::PipelineInputSource;
 
 #[derive(Clone)]
 pub struct SqlitePipelineInputStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 impl SqlitePipelineInputStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
 impl PipelineInputStore for SqlitePipelineInputStore {
     fn get<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::get_pipeline_input(&self.pool, pipeline_id, input_id)
-            })
-            .await
-            .map_err(map_error)
+            self.db
+                .read(|pool| {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::get_pipeline_input(pool, pipeline_id, input_id)
+                    })
+                })
+                .await
+                .map_err(map_error)
         })
     }
 
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> InputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
-            })
-            .await
-            .map_err(map_error)
+            self.db
+                .read(|pool| {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::get_pipeline_input_by_stream_key(pool, stream_key)
+                    })
+                })
+                .await
+                .map_err(map_error)
         })
     }
 
     fn list<'a>(&'a self, pipeline_id: &'a str) -> InputListFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| crate::db::list_pipeline_inputs(&self.pool, pipeline_id))
+            self.db
+                .read(|pool| {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::list_pipeline_inputs(pool, pipeline_id)
+                    })
+                })
                 .await
                 .map_err(map_error)
         })
@@ -58,18 +69,28 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         source: PipelineInputSource,
     ) -> InputWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::create_pipeline_input(
-                    &self.pool,
-                    id,
-                    pipeline_id,
-                    label,
-                    stream_key,
-                    &source,
-                )
-            })
-            .await
-            .map_err(map_error)
+            let (id, pipeline_id, label, stream_key) = (
+                id.to_owned(),
+                pipeline_id.to_owned(),
+                label.to_owned(),
+                stream_key.to_owned(),
+            );
+            self.db
+                .write(move |pool| async move {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::create_pipeline_input(
+                            &pool,
+                            &id,
+                            &pipeline_id,
+                            &label,
+                            &stream_key,
+                            &source,
+                        )
+                    })
+                    .await
+                })
+                .await
+                .map_err(map_error)
         })
     }
 
@@ -82,38 +103,57 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         source: PipelineInputSource,
     ) -> InputUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::update_pipeline_input(
-                    &self.pool,
-                    pipeline_id,
-                    input_id,
-                    label,
-                    enabled,
-                    &source,
-                )
-            })
-            .await
-            .map_err(map_error)
+            let (pipeline_id, input_id, label) = (
+                pipeline_id.to_owned(),
+                input_id.to_owned(),
+                label.to_owned(),
+            );
+            self.db
+                .write(move |pool| async move {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::update_pipeline_input(
+                            &pool,
+                            &pipeline_id,
+                            &input_id,
+                            &label,
+                            enabled,
+                            &source,
+                        )
+                    })
+                    .await
+                })
+                .await
+                .map_err(map_error)
         })
     }
 
     fn delete<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputDeleteFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::delete_pipeline_input(&self.pool, pipeline_id, input_id)
-            })
-            .await
-            .map_err(map_error)
+            let (pipeline_id, input_id) = (pipeline_id.to_owned(), input_id.to_owned());
+            self.db
+                .write(move |pool| async move {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::delete_pipeline_input(&pool, &pipeline_id, &input_id)
+                    })
+                    .await
+                })
+                .await
+                .map_err(map_error)
         })
     }
 
     fn promote<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::promote_pipeline_input(&self.pool, pipeline_id, input_id)
-            })
-            .await
-            .map_err(map_error)
+            let (pipeline_id, input_id) = (pipeline_id.to_owned(), input_id.to_owned());
+            self.db
+                .write(move |pool| async move {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::promote_pipeline_input(&pool, &pipeline_id, &input_id)
+                    })
+                    .await
+                })
+                .await
+                .map_err(map_error)
         })
     }
 }
@@ -121,11 +161,14 @@ impl PipelineInputStore for SqlitePipelineInputStore {
 impl PipelineInputLookup for SqlitePipelineInputStore {
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::with_busy_retry(|| {
-                crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
-            })
-            .await
-            .map_err(|error| PipelineStoreError::new(error.to_string()))
+            self.db
+                .read(|pool| {
+                    crate::db::with_busy_retry(|| {
+                        crate::db::get_pipeline_input_by_stream_key(pool, stream_key)
+                    })
+                })
+                .await
+                .map_err(|error| PipelineStoreError::new(error.to_string()))
         })
     }
 }

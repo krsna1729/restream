@@ -249,9 +249,16 @@ async fn a_window_reads_the_persisted_history_then_the_recent_samples() {
         recorder.record(at, vec![probe("p1", None)]);
     }
 
-    let trace = trace_window(&recorder, &pool, "p1", 0, u64::MAX, 2_000)
-        .await
-        .unwrap();
+    let trace = trace_window(
+        &recorder,
+        &DeadlineDb::api(pool.clone()),
+        "p1",
+        0,
+        u64::MAX,
+        2_000,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         trace.complete_from_ms, 1_000_000,
         "complete from the oldest persisted sample"
@@ -267,36 +274,71 @@ async fn a_window_reads_the_persisted_history_then_the_recent_samples() {
     );
 
     // A window inside the persisted part reads only it; one inside memory only memory.
-    let old = trace_window(&recorder, &pool, "p1", 1_100_000, 1_200_000, 2_000)
-        .await
-        .unwrap();
+    let old = trace_window(
+        &recorder,
+        &DeadlineDb::api(pool.clone()),
+        "p1",
+        1_100_000,
+        1_200_000,
+        2_000,
+    )
+    .await
+    .unwrap();
     assert_eq!(old.samples.len(), 10);
-    let recent = trace_window(&recorder, &pool, "p1", 4_010_000, u64::MAX, 2_000)
-        .await
-        .unwrap();
+    let recent = trace_window(
+        &recorder,
+        &DeadlineDb::api(pool.clone()),
+        "p1",
+        4_010_000,
+        u64::MAX,
+        2_000,
+    )
+    .await
+    .unwrap();
     assert_eq!(recent.samples.first().unwrap().at_ms, 4_010_000);
     // Thinned to the points asked for.
     assert_eq!(
-        trace_window(&recorder, &pool, "p1", 0, u64::MAX, 50)
-            .await
-            .unwrap()
-            .samples
-            .len(),
+        trace_window(
+            &recorder,
+            &DeadlineDb::api(pool.clone()),
+            "p1",
+            0,
+            u64::MAX,
+            50
+        )
+        .await
+        .unwrap()
+        .samples
+        .len(),
         50
     );
     // A pipeline neither knows.
     assert!(
-        trace_window(&recorder, &pool, "nope", 0, u64::MAX, 50)
-            .await
-            .is_none()
+        trace_window(
+            &recorder,
+            &DeadlineDb::api(pool.clone()),
+            "nope",
+            0,
+            u64::MAX,
+            50
+        )
+        .await
+        .is_none()
     );
 
     crate::db::flight_repo::prune(&pool, 2_000_000)
         .await
         .unwrap();
-    let pruned = trace_window(&recorder, &pool, "p1", 0, u64::MAX, 2_000)
-        .await
-        .unwrap();
+    let pruned = trace_window(
+        &recorder,
+        &DeadlineDb::api(pool.clone()),
+        "p1",
+        0,
+        u64::MAX,
+        2_000,
+    )
+    .await
+    .unwrap();
     assert_eq!(pruned.complete_from_ms, 2_000_000);
 }
 
@@ -313,7 +355,14 @@ async fn persisting_writes_each_pipelines_newest_sample_and_prunes_past_retentio
     let recorder = FlightRecorder::started_at(0, 10);
     recorder.record(5_000, vec![probe("p1", None), probe("p2", None)]);
     recorder.record(7_000, vec![probe("p1", None), probe("p2", None)]);
-    persist(&recorder, &pool, 7_000, Duration::from_secs(5), true).await;
+    persist(
+        &recorder,
+        &DeadlineDb::api(pool.clone()),
+        7_000,
+        Duration::from_secs(5),
+        true,
+    )
+    .await;
     for pipeline in ["p1", "p2"] {
         let rows = crate::db::flight_repo::window(&pool, pipeline, 0, i64::MAX)
             .await

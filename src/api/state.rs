@@ -26,7 +26,6 @@ use restream_engine::engine::MediaEngine;
 use restream_engine::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
 use restream_engine::srt::SrtIngestPolicyStore;
 use restream_health::alerts;
-use sqlx::SqlitePool;
 
 use super::AppServices;
 
@@ -120,14 +119,17 @@ impl From<Arc<AppConfig>> for AppStateRuntimeConfig {
     }
 }
 
+// Bound work that outlives its HTTP caller, not tenant accounting.
+const API_MUTATION_PERMITS: usize = 64;
+
 pub struct AppState {
     security: Arc<IngestSecurityService>,
     ingest_policy_store: Arc<SrtIngestPolicyStore>,
     sessions: Arc<TokioRwLock<HashSet<String>>>,
+    mutation_admission: Arc<tokio::sync::Semaphore>,
     pub engine: Arc<MediaEngine>,
-    /// Concrete SQLite pool for application helpers that call `db::*` directly
-    /// (Wave 1 A-lite Logs; expands as other services collapse).
-    pub db: SqlitePool,
+    /// Main-pool reads are deadline bounded; writes run to their outcome.
+    pub db: crate::db::DeadlineDb,
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
     /// See [`AppStateRuntimeConfig::moq_certificate_sha256`].
@@ -168,15 +170,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Wires storage-neutral application services into shared HTTP state.
-    ///
-    /// `db` is a temporary extra until more control-plane slices collapse onto
-    /// the same concrete pool (#149). Keep this as the single App root rather
-    /// than introducing another deps bag.
+    /// Wires the complete API composition, sharing its database executor with
+    /// the services so every main-pool writer uses the same permit budget.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         services: AppServices,
-        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -185,6 +183,7 @@ impl AppState {
         runtime: AppStateRuntimeConfig,
     ) -> Self {
         let AppServices {
+            db,
             pipeline_service,
             pipeline_input_service,
             recirculation_service,
@@ -213,6 +212,7 @@ impl AppState {
             security,
             ingest_policy_store,
             sessions,
+            mutation_admission: Arc::new(tokio::sync::Semaphore::new(API_MUTATION_PERMITS)),
             engine,
             db,
             ingest_disconnect_grace_ms: runtime.ingest_disconnect_grace_ms,
@@ -337,12 +337,15 @@ impl AppState {
 
     /// Checks the cookie token against the in-memory session cache and then
     /// re-validates it against persisted session state and expiry.
-    pub async fn is_authenticated(&self, token: &str) -> bool {
+    pub async fn validate_session(
+        &self,
+        token: &str,
+    ) -> crate::application::services::ServiceResult<bool> {
         let token_hash = hash_session_token(token);
         {
             let sessions = self.sessions.read().await;
             if !sessions.contains(&token_hash) {
-                return false;
+                return Ok(false);
             }
         }
 
@@ -352,12 +355,11 @@ impl AppState {
             Ok(Some(created_at)) => created_at,
             Ok(None) => {
                 self.sessions.write().await.remove(&token_hash);
-                return false;
+                return Ok(false);
             }
             Err(error) => {
                 warn!(err = %error, "failed to validate session against SQLite");
-                self.sessions.write().await.remove(&token_hash);
-                return false;
+                return Err(error);
             }
         };
 
@@ -365,22 +367,53 @@ impl AppState {
         let max_age_ms = SESSION_MAX_AGE_SECONDS * 1000;
         if now.saturating_sub(created_at) > max_age_ms {
             self.sessions.write().await.remove(&token_hash);
-            if let Err(error) = self.auth_service.delete_session(&token_hash).await {
-                warn!(err = %error, "failed to delete expired session from SQLite");
-            }
-            return false;
+            // Housekeeping prunes expired rows; an auth read must not wait for
+            // a cleanup write before rejecting a known-expired credential.
+            return Ok(false);
         }
 
-        true
+        Ok(true)
+    }
+
+    /// Admit before detaching. Rejected work has never polled the handler;
+    /// admitted work owns its slot through reconciliation and auditing.
+    pub(in crate::api) async fn complete_mutation<Fut>(
+        self: Arc<Self>,
+        op: impl FnOnce(Arc<Self>) -> Fut + Send + 'static,
+    ) -> Response
+    where
+        Fut: std::future::Future<Output = Response> + Send + 'static,
+    {
+        let Ok(permit) = self.mutation_admission.clone().try_acquire_owned() else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "Too many pending mutations" })),
+            )
+                .into_response();
+        };
+        match tokio::spawn(async move {
+            let _permit = permit;
+            op(self).await
+        })
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(err = %error, "API mutation task failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Request failed" })),
+                )
+                    .into_response()
+            }
+        }
     }
 
     /// Construct an AppState with all default services wired, for testing.
     ///
-    /// Callers must pass the same `db` pool used to compose `services` so HTTP
-    /// helpers that read `AppState.db` see rows the test inserted.
+    /// The service graph supplies the same executor its adapters use.
     pub fn test_new(
         services: AppServices,
-        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -389,7 +422,6 @@ impl AppState {
     ) -> Self {
         Self::new(
             services,
-            db,
             security,
             ingest_policy_store,
             sessions,
@@ -403,7 +435,6 @@ impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub fn test_new_with_media_dir(
         services: AppServices,
-        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -417,7 +448,6 @@ impl AppState {
         };
         Self::new(
             services,
-            db,
             security,
             ingest_policy_store,
             sessions,
@@ -459,23 +489,37 @@ pub fn get_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Convenience predicate for handlers that only need an auth yes/no answer.
-pub async fn request_is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
-    if let Some(token) = get_session_token_from_headers(headers) {
-        state.is_authenticated(&token).await
-    } else {
-        false
+pub fn unauthorized_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "Unauthorized" })),
+    )
+        .into_response()
+}
+
+pub fn auth_unavailable_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": "Authentication temporarily unavailable" })),
+    )
+        .into_response()
+}
+
+/// A storage failure is not an invalid credential and must not evict it.
+pub async fn require_authenticated_token(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, Response> {
+    let token = get_session_token_from_headers(headers).ok_or_else(unauthorized_response)?;
+    match state.validate_session(&token).await {
+        Ok(true) => Ok(token),
+        Ok(false) => Err(unauthorized_response()),
+        Err(_) => Err(auth_unavailable_response()),
     }
 }
 
-/// Returns an HTTP response when the caller is not authenticated, letting
-/// handlers keep their transport contract local and linear.
 pub async fn require_authenticated(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if request_is_authenticated(state, headers).await {
-        None
-    } else {
-        Some((StatusCode::UNAUTHORIZED, "Unauthorized").into_response())
-    }
+    require_authenticated_token(state, headers).await.err()
 }
 
 /// HLS reads need a dashboard session, or a live share link's token (`?t=`)
@@ -485,21 +529,26 @@ pub async fn require_hls_access(
     headers: &HeaderMap,
     uri: &axum::http::Uri,
 ) -> Option<Response> {
-    if request_is_authenticated(state, headers).await {
-        return None;
-    }
-    // A share link's token admits reads of its own pipeline's preview.
+    let session_error = match require_authenticated_token(state, headers).await {
+        Ok(_) => return None,
+        Err(response) => response,
+    };
+    // An independent share credential can still admit its own pipeline.
     if let (Some(pipeline_id), Some(token)) = (
         crate::application::share::hls_pipeline_of(uri.path()),
         crate::application::share::token_of(uri.query()),
-    ) && state
-        .share_links
-        .admits(token, pipeline_id, chrono::Utc::now().timestamp_millis())
-        .await
-    {
-        return None;
+    ) {
+        match state
+            .share_links
+            .admits(token, pipeline_id, chrono::Utc::now().timestamp_millis())
+            .await
+        {
+            Ok(true) => return None,
+            Ok(false) => {}
+            Err(_) => return Some(auth_unavailable_response()),
+        }
     }
-    Some((StatusCode::UNAUTHORIZED, "Unauthorized").into_response())
+    Some(session_error)
 }
 
 /// Builds one dashboard session cookie with the repository's shared security
@@ -585,5 +634,103 @@ mod runtime_config_tests {
         assert!(secure_cookie.contains("; Secure"));
         assert!(cleared_cookie.contains("; Secure"));
         assert!(cleared_cookie.contains("Max-Age=0"));
+    }
+}
+
+#[cfg(test)]
+mod mutation_admission_tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn full_mutation_admission_rejects_without_a_later_write_and_recovers() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let hash = hash_session_token("admission-token");
+        crate::db::create_session(&pool, &hash, chrono::Utc::now().timestamp_millis())
+            .await
+            .unwrap();
+        let mut state = AppState::test_new(
+            crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+            Arc::new(IngestSecurityService::new(
+                restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
+            )),
+            Arc::new(SrtIngestPolicyStore::new(
+                restream_domain::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+                &[],
+            )),
+            Arc::new(TokioRwLock::new(HashSet::from([hash.clone()]))),
+            Arc::new(MediaEngine::new()),
+            tokio::sync::broadcast::channel(8).0,
+        );
+        state.mutation_admission = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = state
+            .mutation_admission
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let state = Arc::new(state);
+        let app = super::super::create_router(state.clone());
+        let request = || {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v1/pipelines")
+                .header(header::COOKIE, "session=admission-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    r#"{"name":"admission","inputSource":"obs"}"#,
+                ))
+                .unwrap()
+        };
+        let rejected = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(crate::db::list_pipelines(&pool).await.unwrap().is_empty());
+        let principal = state.team_service.principal(&hash).await.unwrap().unwrap();
+        let principal = state
+            .team_service
+            .set_view_as(
+                &hash,
+                &principal,
+                Some(restream_domain::domain::role::Role::Viewer),
+            )
+            .await
+            .unwrap();
+        let denied = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            app.clone().oneshot(request()),
+        )
+        .await
+        .expect("denied-role auditing must also respect workflow admission")
+        .unwrap();
+        assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(state.team_service.audit(20, None).await.unwrap().is_empty());
+        drop(held);
+        // Draining admission proves rejection did not enqueue a hidden owner.
+        let drained = state
+            .mutation_admission
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        assert!(crate::db::list_pipelines(&pool).await.unwrap().is_empty());
+        assert!(state.team_service.audit(20, None).await.unwrap().is_empty());
+        drop(drained);
+        state
+            .team_service
+            .set_view_as(&hash, &principal, None)
+            .await
+            .unwrap();
+        let accepted = app.oneshot(request()).await.unwrap();
+        assert!(accepted.status().is_success());
+        assert_eq!(
+            crate::db::list_pipelines(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|pipeline| pipeline.name)
+                .collect::<Vec<_>>(),
+            ["admission"]
+        );
     }
 }

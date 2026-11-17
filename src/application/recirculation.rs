@@ -1,9 +1,9 @@
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::{ServiceError, ServiceResult};
+use crate::db::DeadlineDb;
 use restream_domain::domain::output_spec::RecirculationTarget;
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::models::Output;
-use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,12 +22,12 @@ pub enum RecirculationTargetInputError {
 
 #[derive(Clone)]
 pub struct RecirculationService {
-    db: SqlitePool,
+    db: DeadlineDb,
     pipeline_input_service: PipelineInputService,
 }
 
 impl RecirculationService {
-    pub fn with_services(db: SqlitePool, pipeline_input_service: PipelineInputService) -> Self {
+    pub fn with_services(db: DeadlineDb, pipeline_input_service: PipelineInputService) -> Self {
         Self {
             db,
             pipeline_input_service,
@@ -411,7 +411,7 @@ mod tests {
             Arc::new(ReadOnlyInputStore { inputs }),
             pipeline_service,
         );
-        RecirculationService::with_services(pool, pipeline_input_service)
+        RecirculationService::with_services(DeadlineDb::api(pool), pipeline_input_service)
     }
 
     #[test]
