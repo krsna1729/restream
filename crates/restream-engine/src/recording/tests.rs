@@ -51,6 +51,32 @@ fn build_filename_has_ts_extension() {
     assert!(!name.contains(' '));
 }
 
+fn digit_shape(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+        .collect()
+}
+
+/// The filename carries the local start time to the second, then the
+/// sanitized name and the recording id's suffix.
+#[test]
+fn build_filename_stamps_the_local_second() {
+    let name = build_filename("pipe", "recording_0000000000000001");
+    assert_eq!(
+        digit_shape(&name),
+        "recording_ddddddddTdddddd_pipe_dddddddddddddddd.ts",
+        "{name}"
+    );
+}
+
+/// Recording rows and conversion state stamp whole-second RFC 3339 in `Z`.
+#[test]
+fn recording_stamps_are_whole_second_rfc3339_in_z() {
+    let stamp = now_rfc3339();
+    assert_eq!(digit_shape(&stamp), "dddd-dd-ddTdd:dd:ddZ", "{stamp}");
+}
+
 #[test]
 fn build_filename_contains_sanitized_name() {
     let name = build_filename("My Pipe?", "recording_0000000000000001");

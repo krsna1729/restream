@@ -261,3 +261,62 @@ async fn an_output_whose_planning_panics_leaves_the_others_planned_in_the_same_p
         "A was left as it was"
     );
 }
+
+/// An attempt's job row stores `started_at`/`ended_at` as RFC 3339 text with
+/// a numeric UTC offset and 0, 3, 6 or 9 fractional digits; `list_jobs`
+/// sorts on that text.
+#[tokio::test]
+async fn an_attempt_job_row_stamps_rfc3339_with_a_numeric_utc_offset() {
+    let pool = memory_pool().await;
+    crate::db::create_pipeline(&pool, "pipe", "pipe", "key-pipe", None, None)
+        .await
+        .unwrap();
+    crate::db::create_output(
+        &pool,
+        OUTPUT,
+        "pipe",
+        "out",
+        "sink://local/discard",
+        None,
+        restream_domain::domain::state::DesiredOutputState::Running,
+        &restream_domain::domain::output_spec::OutputConfig::source(),
+    )
+    .await
+    .unwrap();
+    let job = AttemptJob::begin(
+        &DeadlineDb::api(pool.clone()),
+        "job-1".to_string(),
+        "pipe".to_string(),
+        OUTPUT.to_string(),
+    );
+    job.finish(JobStatus::Stopped);
+    let row = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(row) = crate::db::get_job(&pool, "job-1").await.unwrap()
+                && row.ended_at.is_some()
+            {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the job row is finished");
+    for stamp in [row.started_at.as_str(), row.ended_at.as_deref().unwrap()] {
+        let shape: String = stamp
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        assert!(
+            [
+                "dddd-dd-ddTdd:dd:dd+dd:dd",
+                "dddd-dd-ddTdd:dd:dd.ddd+dd:dd",
+                "dddd-dd-ddTdd:dd:dd.dddddd+dd:dd",
+                "dddd-dd-ddTdd:dd:dd.ddddddddd+dd:dd",
+            ]
+            .contains(&shape.as_str())
+                && stamp.ends_with("+00:00"),
+            "{stamp}"
+        );
+    }
+}

@@ -1,6 +1,7 @@
 //! Mixed-runner output verification helpers.
 
 use super::*;
+use std::time::SystemTime;
 
 #[allow(clippy::too_many_arguments)]
 fn emit_mixed_output_cell_timing(
@@ -11,7 +12,7 @@ fn emit_mixed_output_cell_timing(
     index: usize,
     selected_checks: &[&str],
     failure_count: usize,
-    started_at: chrono::DateTime<Utc>,
+    started_at: SystemTime,
     started: Instant,
     status: &str,
 ) -> Result<(), String> {
@@ -21,7 +22,7 @@ fn emit_mixed_output_cell_timing(
         &format!("output.cell.{}", case.id()),
         status,
         started_at,
-        Utc::now(),
+        SystemTime::now(),
         started.elapsed(),
         Some(json!({
             "cellId": case.id(),
@@ -142,7 +143,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     let input_case = mixed_input_case_for_command(cfg)
         .ok_or_else(|| format!("{cfg} is not a known mixed input case"))?;
     for case in cases {
-        let cell_started_at = Utc::now();
+        let cell_started_at = SystemTime::now();
         let cell_started = Instant::now();
         let cell_failures_before = failures.len();
         let mut selected_checks = Vec::new();

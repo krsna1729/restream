@@ -494,10 +494,14 @@ fn moq_token_response(
     } else {
         host.to_string()
     };
-    let expires_at = i64::try_from(expires_at_secs)
-        .ok()
-        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
-        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let expires_at = std::time::SystemTime::UNIX_EPOCH
+        .checked_add(std::time::Duration::from_secs(expires_at_secs))
+        .map(|at| {
+            restream_domain::timestamp::rfc3339_utc(
+                at,
+                restream_domain::timestamp::Precision::Seconds,
+            )
+        });
     serde_json::json!({
         "token": token,
         "url": format!("https://{host}:{port}/?token={token}"),

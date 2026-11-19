@@ -352,7 +352,7 @@ pub(super) fn write_matrix_scenario_progress_for_mode(
                 "artifactIndexJson": artifact_index_path,
             },
             "caseProgress": matrix_case_progress_json(rows),
-            "updatedAt": Utc::now().to_rfc3339(),
+            "updatedAt": now_rfc3339(),
         }),
     )
 }

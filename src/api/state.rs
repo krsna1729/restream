@@ -363,7 +363,7 @@ impl AppState {
             }
         };
 
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = jiff::Timestamp::now().as_millisecond();
         let max_age_ms = SESSION_MAX_AGE_SECONDS * 1000;
         if now.saturating_sub(created_at) > max_age_ms {
             self.sessions.write().await.remove(&token_hash);
@@ -540,7 +540,7 @@ pub async fn require_hls_access(
     ) {
         match state
             .share_links
-            .admits(token, pipeline_id, chrono::Utc::now().timestamp_millis())
+            .admits(token, pipeline_id, jiff::Timestamp::now().as_millisecond())
             .await
         {
             Ok(true) => return None,
@@ -647,7 +647,7 @@ mod mutation_admission_tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
         let hash = hash_session_token("admission-token");
-        crate::db::create_session(&pool, &hash, chrono::Utc::now().timestamp_millis())
+        crate::db::create_session(&pool, &hash, jiff::Timestamp::now().as_millisecond())
             .await
             .unwrap();
         let mut state = AppState::test_new(

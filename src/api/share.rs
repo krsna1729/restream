@@ -15,7 +15,7 @@ use super::error::ApiError;
 use super::state::{AppState, require_authenticated, to_hex};
 
 fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    jiff::Timestamp::now().as_millisecond()
 }
 
 /// `GET /api/v1/pipelines/{pipeline_id}/share-links` (admin, by policy).

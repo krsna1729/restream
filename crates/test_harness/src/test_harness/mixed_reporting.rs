@@ -1,7 +1,8 @@
 //! Mixed-runner reporting and log helper routines.
 
 use super::*;
-use chrono::{DateTime, Duration as ChronoDuration};
+use restream_domain::timestamp::rfc3339;
+use std::time::SystemTime;
 
 pub(crate) const MIXED_ASSERTION_SCHEMA_VERSION: u32 = 1;
 
@@ -57,12 +58,8 @@ pub(crate) fn emit_mixed_timing(
     elapsed: Duration,
     extra: Option<Value>,
 ) -> Result<(), String> {
-    let ended_at = Utc::now();
-    let started_at = ended_at
-        .checked_sub_signed(
-            ChronoDuration::from_std(elapsed).unwrap_or_else(|_| ChronoDuration::zero()),
-        )
-        .unwrap_or(ended_at);
+    let ended_at = SystemTime::now();
+    let started_at = ended_at.checked_sub(elapsed).unwrap_or(ended_at);
     emit_mixed_timing_window(
         env, cfg, stage, status, started_at, ended_at, elapsed, extra,
     )
@@ -74,8 +71,8 @@ pub(crate) fn emit_mixed_timing_window(
     cfg: &str,
     stage: &str,
     status: &str,
-    started_at: DateTime<Utc>,
-    ended_at: DateTime<Utc>,
+    started_at: SystemTime,
+    ended_at: SystemTime,
     elapsed: Duration,
     extra: Option<Value>,
 ) -> Result<(), String> {
@@ -91,8 +88,8 @@ fn mixed_timing_record(
     cfg: &str,
     stage: &str,
     status: &str,
-    started_at: DateTime<Utc>,
-    ended_at: DateTime<Utc>,
+    started_at: SystemTime,
+    ended_at: SystemTime,
     elapsed: Duration,
     extra: Option<Value>,
 ) -> Value {
@@ -101,8 +98,8 @@ fn mixed_timing_record(
     object.insert("stage".to_string(), json!(stage));
     object.insert("status".to_string(), json!(status));
     object.insert("ms".to_string(), json!(elapsed.as_millis()));
-    object.insert("startedAt".to_string(), json!(started_at.to_rfc3339()));
-    object.insert("endedAt".to_string(), json!(ended_at.to_rfc3339()));
+    object.insert("startedAt".to_string(), json!(rfc3339(started_at)));
+    object.insert("endedAt".to_string(), json!(rfc3339(ended_at)));
     if let Some(Value::Object(extra)) = extra {
         object.extend(extra);
     }
@@ -157,12 +154,11 @@ pub(crate) fn file_tail_lines(path: &Path, lines: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     #[test]
     fn mixed_timing_record_carries_explicit_window_and_extra_fields() {
-        let started_at = Utc.with_ymd_and_hms(2026, 7, 6, 19, 22, 21).unwrap();
-        let ended_at = Utc.with_ymd_and_hms(2026, 7, 6, 19, 24, 24).unwrap();
+        let started_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_783_365_741);
+        let ended_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_783_365_864);
         let record = mixed_timing_record(
             "mixed.asset.file.h264.a2.bf0",
             "output.cell.rtmp.src.a0",
@@ -180,8 +176,8 @@ mod tests {
         assert_eq!(record["stage"], "output.cell.rtmp.src.a0");
         assert_eq!(record["status"], "pass");
         assert_eq!(record["ms"], 123000);
-        assert_eq!(record["startedAt"], started_at.to_rfc3339());
-        assert_eq!(record["endedAt"], ended_at.to_rfc3339());
+        assert_eq!(record["startedAt"], "2026-07-06T19:22:21+00:00");
+        assert_eq!(record["endedAt"], "2026-07-06T19:24:24+00:00");
         assert_eq!(record["cellId"], "rtmp.src.a0");
         assert_eq!(record["label"], "rtmp.src.a0 out2");
     }

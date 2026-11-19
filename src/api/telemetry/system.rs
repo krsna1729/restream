@@ -144,7 +144,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let dl_kbps = (dl_bytes_sec * 8) as f64 / 1000.0;
     let ul_kbps = (ul_bytes_sec * 8) as f64 / 1000.0;
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = restream_domain::timestamp::now_rfc3339();
     if summary {
         serde_json::json!({
             "generatedAt": now,

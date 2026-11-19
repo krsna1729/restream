@@ -275,7 +275,7 @@ pub(crate) async fn processing_graph(
         .collect();
 
     api_view_models::processing_graph_json(
-        chrono::Utc::now().to_rfc3339(),
+        restream_domain::timestamp::now_rfc3339(),
         pipeline_id,
         nodes,
         edges,

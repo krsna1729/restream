@@ -847,6 +847,31 @@ async fn delete_media_file_preserves_file_when_ingest_lookup_fails() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+/// A media row's `modifiedAt` is the file's mtime in milliseconds, as RFC
+/// 3339 with whole digit groups and a numeric UTC offset.
+#[test]
+fn entry_modified_is_millisecond_rfc3339_with_a_numeric_offset() {
+    let temp_dir = tempfile_dir("media-modified");
+    let path = temp_dir.join("clip.ts");
+    let file = std::fs::File::create(&path).unwrap();
+    for (mtime_ns, expected) in [
+        (123_456_789, "2026-01-01T08:30:45.123+00:00"),
+        (0, "2026-01-01T08:30:45+00:00"),
+    ] {
+        file.set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(1_767_256_245, mtime_ns),
+        )
+        .unwrap();
+        let (modified_at, modified_ms) = entry_modified(&std::fs::metadata(&path).unwrap());
+        assert_eq!(modified_at, expected);
+        assert_eq!(
+            modified_ms,
+            1_767_256_245_000 + i64::from(mtime_ns / 1_000_000)
+        );
+    }
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 fn tempfile_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(

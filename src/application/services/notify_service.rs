@@ -377,7 +377,7 @@ impl NotifyService {
     ) -> Delivery {
         let delivery = Delivery {
             id: 0,
-            at_ms: chrono::Utc::now().timestamp_millis(),
+            at_ms: jiff::Timestamp::now().as_millisecond(),
             target_id,
             target_name,
             event: event.kind,

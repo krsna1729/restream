@@ -60,3 +60,19 @@ async fn srt_listener_diag_counts_only_srt_ingests() {
         "the engine-wide ingest count still counts every protocol"
     );
 }
+
+/// Status `lastProgressAt`/`lastErrorAt`/`nextRetryAt`/`endedAt` and
+/// `lastDisconnectAt`: epoch milliseconds as RFC 3339 with a numeric UTC
+/// offset, and none for 0.
+#[test]
+fn epoch_ms_status_stamps_are_rfc3339_with_a_numeric_utc_offset() {
+    assert_eq!(MediaEngine::epoch_ms_to_rfc3339(0), None);
+    assert_eq!(
+        MediaEngine::epoch_ms_to_rfc3339(1_767_256_245_123).as_deref(),
+        Some("2026-01-01T08:30:45.123+00:00")
+    );
+    assert_eq!(
+        MediaEngine::epoch_ms_to_rfc3339(1_767_256_245_000).as_deref(),
+        Some("2026-01-01T08:30:45+00:00")
+    );
+}

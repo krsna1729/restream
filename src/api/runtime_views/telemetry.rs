@@ -87,7 +87,7 @@ async fn lifecycle_snapshots(
 }
 
 pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value {
-    let generated_at = chrono::Utc::now().to_rfc3339();
+    let generated_at = restream_domain::timestamp::now_rfc3339();
     // One registry at a time, each guard released before the next await
     // (see `StageMaps`).
     let input_arr: Vec<serde_json::Value> = engine
@@ -204,7 +204,7 @@ pub(crate) async fn pipeline_telemetry(
     engine: &MediaEngine,
     pipeline_id: &str,
 ) -> serde_json::Value {
-    let generated_at = chrono::Utc::now().to_rfc3339();
+    let generated_at = restream_domain::timestamp::now_rfc3339();
     // One registry at a time (see `StageMaps`).
     let (ingest, has_ingest) = {
         let ingests = engine.ingests.active.read().await;
@@ -371,7 +371,7 @@ pub(crate) async fn stage_telemetry_by_display(
     let lifecycle = engine.stage_runtime_snapshot(&key).await;
 
     Some(api_view_models::single_stage_telemetry_json(
-        chrono::Utc::now().to_rfc3339(),
+        restream_domain::timestamp::now_rfc3339(),
         &key,
         serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
         pipe,

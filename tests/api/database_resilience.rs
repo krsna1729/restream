@@ -41,7 +41,7 @@ async fn fixture() -> (api::AppState, SqlitePool, Arc<TokioRwLock<HashSet<String
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
     for token in [CURRENT_TOKEN, OTHER_TOKEN] {
         let hash = token_hash(token);
-        db::create_session(&pool, &hash, chrono::Utc::now().timestamp_millis())
+        db::create_session(&pool, &hash, jiff::Timestamp::now().as_millisecond())
             .await
             .unwrap();
         sessions.write().await.insert(hash);

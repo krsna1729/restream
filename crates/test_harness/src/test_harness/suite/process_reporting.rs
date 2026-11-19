@@ -268,7 +268,6 @@ mod tests {
         suite_append_result, suite_child_log_reports_timeout, suite_spawn_mode, suite_status_line,
         suite_write_manifest,
     };
-    use chrono::Utc;
     use serde_json::Value;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -277,7 +276,10 @@ mod tests {
         std::env::temp_dir().join(format!(
             "restream-{label}-{}-{}",
             std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
         ))
     }
 

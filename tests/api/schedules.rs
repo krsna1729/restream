@@ -46,7 +46,7 @@ async fn a_schedule_lists_its_next_time_and_runs_its_action_on_demand() {
         outputs.push(body["output"]["id"].as_str().unwrap().to_string());
     }
 
-    let at = chrono::Utc::now().timestamp_millis() + 3_600_000;
+    let at = jiff::Timestamp::now().as_millisecond() + 3_600_000;
     let draft = serde_json::json!({
         "pipelineId": pipeline,
         "name": "Go live on A",
@@ -260,7 +260,7 @@ impl restream::application::ports::IngestLookup for StalledIngestLookup {
 }
 
 async fn last_result(db: &db::DeadlineDb, id: &str) -> Option<String> {
-    schedules::get(db, id, chrono::Utc::now().timestamp_millis())
+    schedules::get(db, id, jiff::Timestamp::now().as_millisecond())
         .await
         .unwrap()
         .last_result
@@ -298,7 +298,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     )
     .await
     .unwrap();
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now().as_millisecond();
     for (id, pipeline, action, at_ms, output_ids) in [
         (
             "sch_a",
@@ -426,7 +426,7 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
     )
     .await
     .unwrap();
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now().as_millisecond();
     schedules::create(
         &db::DeadlineDb::api(pool.clone()),
         "sch_lock",
@@ -468,7 +468,7 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
             let result = schedules::get(
                 &db::DeadlineDb::api(pool.clone()),
                 "sch_lock",
-                chrono::Utc::now().timestamp_millis(),
+                jiff::Timestamp::now().as_millisecond(),
             )
             .await
             .unwrap()
@@ -486,7 +486,7 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
     let settled = schedules::get(
         &db::DeadlineDb::api(pool.clone()),
         "sch_lock",
-        chrono::Utc::now().timestamp_millis(),
+        jiff::Timestamp::now().as_millisecond(),
     )
     .await
     .unwrap()
@@ -508,5 +508,59 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
     assert_eq!(
         settled.as_deref(),
         Some("ok: 1 of 1 destinations wanted running")
+    );
+}
+
+/// An occurrence missed by more than the grace is recorded with the minute
+/// it was due, in UTC.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skipped_occurrence_records_the_utc_minute_it_was_due() {
+    let (pool, lifecycle, dir) = file_pools().await;
+    db::create_pipeline(&pool, "pipe", "Show", "key-pipe", None, None)
+        .await
+        .unwrap();
+    // 2026-01-01T08:30:45.123Z, created just before it: long past its grace.
+    let at_ms = 1_767_256_245_123;
+    schedules::create(
+        &db::DeadlineDb::api(pool.clone()),
+        "sch_skip",
+        &schedules::ScheduleDraft {
+            pipeline_id: "pipe".to_string(),
+            name: "Missed".to_string(),
+            action: schedules::ScheduleAction::StartFile,
+            output_ids: vec![],
+            at_ms,
+            repeat: schedules::Repeat::Once,
+            enabled: true,
+        },
+        at_ms - 1,
+    )
+    .await
+    .unwrap();
+
+    let stop = tokio_util::sync::CancellationToken::new();
+    let scheduler = tokio::spawn(api::schedules::run_scheduler(
+        scheduler_state(&pool),
+        db::DeadlineDb::new(lifecycle, Duration::from_millis(200)),
+        Duration::from_secs(1),
+        api::schedules::ACTION_DEADLINE,
+        stop.clone(),
+    ));
+    let skipped = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(result) = last_result(&db::DeadlineDb::api(pool.clone()), "sch_skip").await
+            {
+                return result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    stop.cancel();
+    let _ = scheduler.await;
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(
+        skipped.ok().as_deref(),
+        Some("skipped: the engine was not running at 2026-01-01 08:30 UTC")
     );
 }

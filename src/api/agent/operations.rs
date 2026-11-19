@@ -235,7 +235,7 @@ async fn execute_operation(
             .ok_or_else(|| "change is missing pipelineId".to_string())?;
         let result = apply_change(state, pipeline_id, change).await?;
         state_transitions.push(serde_json::json!({
-            "at": chrono::Utc::now().to_rfc3339(),
+            "at": restream_domain::timestamp::now_rfc3339(),
             "kind": change.kind,
             "pipelineId": pipeline_id,
             "outputId": result["outputId"],
@@ -243,7 +243,7 @@ async fn execute_operation(
             "to": result["to"],
         }));
         progress_snapshots.push(serde_json::json!({
-            "at": chrono::Utc::now().to_rfc3339(),
+            "at": restream_domain::timestamp::now_rfc3339(),
             "completed": index + 1,
             "total": total,
             "currentChange": change.kind,
@@ -258,7 +258,7 @@ async fn execute_operation(
         progress_snapshots,
         execution_result: restream_agent::plane::redact_secrets(serde_json::json!({
             "success": true,
-            "appliedAt": chrono::Utc::now().to_rfc3339(),
+            "appliedAt": restream_domain::timestamp::now_rfc3339(),
             "changeCount": total,
             "changeResults": change_results,
         })),
@@ -658,7 +658,7 @@ async fn verify_operation(
 
     restream_agent::plane::redact_secrets(serde_json::json!({
         "success": success,
-        "verifiedAt": chrono::Utc::now().to_rfc3339(),
+        "verifiedAt": restream_domain::timestamp::now_rfc3339(),
         "postChangeHealth": health,
         "freshnessRecovery": {
             "checked": true,

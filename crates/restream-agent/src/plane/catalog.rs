@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use restream_agent_contract::{AgentToolKind, agent_tool_names};
+use restream_domain::timestamp::now_rfc3339;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +24,7 @@ pub struct AgentCapabilities {
 pub fn capabilities() -> AgentCapabilities {
     let execution_enabled = cfg!(feature = "agent-execution");
     AgentCapabilities {
-        generated_at: now(),
+        generated_at: now_rfc3339(),
         feature: "agent-plane",
         version: 1,
         compiled_in: true,
@@ -155,8 +156,4 @@ pub fn schema_catalog() -> Value {
             "sections": ["api", "engine", "features", "configuration", "state", "runtime", "desiredVsActual", "diagnostics", "dependencies", "media", "storage", "redaction"]
         }
     })
-}
-
-fn now() -> String {
-    chrono::Utc::now().to_rfc3339()
 }

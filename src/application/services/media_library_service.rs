@@ -652,8 +652,10 @@ fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default();
-    let modified_at = chrono::DateTime::from_timestamp_millis(modified_ms)
-        .map(|dt| dt.to_rfc3339())
+    let modified_at = u64::try_from(modified_ms)
+        .ok()
+        .and_then(|ms| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(ms)))
+        .map(restream_domain::timestamp::rfc3339)
         .unwrap_or_default();
     (modified_at, modified_ms)
 }

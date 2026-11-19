@@ -381,7 +381,7 @@ pub(super) struct AttemptJob {
 impl AttemptJob {
     fn begin(db: &DeadlineDb, job_id: String, pipeline_id: String, output_id: String) -> Self {
         let (finish, finished) = tokio::sync::oneshot::channel::<(JobStatus, String)>();
-        let started_at = chrono::Utc::now().to_rfc3339();
+        let started_at = restream_domain::timestamp::now_rfc3339();
         let db = db.clone();
         tokio::spawn(async move {
             let create = {
@@ -406,7 +406,7 @@ impl AttemptJob {
             // `reset_running_jobs` closes the row.
             let (status, ended_at) = finished
                 .await
-                .unwrap_or_else(|_| (JobStatus::Failed, chrono::Utc::now().to_rfc3339()));
+                .unwrap_or_else(|_| (JobStatus::Failed, restream_domain::timestamp::now_rfc3339()));
             let finish = db.write(move |pool| async move {
                 crate::db::update_job(&pool, &job_id, Some(status), Some(&ended_at)).await
             });
@@ -418,7 +418,9 @@ impl AttemptJob {
     }
 
     pub(super) fn finish(self, status: JobStatus) {
-        let _ = self.finish.send((status, chrono::Utc::now().to_rfc3339()));
+        let _ = self
+            .finish
+            .send((status, restream_domain::timestamp::now_rfc3339()));
     }
 }
 

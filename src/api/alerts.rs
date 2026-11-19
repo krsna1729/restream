@@ -57,7 +57,10 @@ fn alerts_response(
     // History is opt-in: a reader of the open set does not pay for it.
     if let Some(resolved) = resolved {
         body["resolved"] = serde_json::json!(resolved.alerts);
-        body["resolvedCompleteFrom"] = serde_json::json!(resolved.complete_from);
+        body["resolvedCompleteFrom"] = serde_json::json!(restream_domain::timestamp::rfc3339_utc(
+            resolved.complete_from,
+            restream_domain::timestamp::Precision::Auto,
+        ));
     }
     Json(body).into_response()
 }
@@ -117,7 +120,7 @@ pub async fn run_alert_notifier(
             .iter()
             .map(crate::application::notify::AlertBrief::from)
             .collect();
-        let events = transitions.observe(&briefs, chrono::Utc::now().timestamp_millis());
+        let events = transitions.observe(&briefs, jiff::Timestamp::now().as_millisecond());
         for event in events {
             let notify = state.notify_service.clone();
             tokio::spawn(async move {
@@ -130,7 +133,7 @@ pub async fn run_alert_notifier(
 #[derive(Debug, serde::Deserialize)]
 pub struct AlertsQuery {
     /// RFC 3339: only resolved alerts that closed at or after it.
-    since: Option<chrono::DateTime<chrono::Utc>>,
+    since: Option<jiff::Timestamp>,
 }
 
 /// Returns the authenticated dashboard alert feed derived from the current
@@ -159,9 +162,12 @@ pub async fn aggregate_alerts_handler(
             state.alert_tracker.latest().unwrap_or_default()
         }
     };
-    let resolved = query
-        .since
-        .map(|since| state.alert_tracker.resolved_since(since));
+    let resolved = query.since.map(|since| {
+        // Every jiff timestamp fits a 64-bit Unix `SystemTime`.
+        let since =
+            std::time::SystemTime::try_from(since).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        state.alert_tracker.resolved_since(since)
+    });
     alerts_response(evaluation, resolved)
 }
 

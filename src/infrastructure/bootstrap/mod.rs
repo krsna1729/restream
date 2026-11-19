@@ -165,7 +165,7 @@ async fn serve(
         );
     }
 
-    db::reset_running_jobs(&pool, &chrono::Utc::now().to_rfc3339())
+    db::reset_running_jobs(&pool, &restream_domain::timestamp::now_rfc3339())
         .await
         .map_err(|error| format!("failed to reset stale running jobs: {error}"))?;
 

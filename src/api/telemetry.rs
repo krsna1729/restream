@@ -127,7 +127,7 @@ pub async fn build_file_diagnostics_context(
     let file_modified_at = metadata
         .as_ref()
         .and_then(|meta| meta.modified().ok())
-        .map(|timestamp| chrono::DateTime::<chrono::Utc>::from(timestamp).to_rfc3339());
+        .map(restream_domain::timestamp::rfc3339);
 
     let (analysis, analysis_error) = if file_exists {
         match state
@@ -446,7 +446,7 @@ pub async fn v1_events_handler(
     let event_list = state.engine.recent_events(limit, pipeline_filter);
 
     Json(serde_json::json!({
-        "generatedAt": chrono::Utc::now().to_rfc3339(),
+        "generatedAt": restream_domain::timestamp::now_rfc3339(),
         "count": event_list.len(),
         "events": event_list,
     }))

@@ -623,7 +623,7 @@ pub(crate) async fn resource_map(
     };
 
     json!({
-        "generatedAt": chrono::Utc::now().to_rfc3339(),
+        "generatedAt": restream_domain::timestamp::now_rfc3339(),
         "scope": {
             "kind": if pipeline_id.is_some() { "pipeline" } else { "runtime" },
             "pipelineId": pipeline_id,

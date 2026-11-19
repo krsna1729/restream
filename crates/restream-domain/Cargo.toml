@@ -16,6 +16,8 @@ ts = ["dep:ts-rs"]
 [dependencies]
 restream-core = { path = "../restream-core" }
 serde = { version = "1.0", features = ["derive"] }
+# Formats instants only (`timestamp`); no time zones.
+jiff = { version = "1", default-features = false, features = ["std"] }
 url = "2"
 ts-rs = { version = "12", optional = true }
 

@@ -617,7 +617,7 @@ pub(crate) async fn health_snapshot_view(
         .await;
 
     EngineHealthView {
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: restream_domain::timestamp::now_rfc3339(),
         status: "ready",
         pipelines,
         stages: stages_json,

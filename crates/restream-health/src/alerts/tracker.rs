@@ -4,8 +4,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
+use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use restream_domain::timestamp;
 use serde::Serialize;
 
 use super::Alert;
@@ -28,7 +29,8 @@ struct AlertHistory {
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedAlert {
     pub alert: Alert,
-    pub resolved_at: DateTime<Utc>,
+    #[serde(serialize_with = "timestamp::serialize")]
+    pub resolved_at: SystemTime,
 }
 
 struct TrackerState {
@@ -37,7 +39,7 @@ struct TrackerState {
     /// After when `resolved` is complete (an exclusive bound): the tracker's
     /// start (a restart forgets), moved to the latest evicted entry's
     /// `resolved_at` once the ring is full.
-    complete_from: DateTime<Utc>,
+    complete_from: SystemTime,
     /// The notifier's last whole evaluation, which readers are served.
     latest: Option<Evaluation>,
 }
@@ -71,15 +73,16 @@ impl Default for AlertTracker {
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedWindow {
     pub alerts: Vec<ResolvedAlert>,
-    pub complete_from: DateTime<Utc>,
+    #[serde(serialize_with = "timestamp::serialize")]
+    pub complete_from: SystemTime,
 }
 
 impl AlertTracker {
     pub fn new() -> Self {
-        Self::started_at(Utc::now())
+        Self::started_at(SystemTime::now())
     }
 
-    fn started_at(start: DateTime<Utc>) -> Self {
+    fn started_at(start: SystemTime) -> Self {
         Self {
             state: Mutex::new(TrackerState {
                 open: HashMap::new(),
@@ -92,7 +95,7 @@ impl AlertTracker {
 
     /// Stamp alerts from a complete snapshot and resolve every absent entry.
     pub fn track(&self, alerts: &mut [Alert]) {
-        self.track_at(alerts, Utc::now());
+        self.track_at(alerts, SystemTime::now());
     }
 
     /// Keep `alerts`, already tracked, as the evaluation readers are served.
@@ -113,7 +116,7 @@ impl AlertTracker {
     /// opens or resolves an alert, so the history has one writer however
     /// many pages are open.
     pub fn stamp_only(&self, alerts: &mut [Alert]) {
-        let stamp = Utc::now().to_rfc3339();
+        let stamp = timestamp::now_rfc3339();
         let state = restream_sync::lock::lock(&self.state);
         for alert in alerts.iter_mut() {
             if let Some(history) = state.open.get(&alert.id) {
@@ -123,8 +126,8 @@ impl AlertTracker {
         }
     }
 
-    fn track_at(&self, alerts: &mut [Alert], now: DateTime<Utc>) {
-        let stamp = now.to_rfc3339();
+    fn track_at(&self, alerts: &mut [Alert], now: SystemTime) {
+        let stamp = timestamp::rfc3339(now);
         let mut state = restream_sync::lock::lock(&self.state);
         let TrackerState {
             open,
@@ -174,7 +177,7 @@ impl AlertTracker {
     }
 
     /// Alerts resolved at or after `since`, newest first.
-    pub fn resolved_since(&self, since: DateTime<Utc>) -> ResolvedWindow {
+    pub fn resolved_since(&self, since: SystemTime) -> ResolvedWindow {
         let state = restream_sync::lock::lock(&self.state);
         ResolvedWindow {
             alerts: state
@@ -209,11 +212,15 @@ mod tests {
         alert
     }
 
-    fn at(minute: i64) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-10-12T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            + chrono::Duration::minutes(minute)
+    fn at(minute: i64) -> SystemTime {
+        // 2026-10-12T10:00:00Z
+        let base = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_791_799_200);
+        let offset = std::time::Duration::from_secs(minute.unsigned_abs() * 60);
+        if minute < 0 {
+            base - offset
+        } else {
+            base + offset
+        }
     }
 
     fn ids(entries: &[ResolvedAlert]) -> Vec<&str> {
@@ -233,9 +240,39 @@ mod tests {
         let resolved = tracker.resolved_since(at(-60)).alerts;
         assert_eq!(ids(&resolved), ["b", "a"], "newest first");
         assert_eq!(resolved[0].resolved_at, at(2));
-        assert_eq!(resolved[0].alert.first_seen, Some(at(0).to_rfc3339()));
-        assert_eq!(resolved[0].alert.last_seen, Some(at(1).to_rfc3339()));
+        assert_eq!(
+            resolved[0].alert.first_seen,
+            Some(timestamp::rfc3339(at(0)))
+        );
+        assert_eq!(resolved[0].alert.last_seen, Some(timestamp::rfc3339(at(1))));
         assert_eq!(tracker.active_count(), 0);
+    }
+
+    /// `firstSeen`/`lastSeen` are RFC 3339 with a numeric UTC offset and 0,
+    /// 3, 6 or 9 fractional digits; incident explanations parse them back.
+    #[test]
+    fn seen_stamps_are_rfc3339_with_a_numeric_utc_offset() {
+        let tracker = AlertTracker::new();
+        let mut open = [alert("a", "p1")];
+        tracker.track(&mut open);
+        for stamp in [&open[0].first_seen, &open[0].last_seen] {
+            let stamp = stamp.as_deref().unwrap();
+            let shape: String = stamp
+                .chars()
+                .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+                .collect();
+            assert!(
+                [
+                    "dddd-dd-ddTdd:dd:dd+dd:dd",
+                    "dddd-dd-ddTdd:dd:dd.ddd+dd:dd",
+                    "dddd-dd-ddTdd:dd:dd.dddddd+dd:dd",
+                    "dddd-dd-ddTdd:dd:dd.ddddddddd+dd:dd",
+                ]
+                .contains(&shape.as_str())
+                    && stamp.ends_with("+00:00"),
+                "{stamp}"
+            );
+        }
     }
 
     #[test]

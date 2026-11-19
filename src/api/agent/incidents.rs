@@ -42,7 +42,7 @@ pub async fn agent_incident_explanation_handler(
         Ok(query) => query,
         Err(rejection) => return rejection.into_response(),
     };
-    let now_ms = epoch_ms(chrono::Utc::now());
+    let now_ms = epoch_ms(jiff::Timestamp::now());
     let episode = |alert: &restream_health::alerts::Alert| {
         alert.id == query.alert_id
             && query
@@ -61,12 +61,15 @@ pub async fn agent_incident_explanation_handler(
     let incident = open.or_else(|| {
         state
             .alert_tracker
-            .resolved_since(chrono::DateTime::UNIX_EPOCH)
+            .resolved_since(std::time::SystemTime::UNIX_EPOCH)
             .alerts
             .into_iter()
             .rev()
             .find(|resolved| episode(&resolved.alert))
-            .map(|resolved| (resolved.alert, epoch_ms(resolved.resolved_at)))
+            .map(|resolved| {
+                let resolved_at = jiff::Timestamp::try_from(resolved.resolved_at);
+                (resolved.alert, resolved_at.map_or(0, epoch_ms))
+            })
     });
     let Some((alert, to_ms)) = incident else {
         return (
@@ -82,8 +85,8 @@ pub async fn agent_incident_explanation_handler(
         .first_seen
         .as_deref()
         .or(Some(alert.generated_at.as_str()))
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-        .map_or(to_ms, |at| epoch_ms(at.with_timezone(&chrono::Utc)));
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok())
+        .map_or(to_ms, epoch_ms);
 
     let samples = match alert.pipeline_id.as_deref() {
         Some(pipeline_id) => trace_window(
@@ -113,8 +116,8 @@ pub async fn agent_incident_explanation_handler(
 }
 
 #[cfg(feature = "agent-plane")]
-fn epoch_ms(at: chrono::DateTime<chrono::Utc>) -> u64 {
-    u64::try_from(at.timestamp_millis()).unwrap_or(0)
+fn epoch_ms(at: jiff::Timestamp) -> u64 {
+    u64::try_from(at.as_millisecond()).unwrap_or(0)
 }
 
 #[cfg(not(feature = "agent-plane"))]
