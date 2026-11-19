@@ -59,7 +59,7 @@ fn packets_wait_for_the_probe_answer_and_follow_the_replacement_ring() {
     assert_eq!(ring_dts(&old), vec![10], "before the probe, packets flow");
 
     assert!(media.begin_probe());
-    assert!(!media.begin_probe(), "one probe per session");
+    assert!(!media.begin_probe(), "one pending probe at a time");
     media.publish(audio(20, 4));
     media.publish(audio(30, 4));
     assert_eq!(
@@ -78,6 +78,17 @@ fn packets_wait_for_the_probe_answer_and_follow_the_replacement_ring() {
     media.publish(audio(40, 4));
     assert_eq!(ring_dts(&new), vec![20, 30, 40]);
     assert_eq!(ring_dts(&old), vec![10]);
+
+    // A catalog update adds a track: the next probe holds again.
+    assert!(
+        media.begin_probe(),
+        "a later probe after the first is applied"
+    );
+    media.publish(audio(50, 4));
+    assert_eq!(ring_dts(&new), vec![20, 30, 40], "held for the re-probe");
+    let newer = Arc::new(RingBuffer::new(64));
+    media.probe_applied(Some(newer.clone()));
+    assert_eq!(ring_dts(&newer), vec![50]);
     assert_eq!(media.probe_hold_overflows, 0);
 }
 

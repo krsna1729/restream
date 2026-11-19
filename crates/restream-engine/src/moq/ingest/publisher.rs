@@ -33,15 +33,15 @@ impl Default for ProbeHoldLimits {
 
 #[derive(Debug, Default)]
 enum ProbeHold {
+    /// No probe pending (none sent, answered, or given up on): packets go
+    /// straight to the ring.
     #[default]
-    NotSent,
+    Released,
     Pending {
         since: Instant,
         held: Vec<MediaPacket>,
         bytes: usize,
     },
-    /// Answered, or given up on: packets go straight to the ring.
-    Released,
 }
 
 /// The session counters the ingest state shares with the Owner thread.
@@ -82,7 +82,7 @@ impl PublisherMedia {
             timestamp_mapper: InputTimestampMapper::default(),
             standby_gop: StandbyGopCache::default(),
             batch: Vec::with_capacity(1),
-            probe: ProbeHold::NotSent,
+            probe: ProbeHold::Released,
             limits,
             probe_hold_overflows: 0,
         }
@@ -104,10 +104,11 @@ impl PublisherMedia {
             .store(now_ms, Ordering::Relaxed);
     }
 
-    /// Start holding packets: the probe is on its way to Tokio. `false` if
-    /// a probe was already sent.
+    /// Start holding packets: a probe is on its way to Tokio. `false` while
+    /// one is already pending; a later probe (for tracks a catalog update
+    /// added) may begin once the previous one was applied.
     pub(crate) fn begin_probe(&mut self) -> bool {
-        if !matches!(self.probe, ProbeHold::NotSent) {
+        if matches!(self.probe, ProbeHold::Pending { .. }) {
             return false;
         }
         self.probe = ProbeHold::Pending {
