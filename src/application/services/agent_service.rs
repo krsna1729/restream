@@ -11,9 +11,9 @@ use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
+use crate::db::DeadlineDb;
 use restream_domain::models::{Ingest, Job, Output, Pipeline};
 use restream_engine::security::IngestSecurityService;
-use sqlx::SqlitePool;
 
 #[cfg(feature = "agent-execution")]
 use restream_domain::domain::output_spec::OutputConfig;
@@ -80,7 +80,7 @@ pub(crate) enum AgentOutputMutationOutcome {
 /// Application service for agent catalog reads and validated output mutations.
 #[derive(Clone)]
 pub struct AgentService {
-    db: SqlitePool,
+    db: DeadlineDb,
     pipeline_store: Arc<dyn PipelineStore>,
     job_store: Arc<dyn JobStore>,
     ingest_store: Arc<dyn IngestLookup>,
@@ -91,7 +91,7 @@ pub struct AgentService {
 impl AgentService {
     /// Builds the service from the stores used by agent catalogs and mutations.
     pub fn with_stores(
-        db: SqlitePool,
+        db: DeadlineDb,
         pipeline_store: Arc<dyn PipelineStore>,
         job_store: Arc<dyn JobStore>,
         ingest_store: Arc<dyn IngestLookup>,
@@ -502,15 +502,11 @@ mod tests {
             .await
             .expect("the remove asks for a reconcile pass");
 
-        let outputs = crate::application::outputs::list_outputs(&pool)
+        let db = crate::db::DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE);
+        let outputs = crate::application::outputs::list_outputs(&db)
             .await
             .unwrap();
-        crate::application::topology::converge_topology(
-            &crate::db::DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE),
-            &engine,
-            &outputs,
-        )
-        .await;
+        crate::application::topology::converge_topology(&db, &engine, &outputs).await;
         assert!(egress.is_cancelled());
     }
 }

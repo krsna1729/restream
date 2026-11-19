@@ -1,16 +1,16 @@
 //! SQLite adapter for team members, session bindings and the audit log.
 
 use crate::application::ports::*;
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 
 #[derive(Clone)]
 pub struct SqliteTeamStore {
-    pool: SqlitePool,
+    db: DeadlineDb,
 }
 
 impl SqliteTeamStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 }
 
@@ -38,18 +38,22 @@ fn stored_user(row: crate::db::team_repo::UserRow) -> Result<StoredUser, TeamSto
 impl TeamStore for SqliteTeamStore {
     fn last_active(&self) -> TeamFuture<'_, Vec<(String, i64)>> {
         Box::pin(async move {
-            crate::db::team_repo::last_active(
-                &self.pool,
-                crate::application::services::team_service::BUILTIN_ADMIN_USERNAME,
-            )
-            .await
-            .map_err(team_error)
+            self.db
+                .read(|pool| {
+                    crate::db::team_repo::last_active(
+                        pool,
+                        crate::application::services::team_service::BUILTIN_ADMIN_USERNAME,
+                    )
+                })
+                .await
+                .map_err(team_error)
         })
     }
 
     fn list_users(&self) -> TeamFuture<'_, Vec<crate::application::team::UserRecord>> {
         Box::pin(async move {
-            crate::db::team_repo::list_users(&self.pool)
+            self.db
+                .read(crate::db::team_repo::list_users)
                 .await
                 .map_err(team_error)?
                 .into_iter()
@@ -63,7 +67,8 @@ impl TeamStore for SqliteTeamStore {
         username: &'a str,
     ) -> TeamFuture<'a, Option<StoredUser>> {
         Box::pin(async move {
-            crate::db::team_repo::find_user_by_username(&self.pool, username)
+            self.db
+                .read(|pool| crate::db::team_repo::find_user_by_username(pool, username))
                 .await
                 .map_err(team_error)?
                 .map(stored_user)
@@ -73,7 +78,8 @@ impl TeamStore for SqliteTeamStore {
 
     fn find_user<'a>(&'a self, id: &'a str) -> TeamFuture<'a, Option<StoredUser>> {
         Box::pin(async move {
-            crate::db::team_repo::find_user(&self.pool, id)
+            self.db
+                .read(|pool| crate::db::team_repo::find_user(pool, id))
                 .await
                 .map_err(team_error)?
                 .map(stored_user)
@@ -87,16 +93,25 @@ impl TeamStore for SqliteTeamStore {
         password_hash: &'a str,
     ) -> TeamFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::team_repo::insert_user(
-                &self.pool,
-                &user.id,
-                &user.username,
-                user.role.as_str(),
-                user.created_at_ms,
-                password_hash,
-            )
-            .await
-            .map_err(team_error)
+            let id = user.id.clone();
+            let username = user.username.clone();
+            let role = user.role;
+            let created_at_ms = user.created_at_ms;
+            let password_hash = password_hash.to_owned();
+            self.db
+                .write(move |pool| async move {
+                    crate::db::team_repo::insert_user(
+                        &pool,
+                        &id,
+                        &username,
+                        role.as_str(),
+                        created_at_ms,
+                        &password_hash,
+                    )
+                    .await
+                })
+                .await
+                .map_err(team_error)
         })
     }
 
@@ -108,21 +123,31 @@ impl TeamStore for SqliteTeamStore {
         password_hash: Option<&'a str>,
     ) -> TeamFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::team_repo::update_user(
-                &self.pool,
-                id,
-                role.map(|role| role.as_str()),
-                disabled,
-                password_hash,
-            )
-            .await
-            .map_err(team_error)
+            let id = id.to_owned();
+            let password_hash = password_hash.map(str::to_owned);
+            self.db
+                .write(move |pool| async move {
+                    crate::db::team_repo::update_user(
+                        &pool,
+                        &id,
+                        role.map(|role| role.as_str()),
+                        disabled,
+                        password_hash.as_deref(),
+                    )
+                    .await
+                })
+                .await
+                .map_err(team_error)
         })
     }
 
     fn delete_user<'a>(&'a self, id: &'a str) -> TeamFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::team_repo::delete_user(&self.pool, id)
+            let id = id.to_owned();
+            self.db
+                .write(
+                    move |pool| async move { crate::db::team_repo::delete_user(&pool, &id).await },
+                )
                 .await
                 .map_err(team_error)
         })
@@ -134,7 +159,13 @@ impl TeamStore for SqliteTeamStore {
         keep: Option<&'a str>,
     ) -> TeamFuture<'a, ()> {
         Box::pin(async move {
-            crate::db::team_repo::delete_user_sessions(&self.pool, user_id, keep)
+            let user_id = user_id.to_owned();
+            let keep = keep.map(str::to_owned);
+            self.db
+                .write(move |pool| async move {
+                    crate::db::team_repo::delete_user_sessions(&pool, &user_id, keep.as_deref())
+                        .await
+                })
                 .await
                 .map_err(team_error)
         })
@@ -146,20 +177,29 @@ impl TeamStore for SqliteTeamStore {
         binding: &'a SessionBinding,
     ) -> TeamFuture<'a, bool> {
         Box::pin(async move {
-            crate::db::team_repo::set_session_principal(
-                &self.pool,
-                token,
-                binding.user_id.as_deref(),
-                binding.view_as.map(|role| role.as_str()),
-            )
-            .await
-            .map_err(team_error)
+            let token = token.to_owned();
+            let user_id = binding.user_id.clone();
+            let view_as = binding.view_as;
+            self.db
+                .write(move |pool| async move {
+                    crate::db::team_repo::set_session_principal(
+                        &pool,
+                        &token,
+                        user_id.as_deref(),
+                        view_as.map(|role| role.as_str()),
+                    )
+                    .await
+                })
+                .await
+                .map_err(team_error)
         })
     }
 
     fn session_binding<'a>(&'a self, token: &'a str) -> TeamFuture<'a, Option<SessionBinding>> {
         Box::pin(async move {
-            let row = crate::db::team_repo::session_principal(&self.pool, token)
+            let row = self
+                .db
+                .read(|pool| crate::db::team_repo::session_principal(pool, token))
                 .await
                 .map_err(team_error)?;
             Ok(row.map(|(user_id, view_as)| SessionBinding {
@@ -177,17 +217,27 @@ impl TeamStore for SqliteTeamStore {
         entry: &'a crate::application::team::AuditEntry,
     ) -> TeamFuture<'a, ()> {
         Box::pin(async move {
-            crate::db::team_repo::append_audit(
-                &self.pool,
-                entry.at_ms,
-                &entry.username,
-                entry.role.as_str(),
-                &entry.method,
-                &entry.path,
-                entry.status,
-            )
-            .await
-            .map_err(team_error)
+            let at_ms = entry.at_ms;
+            let username = entry.username.clone();
+            let role = entry.role;
+            let method = entry.method.clone();
+            let path = entry.path.clone();
+            let status = entry.status;
+            self.db
+                .write(move |pool| async move {
+                    crate::db::team_repo::append_audit(
+                        &pool,
+                        at_ms,
+                        &username,
+                        role.as_str(),
+                        &method,
+                        &path,
+                        status,
+                    )
+                    .await
+                })
+                .await
+                .map_err(team_error)
         })
     }
 
@@ -197,7 +247,9 @@ impl TeamStore for SqliteTeamStore {
         before: Option<i64>,
     ) -> TeamFuture<'_, Vec<crate::application::team::AuditEntry>> {
         Box::pin(async move {
-            let rows = crate::db::team_repo::list_audit(&self.pool, i64::from(limit), before)
+            let rows = self
+                .db
+                .read(|pool| crate::db::team_repo::list_audit(pool, i64::from(limit), before))
                 .await
                 .map_err(team_error)?;
             Ok(rows

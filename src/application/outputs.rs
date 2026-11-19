@@ -3,7 +3,7 @@
 //! Desired-state start/stop stays here as thin domain writes; reconciler owns
 //! runtime egress. Persistence is `db::*` — no OutputStore port.
 
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 
 use crate::application::services::error::{ServiceError, ServiceResult};
 use restream_domain::domain::output_spec::OutputConfig;
@@ -33,8 +33,8 @@ fn output_not_found(id: &str) -> ServiceError {
 }
 
 /// Lists every persisted output record without applying pipeline filters.
-pub async fn list_outputs(pool: &SqlitePool) -> ServiceResult<Vec<Output>> {
-    crate::db::list_outputs(pool)
+pub async fn list_outputs(db: &DeadlineDb) -> ServiceResult<Vec<Output>> {
+    db.read(crate::db::list_outputs)
         .await
         .map(|records| records.into_iter().map(output_from_record).collect())
         .map_err(|e| ServiceError::internal(format!("list outputs: {e}")))
@@ -42,16 +42,16 @@ pub async fn list_outputs(pool: &SqlitePool) -> ServiceResult<Vec<Output>> {
 
 /// Lists the outputs attached to one pipeline for dashboard detail views
 /// and runtime coordination.
-pub async fn list_for_pipeline(pool: &SqlitePool, pipeline_id: &str) -> ServiceResult<Vec<Output>> {
-    crate::db::list_outputs_for_pipeline(pool, pipeline_id)
+pub async fn list_for_pipeline(db: &DeadlineDb, pipeline_id: &str) -> ServiceResult<Vec<Output>> {
+    db.read(|pool| crate::db::list_outputs_for_pipeline(pool, pipeline_id))
         .await
         .map(|records| records.into_iter().map(output_from_record).collect())
         .map_err(|e| ServiceError::internal(format!("list outputs for pipeline: {e}")))
 }
 
 /// Resolves one persisted output by composite pipeline/output identity.
-pub async fn get_by_id(pool: &SqlitePool, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
-    crate::db::get_output(pool, pipeline_id, id)
+pub async fn get_by_id(db: &DeadlineDb, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
+    db.read(|pool| crate::db::get_output(pool, pipeline_id, id))
         .await
         .map_err(|e| ServiceError::internal(format!("get output: {e}")))?
         .map(output_from_record)
@@ -61,7 +61,7 @@ pub async fn get_by_id(pool: &SqlitePool, pipeline_id: &str, id: &str) -> Servic
 /// Persists a new output with an already-typed desired-state value.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_output(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     id: &str,
     pipeline_id: &str,
     name: &str,
@@ -70,16 +70,27 @@ pub async fn create_output(
     desired_state: DesiredOutputState,
     config: &OutputConfig,
 ) -> ServiceResult<Output> {
-    crate::db::create_output(
-        pool,
-        id,
-        pipeline_id,
-        name,
-        url,
-        monitoring_url,
-        desired_state,
-        config,
-    )
+    let (id, pipeline_id, name, url) = (
+        id.to_owned(),
+        pipeline_id.to_owned(),
+        name.to_owned(),
+        url.to_owned(),
+    );
+    let monitoring_url = monitoring_url.map(str::to_owned);
+    let config = config.clone();
+    db.write(move |pool| async move {
+        crate::db::create_output(
+            &pool,
+            &id,
+            &pipeline_id,
+            &name,
+            &url,
+            monitoring_url.as_deref(),
+            desired_state,
+            &config,
+        )
+        .await
+    })
     .await
     .map(output_from_record)
     .map_err(|e| ServiceError::internal(format!("create output: {e}")))
@@ -88,7 +99,7 @@ pub async fn create_output(
 /// Updates the mutable settings for one persisted output while preserving
 /// its desired-state lifecycle fields.
 pub async fn update_output(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     pipeline_id: &str,
     id: &str,
     name: &str,
@@ -96,41 +107,60 @@ pub async fn update_output(
     monitoring_url: Option<&str>,
     config: &OutputConfig,
 ) -> ServiceResult<Output> {
-    crate::db::update_output(pool, pipeline_id, id, name, url, monitoring_url, config)
+    let (pipeline_id, output_id, name, url) = (
+        pipeline_id.to_owned(),
+        id.to_owned(),
+        name.to_owned(),
+        url.to_owned(),
+    );
+    let monitoring_url = monitoring_url.map(str::to_owned);
+    let config = config.clone();
+    db.write(move |pool| async move {
+        crate::db::update_output(
+            &pool,
+            &pipeline_id,
+            &output_id,
+            &name,
+            &url,
+            monitoring_url.as_deref(),
+            &config,
+        )
         .await
-        .map_err(|e| ServiceError::internal(format!("update output: {e}")))?
-        .map(output_from_record)
-        .ok_or_else(|| output_not_found(id))
+    })
+    .await
+    .map_err(|e| ServiceError::internal(format!("update output: {e}")))?
+    .map(output_from_record)
+    .ok_or_else(|| output_not_found(id))
 }
 
 /// Deletes one persisted output record by pipeline/output identity.
-pub async fn delete_output(pool: &SqlitePool, pipeline_id: &str, id: &str) -> ServiceResult<bool> {
-    crate::db::delete_output(pool, pipeline_id, id)
+pub async fn delete_output(db: &DeadlineDb, pipeline_id: &str, id: &str) -> ServiceResult<bool> {
+    let (pipeline_id, id) = (pipeline_id.to_owned(), id.to_owned());
+    db.write(move |pool| async move { crate::db::delete_output(&pool, &pipeline_id, &id).await })
         .await
         .map_err(|e| ServiceError::internal(format!("delete output: {e}")))
 }
 
 async fn desired_state_request(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     pipeline_id: &str,
     id: &str,
     desired_state: DesiredOutputState,
     action: &'static str,
 ) -> ServiceResult<Output> {
-    crate::db::set_output_desired_state(pool, pipeline_id, id, desired_state)
-        .await
-        .map(output_from_record)
-        .map_err(|e| ServiceError::internal(format!("{action}: {e}")))
+    let (pipeline_id, id) = (pipeline_id.to_owned(), id.to_owned());
+    db.write(move |pool| async move {
+        crate::db::set_output_desired_state(&pool, &pipeline_id, &id, desired_state).await
+    })
+    .await
+    .map(output_from_record)
+    .map_err(|e| ServiceError::internal(format!("{action}: {e}")))
 }
 
 /// Set the output's desired state to `running`, resuming any stopped egress.
-pub async fn request_start(
-    pool: &SqlitePool,
-    pipeline_id: &str,
-    id: &str,
-) -> ServiceResult<Output> {
+pub async fn request_start(db: &DeadlineDb, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
     desired_state_request(
-        pool,
+        db,
         pipeline_id,
         id,
         DesiredOutputState::Running,
@@ -140,9 +170,9 @@ pub async fn request_start(
 }
 
 /// Set the output's desired state to `stopped`, halting any active egress.
-pub async fn request_stop(pool: &SqlitePool, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
+pub async fn request_stop(db: &DeadlineDb, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
     desired_state_request(
-        pool,
+        db,
         pipeline_id,
         id,
         DesiredOutputState::Stopped,
@@ -154,6 +184,7 @@ pub async fn request_stop(pool: &SqlitePool, pipeline_id: &str, id: &str) -> Ser
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::SqlitePool;
 
     async fn seed_output(pool: &SqlitePool) {
         crate::db::create_pipeline(pool, "pipe-1", "Pipeline", "key-1", None, None)
@@ -179,10 +210,14 @@ mod tests {
         crate::db::setup_database_schema(&pool).await.unwrap();
         seed_output(&pool).await;
 
-        let stopped = request_stop(&pool, "pipe-1", "out-1").await.unwrap();
+        let stopped = request_stop(&DeadlineDb::api(pool.clone()), "pipe-1", "out-1")
+            .await
+            .unwrap();
         assert_eq!(stopped.desired_state, DesiredOutputState::Stopped);
 
-        let running = request_start(&pool, "pipe-1", "out-1").await.unwrap();
+        let running = request_start(&DeadlineDb::api(pool.clone()), "pipe-1", "out-1")
+            .await
+            .unwrap();
         assert_eq!(running.desired_state, DesiredOutputState::Running);
     }
 
@@ -197,13 +232,15 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            get_by_id(&pool, "pipe-1", "out-1")
+            get_by_id(&DeadlineDb::api(pool.clone()), "pipe-1", "out-1")
                 .await
                 .unwrap()
                 .retries_exhausted
         );
 
-        let restarted = request_start(&pool, "pipe-1", "out-1").await.unwrap();
+        let restarted = request_start(&DeadlineDb::api(pool.clone()), "pipe-1", "out-1")
+            .await
+            .unwrap();
         assert_eq!(restarted.desired_state, DesiredOutputState::Running);
         assert!(!restarted.retries_exhausted);
     }
@@ -212,7 +249,9 @@ mod tests {
     async fn get_by_id_maps_missing_rows_to_not_found() {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        let error = get_by_id(&pool, "pipe-1", "missing").await.unwrap_err();
+        let error = get_by_id(&DeadlineDb::api(pool.clone()), "pipe-1", "missing")
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("not found"));
     }
 
@@ -225,7 +264,7 @@ mod tests {
             .unwrap();
 
         let created = create_output(
-            &pool,
+            &DeadlineDb::api(pool.clone()),
             "out-2",
             "pipe-1",
             "Created",
@@ -237,6 +276,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(created.desired_state, DesiredOutputState::Stopped);
-        assert_eq!(list_for_pipeline(&pool, "pipe-1").await.unwrap().len(), 1);
+        assert_eq!(
+            list_for_pipeline(&DeadlineDb::api(pool.clone()), "pipe-1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

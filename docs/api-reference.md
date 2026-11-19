@@ -39,7 +39,9 @@ grouped by resource. Base URL: `http://localhost:3030` (the HTTP port is
 - Every `/api/*`, `/hls/*` and `/media/*` route needs the `session` cookie
   from login, except `POST /api/v1/auth/login`. Each handler checks the cookie
   itself (`require_authenticated` in `src/api/state.rs`); there is no
-  router-level gate. A missing or expired session gets `401`.
+  router-level gate. A missing or expired session gets `401`; a SQLite read
+  failure during session or role validation gets `503` without evicting the
+  cached session.
 - There is no bearer-token or API-key auth on this server: only the cookie.
 - An unknown `/api/*` path gets a JSON `404`
   (`{"error": "API route not found", "path", "status": 404}`).
@@ -155,10 +157,12 @@ sequenceDiagram
     L->>S: add_session_hash
     L-->>B: 200 {ok:true} + Set-Cookie session=token
     B->>S: later request with Cookie: session=token
-    S->>S: is_authenticated: hash in memory set?
+    S->>S: validate_session: hash in memory set?
     S->>DB: get_session_created_at
     alt missing or older than 30 days
         S-->>B: 401 Unauthorized
+    else SQLite read failed
+        S-->>B: 503 Authentication temporarily unavailable
     else valid
         S-->>B: handler runs
     end
@@ -196,10 +200,11 @@ Roles are ordered: `viewer` < `operator` < `admin`.
 
 One layer in front of every `/api/v1/` handler (`authorize_and_audit` in
 `src/api/team.rs`) enforces `required_role(method, path)`
-(`src/application/team.rs`). A request without a valid session passes
-through to its handler, which answers `401` as before. A session whose role
-is too low gets `403 { "error", "requiredRole", "effectiveRole" }` before
-any handler runs. Reads any session may make skip the lookup.
+(`src/application/team.rs`). Missing or invalid credentials get `401`, and a
+failed session or principal lookup gets `503`, before any handler runs. A
+session whose role is too low gets `403 { "error", "requiredRole",
+"effectiveRole" }` before any handler runs. Public `/api/*` misses and reads
+any session may make skip the lookup.
 
 - **View as.** `POST /api/v1/auth/view-as` stores a lower role on the
   session; every check then uses `min(role, viewAs)`, so the preview is what

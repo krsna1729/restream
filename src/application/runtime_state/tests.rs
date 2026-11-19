@@ -553,7 +553,7 @@ async fn the_projector_publishes_one_delta_per_database_write() {
     let stop = tokio_util::sync::CancellationToken::new();
     let projector = tokio::spawn(hub::run_projector(
         hub.clone(),
-        pool.clone(),
+        crate::db::DeadlineDb::api(pool.clone()),
         std::sync::Arc::new(MediaEngine::new()),
         std::time::Duration::from_millis(20),
         stop.clone(),
@@ -633,13 +633,15 @@ async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
     // Taken before the rebuild, so the hub's projection is no older than
     // this when the second read below decides.
     let rebuilt_at = tokio::time::Instant::now();
-    hub.refresh_on_demand(&pool, &engine).await;
+    hub.refresh_on_demand(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     assert_eq!(pipelines(&hub).await, 1);
 
     crate::db::create_pipeline(&pool, "pipe-2", "P2", "key-2", None, None)
         .await
         .unwrap();
-    hub.refresh_on_demand(&pool, &engine).await;
+    hub.refresh_on_demand(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     // A host slower than the window rebuilds here, which is also correct.
     if rebuilt_at.elapsed() < hub::ON_DEMAND_REUSE {
         assert_eq!(
@@ -650,7 +652,8 @@ async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
     }
 
     hub.mark_changed();
-    hub.refresh_on_demand(&pool, &engine).await;
+    hub.refresh_on_demand(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     assert_eq!(
         pipelines(&hub).await,
         2,
@@ -661,6 +664,7 @@ async fn on_demand_refresh_reuses_a_fresh_projection_until_a_change() {
         .await
         .unwrap();
     tokio::time::sleep(hub::ON_DEMAND_REUSE).await;
-    hub.refresh_on_demand(&pool, &engine).await;
+    hub.refresh_on_demand(&crate::db::DeadlineDb::api(pool.clone()), &engine)
+        .await;
     assert_eq!(pipelines(&hub).await, 3, "past the window: rebuilt");
 }

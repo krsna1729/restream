@@ -115,6 +115,93 @@ async fn a_write_behind_a_held_write_lock_answers_with_its_outcome_after_release
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[tokio::test]
+async fn a_rejected_optional_write_never_queues_or_lands_after_capacity_returns() {
+    let (api, db, dir) = file_pools("optional-rejected").await;
+    let held = db
+        .writes
+        .clone()
+        .acquire_many_owned(WRITE_PERMITS as u32)
+        .await
+        .unwrap();
+    let (called, mut observed) = tokio::sync::oneshot::channel();
+    let rejected = db.try_spawn_write(move |pool| {
+        let _ = called.send(());
+        async move { crate::db::set_meta(&pool, "rejected", "must-not-land").await }
+    });
+    assert!(rejected.is_none());
+    assert!(
+        matches!(
+            observed.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ),
+        "rejection must drop the operation synchronously, not retain a queued task"
+    );
+    drop(held);
+    // Draining every permit is a completion barrier for admitted writes;
+    // holding them also prevents a delayed write from hiding behind this read.
+    let drained = tokio::time::timeout(
+        ANSWERED_WITHIN,
+        db.writes.clone().acquire_many_owned(WRITE_PERMITS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        crate::db::get_meta(&api, "rejected")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(drained);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn an_accepted_optional_write_survives_handle_drop_behind_a_sqlite_write_lock() {
+    let (api, db, dir) = file_pools("optional-detached").await;
+    let lock = hold_write_lock(&api).await;
+    let (started, observed) = tokio::sync::oneshot::channel();
+    let write = db
+        .try_spawn_write(move |pool| async move {
+            let _ = started.send(());
+            crate::db::set_meta(&pool, "detached", "committed").await
+        })
+        .expect("an optional write is admitted while a lane is free");
+    tokio::time::timeout(ANSWERED_WITHIN, observed)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(write);
+    assert_eq!(db.writes.available_permits(), WRITE_PERMITS - 1);
+    assert!(
+        crate::db::get_meta(&api, "detached")
+            .await
+            .unwrap()
+            .is_none(),
+        "the other connection's SQLite write lock prevents an early commit"
+    );
+
+    release_write_lock(lock).await;
+    // The task releases its permit only after its real database outcome.
+    let drained = tokio::time::timeout(
+        ANSWERED_WITHIN,
+        db.writes.clone().acquire_many_owned(WRITE_PERMITS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        crate::db::get_meta(&api, "detached")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("committed"),
+    );
+    drop(drained);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 async fn insert_logs(api: &SqlitePool, rows: usize, ts: &str) {
     let mut tx = api.begin().await.unwrap();
     for _ in 0..rows {

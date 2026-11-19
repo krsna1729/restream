@@ -75,8 +75,13 @@ impl NotifyTransport for Scripted {
 async fn service(transport: Arc<Scripted>) -> NotifyService {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
-    NotifyService::with_ports(Arc::new(SqliteNotifyStore::new(pool)), transport)
-        .with_retry_delays(vec![0, 0])
+    NotifyService::with_ports(
+        Arc::new(SqliteNotifyStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
+        transport,
+    )
+    .with_retry_delays(vec![0, 0])
 }
 
 fn draft(kind: ChannelKind, min_severity: NotifySeverity) -> ChannelDraft {

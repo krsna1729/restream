@@ -296,7 +296,7 @@ mod tests {
             store,
             Arc::new(
                 crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                    pool.clone(),
+                    crate::db::DeadlineDb::api(pool.clone()),
                 ),
             ),
             SqliteServiceFactory::new(&pool).pipeline_service(),

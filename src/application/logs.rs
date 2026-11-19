@@ -3,18 +3,15 @@
 //! Handlers map HTTP filters here; merge policy for stream backfill stays on
 //! this boundary. Persistence is `db::list_app_logs` — no LogStore port.
 
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 
 use crate::application::services::error::{ServiceError, ServiceResult};
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
 /// Lists persisted application logs using the caller-supplied filters
 /// without applying any stream-specific merge behavior.
-pub async fn list_logs(
-    pool: &SqlitePool,
-    filters: &AppLogFilters,
-) -> ServiceResult<Vec<AppLogRow>> {
-    crate::db::list_app_logs(pool, filters)
+pub async fn list_logs(db: &DeadlineDb, filters: &AppLogFilters) -> ServiceResult<Vec<AppLogRow>> {
+    db.read(|pool| crate::db::list_app_logs(pool, filters))
         .await
         .map_err(|e| ServiceError::internal(format!("list logs: {e}")))
 }
@@ -22,13 +19,13 @@ pub async fn list_logs(
 /// Builds the dashboard stream backfill view, optionally merging pipeline
 /// logs with global restream-scope rows when the request shape allows it.
 pub async fn list_stream_backfill(
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     filters: &AppLogFilters,
     include_restream: bool,
 ) -> ServiceResult<Vec<AppLogRow>> {
     let limit = filters.limit.unwrap_or(200).clamp(1, 1000);
     if !should_merge_restream_backfill(filters, include_restream) {
-        return list_logs(pool, filters).await;
+        return list_logs(db, filters).await;
     }
 
     let mut restream_filters = filters.clone();
@@ -37,7 +34,7 @@ pub async fn list_stream_backfill(
     restream_filters.output_id = None;
 
     let (pipeline_logs, restream_logs) =
-        tokio::join!(list_logs(pool, filters), list_logs(pool, &restream_filters),);
+        tokio::join!(list_logs(db, filters), list_logs(db, &restream_filters),);
 
     let mut merged = std::collections::BTreeMap::new();
     for row in pipeline_logs?.into_iter().chain(restream_logs?) {
@@ -57,6 +54,7 @@ fn should_merge_restream_backfill(filters: &AppLogFilters, include_restream: boo
 mod tests {
     use super::*;
     use crate::logging::types::AppLogEntry;
+    use sqlx::SqlitePool;
 
     fn entry(message: &str, pipeline_id: Option<&str>) -> AppLogEntry {
         AppLogEntry {
@@ -107,9 +105,13 @@ mod tests {
         ])
         .await;
 
-        let backfill = list_stream_backfill(&pool, &filters_for_pipeline("pipe-1", 10), true)
-            .await
-            .unwrap();
+        let backfill = list_stream_backfill(
+            &DeadlineDb::api(pool.clone()),
+            &filters_for_pipeline("pipe-1", 10),
+            true,
+        )
+        .await
+        .unwrap();
 
         let messages = backfill
             .iter()
@@ -126,9 +128,13 @@ mod tests {
         ])
         .await;
 
-        let backfill = list_stream_backfill(&pool, &filters_for_pipeline("pipe-1", 10), false)
-            .await
-            .unwrap();
+        let backfill = list_stream_backfill(
+            &DeadlineDb::api(pool.clone()),
+            &filters_for_pipeline("pipe-1", 10),
+            false,
+        )
+        .await
+        .unwrap();
 
         let messages = backfill
             .iter()
@@ -166,7 +172,9 @@ mod tests {
         let mut received_ids = Vec::new();
         loop {
             filters.after_id = Some(cursor);
-            let page = list_stream_backfill(&pool, &filters, false).await.unwrap();
+            let page = list_stream_backfill(&DeadlineDb::api(pool.clone()), &filters, false)
+                .await
+                .unwrap();
             if page.is_empty() {
                 break;
             }
@@ -183,9 +191,12 @@ mod tests {
         // from an empty page.
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         pool.close().await;
-        let error = list_logs(&pool, &filters_for_pipeline("pipe-1", 10))
-            .await
-            .unwrap_err();
+        let error = list_logs(
+            &DeadlineDb::api(pool.clone()),
+            &filters_for_pipeline("pipe-1", 10),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("list logs:"));
     }
 }

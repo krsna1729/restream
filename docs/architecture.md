@@ -486,7 +486,12 @@ One slow dependency stalls only the entity that needs it:
   may stall on it (an output's task, housekeeping, a scheduled occurrence,
   the recording catalog writer), never by the pass; at most two writes hold
   a connection, so writes queued behind another writer's lock leave the
-  loops' read connections free. The startup catalog load retries with
+  loops' read connections free. API handlers and on-demand projections reach
+  the main pool through their own `DeadlineDb` with a 30 s read deadline
+  (`API_READ_DEADLINE`); authenticated mutations run under a 64-permit
+  admission bound (`API_MUTATION_PERMITS`) so post-commit work and audit
+  logging complete across a client disconnect without an unbounded queue. The
+  startup catalog load retries with
   backoff until it succeeds. A step that cannot read skips its convergence
   and the pass is retried after the gap, while the other steps (input
   selection, HLS pulls, SRT calls, key state, topology, egress) still run.

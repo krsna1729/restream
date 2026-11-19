@@ -169,16 +169,17 @@ async fn serve(
         .await
         .map_err(|error| format!("failed to reset stale running jobs: {error}"))?;
 
-    let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
+    let api_db = db::DeadlineDb::api(pool.clone());
+    let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(api_db.clone());
     let sec_config =
         crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
     let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
     let pipeline_store =
-        crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone());
+        crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(api_db.clone());
     let pipeline_input_store =
-        crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(pool.clone());
+        crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(api_db.clone());
     let srt_ingest_policy_store = Arc::new(
         match crate::application::srt_ingest::load_policy_store(
             &meta_store,
@@ -212,8 +213,8 @@ async fn serve(
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
     let services_factory =
-        crate::infrastructure::service_wiring::SqliteServiceFactory::with_lifecycle_db(
-            &pool,
+        crate::infrastructure::service_wiring::SqliteServiceFactory::with_databases(
+            api_db,
             lifecycle.clone(),
         );
     let auth_service = services_factory.auth_service();
@@ -257,7 +258,6 @@ async fn serve(
     let services = services_factory.compose();
     let state = Arc::new(crate::api::AppState::new(
         services,
-        pool.clone(),
         security.clone(),
         srt_ingest_policy_store.clone(),
         sessions,
@@ -307,9 +307,7 @@ async fn serve(
             lifecycle.clone(),
             engine.clone(),
             Arc::new(
-                crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(
-                    lifecycle_pool.clone(),
-                ),
+                crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(lifecycle.clone()),
             ),
             sessions_for_reconciler,
             recording_metadata,
@@ -328,9 +326,9 @@ async fn serve(
         }
     });
     supervised_task::spawn_supervised("runtime_state_projector", {
-        let (hub, pool, engine, stop) = (
+        let (hub, db, engine, stop) = (
             state.runtime_state.clone(),
-            pool.clone(),
+            state.db.clone(),
             engine.clone(),
             projector_stop.clone(),
         );
@@ -338,7 +336,7 @@ async fn serve(
         move || {
             crate::application::runtime_state::hub::run_projector(
                 hub.clone(),
-                pool.clone(),
+                db.clone(),
                 engine.clone(),
                 interval,
                 stop.clone(),
@@ -346,10 +344,10 @@ async fn serve(
         }
     });
     supervised_task::spawn_supervised("fleet_sampler", {
-        let (history, hub, pool, engine, config, stop) = (
+        let (history, hub, db, engine, config, stop) = (
             state.fleet_history.clone(),
             state.runtime_state.clone(),
-            pool.clone(),
+            state.db.clone(),
             engine.clone(),
             config.clone(),
             projector_stop.clone(),
@@ -358,7 +356,7 @@ async fn serve(
             crate::application::fleet_history::run_fleet_sampler(
                 history.clone(),
                 hub.clone(),
-                pool.clone(),
+                db.clone(),
                 engine.clone(),
                 config.clone(),
                 crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
@@ -367,10 +365,10 @@ async fn serve(
         }
     });
     supervised_task::spawn_supervised("flight_recorder", {
-        let (recorder, hub, pool, engine, stop) = (
+        let (recorder, hub, db, engine, stop) = (
             state.flight_recorder.clone(),
             state.runtime_state.clone(),
-            pool.clone(),
+            state.db.clone(),
             engine.clone(),
             projector_stop.clone(),
         );
@@ -380,7 +378,7 @@ async fn serve(
             crate::application::flight_recorder::run_flight_recorder(
                 recorder.clone(),
                 hub.clone(),
-                pool.clone(),
+                db.clone(),
                 engine.clone(),
                 crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
                 retention,

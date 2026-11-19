@@ -117,9 +117,14 @@ async fn past_occurrences_are_not_run_on_create() {
         repeat: Repeat::Daily,
         enabled: true,
     };
-    let created = create(&pool, "s1", &draft, T + 2 * DAY_MS + 5)
-        .await
-        .unwrap();
+    let created = create(
+        &DeadlineDb::api(pool.clone()),
+        "s1",
+        &draft,
+        T + 2 * DAY_MS + 5,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         created.last_run_ms,
         Some(T + 2 * DAY_MS),
@@ -142,7 +147,7 @@ async fn past_occurrences_are_not_run_on_create() {
         ..draft
     };
     assert!(matches!(
-        create(&pool, "s2", &file, T).await,
+        create(&DeadlineDb::api(pool.clone()), "s2", &file, T).await,
         Err(ServiceError::Conflict(_))
     ));
 }

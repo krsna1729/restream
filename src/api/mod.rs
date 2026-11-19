@@ -42,8 +42,9 @@ pub mod team;
 pub mod telemetry;
 pub mod view_models;
 
-/// Storage-neutral application services consumed by the HTTP boundary.
+/// The API's service graph and shared main-pool database executor.
 pub struct AppServices {
+    pub db: crate::db::DeadlineDb,
     pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
     pub recirculation_service: RecirculationService,

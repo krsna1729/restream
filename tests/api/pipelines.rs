@@ -375,7 +375,6 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
-        auth_pool.clone(),
         security,
         ingest_policy_store,
         sessions,
@@ -805,7 +804,6 @@ async fn a_successful_mutation_requests_a_reconcile_pass() {
     let (log_broadcast, _) = broadcast::channel(32);
     let state = Arc::new(api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),

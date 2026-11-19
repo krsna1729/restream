@@ -16,8 +16,9 @@ use tracing::warn;
 use super::auth::hash_password;
 use super::error::ApiError;
 use super::state::{
-    AppState, MAX_PASSWORD_LEN, MIN_DASHBOARD_PASSWORD_LEN, check_field_len,
-    get_session_token_from_headers, hash_session_token, to_hex,
+    AppState, MAX_PASSWORD_LEN, MIN_DASHBOARD_PASSWORD_LEN, auth_unavailable_response,
+    check_field_len, hash_session_token, require_authenticated_token, to_hex,
+    unauthorized_response,
 };
 use crate::application::team::{AuditEntry, Principal, UserRecord, required_role};
 use restream_domain::domain::role::Role;
@@ -27,16 +28,12 @@ pub(in crate::api) async fn session_principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(String, Principal), Response> {
-    let unauthorized = || (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-    let token = get_session_token_from_headers(headers).ok_or_else(unauthorized)?;
-    if !state.is_authenticated(&token).await {
-        return Err(unauthorized());
-    }
+    let token = require_authenticated_token(state, headers).await?;
     let token_hash = hash_session_token(&token);
     match state.team_service.principal(&token_hash).await {
         Ok(Some(principal)) => Ok((token_hash, principal)),
-        Ok(None) => Err(unauthorized()),
-        Err(error) => Err(ApiError::from(error).into_response()),
+        Ok(None) => Err(unauthorized_response()),
+        Err(_) => Err(auth_unavailable_response()),
     }
 }
 
@@ -83,8 +80,7 @@ pub(super) async fn audit(
 }
 
 /// Enforces [`required_role`] on every authenticated API request and audits
-/// each change. A request without a valid session passes through: its
-/// handler answers 401, so the authentication contract stays where it is.
+/// each change. Missing credentials or failed principal lookups fail closed.
 /// Reads any session may make skip the principal lookup entirely.
 pub async fn authorize_and_audit(
     State(state): State<Arc<AppState>>,
@@ -92,7 +88,13 @@ pub async fn authorize_and_audit(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_string();
-    if !path.starts_with("/api/v1/") || path == "/api/v1/auth/login" {
+    if !path.starts_with("/api/v1/")
+        || path == "/api/v1/auth/login"
+        || request
+            .extensions()
+            .get::<axum::extract::MatchedPath>()
+            .is_some_and(|matched| matched.as_str() == "/api/{*path}")
+    {
         return next.run(request).await;
     }
     let method = request.method().clone();
@@ -100,29 +102,37 @@ pub async fn authorize_and_audit(
     if needed == Role::Viewer && is_read(&method) {
         return next.run(request).await;
     }
-    let Ok((_, principal)) = session_principal(&state, request.headers()).await else {
-        return next.run(request).await;
+    let principal = match session_principal(&state, request.headers()).await {
+        Ok((_, principal)) => principal,
+        Err(response) => return response,
     };
     let acting = principal.effective_role();
-    if acting < needed {
-        if !is_read(&method) {
-            audit(&state, &principal, method.as_str(), &path, 403).await;
-        }
-        return forbidden(needed, acting);
+    if is_read(&method) {
+        return if acting < needed {
+            forbidden(needed, acting)
+        } else {
+            next.run(request).await
+        };
     }
-    let response = next.run(request).await;
-    // Logout is recorded too: it is a change to who holds access.
-    if !is_read(&method) {
-        audit(
-            &state,
-            &principal,
-            method.as_str(),
-            &path,
-            response.status().as_u16(),
-        )
-        .await;
-    }
-    response
+    state
+        .complete_mutation(move |state| async move {
+            if acting < needed {
+                audit(&state, &principal, method.as_str(), &path, 403).await;
+                return forbidden(needed, acting);
+            }
+            let response = next.run(request).await;
+            // Logout is recorded too: it is a change to who holds access.
+            audit(
+                &state,
+                &principal,
+                method.as_str(),
+                &path,
+                response.status().as_u16(),
+            )
+            .await;
+            response
+        })
+        .await
 }
 
 /// `GET /api/v1/auth/me`: who this session is and the role it acts as.

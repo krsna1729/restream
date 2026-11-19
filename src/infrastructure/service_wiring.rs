@@ -25,18 +25,18 @@ use restream_engine::recording::RecordingMetadataReporter;
 ///
 /// Every service it builds shares one ingest admission index, so a catalog
 /// write through any of them refreshes the index the ingest listeners read.
-pub struct SqliteServiceFactory<'pool> {
-    db: &'pool SqlitePool,
+pub struct SqliteServiceFactory {
+    db: DeadlineDb,
     lifecycle: DeadlineDb,
     catalog_auth: Arc<CatalogAuth>,
     recording_metadata: std::sync::OnceLock<RecordingMetadataReporter>,
 }
 
-impl<'pool> SqliteServiceFactory<'pool> {
+impl SqliteServiceFactory {
     /// The index starts empty; production startup fills it with
     /// [`CatalogAuth::load`] before any listener starts. Its reloads and the
     /// recording catalog writer use `db` under the shared-loop deadline.
-    pub fn new(db: &'pool SqlitePool) -> Self {
+    pub fn new(db: &SqlitePool) -> Self {
         Self::with_lifecycle_db(
             db,
             DeadlineDb::new(db.clone(), crate::db::SHARED_LOOP_DEADLINE),
@@ -46,7 +46,13 @@ impl<'pool> SqliteServiceFactory<'pool> {
     /// As [`Self::new`], with the admission index reloading from and the
     /// recording catalog writer writing through `lifecycle` (production:
     /// the lifecycle pool, which API load cannot exhaust).
-    pub fn with_lifecycle_db(db: &'pool SqlitePool, lifecycle: DeadlineDb) -> Self {
+    pub fn with_lifecycle_db(db: &SqlitePool, lifecycle: DeadlineDb) -> Self {
+        Self::with_databases(DeadlineDb::api(db.clone()), lifecycle)
+    }
+
+    /// Uses the supplied API executor throughout the service graph while
+    /// keeping admission reloads and recording metadata on `lifecycle`.
+    pub fn with_databases(db: DeadlineDb, lifecycle: DeadlineDb) -> Self {
         Self {
             db,
             catalog_auth: CatalogAuth::new(Arc::new(SqliteCatalogSource::new(lifecycle.clone()))),
@@ -77,6 +83,7 @@ impl<'pool> SqliteServiceFactory<'pool> {
         let settings_service = self.settings_service_with(pipeline_service.clone());
 
         AppServices {
+            db: self.db.clone(),
             pipeline_input_service,
             recirculation_service,
             auth_service: self.auth_service(),

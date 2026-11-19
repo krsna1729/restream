@@ -8,8 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::db::DeadlineDb;
 use serde::Serialize;
-use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
 use crate::application::capacity::CapacitySnapshot;
@@ -236,7 +236,7 @@ impl FleetHistory {
 pub async fn run_fleet_sampler(
     history: Arc<FleetHistory>,
     hub: Arc<StateHub>,
-    pool: SqlitePool,
+    db: DeadlineDb,
     engine: Arc<MediaEngine>,
     config: Arc<AppConfig>,
     interval: Duration,
@@ -252,7 +252,7 @@ pub async fn run_fleet_sampler(
             () = shutdown.cancelled() => return,
             _ = ticks.tick() => {}
         }
-        hub.refresh_on_demand(&pool, &engine).await;
+        hub.refresh_on_demand(&db, &engine).await;
         let capacity = crate::application::capacity::capacity_snapshot(&engine, &config).await;
         let at_ms = MediaEngine::now_epoch_ms();
         let mut sample = hub

@@ -207,15 +207,13 @@ async fn file_pools() -> (SqlitePool, SqlitePool, std::path::PathBuf) {
 
 fn scheduler_state(pool: &SqlitePool) -> Arc<api::AppState> {
     scheduler_state_with(
-        pool,
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(pool).compose(),
     )
 }
 
-fn scheduler_state_with(pool: &SqlitePool, services: api::AppServices) -> Arc<api::AppState> {
+fn scheduler_state_with(services: api::AppServices) -> Arc<api::AppState> {
     Arc::new(api::AppState::test_new(
         services,
-        pool.clone(),
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
@@ -261,8 +259,8 @@ impl restream::application::ports::IngestLookup for StalledIngestLookup {
     }
 }
 
-async fn last_result(pool: &SqlitePool, id: &str) -> Option<String> {
-    schedules::get(pool, id, chrono::Utc::now().timestamp_millis())
+async fn last_result(db: &db::DeadlineDb, id: &str) -> Option<String> {
+    schedules::get(db, id, chrono::Utc::now().timestamp_millis())
         .await
         .unwrap()
         .last_result
@@ -318,7 +316,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         ),
     ] {
         schedules::create(
-            &pool,
+            &db::DeadlineDb::api(pool.clone()),
             id,
             &schedules::ScheduleDraft {
                 pipeline_id: pipeline.to_string(),
@@ -338,17 +336,17 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
     services.file_ingest_service = restream::application::services::FileIngestService::with_ports(
         Arc::new(StalledIngestLookup),
-        Arc::new(sqlite_ports::SqliteIngestLookup::new(pool.clone())),
-        Arc::new(sqlite_ports::SqlitePipelineStore::new(pool.clone())),
+        Arc::new(sqlite_ports::SqliteIngestLookup::new(services.db.clone())),
+        Arc::new(sqlite_ports::SqlitePipelineStore::new(services.db.clone())),
         Arc::new(pipeline_input_store::SqlitePipelineInputStore::new(
-            pool.clone(),
+            services.db.clone(),
         )),
         services.pipeline_service.clone(),
     );
 
     let stop = tokio_util::sync::CancellationToken::new();
     let mut scheduler = tokio::spawn(api::schedules::run_scheduler(
-        scheduler_state_with(&pool, services),
+        scheduler_state_with(services),
         db::DeadlineDb::new(lifecycle, Duration::from_millis(200)),
         Duration::from_secs(1),
         Duration::from_secs(1),
@@ -357,7 +355,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     // Both are due at the tick at 1 s; B must run long before its grace.
     let b = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            if let Some(result) = last_result(&pool, "sch_b").await
+            if let Some(result) = last_result(&db::DeadlineDb::api(pool.clone()), "sch_b").await
                 && result != "running"
             {
                 return result;
@@ -369,7 +367,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     // A's deadline is 1 s after its tick.
     let a = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let Some(result) = last_result(&pool, "sch_a").await
+            if let Some(result) = last_result(&db::DeadlineDb::api(pool.clone()), "sch_a").await
                 && result.starts_with("running: ")
             {
                 return result;
@@ -387,7 +385,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     )
     .await;
     scheduler.abort();
-    let interrupted = last_result(&pool, "sch_a").await;
+    let interrupted = last_result(&db::DeadlineDb::api(pool.clone()), "sch_a").await;
     let _ = std::fs::remove_dir_all(dir);
     assert_eq!(
         b.ok().as_deref(),
@@ -430,7 +428,7 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
     .unwrap();
     let now = chrono::Utc::now().timestamp_millis();
     schedules::create(
-        &pool,
+        &db::DeadlineDb::api(pool.clone()),
         "sch_lock",
         &schedules::ScheduleDraft {
             pipeline_id: "pipe".to_string(),
@@ -467,10 +465,14 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
 
     let finished = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let result = schedules::get(&pool, "sch_lock", chrono::Utc::now().timestamp_millis())
-                .await
-                .unwrap()
-                .last_result;
+            let result = schedules::get(
+                &db::DeadlineDb::api(pool.clone()),
+                "sch_lock",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            .unwrap()
+            .last_result;
             if result.as_deref().is_some_and(|result| result != "running") {
                 return result;
             }
@@ -481,10 +483,14 @@ async fn an_occurrence_whose_running_record_waits_on_the_write_lock_runs_once() 
     // Another tick: a second run would show up as a second audit row, and a
     // late "running" record would replace the outcome.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
-    let settled = schedules::get(&pool, "sch_lock", chrono::Utc::now().timestamp_millis())
-        .await
-        .unwrap()
-        .last_result;
+    let settled = schedules::get(
+        &db::DeadlineDb::api(pool.clone()),
+        "sch_lock",
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap()
+    .last_result;
     let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE path = ?")
         .bind("/api/v1/schedules/sch_lock")
         .fetch_one(&pool)

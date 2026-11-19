@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use sqlx::SqlitePool;
+use crate::db::DeadlineDb;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -217,13 +217,23 @@ impl StateHub {
     }
 
     /// Rebuilds from the rows and the engine and publishes the change.
+    /// The deadline includes waiting for another refresh, not just SQL, so
+    /// queued readers cannot accumulate another full deadline per rebuild.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "`refreshing` serializes rebuilds across the read transaction by design; only observability readers wait on it"
     )]
-    pub async fn refresh(&self, pool: &SqlitePool, engine: &MediaEngine) {
-        let mut last = self.refreshing.lock().await;
-        self.rebuild(&mut last, pool, engine).await;
+    pub async fn refresh(&self, db: &DeadlineDb, engine: &MediaEngine) {
+        if let Err(error) = db
+            .bound(async {
+                let mut last = self.refreshing.lock().await;
+                self.rebuild(&mut last, db, engine).await;
+                Ok::<(), crate::db::DeadlineError>(())
+            })
+            .await
+        {
+            tracing::warn!(err = %error, "runtime state refresh exceeded its deadline");
+        }
     }
 
     /// [`Self::refresh`] for a request: reuses the current projection when
@@ -234,14 +244,22 @@ impl StateHub {
         clippy::await_holding_invalid_type,
         reason = "`refreshing` serializes rebuilds across the read transaction by design; only observability readers wait on it"
     )]
-    pub async fn refresh_on_demand(&self, pool: &SqlitePool, engine: &MediaEngine) {
-        let mut last = self.refreshing.lock().await;
-        if !last.covers(Instant::now(), self.changes.load(Ordering::Acquire)) {
-            self.rebuild(&mut last, pool, engine).await;
+    pub async fn refresh_on_demand(&self, db: &DeadlineDb, engine: &MediaEngine) {
+        if let Err(error) = db
+            .bound(async {
+                let mut last = self.refreshing.lock().await;
+                if !last.covers(Instant::now(), self.changes.load(Ordering::Acquire)) {
+                    self.rebuild(&mut last, db, engine).await;
+                }
+                Ok::<(), crate::db::DeadlineError>(())
+            })
+            .await
+        {
+            tracing::warn!(err = %error, "runtime state refresh exceeded its deadline");
         }
     }
 
-    async fn rebuild(&self, last: &mut LastRefresh, pool: &SqlitePool, engine: &MediaEngine) {
+    async fn rebuild(&self, last: &mut LastRefresh, db: &DeadlineDb, engine: &MediaEngine) {
         // Read before the rows: a change marked during the rebuild is newer
         // than this projection and must not be taken as covered by it.
         let changes = self.changes.load(Ordering::Acquire);
@@ -250,45 +268,30 @@ impl StateHub {
         // the projection (an input whose pipeline is not in it yet) and cost
         // a second delta for one change. It only reads, and it ends before
         // the engine is read.
-        let mut snapshot = match pool.begin().await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                tracing::warn!(err = %error, "DB error opening a read for runtime state");
-                return;
-            }
-        };
-        let pipelines = match crate::db::list_pipelines(&mut *snapshot).await {
+        let (pipelines, outputs, inputs, host) = match db
+            .read(|pool| async move {
+                let mut snapshot = pool.begin().await?;
+                let pipelines = crate::db::list_pipelines(&mut *snapshot).await?;
+                let outputs = crate::db::list_outputs(&mut *snapshot)
+                    .await?
+                    .into_iter()
+                    .map(crate::application::outputs::from_record)
+                    .collect::<Vec<_>>();
+                let inputs = crate::db::list_all_pipeline_inputs(&mut *snapshot).await?;
+                let host = crate::application::services::ingest_host_or_default(
+                    crate::db::get_ingest_host(&mut *snapshot).await?,
+                );
+                drop(snapshot);
+                Ok::<_, sqlx::Error>((pipelines, outputs, inputs, host))
+            })
+            .await
+        {
             Ok(rows) => rows,
             Err(error) => {
-                tracing::warn!(err = %error, "DB error reading pipelines for runtime state");
+                tracing::warn!(err = %error, "DB error reading runtime state");
                 return;
             }
         };
-        let outputs = match crate::db::list_outputs(&mut *snapshot).await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(crate::application::outputs::from_record)
-                .collect::<Vec<_>>(),
-            Err(error) => {
-                tracing::warn!(err = %error, "DB error reading outputs for runtime state");
-                return;
-            }
-        };
-        let inputs = match crate::db::list_all_pipeline_inputs(&mut *snapshot).await {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::warn!(err = %error, "DB error reading inputs for runtime state");
-                return;
-            }
-        };
-        let host = match crate::db::get_ingest_host(&mut *snapshot).await {
-            Ok(host) => crate::application::services::ingest_host_or_default(host),
-            Err(error) => {
-                tracing::warn!(err = %error, "DB error reading the ingest host for runtime state");
-                return;
-            }
-        };
-        drop(snapshot);
         let endpoints = IngestEndpoints {
             host,
             ports: self.ports,
@@ -355,11 +358,61 @@ impl StateHub {
 /// demand.
 pub async fn run_projector(
     hub: Arc<StateHub>,
-    pool: SqlitePool,
+    db: DeadlineDb,
     engine: Arc<MediaEngine>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
-    hub.schedule_rebuilds(interval, &shutdown, || hub.refresh(&pool, &engine))
+    hub.schedule_rebuilds(interval, &shutdown, || hub.refresh(&db, &engine))
         .await;
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Intentionally hold the refresh gate to prove its deadline; lock order is refreshing -> current, with no media lock"
+    )]
+    async fn a_queued_refresh_expires_without_replacing_the_published_projection() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_pipeline(&pool, "before", "Before", "key-before", None, None)
+            .await
+            .unwrap();
+        let db = DeadlineDb::api(pool.clone());
+        let engine = MediaEngine::new();
+        let hub = StateHub::new(crate::config::AppConfig::default().ports, 3);
+        hub.refresh(&db, &engine).await;
+        let before = hub.snapshot().await;
+        assert_eq!(before.pipelines[0].name, "Before");
+        let before = serde_json::to_value(before).unwrap();
+        crate::db::create_pipeline(&pool, "after", "After", "key-after", None, None)
+            .await
+            .unwrap();
+        hub.mark_changed();
+        let held = hub.refreshing.lock().await;
+        let short = DeadlineDb::new(pool, Duration::from_millis(30));
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            hub.refresh_on_demand(&short, &engine),
+        )
+        .await
+        .expect("waiting behind another refresh must share the read deadline");
+        assert_eq!(serde_json::to_value(hub.snapshot().await).unwrap(), before);
+        drop(held);
+        hub.refresh_on_demand(&db, &engine).await;
+        assert_eq!(
+            hub.snapshot()
+                .await
+                .pipelines
+                .iter()
+                .find(|pipeline| pipeline.id == "after")
+                .unwrap()
+                .name,
+            "After"
+        );
+    }
 }

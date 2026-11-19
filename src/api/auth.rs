@@ -14,8 +14,9 @@ use tracing::warn;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, MAX_PASSWORD_LEN, MIN_DASHBOARD_PASSWORD_LEN,
-    SESSION_MAX_AGE_SECONDS, check_field_len, clear_session_cookie, get_session_token_from_headers,
-    hash_session_token, make_session_cookie, to_hex,
+    SESSION_MAX_AGE_SECONDS, auth_unavailable_response, check_field_len, clear_session_cookie,
+    get_session_token_from_headers, hash_session_token, make_session_cookie,
+    require_authenticated_token, to_hex,
 };
 use crate::application::services::team_service::{BUILTIN_ADMIN_ID, BUILTIN_ADMIN_USERNAME};
 use restream_engine::security::RateLimitScope;
@@ -53,18 +54,6 @@ fn incorrect_password_response() -> Response {
         Json(serde_json::json!({"error": "Incorrect password"})),
     )
         .into_response()
-}
-
-// Some authenticated auth endpoints need the raw session token so they can keep
-// the current session alive while rotating or pruning the rest.
-async fn require_authenticated_token(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<String, Response> {
-    match get_session_token_from_headers(headers) {
-        Some(token) if state.is_authenticated(&token).await => Ok(token),
-        _ => Err((StatusCode::UNAUTHORIZED, "Unauthorized").into_response()),
-    }
 }
 
 /// Derives a salted password hash for dashboard auth storage.
@@ -184,17 +173,19 @@ pub async fn login_post_handler(
     } else {
         match state.team_service.login_candidate(&username).await {
             Ok(Some(stored)) => Some(stored),
-            _ => {
+            Ok(None) => {
                 state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
                 return incorrect_password_response();
             }
+            Err(_) => return auth_unavailable_response(),
         }
     };
     let stored_hash = match &member {
         Some(stored) => stored.password_hash.clone(),
         None => match state.auth_service.get_password_hash().await {
             Ok(Some(hash)) => hash,
-            _ => return incorrect_password_response(),
+            Ok(None) => return incorrect_password_response(),
+            Err(_) => return auth_unavailable_response(),
         },
     };
 
@@ -206,57 +197,61 @@ pub async fn login_post_handler(
         state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
         return incorrect_password_response();
     }
-    // Session creation crosses the transport/application boundary: the cookie
-    // stores the raw token while persistence and cache state only keep its hash.
-    use rand::RngExt;
-    let mut token_bytes = [0u8; 32];
-    rand::rng().fill(&mut token_bytes);
-    let token = to_hex(&token_bytes);
-    let token_hash = hash_session_token(&token);
+    let member_id = member.map(|stored| stored.user.id);
+    state
+        .complete_mutation(move |state| async move {
+            // Session creation crosses the transport/application boundary: the cookie
+            // stores the raw token while persistence and cache state only keep its hash.
+            use rand::RngExt;
+            let mut token_bytes = [0u8; 32];
+            rand::rng().fill(&mut token_bytes);
+            let token = to_hex(&token_bytes);
+            let token_hash = hash_session_token(&token);
 
-    let ts = chrono::Utc::now().timestamp_millis();
-    if state
-        .auth_service
-        .create_session(&token_hash, ts)
+            let ts = chrono::Utc::now().timestamp_millis();
+            if state
+                .auth_service
+                .create_session(&token_hash, ts)
+                .await
+                .is_err()
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create session",
+                )
+                    .into_response();
+            }
+
+            if member_id.is_some()
+                && state
+                    .team_service
+                    .bind_session(&token_hash, member_id.as_deref())
+                    .await
+                    .is_err()
+            {
+                // An unbound session would be the built-in admin's: never leave one.
+                let _ = state.auth_service.delete_session(&token_hash).await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create session",
+                )
+                    .into_response();
+            }
+            state.add_session_hash(token_hash).await;
+
+            let cookie = make_session_cookie(
+                &token,
+                SESSION_MAX_AGE_SECONDS,
+                state.secure_session_cookies(),
+            );
+            (
+                StatusCode::OK,
+                [(header::SET_COOKIE, cookie)],
+                Json(serde_json::json!({"ok": true})),
+            )
+                .into_response()
+        })
         .await
-        .is_err()
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to create session",
-        )
-            .into_response();
-    }
-
-    let member_id = member.as_ref().map(|stored| stored.user.id.as_str());
-    if member_id.is_some()
-        && state
-            .team_service
-            .bind_session(&token_hash, member_id)
-            .await
-            .is_err()
-    {
-        // An unbound session would be the built-in admin's: never leave one.
-        let _ = state.auth_service.delete_session(&token_hash).await;
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to create session",
-        )
-            .into_response();
-    }
-    state.add_session_hash(token_hash).await;
-
-    let cookie = make_session_cookie(
-        &token,
-        SESSION_MAX_AGE_SECONDS,
-        state.secure_session_cookies(),
-    );
-    (
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
-        Json(serde_json::json!({"ok": true})),
-    )
-        .into_response()
 }
 
 /// Deletes the current dashboard session from both the in-memory cache and the
@@ -312,7 +307,8 @@ pub async fn change_password_handler(
 
     let principal = match state.team_service.principal(&token_hash).await {
         Ok(Some(principal)) => principal,
-        _ => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+        Ok(None) => return super::state::unauthorized_response(),
+        Err(_) => return auth_unavailable_response(),
     };
     if principal.user_id != BUILTIN_ADMIN_ID {
         return change_member_password(
@@ -327,13 +323,14 @@ pub async fn change_password_handler(
 
     let stored_hash = match state.auth_service.get_password_hash().await {
         Ok(Some(hash)) => hash,
-        _ => {
+        Ok(None) => {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({"error": "Current password is incorrect"})),
             )
                 .into_response();
         }
+        Err(_) => return auth_unavailable_response(),
     };
 
     let verified =
@@ -404,8 +401,10 @@ async fn change_member_password(
         )
             .into_response()
     };
-    let Ok(Some(stored)) = state.team_service.stored_user(user_id).await else {
-        return incorrect();
+    let stored = match state.team_service.stored_user(user_id).await {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return incorrect(),
+        Err(_) => return auth_unavailable_response(),
     };
     let stored_hash = stored.password_hash;
     let verified =

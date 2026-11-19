@@ -444,9 +444,15 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
     ));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(pool.clone())),
-        Arc::new(SqliteMetaStore::new(pool.clone())),
-        Arc::new(SqliteRecordingStore::new(pool.clone())),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
+        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         sqlite_pipeline_service(&pool),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
@@ -653,9 +659,15 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
     let ingest_store = Arc::new(ConcurrentWriteIngestStore::new(ingest, "sk-rotated"));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(pool.clone())),
-        Arc::new(SqliteMetaStore::new(pool.clone())),
-        Arc::new(SqliteRecordingStore::new(pool.clone())),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
+        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         sqlite_pipeline_service(&pool),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
@@ -687,9 +699,13 @@ async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(pool.clone())),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         Arc::new(FailingMetaWriter),
-        Arc::new(SqliteRecordingStore::new(pool.clone())),
+        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         sqlite_pipeline_service(&pool),
         sqlite_ingest_service(&pool),
     );
@@ -721,9 +737,13 @@ async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(pool.clone())),
+        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         Arc::new(FailingMetaWriter),
-        Arc::new(SqliteRecordingStore::new(pool.clone())),
+        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
+            pool.clone(),
+        ))),
         sqlite_pipeline_service(&pool),
         sqlite_ingest_service(&pool),
     );

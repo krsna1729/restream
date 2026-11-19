@@ -27,6 +27,8 @@ mod agent_panels;
 mod auth;
 #[path = "api/config.rs"]
 mod config;
+#[path = "api/database_resilience.rs"]
+mod database_resilience;
 #[path = "api/diagnostics.rs"]
 mod diagnostics;
 #[path = "api/health.rs"]
@@ -79,7 +81,6 @@ async fn test_state() -> (Arc<api::AppState>, SqlitePool, Arc<MediaEngine>) {
 
     let state = Arc::new(api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
@@ -106,7 +107,6 @@ async fn test_app_with_secure_cookies() -> axum::Router {
 
     let mut state = api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
@@ -146,7 +146,6 @@ async fn authenticated_app_with_temp_media()
 
     let state = Arc::new(api::AppState::test_new_with_media_dir(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
@@ -187,7 +186,6 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
 
     let state = Arc::new(api::AppState::test_new_with_media_dir(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         security,
         ingest_policy_store,
         sessions,

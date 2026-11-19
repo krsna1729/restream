@@ -37,7 +37,6 @@ pub async fn authenticated_app_with_engine() -> (axum::Router, SqlitePool, Strin
     let engine = Arc::new(MediaEngine::new());
     let state = Arc::new(api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
-        pool.clone(),
         security,
         policies,
         sessions,

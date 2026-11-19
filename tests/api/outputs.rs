@@ -269,7 +269,7 @@ async fn pipeline_recirculation_output_lifecycle_uses_api_status_and_cleanup() {
             .unwrap()
             .is_none()
     );
-    converge_once(&pool, &engine).await;
+    converge_once(&db::DeadlineDb::api(pool.clone()), &engine).await;
     assert!(token.is_cancelled());
 }
 
@@ -588,7 +588,7 @@ async fn delete_output_cancels_egress() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // The row is gone; the next reconcile pass stops its egress.
-    converge_once(&pool, &engine).await;
+    converge_once(&db::DeadlineDb::api(pool.clone()), &engine).await;
     assert!(token.is_cancelled(), "deleting output should cancel egress");
 }
 
@@ -615,14 +615,9 @@ async fn delete_output_returns_not_found_for_missing_row() {
 }
 
 /// One reconcile pass over the persisted topology, as the reconciler runs it.
-async fn converge_once(pool: &SqlitePool, engine: &MediaEngine) {
-    let outputs = restream::application::outputs::list_outputs(pool)
+async fn converge_once(db: &db::DeadlineDb, engine: &MediaEngine) {
+    let outputs = restream::application::outputs::list_outputs(db)
         .await
         .unwrap();
-    restream::application::topology::converge_topology(
-        &restream::db::DeadlineDb::new(pool.clone(), restream::db::SHARED_LOOP_DEADLINE),
-        engine,
-        &outputs,
-    )
-    .await;
+    restream::application::topology::converge_topology(db, engine, &outputs).await;
 }

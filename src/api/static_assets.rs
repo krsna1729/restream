@@ -12,7 +12,7 @@ use rust_embed::RustEmbed;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-use super::state::{AppState, get_session_token_from_headers, request_is_authenticated, to_hex};
+use super::state::{AppState, require_authenticated_token, to_hex};
 
 #[derive(RustEmbed)]
 #[folder = "public/"]
@@ -168,10 +168,10 @@ fn cache_control(path: &str) -> HeaderValue {
 pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     // The login page is public, but authenticated sessions should land in the
     // app shell instead of seeing the sign-in screen again.
-    if let Some(token) = get_session_token_from_headers(&headers)
-        && state.is_authenticated(&token).await
-    {
-        return Redirect::to("./").into_response();
+    match require_authenticated_token(&state, &headers).await {
+        Ok(_) => return Redirect::to("./").into_response(),
+        Err(response) if response.status() == StatusCode::UNAUTHORIZED => {}
+        Err(response) => return response,
     }
     serve_embedded_with_headers("login.html", &headers).into_response()
 }
@@ -215,14 +215,22 @@ pub async fn spa_fallback_handler(
     }
     if request_targets_embedded_asset(path) {
         if request_targets_authenticated_html(path)
-            && !request_is_authenticated(&state, &headers).await
+            && let Err(response) = require_authenticated_token(&state, &headers).await
         {
-            return login_redirect_response();
+            return if response.status() == StatusCode::UNAUTHORIZED {
+                login_redirect_response()
+            } else {
+                response
+            };
         }
         return serve_embedded_with_headers(path, &headers).into_response();
     }
-    if !request_is_authenticated(&state, &headers).await {
-        return login_redirect_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return if response.status() == StatusCode::UNAUTHORIZED {
+            login_redirect_response()
+        } else {
+            response
+        };
     }
     serve_embedded_with_headers("index.html", &headers).into_response()
 }

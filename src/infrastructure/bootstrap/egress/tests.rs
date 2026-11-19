@@ -71,7 +71,7 @@ async fn a_late_retries_exhausted_mark_does_not_swallow_the_next_start() {
     mark_lands(&egress, &api).await;
     egress.reconcile(&outputs(&api).await).await;
 
-    crate::application::outputs::request_start(&api, "pipe", OUTPUT)
+    crate::application::outputs::request_start(&DeadlineDb::api(api.clone()), "pipe", OUTPUT)
         .await
         .unwrap();
     egress.reconcile(&outputs(&api).await).await;
@@ -218,7 +218,7 @@ async fn an_output_whose_planning_panics_leaves_the_others_planned_in_the_same_p
     let _a = live_output(&engine, &pool, "a", "sink://local/discard").await;
     let _b = live_output(&engine, &pool, "b", "sink://local/discard").await;
     let _c = live_output(&engine, &pool, "c", "sink://local/discard").await;
-    crate::application::outputs::request_stop(&pool, "b", "out-b")
+    crate::application::outputs::request_stop(&DeadlineDb::api(pool.clone()), "b", "out-b")
         .await
         .unwrap();
     let egress = egress(&engine, DeadlineDb::new(pool.clone(), SHARED_LOOP_DEADLINE))
@@ -227,10 +227,10 @@ async fn an_output_whose_planning_panics_leaves_the_others_planned_in_the_same_p
     assert!(output_starts_within(&engine, "out-a", Duration::from_secs(2)).await);
     assert!(output_starts_within(&engine, "out-c", Duration::from_secs(2)).await);
 
-    crate::application::outputs::request_start(&pool, "b", "out-b")
+    crate::application::outputs::request_start(&DeadlineDb::api(pool.clone()), "b", "out-b")
         .await
         .unwrap();
-    crate::application::outputs::request_stop(&pool, "c", "out-c")
+    crate::application::outputs::request_stop(&DeadlineDb::api(pool.clone()), "c", "out-c")
         .await
         .unwrap();
     PANIC_FOR_A.store(true, Ordering::SeqCst);

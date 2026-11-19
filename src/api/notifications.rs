@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::error::ApiError;
-use super::state::{AppState, get_session_token_from_headers, hash_session_token, to_hex};
+use super::state::{AppState, to_hex};
 use crate::application::notify::{
     AlertBrief, ChannelKind, EventKind, NotifyEvent, NotifySeverity, PushSubscription,
 };
@@ -19,20 +19,9 @@ use crate::application::services::notify_service::ChannelDraft;
 
 /// The session's member name, or the handler's 401.
 async fn member(state: &AppState, headers: &HeaderMap) -> Result<String, Response> {
-    let unauthorized = || (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-    let token = get_session_token_from_headers(headers).ok_or_else(unauthorized)?;
-    if !state.is_authenticated(&token).await {
-        return Err(unauthorized());
-    }
-    match state
-        .team_service
-        .principal(&hash_session_token(&token))
+    super::team::session_principal(state, headers)
         .await
-    {
-        Ok(Some(principal)) => Ok(principal.username),
-        Ok(None) => Err(unauthorized()),
-        Err(error) => Err(ApiError::from(error).into_response()),
-    }
+        .map(|(_, principal)| principal.username)
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -247,13 +236,17 @@ pub async fn push_key_handler(State(state): State<Arc<AppState>>, headers: Heade
     if let Err(response) = member(&state, &headers).await {
         return response;
     }
-    result(
-        state
-            .notify_service
-            .push_public_key()
-            .await
-            .map(|key| serde_json::json!({ "publicKey": key })),
-    )
+    state
+        .complete_mutation(move |state| async move {
+            result(
+                state
+                    .notify_service
+                    .push_public_key()
+                    .await
+                    .map(|key| serde_json::json!({ "publicKey": key })),
+            )
+        })
+        .await
 }
 
 /// `GET /api/v1/notifications/push/subscriptions`: this member's browsers.

@@ -657,18 +657,20 @@ fn apply_security_headers<S: Clone + Send + Sync + 'static>(router: Router<S>) -
 /// Constructs the externally exposed application router with shared transport
 /// layers and the concrete application state attached.
 pub fn create_router(state: Arc<AppState>) -> Router {
-    apply_standard_layers(create_app_router())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            wake_reconciler_after_mutation,
-        ))
-        // Outermost of the two: a request the role policy refuses never
-        // reaches a handler, so it never wakes the reconciler either.
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            super::team::authorize_and_audit,
-        ))
-        .with_state(state)
+    apply_standard_layers(
+        create_app_router()
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                wake_reconciler_after_mutation,
+            ))
+            // Outermost of the two: a request the role policy refuses never
+            // reaches a handler, so it never wakes the reconciler either.
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                super::team::authorize_and_audit,
+            )),
+    )
+    .with_state(state)
 }
 
 /// The HLS push ingest surface. Kept out of `create_router`'s body limit and

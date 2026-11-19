@@ -17,8 +17,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::db::DeadlineDb;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
 use crate::application::fleet_history::is_delivering;
@@ -491,7 +491,7 @@ pub fn thin(samples: Vec<FlightSample>, max: usize) -> Vec<FlightSample> {
 /// to `max_points`. `None` when neither knows the pipeline.
 pub async fn trace_window(
     recorder: &FlightRecorder,
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     pipeline_id: &str,
     since_ms: u64,
     until_ms: u64,
@@ -503,20 +503,26 @@ pub async fn trace_window(
     let mut oldest = memory.as_ref().map(|(from, _)| *from);
     if since_ms < detailed_from_ms {
         let to_i64 = |ms: u64| i64::try_from(ms).unwrap_or(i64::MAX);
-        if let Ok(rows) = crate::db::flight_repo::window(
-            pool,
-            pipeline_id,
-            to_i64(since_ms),
-            to_i64(detailed_from_ms.min(until_ms)),
-        )
-        .await
+        if let Ok(rows) = db
+            .read(|pool| {
+                crate::db::flight_repo::window(
+                    pool,
+                    pipeline_id,
+                    to_i64(since_ms),
+                    to_i64(detailed_from_ms.min(until_ms)),
+                )
+            })
+            .await
         {
             samples.extend(
                 rows.into_iter()
                     .filter_map(|(_, json)| serde_json::from_str::<FlightSample>(&json).ok()),
             );
         }
-        if let Ok(Some(first)) = crate::db::flight_repo::oldest(pool, pipeline_id).await {
+        if let Ok(Some(first)) = db
+            .read(|pool| crate::db::flight_repo::oldest(pool, pipeline_id))
+            .await
+        {
             let first = u64::try_from(first).unwrap_or(0);
             oldest = Some(oldest.map_or(first, |kept| kept.min(first)));
         }
@@ -541,7 +547,7 @@ pub async fn trace_window(
 /// Persists the newest samples and drops what is older than `retention`.
 async fn persist(
     recorder: &FlightRecorder,
-    pool: &SqlitePool,
+    db: &DeadlineDb,
     now_ms: u64,
     retention: Duration,
     prune: bool,
@@ -554,16 +560,24 @@ async fn persist(
             Some((pipeline_id, i64::try_from(sample.at_ms).ok()?, json))
         })
         .collect();
-    if let Err(err) = crate::db::flight_repo::insert_batch(pool, &rows).await {
-        tracing::warn!(error = %err, "flight recorder: persisting samples failed");
-    }
-    if prune {
-        let before = now_ms.saturating_sub(retention.as_millis() as u64);
-        if let Err(err) =
-            crate::db::flight_repo::prune(pool, i64::try_from(before).unwrap_or(0)).await
-        {
-            tracing::warn!(error = %err, "flight recorder: pruning history failed");
-        }
+    if let Err(err) = db
+        .write(move |pool| async move {
+            if let Err(err) = crate::db::flight_repo::insert_batch(&pool, &rows).await {
+                tracing::warn!(error = %err, "flight recorder: persisting samples failed");
+            }
+            if prune {
+                let before = now_ms.saturating_sub(retention.as_millis() as u64);
+                if let Err(err) =
+                    crate::db::flight_repo::prune(&pool, i64::try_from(before).unwrap_or(0)).await
+                {
+                    tracing::warn!(error = %err, "flight recorder: pruning history failed");
+                }
+            }
+            Ok::<(), sqlx::Error>(())
+        })
+        .await
+    {
+        tracing::warn!(error = %err, "flight recorder: persistence task failed");
     }
 }
 
@@ -772,7 +786,7 @@ async fn destination_readings(
 pub async fn run_flight_recorder(
     recorder: Arc<FlightRecorder>,
     hub: Arc<StateHub>,
-    pool: SqlitePool,
+    db: DeadlineDb,
     engine: Arc<MediaEngine>,
     interval: Duration,
     retention: Option<Duration>,
@@ -789,7 +803,7 @@ pub async fn run_flight_recorder(
             () = shutdown.cancelled() => return,
             _ = ticks.tick() => {}
         }
-        hub.refresh_on_demand(&pool, &engine).await;
+        hub.refresh_on_demand(&db, &engine).await;
         let probes = collect_probes(&hub, &engine, inspector.as_ref()).await;
         let now_ms = MediaEngine::now_epoch_ms();
         recorder.record(now_ms, probes);
@@ -803,7 +817,7 @@ pub async fn run_flight_recorder(
             // Prune about once a minute (every sixth persisted tick).
             persist(
                 &recorder,
-                &pool,
+                &db,
                 now_ms,
                 retention,
                 tick.is_multiple_of(FLIGHT_PERSIST_EVERY * 6),

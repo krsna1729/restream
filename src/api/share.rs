@@ -118,10 +118,16 @@ pub async fn watch_page_handler(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Response {
-    let Some(link) = state.share_links.resolve(&token, now_ms()).await else {
-        return embeddable((StatusCode::NOT_FOUND, Html(WATCH_GONE.to_string())).into_response());
+    let link = match state.share_links.resolve(&token, now_ms()).await {
+        Ok(Some(link)) => link,
+        Ok(None) => {
+            return embeddable(
+                (StatusCode::NOT_FOUND, Html(WATCH_GONE.to_string())).into_response(),
+            );
+        }
+        Err(_) => return embeddable(super::state::auth_unavailable_response()),
     };
-    state.share_links.count_view(&link.id).await;
+    drop(state.share_links.count_view(link.id));
     let title = state
         .file_ingest_service
         .get_pipeline(&link.pipeline_id)

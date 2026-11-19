@@ -43,6 +43,10 @@ use tokio::sync::Semaphore;
 /// its next pass.
 pub const SHARED_LOOP_DEADLINE: Duration = Duration::from_secs(3);
 
+/// API reads include pool acquisition, statements and busy retries in one
+/// budget. Writes still wait for their real outcome rather than this deadline.
+pub const API_READ_DEADLINE: Duration = Duration::from_secs(30);
+
 /// Writes on one executor that hold a connection at once; the rest wait for
 /// a permit without one.
 pub const WRITE_PERMITS: usize = 2;
@@ -91,6 +95,10 @@ pub struct DeadlineDb {
 }
 
 impl DeadlineDb {
+    pub fn api(pool: SqlitePool) -> Self {
+        Self::new(pool, API_READ_DEADLINE)
+    }
+
     pub fn new(pool: SqlitePool, deadline: Duration) -> Self {
         Self {
             pool,
@@ -140,6 +148,25 @@ impl DeadlineDb {
         })
         .await
         .unwrap_or_else(|_| Err(DeadlineError::Aborted.into()))
+    }
+
+    /// Admit optional background work only when a write lane is free. No
+    /// waiter is spawned on rejection; an admitted task owns its permit.
+    pub fn try_spawn_write<T, E, Fut>(
+        &self,
+        op: impl FnOnce(SqlitePool) -> Fut,
+    ) -> Option<tokio::task::JoinHandle<Result<T, E>>>
+    where
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        let permit = self.writes.clone().try_acquire_owned().ok()?;
+        let write = op(self.pool.clone());
+        Some(tokio::spawn(async move {
+            let _permit = permit;
+            write.await
+        }))
     }
 }
 
