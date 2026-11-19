@@ -248,6 +248,10 @@ async fn live_sibling_fault_gate_peer_panic() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn live_sibling_fault_gate_owner_fault() {
     // RTMP and SRT use independent Owners but share the production engine's
     // registries and release queue. A fatal SRT Owner cannot interrupt RTMP.

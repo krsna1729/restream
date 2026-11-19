@@ -111,6 +111,10 @@ struct ProcMemRollup {
     swap_kb: u64,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn sample_resource_window(
     env: &ResourceSweepEnv,
     stack: &mut ResourceSweepStack,

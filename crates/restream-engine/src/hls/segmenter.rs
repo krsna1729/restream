@@ -64,6 +64,10 @@ pub async fn start_hls_segmenter(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn run_hls_segmenter(
     pipeline_id: String,
     store: Arc<HlsStore>,

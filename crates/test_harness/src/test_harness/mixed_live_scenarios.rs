@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(in super::super) async fn run_mixed_anchor_config(
     env: &MixedEnv,
     api: &RampApi,

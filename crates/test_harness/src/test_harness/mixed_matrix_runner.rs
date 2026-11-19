@@ -25,6 +25,10 @@ pub(crate) use mixed_matrix_progress::{
     mixed_runtime_log_noise_matches,
 };
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
@@ -369,6 +373,10 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
     }))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn mixed_signal_correctness() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)

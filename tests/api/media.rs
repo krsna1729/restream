@@ -147,6 +147,10 @@ fn media_destination_path_allows_plain_name_under_relative_media_root() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn media_library_classifies_serves_and_deletes_files() {
     let (app, cookie, temp_dir, pool) = authenticated_app_with_temp_media().await;
     let recording_path = temp_dir.join("sample-recording.mp4");

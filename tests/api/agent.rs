@@ -535,6 +535,10 @@ async fn unknown_operation_answers_every_route_with_the_same_json_404() {
 
 #[cfg(feature = "agent-execution")]
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

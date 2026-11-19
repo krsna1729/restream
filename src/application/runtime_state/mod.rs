@@ -225,6 +225,10 @@ pub struct Rows<'a> {
 /// Projects every entity from its rows and the engine's runtime maps. Each
 /// engine map is read once, so the projection is consistent per map and
 /// costs one pass over the outputs.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: u32) -> Projection {
     let Rows {
         pipelines,

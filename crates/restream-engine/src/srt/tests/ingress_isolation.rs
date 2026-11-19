@@ -13,6 +13,10 @@ use srt_proto::wire::{ControlType, SrtPacket};
 use super::super::ingress_test_support::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn replayed_future_head_does_not_starve_a_shared_ingress_owner() {
     const WINDOW: u32 = 8192;
     const CHUNKS: usize = 400;

@@ -28,3 +28,8 @@ await-holding-invalid-types = [
   { path = "tokio::sync::OwnedMappedMutexGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
   { path = "restream_sync::keyed_lock::KeyedGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
 ]
+# `clippy::too_many_lines` (enabled in `[workspace.lints.clippy]`): the unit
+# too big to review is a function, not a file. Counts code lines only. A
+# pre-existing offender carries `#[expect(clippy::too_many_lines, reason)]`;
+# delete it when the function is split.
+too-many-lines-threshold = 150

@@ -257,6 +257,10 @@ pub(super) async fn check_ingest_stream_info(
     .with_issues(issues)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn check_publisher_transport(
     idx: u32,
     engine: &Arc<MediaEngine>,

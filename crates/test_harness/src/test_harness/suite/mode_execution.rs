@@ -131,6 +131,10 @@ async fn suite_run_parallel_batch(
     Ok(outcomes)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn suite_run() -> Result<Value, String> {
     let raw: Vec<String> = std::env::args().skip(2).collect();
     let (modes, preflight_only) = suite_selected_modes(&raw)?;

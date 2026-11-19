@@ -42,6 +42,10 @@ fn stage_snapshot(
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn stage_phase_table_is_consistent_for_status_graph_and_alerts() {
     let dependency = StageKey::new("pipe-stage-table", StageKind::source());
     let cases = vec![

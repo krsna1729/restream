@@ -120,6 +120,10 @@ async fn wait_for_recording_file(media_root: &Path, pipeline_name: &str) -> bool
     recording_file_exists(media_root, pipeline_name)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn run_ingest_lifecycle_case(
     api: &RampApi,
     ports: &TestPorts,

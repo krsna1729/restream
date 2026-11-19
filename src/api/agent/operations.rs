@@ -493,6 +493,10 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
 }
 
 #[cfg(feature = "agent-execution")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn verify_operation(
     state: &AppState,
     record: &restream_agent::execution::OperationRecord,

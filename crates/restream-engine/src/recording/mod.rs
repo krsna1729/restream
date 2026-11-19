@@ -461,6 +461,10 @@ async fn feed_recording(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub async fn start_recording(
     start: RecordingStart,
     ring_buffer: Arc<RingBuffer>,

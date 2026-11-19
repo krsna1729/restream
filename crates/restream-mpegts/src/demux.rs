@@ -625,6 +625,10 @@ impl TsDemuxer {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     fn parse_pmt(&mut self, payload: &[u8], pusi: bool) {
         let data = if pusi {
             self.pmt_buf.clear();

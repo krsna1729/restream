@@ -321,6 +321,10 @@ fn create_compressed_static_router() -> Router<Arc<AppState>> {
 
 /// Builds the complete dashboard router before transport-wide layers are
 /// applied, keeping route registration close to the public boundary list above.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn create_app_router() -> Router<Arc<AppState>> {
     // Keep the full route table in one place so the public dashboard surface is
     // easy to audit, even though individual handlers stay in smaller modules.

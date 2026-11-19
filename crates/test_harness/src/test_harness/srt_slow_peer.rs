@@ -88,6 +88,10 @@ async fn require_one_srt_shard(api: &RampApi, when: &str) -> Result<(), String> 
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn srt_slow_peer() -> Result<Value, String> {
     let healthy_count = env_u("SLOW_PEER_HEALTHY", 10) as usize;
     let watch = Duration::from_secs(env_u("SLOW_PEER_WATCH_SECS", 30));

@@ -15,6 +15,10 @@ use super::configured_media_root;
 
 /// Builds the dashboard/system metrics payload, with a summary mode that keeps
 /// only the fields needed by compact operator surfaces.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
     let (cpu_pct, total_mem, used_mem, core_count, engine) =
         crate::host::system_sampling::sampled_system(|sys| {

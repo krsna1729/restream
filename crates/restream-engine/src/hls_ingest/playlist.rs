@@ -202,6 +202,10 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
 /// Parse a playlist whose URIs a caller resolves (push uploads against their
 /// namespace, pull ingest against the remote playlist URL). The resolver gets
 /// each raw URI; `None` rejects it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub fn parse_with(
     bytes: &[u8],
     mut resolve: impl FnMut(&str) -> Option<String>,

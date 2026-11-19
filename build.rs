@@ -48,6 +48,10 @@ fn embed_toolchain_versions() {
     );
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn embed_rust_dependency_inventory() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let target = std::env::var("TARGET").expect("TARGET missing");

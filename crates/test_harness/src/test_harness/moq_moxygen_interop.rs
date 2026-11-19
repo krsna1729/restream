@@ -218,6 +218,10 @@ fn moxygen_relay_bin() -> Result<PathBuf, String> {
 
 /// Entry point for the `moq-moxygen-interop` command; it takes no options
 /// beyond the harness's own `--no-netns`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String> {
     let args = strip_netns_opt(args);
     if let Some(unknown) = args.first() {

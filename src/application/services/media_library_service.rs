@@ -164,6 +164,10 @@ impl MediaLibraryService {
 
     /// Lists visible media files and folds companion recording artifacts into a
     /// single response row when possible.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     pub async fn list_media_files(&self, media_dir: &str) -> Vec<MediaLibraryFile> {
         let mut entries = HashMap::<String, MediaDirEntry>::new();
         if let Ok(mut media_dir_entries) = tokio::fs::read_dir(media_dir).await {

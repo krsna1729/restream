@@ -7,6 +7,10 @@ use super::super::*;
 /// disconnect cleanup races the replacement. Expects the output to keep its
 /// sink connection, stay running without retry, and progress from the new
 /// publisher once its disconnect state clears.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn rapid_srt_replacement_preserves_egress(
     api: &mut RampApi,
     ports: &TestPorts,

@@ -233,6 +233,10 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
 }
 
 #[tokio::test]
+      #[expect(
+          clippy::too_many_lines,
+          reason = "predates the function-size limit (#147); split it before growing it"
+      )]
 async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
     let fixture = crate::test_fixtures::av_marker_transport_fixture("h265", true)
         .expect("multi-audio HEVC marker fixture");

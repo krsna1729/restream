@@ -116,6 +116,10 @@ struct Session {
     report: serde_json::Map<String, Value>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, String> {
     let started = Instant::now();
     let work_dir = std::env::var_os("WORK_DIR")

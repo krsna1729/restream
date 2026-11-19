@@ -1,5 +1,9 @@
 use super::*;
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn handle_session_results(
     session: &mut ServerSession,
     results: Vec<ServerSessionResult>,

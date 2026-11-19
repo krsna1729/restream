@@ -267,6 +267,10 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
 /// the canonical run shape, a clean tree, and bench binaries built from that
 /// same tree — so an accidental promotion is mechanically impossible.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn baseline_eligibility_requires_the_canonical_run_shape() {
     let canonical_run = || {
         json!({

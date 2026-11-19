@@ -110,6 +110,10 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
 }
 
 /// Everything `run_app` does once logging is up.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn serve(
     config: Arc<AppConfig>,
     pool: sqlx::SqlitePool,

@@ -97,6 +97,10 @@ fn external_output_stream_idx(
 ///
 /// Run an external FFmpeg stage using the shared input pump and output
 /// normalizer. This is the real `FfmpegStageBackend` implementation.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn run_external_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,

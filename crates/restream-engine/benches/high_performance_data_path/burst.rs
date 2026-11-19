@@ -35,6 +35,10 @@ use super::support::{PACKET_BYTES, RING_CAPACITY, packet};
 /// Condvar savings. The fix was `iter_custom` with a single Vec pre-warmed
 /// outside the loop, matching the real production code path. With that
 /// correction the batch variant measures 28.5 µs vs 37.6 µs — a 24% gain.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn bench_burst_mux_write(c: &mut Criterion) {
     let video_meta = VideoMeta {
         codec: "h264".into(),

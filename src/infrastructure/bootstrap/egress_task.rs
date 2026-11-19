@@ -141,6 +141,10 @@ impl EgressTask {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     pub(super) async fn run(self) {
         let url_scheme = OutputUrlScheme::from_url(&self.url);
         if !url_scheme.is_supported_output() {

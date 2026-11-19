@@ -582,6 +582,10 @@ async fn persist(
 }
 
 /// Reads one probe per pipeline from the engine and the runtime state.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn collect_probes(
     hub: &StateHub,
     engine: &MediaEngine,
