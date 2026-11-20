@@ -35,7 +35,10 @@ pub fn build_conversion_state_path(ts_path: &Path) -> PathBuf {
 }
 
 pub(super) fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    restream_domain::timestamp::rfc3339_utc(
+        std::time::SystemTime::now(),
+        restream_domain::timestamp::Precision::Seconds,
+    )
 }
 
 pub(super) async fn write_conversion_state(

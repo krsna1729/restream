@@ -46,7 +46,7 @@ futures-util = "0.3"
 rand = "0.10"
 sha2 = "0.11"
 md-5 = "0.11"
-chrono = { version = "0.4", features = ["serde"] }
+jiff = "1"
 tokio-util = { version = "0.7", features = ["codec"] }
 rml_rtmp = "0.8.0"
 arc-swap = "1"

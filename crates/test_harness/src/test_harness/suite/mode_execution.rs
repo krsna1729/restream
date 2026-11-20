@@ -1,4 +1,4 @@
-use chrono::Utc;
+use restream_domain::timestamp::now_rfc3339;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -52,7 +52,7 @@ async fn suite_run_mode(
     use_host_net: bool,
     timeout: Duration,
 ) -> Result<SuiteModeOutcome, String> {
-    let started_at = Utc::now().to_rfc3339();
+    let started_at = now_rfc3339();
     let started = Instant::now();
     let spawn_mode_dir = mode_dir.clone();
     let spawn_mode = mode.clone();
@@ -70,7 +70,7 @@ async fn suite_run_mode(
     .await
     .map_err(|e| format!("suite worker join failed for {mode}: {e}"))??;
     let elapsed = started.elapsed();
-    let finished_at = Utc::now().to_rfc3339();
+    let finished_at = now_rfc3339();
     Ok(SuiteModeOutcome {
         mode,
         mode_dir,
@@ -138,7 +138,9 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
     let mut use_host_net = std::env::var("TEST_HARNESS_USE_HOST_NET")
         .ok()
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let mut run_id = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let mut run_id = jiff::Timestamp::now()
+        .strftime("%Y%m%dT%H%M%SZ")
+        .to_string();
     let mut work_root: Option<PathBuf> = std::env::var_os("WORK_ROOT").map(PathBuf::from);
     let mut mode_timeout_secs = std::env::var("TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS")
         .ok()
@@ -204,7 +206,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
     let manifest_path = work_root.join("manifest.json");
     std::fs::File::create(&results_jsonl).map_err(|e| e.to_string())?;
 
-    let started_at = Utc::now().to_rfc3339();
+    let started_at = now_rfc3339();
     suite_write_manifest(
         &manifest_path,
         "RUNNING",
@@ -279,7 +281,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
             let mode = &modes[index];
             let mode_dir = work_root.join(mode);
             std::fs::create_dir_all(&mode_dir).map_err(|e| e.to_string())?;
-            let mode_started = Utc::now().to_rfc3339();
+            let mode_started = now_rfc3339();
 
             let command = if preflight_only {
                 "preflight"
@@ -313,7 +315,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
             }
 
             let mode_elapsed = mode_started_instant.elapsed();
-            let mode_finished = Utc::now().to_rfc3339();
+            let mode_finished = now_rfc3339();
             suite_append_result(
                 &results_jsonl,
                 mode,
@@ -346,7 +348,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
         }
     }
 
-    let finished_at = Utc::now().to_rfc3339();
+    let finished_at = now_rfc3339();
     let final_status = if overall_ok { "PASS" } else { "FAIL" };
     suite_write_manifest(
         &manifest_path,

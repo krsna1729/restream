@@ -266,7 +266,10 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
         let output_id = fc.output_id.take().or(span_ctx.output_id);
         let event_type = fc.event_type.take();
         let event_class = fc.event_class.take();
-        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let ts = restream_domain::timestamp::rfc3339_utc(
+            std::time::SystemTime::now(),
+            restream_domain::timestamp::Precision::Millis,
+        );
         let level = meta.level().to_string().to_uppercase();
 
         let entry = AppLogEntry {
@@ -528,6 +531,27 @@ mod tests {
     fn history_level_filter_drops_debug_and_trace() {
         assert!(!history_level_enabled(&tracing::Level::DEBUG));
         assert!(!history_level_enabled(&tracing::Level::TRACE));
+    }
+
+    /// App-log `ts` is millisecond RFC 3339 in `Z`: `app_logs` rows sort and
+    /// filter on it as text.
+    #[test]
+    fn app_log_ts_is_millisecond_rfc3339_in_z() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let layer = super::DbLayer {
+            tx,
+            spans: super::SpanStore::default(),
+        };
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            tracing::info!("stamped");
+        });
+        let ts = rx.try_recv().unwrap().ts;
+        let shape: String = ts
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        assert_eq!(shape, "dddd-dd-ddTdd:dd:dd.dddZ", "{ts}");
     }
 
     #[tokio::test]

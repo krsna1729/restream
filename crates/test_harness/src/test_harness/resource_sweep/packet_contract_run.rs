@@ -80,7 +80,7 @@ impl RunMetadata {
 
     pub(super) fn to_json(&self) -> Value {
         json!({
-            "generatedAt": chrono::Utc::now().to_rfc3339(),
+            "generatedAt": restream_domain::timestamp::now_rfc3339(),
             "gitSha": self.git_sha,
             "gitDirty": self.git_dirty,
             "restreamBinary": self.restream_binary,

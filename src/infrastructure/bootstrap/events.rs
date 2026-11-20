@@ -202,7 +202,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             persist_runtime_event(restream_engine::events::Event {
                 seq: 1,
-                timestamp: chrono::Utc::now(),
+                timestamp: std::time::SystemTime::now(),
                 kind: restream_engine::events::EventKind::EgressFailed {
                     pipeline_id: "pipe".to_string(),
                     output_id: "out".to_string(),

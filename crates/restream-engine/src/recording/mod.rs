@@ -90,7 +90,7 @@ fn sanitize_name(name: &str) -> String {
 }
 
 fn build_filename(pipe_name: &str, recording_id: &str) -> String {
-    let now = chrono::Local::now();
+    let now = jiff::ZonedDateTime::now();
     let safe_name = sanitize_name(pipe_name);
     let safe_name = if safe_name.is_empty() {
         "pipeline"
@@ -106,7 +106,7 @@ fn build_filename(pipe_name: &str, recording_id: &str) -> String {
     let id_suffix = recording_id.rsplit('_').next().unwrap_or(recording_id);
     format!(
         "recording_{}_{}_{}.ts",
-        now.format("%Y%m%dT%H%M%S"),
+        now.strftime("%Y%m%dT%H%M%S"),
         safe_name,
         id_suffix
     )
@@ -481,7 +481,7 @@ pub async fn start_recording(
     let _ = fs::create_dir_all(&media_dir);
     let filename = build_filename(&pipeline_name, &recording_id);
     let file_path = format!("{}/{}", media_dir, filename);
-    let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let recorded_at = now_rfc3339();
     if let Some(metadata) = &metadata {
         metadata.report(RecordingMetadataEvent::Started {
             recording_id: recording_id.clone(),

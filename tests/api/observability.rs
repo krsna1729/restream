@@ -475,6 +475,63 @@ async fn fleet_history_rejects_a_malformed_bound_and_reports_its_window() {
     assert_eq!(body["intervalMs"], 5000, "{body}");
 }
 
+/// The timestamp forms the alert feed serves, and the bound forms the
+/// dashboard sends back: `Date.toISOString()` for `since`, and an alert's
+/// `firstSeen` (nanoseconds, `+00:00`) for a fleet-history window.
+#[tokio::test]
+async fn alert_and_history_timestamps_keep_their_wire_forms() {
+    fn shape(ts: &serde_json::Value) -> String {
+        let ts = ts.as_str().unwrap_or_default();
+        let digits: String = ts
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        // Whole digit groups only: 0, 3, 6 or 9 fractional digits.
+        digits
+            .replace(".ddddddddd", ".f")
+            .replace(".dddddd", ".f")
+            .replace(".ddd", ".f")
+    }
+    let (app, cookie) = authenticated_app().await;
+
+    let alerts = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/alerts?since=2026-10-12T10%3A00%3A00.000Z",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(alerts.status(), StatusCode::OK);
+    let alerts = body_json(alerts).await;
+    let generated_at = &alerts["generatedAt"];
+    assert!(
+        ["dddd-dd-ddTdd:dd:dd+dd:dd", "dddd-dd-ddTdd:dd:dd.f+dd:dd"]
+            .contains(&shape(generated_at).as_str())
+            && generated_at.as_str().unwrap().ends_with("+00:00"),
+        "{alerts}"
+    );
+    assert!(
+        ["dddd-dd-ddTdd:dd:ddZ", "dddd-dd-ddTdd:dd:dd.fZ"]
+            .contains(&shape(&alerts["resolvedCompleteFrom"]).as_str()),
+        "{alerts}"
+    );
+
+    let history = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/fleet/history?since=2026-10-12T10%3A00%3A00.123456789%2B00%3A00",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(history.status(), StatusCode::OK);
+}
+
 // ── coverage gap: metrics/system ────────────────────────────────────────
 
 #[tokio::test]

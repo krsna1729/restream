@@ -208,7 +208,7 @@ pub async fn login_post_handler(
             let token = to_hex(&token_bytes);
             let token_hash = hash_session_token(&token);
 
-            let ts = chrono::Utc::now().timestamp_millis();
+            let ts = jiff::Timestamp::now().as_millisecond();
             if state
                 .auth_service
                 .create_session(&token_hash, ts)

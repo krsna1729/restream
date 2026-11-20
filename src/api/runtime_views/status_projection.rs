@@ -8,6 +8,15 @@ pub(super) use super::common::{
     output_runtime_explanation_json, reader_snapshot_json, recent_egress_runtime_view, to_json,
 };
 
+/// `publishStartedAt`: now less the whole seconds the publisher has been up.
+fn whole_seconds_ago(elapsed_secs: f64) -> String {
+    let now = std::time::SystemTime::now();
+    let started = now
+        .checked_sub(std::time::Duration::from_secs(elapsed_secs as u64))
+        .unwrap_or(now);
+    restream_domain::timestamp::rfc3339(started)
+}
+
 pub(super) fn active_pipeline_input_json(
     ingest: &ActiveIngest,
     recent: Option<&RecentIngestOutcome>,
@@ -25,10 +34,7 @@ pub(super) fn active_pipeline_input_json(
     } else {
         None
     };
-    let publish_started_at = {
-        let ts = chrono::Utc::now() - chrono::Duration::seconds(elapsed_secs as i64);
-        ts.to_rfc3339()
-    };
+    let publish_started_at = whole_seconds_ago(elapsed_secs);
 
     let publisher_json = serde_json::json!({
         "protocol": ingest.protocol,
@@ -91,10 +97,7 @@ pub(super) fn active_pipeline_input_summary_json(
     } else {
         None
     };
-    let publish_started_at = {
-        let ts = chrono::Utc::now() - chrono::Duration::seconds(elapsed_secs as i64);
-        ts.to_rfc3339()
-    };
+    let publish_started_at = whole_seconds_ago(elapsed_secs);
     let audio_tracks = restream_sync::lock::lock(&ingest.audio_tracks);
     let probe_ready = metadata.video.is_some() || !audio_tracks.is_empty();
     let probe_status = if probe_ready { "ready" } else { "pending" };

@@ -67,7 +67,7 @@ pub(super) async fn audit(
 ) {
     let entry = AuditEntry {
         id: 0,
-        at_ms: chrono::Utc::now().timestamp_millis(),
+        at_ms: jiff::Timestamp::now().as_millisecond(),
         username: principal.username.clone(),
         role: principal.effective_role(),
         method: method.to_string(),
@@ -257,7 +257,7 @@ pub async fn create_user_handler(
         id: format!("u_{}", to_hex(&id)),
         username: payload.username.trim().to_string(),
         role: payload.role,
-        created_at_ms: chrono::Utc::now().timestamp_millis(),
+        created_at_ms: jiff::Timestamp::now().as_millisecond(),
         disabled: false,
         last_active_ms: None,
     };

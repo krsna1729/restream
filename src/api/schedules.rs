@@ -43,7 +43,7 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 type Running = HashMap<tokio::task::Id, (String, Option<i64>)>;
 
 fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    jiff::Timestamp::now().as_millisecond()
 }
 
 /// Runs one schedule's action now; the summary says what it did.
@@ -201,8 +201,8 @@ async fn run_occurrence(
 
 /// Records that an occurrence was missed by more than the grace.
 async fn record_skip(db: DeadlineDb, schedule_id: String, occurrence_ms: i64) {
-    let missed = chrono::DateTime::from_timestamp_millis(occurrence_ms)
-        .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
+    let missed = jiff::Timestamp::from_millisecond(occurrence_ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M UTC").to_string())
         .unwrap_or_default();
     let _ = record_run(
         &db,

@@ -10,7 +10,6 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 
-- [Q-110 chrono to jiff](#q-110-platform-sonnet-move-from-chrono-to-jiff-after-jiff-10)
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Q-116 MoQ ingest follows catalog updates](#q-116-correctness-opus-moq-ingest-takes-tracks-a-publisher-adds-after-its-first-catalog)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
@@ -47,18 +46,6 @@ the [assurance roadmap](assurance-roadmap.md).
   `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
   minute per session, and a probe whose own thread-CPU gaps stay below
   1 ms. A mean or p99 passing does not waive the maximum.
-
-### Q-110 [platform] [sonnet] Move from chrono to jiff after jiff 1.0
-- Goal: no crate depends on chrono. Its maintainer has soft-deprecated it
-  ([chrono#1768](https://github.com/chronotope/chrono/issues/1768)), and a
-  RustSec "unmaintained" advisory waits for jiff 1.0; with no ignore in
-  `deny.toml`, that advisory would fail the Cargo deny job.
-- Scope: 5 crates and about 40 files, mostly `Utc::now`, RFC 3339 output
-  and `from_timestamp` conversions; `serde_with`'s chrono feature also
-  pulls it in.
-- Gates: contract tests pin today's serialized timestamps (API JSON and
-  SQLite rows) before the switch and pass unchanged after it;
-  `cargo tree -i chrono` is empty.
 
 ### Q-115 [platform] [sonnet] Move to reqwest 0.13 without a crypto-provider panic or a trust-root change
 - Goal: every crate builds against reqwest 0.13; `.github/dependabot.yml`

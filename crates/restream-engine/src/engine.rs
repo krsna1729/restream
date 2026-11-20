@@ -254,15 +254,17 @@ impl MediaEngine {
     }
 
     pub fn now_epoch_ms() -> u64 {
-        chrono::Utc::now().timestamp_millis().max(0) as u64
+        jiff::Timestamp::now().as_millisecond().max(0) as u64
     }
 
+    /// `ms` as [`restream_domain::timestamp::rfc3339`]; `None` for 0 (never).
     pub fn epoch_ms_to_rfc3339(ms: u64) -> Option<String> {
         if ms == 0 {
             return None;
         }
-        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64)
-            .map(|timestamp| timestamp.to_rfc3339())
+        std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_millis(ms))
+            .map(restream_domain::timestamp::rfc3339)
     }
 
     pub fn set_event_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<crate::events::Event>) {

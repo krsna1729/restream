@@ -121,7 +121,7 @@ impl MediaEngine {
                 target_addr: Arc::new(std::sync::Mutex::new(None)),
                 status: EgressStatus::Running,
                 phase: Arc::new(std::sync::Mutex::new(EgressPhase::Starting)),
-                started_at: chrono::Utc::now().to_rfc3339(),
+                started_at: restream_domain::timestamp::now_rfc3339(),
                 start_instant: now,
                 bytes_sent: Arc::new(AtomicU64::new(0)),
                 metrics: Arc::new(StageMetrics::new()),

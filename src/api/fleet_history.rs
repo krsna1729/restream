@@ -14,14 +14,14 @@ use super::state::{AppState, require_authenticated};
 #[derive(Debug, serde::Deserialize)]
 pub struct FleetHistoryQuery {
     /// RFC 3339: only samples taken at or after it; every kept one without.
-    since: Option<chrono::DateTime<chrono::Utc>>,
+    since: Option<jiff::Timestamp>,
     /// RFC 3339: only samples taken at or before it; up to now without.
-    until: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<jiff::Timestamp>,
 }
 
 /// Epoch ms, before 1970 read as 0.
-fn epoch_ms(at: chrono::DateTime<chrono::Utc>) -> u64 {
-    u64::try_from(at.timestamp_millis()).unwrap_or(0)
+fn epoch_ms(at: jiff::Timestamp) -> u64 {
+    u64::try_from(at.as_millisecond()).unwrap_or(0)
 }
 
 pub async fn v1_fleet_history_handler(
@@ -46,9 +46,9 @@ pub async fn v1_fleet_history_handler(
 #[derive(Debug, serde::Deserialize)]
 pub struct FlightRecorderQuery {
     /// RFC 3339: only samples taken at or after it; every kept one without.
-    since: Option<chrono::DateTime<chrono::Utc>>,
+    since: Option<jiff::Timestamp>,
     /// RFC 3339: only samples taken before it; up to now without.
-    until: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<jiff::Timestamp>,
     /// At most this many samples, evenly thinned (default and cap 2,000).
     points: Option<usize>,
 }

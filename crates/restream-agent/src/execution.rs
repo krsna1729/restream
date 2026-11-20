@@ -18,6 +18,7 @@ use crate::plane::PlanResponse;
 pub use approvals::{ActionApproval, Approver, change_role};
 use restream_agent_contract::{ApprovalRequest, OperationCreateRequest, PlanRequest};
 use restream_domain::domain::role::Role;
+use restream_domain::timestamp::now_rfc3339;
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
 const AUTHENTICATED_DASHBOARD_ACTOR: &str = "dashboard-admin";
@@ -170,7 +171,7 @@ impl AgentExecutionStore {
             });
         }
 
-        let created_at = now();
+        let created_at = now_rfc3339();
         let operation_id = operation_id(&request, &created_at);
         let status = if plan.validation.valid {
             OperationStatus::AwaitingApproval
@@ -275,7 +276,7 @@ impl AgentExecutionStore {
             return Err(OperationStoreError::RoleTooLow { needed });
         }
 
-        let approved_at = now();
+        let approved_at = now_rfc3339();
         for slot in record
             .action_approvals
             .iter_mut()
@@ -326,7 +327,7 @@ impl AgentExecutionStore {
             return Err(OperationStoreError::RoleTooLow { needed });
         }
 
-        let approved_at = now();
+        let approved_at = now_rfc3339();
         let approval = ActionApproval {
             approved_by: approver.username.clone(),
             role: approver.role,
@@ -373,7 +374,7 @@ impl AgentExecutionStore {
             OperationStatus::Approved => {}
         }
 
-        let ts = now();
+        let ts = now_rfc3339();
         record.status = OperationStatus::Applying;
         record.baseline = Some(baseline);
         record.updated_at = ts.clone();
@@ -437,7 +438,7 @@ impl AgentExecutionStore {
             .ok_or(OperationStoreError::NotFound)?;
         record.status.require_applied()?;
 
-        let ts = now();
+        let ts = now_rfc3339();
         record.status = if verification_result["success"].as_bool().unwrap_or(false) {
             OperationStatus::Verified
         } else {
@@ -461,7 +462,7 @@ impl AgentExecutionStore {
     ) -> Option<OperationRecord> {
         let mut state = lock_or_recover(&self.state);
         let record = state.records.get_mut(operation_id)?;
-        let ts = now();
+        let ts = now_rfc3339();
         f(record, ts.clone());
         record.updated_at = ts;
         Some(record.clone())
@@ -656,10 +657,6 @@ fn hex_prefix(bytes: &[u8], len: usize) -> String {
         .take(len)
         .map(|n| char::from_digit(n as u32, 16).unwrap_or('0'))
         .collect()
-}
-
-fn now() -> String {
-    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]

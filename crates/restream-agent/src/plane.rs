@@ -19,6 +19,7 @@ use restream_agent_contract::{InvestigationRequest, PlanRequest, ProposedChange}
 use restream_domain::domain::output_spec::{OutputConfig, OutputUrlScheme, ProtocolCapabilities};
 use restream_domain::models::{Ingest, Output, Pipeline};
 use restream_domain::planner::{PlannedOutput, plan_pipeline_graph};
+use restream_domain::timestamp::now_rfc3339;
 
 const OUTPUT_URL_SCHEME_ERROR: &str = "Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, https://, and moqt://";
 
@@ -109,7 +110,7 @@ pub fn redacted_context<E: Serialize>(
     storage: Value,
 ) -> Value {
     serde_json::json!({
-        "generatedAt": now(),
+        "generatedAt": now_rfc3339(),
         "readOnly": true,
         "redaction": redaction_policy(),
         "api": {
@@ -344,7 +345,7 @@ pub fn investigation_response<E: Serialize>(
     }
 
     serde_json::json!({
-        "generatedAt": now(),
+        "generatedAt": now_rfc3339(),
         "workflow": workflow,
         "pipelineId": request.pipeline_id,
         "outputId": request.output_id,
@@ -428,7 +429,7 @@ pub fn plan_response(
     }
 
     PlanResponse {
-        generated_at: now(),
+        generated_at: now_rfc3339(),
         plan_id,
         status: if validation.valid { "draft" } else { "invalid" },
         intent: request.intent,
@@ -792,8 +793,4 @@ fn hex_prefix(bytes: &[u8], len: usize) -> String {
         .take(len)
         .map(|n| char::from_digit(n as u32, 16).unwrap_or('0'))
         .collect()
-}
-
-fn now() -> String {
-    chrono::Utc::now().to_rfc3339()
 }

@@ -10,8 +10,8 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 /// Maximum number of events retained. Oldest are evicted when exceeded.
@@ -207,7 +207,8 @@ impl EventKind {
 pub struct Event {
     /// Monotonically increasing sequence number within this process lifetime.
     pub seq: u64,
-    pub timestamp: DateTime<Utc>,
+    #[serde(serialize_with = "restream_domain::timestamp::serialize")]
+    pub timestamp: SystemTime,
     #[serde(flatten)]
     pub kind: EventKind,
 }
@@ -256,7 +257,7 @@ impl EventLog {
             }
             let event = Event {
                 seq,
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now(),
                 kind,
             };
             inner.events.push_back(event.clone());
@@ -312,6 +313,30 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert!(events[0].seq < events[1].seq);
         assert!(events[1].seq < events[2].seq);
+    }
+
+    /// An event's JSON `timestamp` is RFC 3339 in `Z` with 0, 3, 6 or 9
+    /// fractional digits (`recentEvents`, `/api/v1/events`).
+    #[test]
+    fn event_json_timestamp_is_rfc3339_in_z_with_whole_digit_groups() {
+        let log = EventLog::new();
+        log.emit(connected("p1"));
+        let json = serde_json::to_value(&log.recent(1, None)[0]).unwrap();
+        let ts = json["timestamp"].as_str().unwrap();
+        let shape: String = ts
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        assert!(
+            [
+                "dddd-dd-ddTdd:dd:ddZ",
+                "dddd-dd-ddTdd:dd:dd.dddZ",
+                "dddd-dd-ddTdd:dd:dd.ddddddZ",
+                "dddd-dd-ddTdd:dd:dd.dddddddddZ",
+            ]
+            .contains(&shape.as_str()),
+            "{ts}"
+        );
     }
 
     #[test]

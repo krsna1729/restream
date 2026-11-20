@@ -34,7 +34,7 @@ fn random_hex(bytes: usize) -> String {
 fn test_event(username: &str) -> NotifyEvent {
     NotifyEvent {
         kind: EventKind::Test,
-        at_ms: chrono::Utc::now().timestamp_millis(),
+        at_ms: jiff::Timestamp::now().as_millisecond(),
         alert: AlertBrief {
             id: "test".to_string(),
             severity: NotifySeverity::Warning,
@@ -120,7 +120,7 @@ pub async fn create_channel_handler(
             format!("ch_{}", random_hex(8)),
             secret,
             payload.into(),
-            chrono::Utc::now().timestamp_millis(),
+            jiff::Timestamp::now().as_millisecond(),
         )
         .await
     {
@@ -300,7 +300,7 @@ pub async fn subscribe_handler(
         p256dh: payload.keys.p256dh,
         auth: payload.keys.auth,
         min_severity: payload.min_severity,
-        created_at_ms: chrono::Utc::now().timestamp_millis(),
+        created_at_ms: jiff::Timestamp::now().as_millisecond(),
     };
     match state.notify_service.subscribe(subscription).await {
         Ok(subscription) => (StatusCode::CREATED, Json(subscription)).into_response(),

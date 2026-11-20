@@ -140,8 +140,8 @@ pub(super) async fn check_active_outputs(
                 .unwrap_or_else(|| "unresolved".to_string());
             let last_progress_ms = egress.last_progress_ms;
             let progress_age_ms = if last_progress_ms > 0 {
-                let age = chrono::Utc::now()
-                    .timestamp_millis()
+                let age = jiff::Timestamp::now()
+                    .as_millisecond()
                     .max(0)
                     .saturating_sub(last_progress_ms as i64);
                 Some(age)

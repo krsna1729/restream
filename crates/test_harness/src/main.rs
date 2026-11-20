@@ -9,13 +9,13 @@ use axum::extract::{DefaultBodyLimit, OriginalUri, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, put};
 use bytes::Bytes;
-use chrono::Utc;
 use restream_domain::domain::audio_routing::{
     AudioRouting, is_audio_operation, parse_audio_operation,
 };
 use restream_domain::domain::output_spec::{
     OutputConfig, OutputUrlScheme, OutputVideoCodec, OutputVideoConfig, RtmpOutputMode,
 };
+use restream_domain::timestamp::now_rfc3339;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,

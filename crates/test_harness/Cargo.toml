@@ -21,7 +21,7 @@ restream-sync = { path = "../restream-sync" }
 restream-srt = { path = "../restream-srt" }
 axum = { version = "0.8", features = ["macros"] }
 bytes = "1.12"
-chrono = { version = "0.4", features = ["serde"] }
+jiff = "1"
 rml_rtmp = "0.8.0"
 serde = { version = "1.0", features = ["derive"] }
 srt-proto = { git = "https://github.com/krsna1729/srt-rs", rev = "4dad48521ee8f69c44b3845953bc2b4a478666c6" }
