@@ -458,6 +458,10 @@ pub(super) async fn record(
 }
 
 /// [`record`] with an explicit observation time (tests drive the clock).
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn record_at(
     system: &Value,
     elapsed_secs: f64,

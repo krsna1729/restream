@@ -39,6 +39,10 @@ where
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
     const MAX_SHORT_TERM_REF_PIC_SETS: u32 = 64;
     const MAX_DELTA_POCS: u32 = 64;

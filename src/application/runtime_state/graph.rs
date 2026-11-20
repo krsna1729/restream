@@ -226,6 +226,10 @@ fn edge(from: impl Into<String>, to: impl Into<String>, label: impl Into<String>
 /// from an earlier plan is not drawn); one egress node per output, through
 /// a TS mux for SRT; recirculation targets; recording and HLS preview.
 /// `outputs` are the pipeline's own.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) fn pipeline_graph(
     pipeline_id: &str,
     outputs: &[&Output],

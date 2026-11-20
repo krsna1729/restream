@@ -182,6 +182,10 @@ pub(super) async fn run_retry_budget_case(
 
 /// A brief publisher drop must keep the egress connection running through the
 /// disconnect grace and resume delivery when the publisher returns.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn run_recovery_transient_case(
     api: &RampApi,
     ports: &TestPorts,

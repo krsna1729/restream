@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(in super::super) async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
@@ -158,6 +162,10 @@ pub(in super::super) async fn mixed_input_matrix_correctness_serial() -> Result<
     }))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(in super::super) async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)

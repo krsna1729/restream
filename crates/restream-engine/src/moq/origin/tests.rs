@@ -250,6 +250,10 @@ fn a_viewer_with_a_token_plays_the_pipeline_over_loopback_quic() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn a_track_set_change_replaces_the_served_generation() {
     let (origin, engine, tokio) = origin(8);
     let ring = tokio.block_on(engine.get_or_create_pipeline("pipe-gen"));

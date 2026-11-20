@@ -107,6 +107,10 @@ async fn cause_codes(api: &RampApi) -> Result<HashMap<String, Value>, String> {
         .collect())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> {
     let mode = fabric.mode();
     let shards = env_u("ADMISSION_SHARDS", 1);

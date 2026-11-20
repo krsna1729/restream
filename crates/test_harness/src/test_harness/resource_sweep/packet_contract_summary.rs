@@ -17,6 +17,10 @@ use super::packet_contract_verdict::{
 /// Aggregate one rung's samples: mean/peak rates, peak gauges, cost proxies,
 /// the workload dimensions, and the worst validity verdict with the union of
 /// its reasons.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) fn rung_summary(
     scenario: &str,
     outputs: u64,
@@ -349,6 +353,10 @@ pub(super) fn rung_summary(
 /// impossible: a `healthy` datapath on a dirty tree, a non-canonical workload,
 /// an off-ladder output count or a short window is still not a baseline.
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) fn baseline_eligibility(
     run: &Value,
     scenario: &str,

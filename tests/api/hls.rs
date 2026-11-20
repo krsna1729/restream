@@ -212,6 +212,10 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
 /// HLS master lists video and all 16 alternate audio renditions, and the
 /// video and audio segments are served.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn file_ingest_preview_hls_serves_playlist_and_segment() {
     let (app, cookie, media_dir, pool, _engine) =
         authenticated_app_with_temp_media_and_engine().await;

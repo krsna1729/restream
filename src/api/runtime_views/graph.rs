@@ -13,6 +13,10 @@ use restream_domain::models::Output;
 use restream_engine::engine::MediaEngine;
 use std::collections::HashMap;
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn processing_graph(
     engine: &MediaEngine,
     pipeline_id: &str,

@@ -392,6 +392,10 @@ pub(crate) async fn health_snapshot(
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn health_snapshot_view(
     engine: &MediaEngine,
     config: &AppConfig,

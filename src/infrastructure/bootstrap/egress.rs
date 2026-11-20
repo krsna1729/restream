@@ -425,6 +425,10 @@ impl AttemptJob {
 }
 
 impl EgressStarter {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     async fn start(self, output: Output) {
         let output = &output;
         let correlation_id = restream_engine::correlation_id::next_correlation_id("out");

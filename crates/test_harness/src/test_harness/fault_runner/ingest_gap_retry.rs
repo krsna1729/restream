@@ -6,6 +6,10 @@ use super::super::*;
 /// Stops the RTMP sink, then the publisher, inside the disconnect grace.
 /// Expects retrying output and the RTMP disconnect to surface in status and
 /// health during the gap, then the output to recover once both return.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn egress_retry_survives_ingest_gap(
     api: &mut RampApi,
     ports: &TestPorts,

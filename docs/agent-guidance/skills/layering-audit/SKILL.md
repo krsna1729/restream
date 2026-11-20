@@ -35,21 +35,30 @@ and hot-path dispatch/channel hops introduced solely for layering.
 
 ## File growth
 
-`cargo xtask source-audit` is authoritative for raw line counts: Rust warns
-at 800 and fails above 999; frontend TypeScript also caps at 999. The warning
-is an ownership review trigger, not proof that a file needs splitting.
+Two gates fail the build; file length is not one of them:
+
+- clippy `too_many_lines` fails a function over 150 code lines (threshold in
+  `clippy.toml`). Split it along its steps; a function that predates the limit
+  carries `#[expect(clippy::too_many_lines, reason = ...)]`. Delete the expect
+  when you split it, and never add one to new code.
+- `cargo xtask source-audit` fails on an orphaned `.rs` file, one no crate
+  root reaches through `mod`, `#[path]` or `include!`, because it is never
+  compiled.
+
+The audit also reports production code lines per crate and lists files of 800+
+raw lines. That list is an ownership review trigger, not proof that a file
+needs splitting.
 
 For each Rust file at or above 800 lines before or after a proposed change:
 
-1. Review the touched responsibility, not all warning-band files. State the
+1. Review the touched responsibility, not all listed files. State the
    base/head line counts and the owner being changed in the PR or commit.
 2. Put a new independent responsibility in its existing owner, or extract a
    cohesive owner before adding it. Substantive feature work should normally
-   leave the original pressure-band file no larger. New extractions stay below
-   the warning band; do not merely move the near-cap problem to another file.
+   leave a listed file no larger. Do not merely move the growth to a new file.
 3. A narrow correctness fix may grow a coherent owner without an extraction
-   when a move would increase risk. Explain that tradeoff in the PR or commit;
-   the hard maximum still applies. Do not delay a fix for an unrelated reorg.
+   when a move would increase risk. Explain that tradeoff in the PR or commit.
+   Do not delay a fix for an unrelated reorg.
 4. Keep tests with their behavior. Move inline tests or independent scenarios
    to named test modules when useful; share setup rather than copy it.
 5. Reject line-count gaming: removing useful comments, compressed formatting,

@@ -121,6 +121,10 @@ pub(crate) async fn verify_mixed_output_dimensions(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn verify_mixed_output_cases_inner(
     env: &MixedEnv,
     api: &RampApi,

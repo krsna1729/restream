@@ -21,6 +21,10 @@ pub(super) const WORKLOAD_TOLERANCE: f64 = 0.05;
 /// broken); `contaminated` means the host or the peer dropped datagrams, so
 /// the path under test was not lossless; `healthy` means none of those fired.
 /// Only rated samples get a verdict — the first sample has no interval yet.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) fn sample_validity(
     sample: &Value,
     expected_outputs: u64,

@@ -10,6 +10,10 @@ use crate::ts_chunk_ring::TsChunkRing;
 use restream_core::{MediaPacket, MediaType};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) fn start_shared_ts_muxer(
     pipeline_id: &str,
     stage_key: &str,

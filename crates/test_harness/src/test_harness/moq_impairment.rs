@@ -293,6 +293,10 @@ impl Session {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     async fn execute(&mut self) -> Result<(), String> {
         let relay_bin = pinned_bin(&MOQ_RELAY).await?;
         let mut relay = DevRelay::new(

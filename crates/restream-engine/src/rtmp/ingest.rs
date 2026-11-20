@@ -165,6 +165,10 @@ pub(super) enum PublishAuthorization {
     },
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn run_rtmp_control_session(
     mut commands: mpsc::Receiver<RtmpControlCommand>,
     shutdown: CancellationToken,
@@ -609,6 +613,10 @@ fn set_tcp_socket_buffers(socket: std::os::fd::BorrowedFd<'_>, size: usize) {
         warn!("failed to set RTMP send socket buffer");
     }
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(super) async fn handle_rtmp_client(
     stream: compio::net::TcpStream,
     client_addr: SocketAddr,

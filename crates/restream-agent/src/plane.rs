@@ -446,6 +446,10 @@ pub fn plan_response(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub fn validate_plan(
     request: &PlanRequest,
     pipelines: &[Pipeline],

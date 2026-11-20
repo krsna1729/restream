@@ -207,6 +207,10 @@ pub(crate) async fn rtmp_sink_flaps_surface_instability(
 /// Removes and recreates the SRT ingest pipeline an SRT output publishes
 /// into, twice. Expects the same retry/recovery/flapping contract as the RTMP
 /// case, and writes owner-timeline diagnostics when it fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) async fn srt_sink_flaps_surface_instability(
     api: &mut RampApi,
     ports: &TestPorts,

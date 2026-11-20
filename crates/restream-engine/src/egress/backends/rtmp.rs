@@ -349,6 +349,10 @@ impl MediaPublisher {
         .map_err(str::to_string)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the function-size limit (#147); split it before growing it"
+    )]
     fn advance(
         &mut self,
         stream: &mut TlsTcpConnection,

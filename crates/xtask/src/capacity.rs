@@ -105,6 +105,10 @@ fn env_number(key: &str, default: u64) -> Result<u64, String> {
         .map_err(|_| format!("capacity-ramp: {key} must be a whole number"))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
     match args {
         [] => {}

@@ -203,6 +203,10 @@ fn field_available<T>(returned_len: usize, offset: usize) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 fn stats_from_tcp_info(info: &LinuxTcpInfo, returned_len: usize) -> TcpReceiverStats {
     TcpReceiverStats {
         tcp_rtt_ms: field_available::<u32>(

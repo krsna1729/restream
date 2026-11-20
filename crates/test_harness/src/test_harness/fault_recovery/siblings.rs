@@ -61,6 +61,10 @@ pub(crate) async fn fault_sibling_isolation() -> Result<Value, String> {
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
     let api = login_api(ports).await?;
     let fixture = checked_h264_fixture()?;

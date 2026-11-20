@@ -1,15 +1,23 @@
-//! Source-wide audit: layering, god-file growth, un-centralized environment
+//! Source-wide audit: layering, orphaned sources, un-centralized environment
 //! variables and a few removed-API guardrails. `docs/architecture.md`
 //! points here as the authority.
+//!
+//! File length is reported, never failed: a long file of small cohesive
+//! items is fine, and a cap forced splits by size rather than ownership.
+//! What fails is the unit genuinely too big to review, a function (clippy
+//! `too_many_lines`, threshold in `clippy.toml`), and a source file no
+//! crate compiles ([`orphans`]).
 
+mod orphans;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::StepResult;
 use crate::scan::{Hit, files_under, grep_files, read_text};
 
-const RUST_LINE_LIMIT: usize = 999;
-const RUST_LINE_WARNING: usize = 800;
-const FRONTEND_LINE_LIMIT: usize = 999;
+/// Files at or above this many raw lines are listed for ownership review.
+const LARGE_FILE_LINES: usize = 800;
 
 /// Rust responsibility classes reported by the audit, in print order.
 const RUST_CLASSES: [&str; 7] = [
@@ -112,7 +120,7 @@ pub(crate) fn run() -> StepResult {
         grep_files(&media_files, |line| line.contains("use crate::api")),
     );
 
-    failed |= audit_file_sizes()?;
+    failed |= audit_sources()?;
 
     let env_hits = grep_files(&production_files, |line| line.contains("std::env::var"))
         .into_iter()
@@ -191,9 +199,24 @@ fn report(section: &str, failure: &str, success: &str, hits: Vec<Hit>) -> bool {
     true
 }
 
-fn audit_file_sizes() -> Result<bool, String> {
+fn audit_sources() -> Result<bool, String> {
     println!();
-    println!("Checking file size limits...");
+    println!("Checking orphaned Rust sources...");
+    let orphans = orphans::orphans()?;
+    let failed = !orphans.is_empty();
+    if failed {
+        eprintln!(
+            "FAIL: Rust files no crate root reaches through `mod`, `#[path]` or `include!` (never compiled):"
+        );
+        for orphan in &orphans {
+            eprintln!("  {}", orphan.display());
+        }
+    } else {
+        println!("OK: Every Rust source is reachable from a crate root.");
+    }
+
+    println!();
+    println!("Reporting source sizes...");
     let mut files: Vec<PathBuf> = Vec::new();
     if Path::new("build.rs").is_file() {
         files.push("build.rs".into());
@@ -213,54 +236,68 @@ fn audit_file_sizes() -> Result<bool, String> {
     }));
 
     let mut counts = [0usize; RUST_CLASSES.len()];
-    let mut failed = false;
-    let mut warnings = 0;
+    let mut production_lines: BTreeMap<String, usize> = BTreeMap::new();
+    let mut large = Vec::new();
     for path in files {
         let name = path.to_string_lossy().into_owned();
         let class = classify(&name);
-        let lines = raw_line_count(&read_text(&path)?);
+        let text = read_text(&path)?;
+        let lines = raw_line_count(&text);
+        if lines >= LARGE_FILE_LINES {
+            large.push((lines, class, name.clone()));
+        }
         if path.extension().is_some_and(|ext| ext == "rs") {
             if let Some(slot) = RUST_CLASSES.iter().position(|known| *known == class) {
                 counts[slot] += 1;
             }
-            if lines > RUST_LINE_LIMIT {
-                eprintln!(
-                    "FAIL [{class}]: {name} has {lines} raw lines (Rust hard maximum: {RUST_LINE_LIMIT}; 1000 fails)"
-                );
-                failed = true;
-            } else if lines >= RUST_LINE_WARNING {
-                warnings += 1;
-                eprintln!(
-                    "WARN [{class}]: {name} has {lines} raw lines (Rust pressure band: {RUST_LINE_WARNING}-{RUST_LINE_LIMIT})"
-                );
+            if class == "production" {
+                *production_lines.entry(crate_of(&name)).or_default() += code_lines(&text);
             }
-        } else if class == "frontend-production" && lines > FRONTEND_LINE_LIMIT {
-            eprintln!(
-                "FAIL [{class}]: {name} has {lines} raw lines (frontend hard maximum: {FRONTEND_LINE_LIMIT}; 1000 fails)"
-            );
-            failed = true;
         }
     }
 
-    println!(
-        "Line policies: Rust hard maximum {RUST_LINE_LIMIT} (warn at {RUST_LINE_WARNING}); TypeScript/JavaScript hard maximum {FRONTEND_LINE_LIMIT} (same as Rust)."
-    );
     println!("Audited Rust files by responsibility:");
     for (class, count) in RUST_CLASSES.iter().zip(counts) {
         println!("  {:<16} {count}", format!("{class}:"));
     }
-    if !failed {
-        println!("OK: All audited files are within their language-specific raw-line maximum.");
+    println!("Production Rust code lines (non-blank, non-comment) by crate:");
+    for (krate, lines) in &production_lines {
+        println!("  {krate:<24} {lines}");
     }
-    if warnings > 0 {
+    println!(
+        "  {:<24} {}",
+        "total",
+        production_lines.values().sum::<usize>()
+    );
+    if !large.is_empty() {
+        large.sort_unstable_by(|a, b| b.cmp(a));
         println!(
-            "WARN: {warnings} Rust file(s) are in the {RUST_LINE_WARNING}-{RUST_LINE_LIMIT} pressure band."
+            "Files of {LARGE_FILE_LINES}+ raw lines ({}), an ownership review trigger, not a limit:",
+            large.len()
         );
-        println!(
-            "      Review touched owners before growth; see the layering-audit skill's file-growth policy."
-        );
+        for (lines, class, name) in &large {
+            println!("  {lines:>5} [{class}] {name}");
+        }
+        println!("  Before growing one, apply the layering-audit skill's file-growth policy.");
     }
     Ok(failed)
+}
+
+/// The crate a production path belongs to: `crates/<name>/...`, else the
+/// root `restream` package.
+fn crate_of(path: &str) -> String {
+    path.strip_prefix("crates/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("restream")
+        .to_string()
+}
+
+/// Lines that are neither blank nor only a `//` comment.
+fn code_lines(text: &str) -> usize {
+    text.lines()
+        .map(str::trim_start)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .count()
 }
 
 fn classify(path: &str) -> &'static str {

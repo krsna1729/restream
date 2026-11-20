@@ -428,6 +428,10 @@ async fn read_track(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 async fn run_async(
     config: SubscriberConfig,
     tls: compio::quic::ClientConfig,

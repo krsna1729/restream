@@ -257,6 +257,10 @@ pub fn anomaly_alerts(
 
 /// Derive alerts from a `health_snapshot()` JSON value.
 /// Returns alerts sorted Critical-first, then Warning, then by pipeline id.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the function-size limit (#147); split it before growing it"
+)]
 pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
     let generated_at = snapshot
         .get("generatedAt")
