@@ -9,13 +9,10 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
-
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
-- [Q-116 MoQ ingest follows catalog updates](#q-116-correctness-opus-moq-ingest-takes-tracks-a-publisher-adds-after-its-first-catalog)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
-- [Q-132 API SQLite deadlines and session survival](#q-132-correctness-opus-api-handlers-reach-sqlite-under-a-deadline-and-a-session-survives-a-pool-timeout)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -63,18 +60,6 @@ the [assurance roadmap](assurance-roadmap.md).
   shared builder or a provider installed before any client, covering
   tests); trust roots stay webpki-roots plus the custom PEM roots; aws-lc-rs
   stays out of `Cargo.lock`; the Dependabot ignore is removed.
-
-### Q-116 [correctness] [opus] MoQ ingest takes tracks a publisher adds after its first catalog
-- Goal: a publisher whose first catalog lists only some tracks still gets
-  every track ingested. `read_catalog`
-  (`crates/restream-engine/src/moq/ingest/session.rs`) reads one catalog
-  version and cancels; tracks a later version adds are never subscribed.
-- Why: the moq-gst publisher can publish a first catalog that lists only
-  `0.aac`; the CI `moq-dev-interop --ietf 19` `ingestGstMoqSession` check
-  then fails intermittently with "media probe was incomplete within 60s".
-- Gates: a session test where the publisher's first catalog has audio only
-  and a later version adds video puts both tracks in the ring; a catalog
-  update that removes or retypes a live track keeps today's behavior.
 
 ### Q-117 [platform] [sonnet] Drop the vendored hang and moq-msf
 - Goal: `hang` and `moq-msf` come from crates.io again, so Dependabot and

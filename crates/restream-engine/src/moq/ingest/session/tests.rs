@@ -1,6 +1,8 @@
 //! The publisher session core: stream-key routing, track selection, frames
 //! into the ring, the probe hold, bounds and the release of the input.
 
+mod catalog_updates;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
@@ -574,7 +576,7 @@ fn msf_only_catalog_maps_loc_h264_h265_and_aac_into_the_ring() {
                 )
                 .unwrap();
             group.finish().unwrap();
-            let catalog = first_catalog(
+            let (_, catalog) = first_catalog(
                 read_catalog(&broadcast.consume(), None),
                 Duration::from_secs(1),
             )
@@ -798,7 +800,7 @@ fn bounded_draft01_shared_init_references_reach_the_ring() {
             .write_frame(moq_net::Timestamp::ZERO, Bytes::from_static(json))
             .unwrap();
         group.finish().unwrap();
-        let catalog = first_catalog(
+        let (_, catalog) = first_catalog(
             read_catalog(&broadcast.consume(), Some(CatalogFormat::Msf)),
             Duration::from_secs(1),
         )

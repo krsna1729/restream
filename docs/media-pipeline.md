@@ -1030,8 +1030,13 @@ The diagram shows a publisher connection from QUIC accept to the ring.
 - **Tracks.** The first ranked H.264 or H.265 rendition becomes video; up to
   eight AAC renditions become audio tracks in catalog order. Others are logged
   as `restream.moq.ingest.track_rejected`. A catalog with no usable track ends
-  the session. Only the first catalog is read; a publisher that changes
-  renditions must reconnect.
+  the session. Later catalog versions are read too, but they only add: a
+  track name not seen before is subscribed (logged as
+  `restream.moq.ingest.track_added`; video only while the session has none,
+  AAC up to the same eight) and the session probes again once the previous
+  probe was answered. A version that removes or retypes a track changes
+  nothing; a publisher that changes renditions must reconnect. An update
+  that ends, fails to parse or panics stops the following, not the media.
 - **Frames.** LOC carries a property block and codec payload; upstream
   `moq_loc::decode` slices without copying and honors per-frame Timescale.
   Legacy hang timestamps and CMAF remain accepted. Empty duration or

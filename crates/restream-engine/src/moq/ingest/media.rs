@@ -152,30 +152,68 @@ impl TrackSet {
     /// Take the catalog's video track and its AAC tracks (up to
     /// [`MAX_AUDIO_TRACKS`]); everything else is kept with its reason.
     pub(crate) fn new(catalog: CatalogTracks) -> Self {
+        let mut set = Self::default();
+        set.extend(catalog);
+        set
+    }
+
+    /// Take the tracks a catalog version adds, after the ones already taken,
+    /// so existing indexes stay valid; returns the new tracks' indexes. A
+    /// name already decided (taken or rejected) keeps its first decision, so
+    /// a later version that removes or retypes a track changes nothing. A
+    /// second video track is refused.
+    pub(crate) fn extend(&mut self, catalog: CatalogTracks) -> std::ops::Range<usize> {
+        let start = self.tracks.len();
         let CatalogTracks {
             video,
             audio,
             rejected,
         } = catalog;
-        let mut set = Self {
-            tracks: Vec::with_capacity(audio.len().min(MAX_AUDIO_TRACKS).saturating_add(1)),
-            rejected,
-        };
-        if let Some((name, config)) = video {
-            set.take(IngestTrack::video(name, config));
+        for (name, reason) in rejected {
+            if !self.knows(&name) {
+                self.rejected.push((name, reason));
+            }
         }
-        let mut audio_tracks = 0u32;
+        if let Some((name, config)) = video
+            && !self.knows(&name)
+        {
+            if self
+                .tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Video)
+            {
+                let reason = "the publisher already has a video track".to_string();
+                self.rejected.push((name, reason));
+            } else {
+                self.take(IngestTrack::video(name, config));
+            }
+        }
+        let mut audio_tracks = self
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+            .count();
         for (name, config) in audio {
-            if audio_tracks as usize == MAX_AUDIO_TRACKS {
-                let reason = format!("more than {MAX_AUDIO_TRACKS} audio tracks");
-                set.rejected.push((name, reason));
+            if self.knows(&name) {
                 continue;
             }
-            if set.take(IngestTrack::audio(name, config, audio_tracks)) {
+            if audio_tracks == MAX_AUDIO_TRACKS {
+                let reason = format!("more than {MAX_AUDIO_TRACKS} audio tracks");
+                self.rejected.push((name, reason));
+                continue;
+            }
+            // Below MAX_AUDIO_TRACKS, so the index fits.
+            let index = u32::try_from(audio_tracks).unwrap_or(u32::MAX);
+            if self.take(IngestTrack::audio(name, config, index)) {
                 audio_tracks = audio_tracks.saturating_add(1);
             }
         }
-        set
+        start..self.tracks.len()
+    }
+
+    fn knows(&self, name: &str) -> bool {
+        self.tracks.iter().any(|track| track.name == name)
+            || self.rejected.iter().any(|(rejected, _)| rejected == name)
     }
 
     fn take(&mut self, track: Result<IngestTrack, (String, String)>) -> bool {

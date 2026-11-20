@@ -23,7 +23,7 @@ use futures_util::{FutureExt, StreamExt};
 use moq_mux::catalog::CatalogFormat;
 use moq_net::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::publisher::PublisherMedia;
 use super::{Admission, AttemptEnd, Lifecycle, PublisherSession, Rejection, stream_key_from_path};
@@ -32,7 +32,7 @@ use crate::moq::transport;
 use restream_core::MediaPacket;
 use restream_moq::budget;
 use restream_moq::budget::CacheBudget;
-use restream_moq::media::from_hang_catalog;
+use restream_moq::media::{CatalogTracks, from_hang_catalog};
 use restream_sync::RingBuffer;
 
 /// Bounds on one publisher session; passing one ends the session.
@@ -118,7 +118,12 @@ pub(crate) struct Ingest<L: Lifecycle> {
     tracks: TrackSet,
     limits: SessionLimits,
     malformed_run: u32,
+    /// The current tracks' probe was sent (a catalog update that adds a
+    /// track clears it).
     probe_sent: bool,
+    /// A probe is with Tokio; the next waits for its answer, so a stale
+    /// probe can never land after a newer one.
+    probe_in_flight: bool,
     packets: Vec<MediaPacket>,
 }
 
@@ -133,6 +138,7 @@ impl<L: Lifecycle> Ingest<L> {
             limits,
             malformed_run: 0,
             probe_sent: false,
+            probe_in_flight: false,
             packets: Vec::with_capacity(4),
         }
     }
@@ -141,15 +147,7 @@ impl<L: Lifecycle> Ingest<L> {
     /// [`Self::frame`]'s index order. A catalog with nothing Restream can
     /// carry ends the session.
     pub(crate) fn set_tracks(&mut self, tracks: TrackSet) -> Result<Vec<String>, SessionEnd> {
-        for (name, reason) in tracks.rejected() {
-            info!(
-                event_class = "media",
-                event_type = "restream.moq.ingest.track_rejected",
-                track = %name,
-                reason = %reason,
-                "MoQ publisher track not ingested",
-            );
-        }
+        log_rejected(tracks.rejected());
         if tracks.is_empty() {
             return Err(SessionEnd::new(
                 Error::Unsupported,
@@ -165,19 +163,46 @@ impl<L: Lifecycle> Ingest<L> {
             .collect())
     }
 
-    /// The probe to apply, the first time the tracks know their metadata;
-    /// packets are held from now until [`Self::probe_applied`].
+    /// Take the tracks a later catalog version adds; returns each new track's
+    /// [`Self::frame`] index and name, to subscribe to. Removed or retyped
+    /// tracks change nothing ([`TrackSet::extend`]).
+    pub(crate) fn add_tracks(&mut self, catalog: CatalogTracks) -> Vec<(usize, String)> {
+        let rejected = self.tracks.rejected().len();
+        let added = self.tracks.extend(catalog);
+        log_rejected(&self.tracks.rejected()[rejected..]);
+        if !added.is_empty() {
+            self.probe_sent = false;
+        }
+        added
+            .filter_map(|index| {
+                let track = self.tracks.tracks().get(index)?;
+                info!(
+                    event_class = "media",
+                    event_type = "restream.moq.ingest.track_added",
+                    track = %track.name,
+                    "MoQ publisher catalog added a track",
+                );
+                Some((index, track.name.clone()))
+            })
+            .collect()
+    }
+
+    /// The probe to apply, once the current tracks know their metadata and
+    /// no earlier probe is with Tokio; packets are held from now until
+    /// [`Self::probe_applied`].
     pub(crate) fn ready_probe(&mut self) -> Option<(PublisherSession, MoqProbe)> {
-        if self.probe_sent {
+        if self.probe_sent || self.probe_in_flight {
             return None;
         }
         let probe = self.tracks.probe()?;
         self.probe_sent = true;
+        self.probe_in_flight = true;
         self.media.begin_probe();
         Some((self.session.clone(), probe))
     }
 
     pub(crate) fn probe_applied(&mut self, ring: Option<Arc<RingBuffer>>) {
+        self.probe_in_flight = false;
         self.media.probe_applied(ring);
     }
 
@@ -342,9 +367,9 @@ async fn ingest<L: Lifecycle + Clone>(
         Ok(Err(error)) => return SessionEnd::moq("broadcast", error),
         Ok(Ok(broadcast)) => broadcast,
     };
-    let catalog =
+    let (reader, catalog) =
         match first_catalog(read_catalog(&broadcast, preference), limits.catalog_timeout).await {
-            Ok(catalog) => catalog,
+            Ok(first) => first,
             Err(end) => return end,
         };
     let tracks = TrackSet::new(from_hang_catalog(&catalog));
@@ -365,23 +390,21 @@ async fn ingest<L: Lifecycle + Clone>(
     let last_frame = Cell::new(Instant::now());
     let mut pumps = FuturesUnordered::new();
     for (index, name) in names.into_iter().enumerate() {
-        let subscriber = match broadcast.track(&name) {
-            Ok(track) => track.subscribe(None::<moq_net::track::Subscription>).await,
-            Err(error) => Err(error),
-        };
-        match subscriber {
-            Ok(subscriber) => pumps.push(pump(
+        match subscribe(&broadcast, &name).await {
+            Ok(track) => pumps.push(pump(
                 index,
-                subscriber.ordered(),
+                track,
                 lifecycle,
                 slot,
                 budget,
                 &last_frame,
                 limits.max_frame_bytes,
             )),
-            Err(error) => return SessionEnd::moq(&format!("subscribe to track {name:?}"), error),
+            Err(end) => return end,
         }
     }
+    // A publisher may list some tracks only in a later catalog version.
+    let mut reader = Some(reader);
     let mut idle = pin!(idle_watch(&last_frame, limits.idle_timeout));
     loop {
         tokio::select! {
@@ -391,9 +414,109 @@ async fn ingest<L: Lifecycle + Clone>(
                 Some(None) => {}
                 None => return SessionEnd::new(Error::Closed, "the publisher finished every track"),
             },
+            catalog = catalog_update(&mut reader) => {
+                let (added, probe) = {
+                    let mut slot = slot.borrow_mut();
+                    let Some(ingest) = slot.as_mut() else {
+                        return SessionEnd::new(Error::Cancel, "the session was released");
+                    };
+                    let added = ingest.add_tracks(from_hang_catalog(&catalog));
+                    (added, ingest.ready_probe())
+                };
+                for (index, name) in added {
+                    match subscribe(&broadcast, &name).await {
+                        Ok(track) => pumps.push(pump(
+                            index,
+                            track,
+                            lifecycle,
+                            slot,
+                            budget,
+                            &last_frame,
+                            limits.max_frame_bytes,
+                        )),
+                        Err(end) => return end,
+                    }
+                }
+                if let Some((session, probe)) = probe {
+                    apply_probe(lifecycle, slot, &session, probe).await;
+                }
+            }
         }
     }
 }
+
+async fn subscribe(
+    broadcast: &moq_net::broadcast::Consumer,
+    name: &str,
+) -> Result<moq_net::track::Ordered, SessionEnd> {
+    let subscriber = match broadcast.track(name) {
+        Ok(track) => track.subscribe(None::<moq_net::track::Subscription>).await,
+        Err(error) => Err(error),
+    };
+    subscriber
+        .map(moq_net::track::Subscriber::ordered)
+        .map_err(|error| SessionEnd::moq(&format!("subscribe to track {name:?}"), error))
+}
+
+fn log_rejected(rejected: &[(String, String)]) {
+    for (name, reason) in rejected {
+        info!(
+            event_class = "media",
+            event_type = "restream.moq.ingest.track_rejected",
+            track = %name,
+            reason = %reason,
+            "MoQ publisher track not ingested",
+        );
+    }
+}
+
+/// The catalog track a session keeps reading after its first version.
+enum CatalogReader {
+    Hang(hang::catalog::Consumer),
+    Msf(moq_mux::catalog::msf::Consumer),
+}
+
+impl std::fmt::Debug for CatalogReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Hang(_) => "CatalogReader::Hang",
+            Self::Msf(_) => "CatalogReader::Msf",
+        })
+    }
+}
+
+impl CatalogReader {
+    async fn next(&mut self) -> moq_mux::Result<Option<hang::Catalog>> {
+        match self {
+            Self::Hang(consumer) => Ok(consumer.next().await?),
+            Self::Msf(consumer) => consumer.next().await,
+        }
+    }
+}
+
+/// The next catalog version. Updates only add tracks, so one that ends,
+/// fails or panics stops the following and leaves the media running; with
+/// nothing to follow this never resolves.
+async fn catalog_update(reader: &mut Option<CatalogReader>) -> hang::Catalog {
+    while let Some(current) = reader.as_mut() {
+        match AssertUnwindSafe(current.next()).catch_unwind().await {
+            Ok(Ok(Some(catalog))) => return catalog,
+            Ok(Ok(None)) => debug!("the MoQ publisher's catalog track ended"),
+            Ok(Err(error)) => {
+                warn!(%error, "MoQ catalog update unreadable; no longer following updates");
+            }
+            Err(payload) => {
+                let panic = crate::panic_boundary::record_contained(payload.as_ref());
+                warn!(%panic, "MoQ catalog parser panicked; no longer following updates");
+            }
+        }
+        *reader = None;
+    }
+    std::future::pending().await
+}
+
+/// The first catalog version, and the reader that follows later ones.
+type FirstCatalog = moq_mux::Result<Option<(CatalogReader, hang::Catalog)>>;
 
 /// Honor an announced profile before trying its alternate; only unnamed
 /// broadcasts race. A missing profile may fall back, but malformed input
@@ -401,12 +524,11 @@ async fn ingest<L: Lifecycle + Clone>(
 async fn read_catalog(
     broadcast: &moq_net::broadcast::Consumer,
     preference: Option<CatalogFormat>,
-) -> moq_mux::Result<Option<hang::Catalog>> {
+) -> FirstCatalog {
     let hang = async {
-        Ok(hang::Catalog::<()>::subscribe(broadcast)
-            .await?
-            .next()
-            .await?)
+        let mut consumer = hang::Catalog::<()>::subscribe(broadcast).await?;
+        let first = consumer.next().await?;
+        Ok(first.map(|catalog| (CatalogReader::Hang(consumer), catalog)))
     };
     let msf = async {
         let track = broadcast
@@ -415,9 +537,9 @@ async fn read_catalog(
             .await?;
         // Upstream does not spawn. The moq-net model caps catalog frames at
         // MAX_CACHE_BYTES; this consumer also checks the rendition bound.
-        moq_mux::catalog::msf::Consumer::<()>::new(track)
-            .next()
-            .await
+        let mut consumer = moq_mux::catalog::msf::Consumer::<()>::new(track);
+        let first = consumer.next().await?;
+        Ok(first.map(|catalog| (CatalogReader::Msf(consumer), catalog)))
     };
     // An unnamed broadcast is a hang publisher (Restream's own convention);
     // decide by profile, never by which catalog happens to arrive first, so a
@@ -445,7 +567,7 @@ async fn read_catalog(
     }
 }
 
-fn missing_catalog(result: &moq_mux::Result<Option<hang::Catalog>>) -> bool {
+fn missing_catalog(result: &FirstCatalog) -> bool {
     match result {
         Ok(None) => true,
         Err(moq_mux::Error::Moq(error) | moq_mux::Error::Hang(hang::Error::Moq(error))) => {
@@ -460,10 +582,10 @@ fn missing_catalog(result: &moq_mux::Result<Option<hang::Catalog>>) -> bool {
 
 /// Contain dependency parser panics at the catalog boundary, not the whole
 /// listener: a bad catalog closes just this admitted publisher.
-async fn first_catalog<E: Display>(
-    read: impl Future<Output = Result<Option<hang::Catalog>, E>>,
+async fn first_catalog<T, E: Display>(
+    read: impl Future<Output = Result<Option<T>, E>>,
     timeout: Duration,
-) -> Result<hang::Catalog, SessionEnd> {
+) -> Result<T, SessionEnd> {
     match compio::time::timeout(timeout, AssertUnwindSafe(read).catch_unwind()).await {
         Err(_) => Err(SessionEnd::new(
             Error::Timeout,
