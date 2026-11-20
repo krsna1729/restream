@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-074 bounded HLS ingest poll](#q-074-performance-opus-a-rare-multi-millisecond-hls-ingest-poll-is-bounded-whatever-its-cause)
 - [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
@@ -24,25 +23,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-074 [performance] [opus] A rare multi-millisecond HLS ingest poll is bounded whatever its cause
-- Goal: a `hlsIngest` poll on the MEDIA executor never spends multiple
-  milliseconds of thread CPU.
-- Remaining work: run the live gate on a host whose thread CPU clock is
-  trustworthy. The application bounds are in place: a box walk counts
-  nested boxes, a poll converts at most 256 fMP4 samples, and a whole
-  `moof` decode and plan takes about 0.5 ms at the 16384-sample bound on a
-  Zen 1 VM, so a full incremental parser is not needed. On that VM the gate
-  cannot pass or fail the code: TS and fMP4 both showed 19–40 ms maxima,
-  about half of it system time, while the `--host-probe` thread, which does
-  no work, saw thread-CPU gaps up to 97 ms (hypervisor time charged to the
-  thread). Allocator or kernel tuning showed no repeatable tail improvement.
-- Gates: release `hls-push-duty -- --no-netns --hls-publishers 8
-  --duration-secs 60 --poll-usage --host-probe`, with `--segment-type ts`
-  and `--segment-type fmp4`, on bare metal over five runs each, with
-  `hlsIngest` max CPU below 4 ms and fewer than one poll above 4 ms per
-  minute per session, and a probe whose own thread-CPU gaps stay below
-  1 ms. A mean or p99 passing does not waive the maximum.
 
 ### Q-115 [platform] [sonnet] Move to reqwest 0.13 without a crypto-provider panic or a trust-root change
 - Goal: every crate builds against reqwest 0.13; `.github/dependabot.yml`
