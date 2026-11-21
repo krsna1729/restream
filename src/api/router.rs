@@ -321,15 +321,26 @@ fn create_compressed_static_router() -> Router<Arc<AppState>> {
 
 /// Builds the complete dashboard router before transport-wide layers are
 /// applied, keeping route registration close to the public boundary list above.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 fn create_app_router() -> Router<Arc<AppState>> {
-    // Keep the full route table in one place so the public dashboard surface is
-    // easy to audit, even though individual handlers stay in smaller modules.
+    // The full route table stays in this file, one function per area, so the
+    // public dashboard surface is easy to audit, even though individual
+    // handlers stay in smaller modules. Each path is registered in one area.
     Router::new()
         .merge(create_compressed_static_router())
+        .merge(access_routes())
+        .merge(pipeline_routes())
+        .merge(observability_routes())
+        .merge(agent_routes())
+        .merge(pipeline_operation_routes())
+        .merge(engine_and_media_routes())
+        .merge(create_hls_router())
+        .route("/api/{*path}", any(api_not_found_handler))
+}
+
+/// Sign-in, users, audit, notifications, schedules, share links and rate
+/// limits.
+fn access_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/logo.png", get(logo_handler))
         .route("/api/v1/auth/login", post(login_post_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
@@ -402,6 +413,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
             "/api/v1/security/rate-limits/reset",
             post(rate_limits_reset_handler),
         )
+}
+
+/// Settings, pipelines and their inputs and outputs.
+fn pipeline_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/api/v1/audio-caps", get(audio_caps_handler))
         .route(
             "/api/v1/settings",
@@ -480,6 +496,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
             "/api/v1/pipelines/{pipeline_id}/alerts",
             get(pipeline_alerts_handler),
         )
+}
+
+/// Logs, alerts, events, engine-wide views and history.
+fn observability_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/api/v1/logs", get(logs_handler))
         .route("/api/v1/logs/stream", get(logs_stream_handler))
         .route("/api/v1/alerts", get(aggregate_alerts_handler))
@@ -508,6 +529,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
             "/api/v1/pipelines/{pipeline_id}/flight-recorder",
             get(super::fleet_history::v1_flight_recorder_handler),
         )
+}
+
+/// The operations agent: context, plans and operations.
+fn agent_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route(
             "/api/v1/agent/capabilities",
             get(agent_capabilities_handler),
@@ -556,6 +582,12 @@ fn create_app_router() -> Router<Arc<AppState>> {
             post(agent_operation_verify_handler),
         )
         .route("/api/v1/agent/verify", post(agent_verify_handler))
+}
+
+/// Per-pipeline telemetry, diagnostics, recording and stream QA; encodings
+/// and legacy ingests.
+fn pipeline_operation_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route(
             "/api/v1/pipelines/{pipeline_id}/telemetry",
             get(v1_pipeline_telemetry_handler),
@@ -603,6 +635,11 @@ fn create_app_router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/ingests/{id}/start", post(ingests_start_handler))
         .route("/api/v1/ingests/{id}/stop", post(ingests_stop_handler))
+}
+
+/// Engine status, the media library and health endpoints.
+fn engine_and_media_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/api/v1/engine", get(status_get_handler))
         .route("/api/v1/engine/sbom", get(status_sbom_get_handler))
         .route("/api/v1/engine/health", get(v1_engine_health_handler))
@@ -626,8 +663,6 @@ fn create_app_router() -> Router<Arc<AppState>> {
         )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
-        .merge(create_hls_router())
-        .route("/api/{*path}", any(api_not_found_handler))
 }
 
 // These layers define transport-wide policy shared by dashboard APIs, static
