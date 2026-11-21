@@ -107,8 +107,8 @@ impl DeadlineDb {
         }
     }
 
-    /// Bounds a read that is already built: one through an application
-    /// port whose adapter runs on this pool. Dropped at the deadline.
+    /// Bounds a read future that is already built on this pool. Dropped at
+    /// the deadline.
     pub async fn bound<T, E>(&self, call: impl Future<Output = Result<T, E>>) -> Result<T, E>
     where
         E: From<DeadlineError>,

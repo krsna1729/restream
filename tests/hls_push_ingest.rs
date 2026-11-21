@@ -11,9 +11,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::application::catalog_auth::{
-    CatalogAuth, CatalogAuthLoadFuture, CatalogAuthSource, CatalogIngestAuthenticator,
-};
+use restream::application::catalog_auth::{CatalogAuth, CatalogIngestAuthenticator};
+use restream::db::{self, DeadlineDb};
 use restream_core::MediaType;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::engine::MediaEngine;
@@ -25,37 +24,26 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const STREAM_KEY: &str = "hls-key";
 const PIPELINE_ID: &str = "pipe-hls";
-const INPUT_ID: &str = "input-hls";
-
-/// A catalog of one keyed input on [`STREAM_KEY`].
-struct OneKey;
-
-impl CatalogAuthSource for OneKey {
-    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
-        Box::pin(async move {
-            Ok(vec![Ok(
-                restream_domain::domain::pipeline_input::PipelineInput {
-                    id: INPUT_ID.to_string(),
-                    pipeline_id: PIPELINE_ID.to_string(),
-                    stream_key: STREAM_KEY.to_string(),
-                    enabled: true,
-                    selected: true,
-                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
-                },
-            )])
-        })
-    }
-}
 
 struct Server {
     engine: Arc<MediaEngine>,
     address: SocketAddr,
+    input_id: String,
     _ingest: Arc<HlsIngest>,
 }
 
 async fn serve() -> Server {
     let engine = Arc::new(MediaEngine::new());
-    let catalog = CatalogAuth::new(Arc::new(OneKey));
+    let pool = db::create_pool("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+    db::create_pipeline(&pool, PIPELINE_ID, "HLS", STREAM_KEY, None, None)
+        .await
+        .unwrap();
+    let input = db::get_pipeline_input_by_stream_key(&pool, STREAM_KEY)
+        .await
+        .unwrap()
+        .unwrap();
+    let catalog = CatalogAuth::new(DeadlineDb::api(pool));
     catalog.load().await.unwrap();
     let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let ingest = HlsIngest::new(
@@ -81,6 +69,7 @@ async fn serve() -> Server {
     Server {
         engine,
         address,
+        input_id: input.id,
         _ingest: ingest,
     }
 }
@@ -125,7 +114,11 @@ async fn assert_whole_fixture_published(
 ) {
     // Long enough for an 8 s fixture published at media pace.
     tokio::time::timeout(Duration::from_secs(30), async {
-        while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+        while server
+            .engine
+            .input_has_session(PIPELINE_ID, &server.input_id)
+            .await
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -381,7 +374,11 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     std::fs::remove_dir_all(&dir).unwrap();
 
     tokio::time::timeout(Duration::from_secs(30), async {
-        while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+        while server
+            .engine
+            .input_has_session(PIPELINE_ID, &server.input_id)
+            .await
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })

@@ -238,7 +238,6 @@ async fn last_result(db: &db::DeadlineDb, id: &str) -> Option<String> {
 /// passes, A's row says it is still running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
-    use restream::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
     let (pool, lifecycle, dir) = file_pools().await;
     for pipeline in ["pipe-a", "pipe-b"] {
         db::create_pipeline(
@@ -308,7 +307,6 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
     services.file_ingest_service = restream::application::services::FileIngestService::new(
         db::DeadlineDb::api(ingest_pool),
-        Arc::new(SqlitePipelineInputStore::new(services.db.clone())),
         services.pipeline_service.clone(),
     );
 

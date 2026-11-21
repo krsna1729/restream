@@ -9,8 +9,11 @@ use bytes::Bytes;
 use futures_util::StreamExt as _;
 use reqwest::StatusCode;
 
-use crate::application::catalog_auth::{CatalogAuth, CatalogAuthLoadFuture, CatalogAuthSource};
-use restream_domain::domain::pipeline_input::{PipelineInput, PushAuth};
+use crate::application::catalog_auth::CatalogAuth;
+use crate::application::pipeline_inputs::PipelineInputService;
+use crate::application::services::PipelineService;
+use crate::db::{self, DeadlineDb};
+use restream_domain::domain::pipeline_input::{PipelineInputSource, PushAuth};
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls_ingest::test_support::{
     INPUT_ID, PIPELINE_ID, STREAM_KEY, fmp4_video_objects, test_ingest,
@@ -24,44 +27,55 @@ fn random_password() -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// The catalog's one input; a test changes its credential, then refreshes
-/// the index as a catalog write does.
-struct Inputs(std::sync::RwLock<PushAuth>);
-
-impl CatalogAuthSource for Inputs {
-    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
-        Box::pin(async move {
-            Ok(vec![Ok(PipelineInput {
-                id: INPUT_ID.to_string(),
-                pipeline_id: PIPELINE_ID.to_string(),
-                stream_key: STREAM_KEY.to_string(),
-                enabled: true,
-                push_auth: self.0.read().unwrap().clone(),
-                ..PipelineInput::keyed_default()
-            })])
-        })
+fn source_with_auth(push_auth: PushAuth) -> PipelineInputSource {
+    PipelineInputSource {
+        push_auth,
+        ..PipelineInputSource::keyed()
     }
 }
 
-async fn catalog(auth: PushAuth) -> (Arc<Inputs>, Arc<CatalogAuth>) {
-    let inputs = Arc::new(Inputs(std::sync::RwLock::new(auth)));
-    let catalog = CatalogAuth::new(inputs.clone());
+async fn catalog(auth: PushAuth) -> (PipelineInputService, Arc<CatalogAuth>) {
+    let pool = db::create_pool("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+    db::create_pipeline(&pool, PIPELINE_ID, "HLS", "unused-primary", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline_input(
+        &pool,
+        INPUT_ID,
+        PIPELINE_ID,
+        "Publisher",
+        STREAM_KEY,
+        &source_with_auth(auth),
+    )
+    .await
+    .unwrap();
+    let db = DeadlineDb::api(pool);
+    let catalog = CatalogAuth::new(db.clone());
     catalog.load().await.unwrap();
-    (inputs, catalog)
+    let pipelines = PipelineService::new(db.clone(), catalog.clone());
+    (PipelineInputService::new(db, pipelines), catalog)
 }
 
 struct Server {
     engine: Arc<MediaEngine>,
     base: String,
     _ingest: Arc<HlsIngest>,
-    inputs: Arc<Inputs>,
-    catalog: Arc<CatalogAuth>,
+    inputs: PipelineInputService,
 }
 
 impl Server {
     async fn set_push_auth(&self, auth: PushAuth) {
-        *self.inputs.0.write().unwrap() = auth;
-        self.catalog.refresh().await;
+        self.inputs
+            .update(
+                PIPELINE_ID,
+                INPUT_ID,
+                "Publisher",
+                true,
+                source_with_auth(auth),
+            )
+            .await
+            .unwrap();
     }
 }
 
@@ -72,7 +86,7 @@ async fn serve(limits: HlsIngestLimits) -> Server {
 async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
     let (engine, ingest) = test_ingest(limits);
     let (inputs, catalog) = catalog(auth).await;
-    let app = crate::api::create_hls_ingest_router(ingest.clone(), catalog.clone());
+    let app = crate::api::create_hls_ingest_router(ingest.clone(), catalog);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(crate::api::http_server::serve(
@@ -88,7 +102,6 @@ async fn serve_with_auth(limits: HlsIngestLimits, auth: PushAuth) -> Server {
         base: format!("http://{address}/ingest/hls"),
         _ingest: ingest,
         inputs,
-        catalog,
     }
 }
 

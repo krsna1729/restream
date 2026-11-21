@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::application::ingest::{
-    FileIngestConfig, PipelineFileIngestState, PipelineInputLookup, ResolveFileIngestError,
+    FileIngestConfig, PipelineFileIngestState, ResolveFileIngestError,
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
+use crate::application::pipeline_inputs::read_pipeline_input_by_stream_key;
 use crate::db::{self, DeadlineDb};
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
@@ -54,19 +55,13 @@ pub enum FileIngestStartError {
 /// media-engine state so stored config and active ingest processes stay aligned.
 pub struct FileIngestService {
     db: DeadlineDb,
-    pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
     pipeline_service: PipelineService,
 }
 
 impl FileIngestService {
-    pub fn new(
-        db: DeadlineDb,
-        pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
-        pipeline_service: PipelineService,
-    ) -> Self {
+    pub fn new(db: DeadlineDb, pipeline_service: PipelineService) -> Self {
         Self {
             db,
-            pipeline_input_lookup,
             pipeline_service,
         }
     }
@@ -232,9 +227,7 @@ impl FileIngestService {
             .iter()
             .map(|filename| Self::resolve_media_file_path(media_dir, filename))
             .collect::<Result<Vec<_>, _>>()?;
-        let input = self
-            .pipeline_input_lookup
-            .get_by_stream_key(&ingest.stream_key)
+        let input = read_pipeline_input_by_stream_key(&self.db, &ingest.stream_key)
             .await
             .map_err(|error| FileIngestStartError::PipelineStore(error.to_string()))?
             .ok_or(FileIngestStartError::MissingPipelineForStreamKey)?;

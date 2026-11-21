@@ -1,83 +1,26 @@
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-
 use crate::application::services::{PipelineService, ServiceError, ServiceResult};
+use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::{
     PipelineInput, PipelineInputRole, PipelineInputSource,
 };
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
 
-pub type InputLookupFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<Option<PipelineInput>, PipelineInputStoreError>> + Send + 'a>,
->;
-pub type InputListFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<PipelineInput>, PipelineInputStoreError>> + Send + 'a>>;
-pub type InputWriteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<PipelineInput, PipelineInputStoreError>> + Send + 'a>>;
-pub type InputUpdateFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<Option<PipelineInput>, PipelineInputStoreError>> + Send + 'a>,
->;
-pub type InputDeleteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<bool, PipelineInputStoreError>> + Send + 'a>>;
-
-#[derive(Debug, Clone)]
-pub enum PipelineInputStoreError {
-    Conflict(String),
-    Internal(String),
-}
-
-impl fmt::Display for PipelineInputStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Conflict(message) | Self::Internal(message) => formatter.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for PipelineInputStoreError {}
-
-pub trait PipelineInputStore: Send + Sync {
-    fn get<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputLookupFuture<'a>;
-    fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> InputLookupFuture<'a>;
-    fn list<'a>(&'a self, pipeline_id: &'a str) -> InputListFuture<'a>;
-    fn create<'a>(
-        &'a self,
-        id: &'a str,
-        pipeline_id: &'a str,
-        label: &'a str,
-        stream_key: &'a str,
-        source: PipelineInputSource,
-    ) -> InputWriteFuture<'a>;
-    fn update<'a>(
-        &'a self,
-        pipeline_id: &'a str,
-        input_id: &'a str,
-        label: &'a str,
-        enabled: bool,
-        source: PipelineInputSource,
-    ) -> InputUpdateFuture<'a>;
-    fn delete<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputDeleteFuture<'a>;
-    fn promote<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputUpdateFuture<'a>;
-}
-
 #[derive(Clone)]
 pub struct PipelineInputService {
-    store: Arc<dyn PipelineInputStore>,
+    db: DeadlineDb,
     pipelines: PipelineService,
 }
 
 impl PipelineInputService {
-    pub fn with_store(store: Arc<dyn PipelineInputStore>, pipelines: PipelineService) -> Self {
-        Self { store, pipelines }
+    pub fn new(db: DeadlineDb, pipelines: PipelineService) -> Self {
+        Self { db, pipelines }
     }
 
     pub async fn list(&self, pipeline_id: &str) -> ServiceResult<Vec<PipelineInput>> {
         self.pipelines.get_by_id(pipeline_id).await?;
-        self.store
-            .list(pipeline_id)
+        self.db
+            .read(|pool| db::with_busy_retry(|| db::list_pipeline_inputs(pool, pipeline_id)))
             .await
             .map_err(|error| ServiceError::internal(format!("list pipeline inputs: {error}")))
     }
@@ -86,8 +29,7 @@ impl PipelineInputService {
         &self,
         stream_key: &str,
     ) -> ServiceResult<Option<PipelineInput>> {
-        self.store
-            .get_by_stream_key(stream_key)
+        read_pipeline_input_by_stream_key(&self.db, stream_key)
             .await
             .map(|input| input.filter(|candidate| candidate.enabled))
             .map_err(|error| ServiceError::internal(format!("get pipeline input: {error}")))
@@ -109,29 +51,38 @@ impl PipelineInputService {
         for _ in 0..16 {
             let input_id = format!("input_{}", hex(&rand::random::<[u8; 8]>()));
             let stream_key = generated_stream_key();
-            let store = self.store.clone();
+            let db = self.db.clone();
             let (pipeline_id, label) = (pipeline_id.to_owned(), label.to_owned());
             let source = source.clone();
             match catalog_auth
                 .commit(async move {
-                    store
-                        .create(&input_id, &pipeline_id, &label, &stream_key, source)
+                    db.write(move |pool| async move {
+                        db::with_busy_retry(|| {
+                            db::create_pipeline_input(
+                                &pool,
+                                &input_id,
+                                &pipeline_id,
+                                &label,
+                                &stream_key,
+                                &source,
+                            )
+                        })
                         .await
+                    })
+                    .await
                 })
                 .await
             {
                 Ok(input) => return Ok(input),
-                Err(PipelineInputStoreError::Conflict(message))
-                    if message.contains("pipeline input limit exceeded") =>
-                {
+                Err(error) if is_input_limit(&error) => {
                     return Err(ServiceError::conflict(format!(
                         "pipeline input limit is {MAX_PIPELINE_INPUTS}"
                     )));
                 }
-                Err(PipelineInputStoreError::Conflict(_)) => continue,
-                Err(PipelineInputStoreError::Internal(message)) => {
+                Err(error) if is_unique_violation(&error) => continue,
+                Err(error) => {
                     return Err(ServiceError::internal(format!(
-                        "create pipeline input: {message}"
+                        "create pipeline input: {error}"
                     )));
                 }
             }
@@ -155,7 +106,7 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be disabled",
             ));
         }
-        let store = self.store.clone();
+        let db = self.db.clone();
         let owned = (
             pipeline_id.to_owned(),
             input_id.to_owned(),
@@ -164,10 +115,21 @@ impl PipelineInputService {
         self.pipelines
             .catalog_auth()
             .commit(async move {
-                let (pipeline_id, input_id, label) = owned;
-                store
-                    .update(&pipeline_id, &input_id, &label, enabled, source)
+                db.write(move |pool| async move {
+                    let (pipeline_id, input_id, label) = owned;
+                    db::with_busy_retry(|| {
+                        db::update_pipeline_input(
+                            &pool,
+                            &pipeline_id,
+                            &input_id,
+                            &label,
+                            enabled,
+                            &source,
+                        )
+                    })
                     .await
+                })
+                .await
             })
             .await
             .map_err(store_error)?
@@ -181,11 +143,17 @@ impl PipelineInputService {
                 "primary or selected inputs cannot be deleted",
             ));
         }
-        let store = self.store.clone();
+        let db = self.db.clone();
         let owned = (pipeline_id.to_owned(), input_id.to_owned());
         self.pipelines
             .catalog_auth()
-            .commit(async move { store.delete(&owned.0, &owned.1).await })
+            .commit(async move {
+                db.write(move |pool| async move {
+                    db::with_busy_retry(|| db::delete_pipeline_input(&pool, &owned.0, &owned.1))
+                        .await
+                })
+                .await
+            })
             .await
             .map_err(store_error)
     }
@@ -195,23 +163,40 @@ impl PipelineInputService {
         if !current.enabled {
             return Err(ServiceError::conflict("disabled inputs cannot be promoted"));
         }
-        let store = self.store.clone();
+        let db = self.db.clone();
         let owned = (pipeline_id.to_owned(), input_id.to_owned());
         self.pipelines
             .catalog_auth()
-            .commit(async move { store.promote(&owned.0, &owned.1).await })
+            .commit(async move {
+                db.write(move |pool| async move {
+                    db::with_busy_retry(|| db::promote_pipeline_input(&pool, &owned.0, &owned.1))
+                        .await
+                })
+                .await
+            })
             .await
             .map_err(store_error)?
             .ok_or_else(|| input_not_found(input_id))
     }
 
     pub async fn get(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
-        self.store
-            .get(pipeline_id, input_id)
+        self.db
+            .read(|pool| {
+                db::with_busy_retry(|| db::get_pipeline_input(pool, pipeline_id, input_id))
+            })
             .await
             .map_err(store_error)?
             .ok_or_else(|| input_not_found(input_id))
     }
+}
+
+/// Resolution without an enabled check, for callers that own eligibility.
+pub(super) async fn read_pipeline_input_by_stream_key(
+    db: &DeadlineDb,
+    stream_key: &str,
+) -> Result<Option<PipelineInput>, sqlx::Error> {
+    db.read(|pool| db::with_busy_retry(|| db::get_pipeline_input_by_stream_key(pool, stream_key)))
+        .await
 }
 
 pub fn generated_stream_key() -> String {
@@ -226,14 +211,23 @@ fn input_not_found(input_id: &str) -> ServiceError {
     ServiceError::not_found(format!("pipeline input {input_id} not found"))
 }
 
-fn store_error(error: PipelineInputStoreError) -> ServiceError {
-    match error {
-        PipelineInputStoreError::Conflict(message) => ServiceError::conflict(message),
-        // Internal messages are the raw sqlx Display. A SQLITE_BUSY failure
-        // here becomes HTTP 500 `{"error":"error returned from database:
-        // (code: 5) database is locked"}` with no service prefix — the
-        // shape seen on the concurrency-contract flake. Retry happens in
-        // `SqlitePipelineInputStore` before this mapping.
-        PipelineInputStoreError::Internal(message) => ServiceError::internal(message),
+fn is_input_limit(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|error| error.message().contains("pipeline input limit exceeded"))
+}
+
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|error| error.is_unique_violation())
+}
+
+fn store_error(error: sqlx::Error) -> ServiceError {
+    if is_unique_violation(&error) || is_input_limit(&error) {
+        ServiceError::conflict(error.to_string())
+    } else {
+        // Preserve the raw failure message when the bounded SQLite retry fails.
+        ServiceError::internal(error.to_string())
     }
 }
