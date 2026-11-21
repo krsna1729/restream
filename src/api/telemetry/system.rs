@@ -15,10 +15,6 @@ use super::configured_media_root;
 
 /// Builds the dashboard/system metrics payload, with a summary mode that keeps
 /// only the fields needed by compact operator surfaces.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
     let (cpu_pct, total_mem, used_mem, core_count, engine) =
         crate::host::system_sampling::sampled_system(|sys| {
@@ -33,11 +29,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
         })
         .unwrap_or_default();
     let free_mem = total_mem.saturating_sub(used_mem);
-    let mem_pct = if total_mem > 0 {
-        (used_mem as f64 / total_mem as f64) * 100.0
-    } else {
-        0.0
-    };
+    let mem_pct = used_percent(total_mem, used_mem);
     let load1 = System::load_average().map_or(0.0, |load| load.one);
     let capacity =
         crate::application::capacity::capacity_snapshot(&state.engine, &state.config).await;
@@ -53,98 +45,17 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
     let hls_put_tls = HLS_PUT_TLS_COUNTERS.snapshot();
 
-    let media_root = {
-        let absolute = configured_media_root(&state.media_dir);
-        std::fs::canonicalize(&absolute).unwrap_or(absolute)
-    };
     // A host that will not list its disks reports none.
     let disks = Disks::new_with_refreshed_list().ok();
     let disks: &[sysinfo::Disk] = disks.as_deref().unwrap_or_default();
+    let system_disk = system_disk_usage(disks);
+    let free_disk = system_disk.total.saturating_sub(system_disk.used);
+    let disk_pct = used_percent(system_disk.total, system_disk.used);
+    let media_disk = media_disk_json(&state.media_dir, disks);
 
-    let system_root = {
-        #[cfg(unix)]
-        {
-            PathBuf::from("/")
-        }
-        #[cfg(not(unix))]
-        {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        }
-    };
-    let (total_disk, used_disk, disk_mount) =
-        if let Some((total, used, mount)) = disk_usage_for_path(disks, &system_root) {
-            (total, used, Some(mount))
-        } else {
-            let (total, used) = disks.iter().fold((0u64, 0u64), |(t, u), disk| {
-                (
-                    t + disk.total_space(),
-                    u + (disk.total_space() - disk.available_space()),
-                )
-            });
-            (total, used, None)
-        };
-    let free_disk = total_disk.saturating_sub(used_disk);
-    let disk_pct = if total_disk > 0 {
-        (used_disk as f64 / total_disk as f64) * 100.0
-    } else {
-        0.0
-    };
-    let media_disk = disk_usage_for_path(disks, &media_root).map(|(total, used, mount)| {
-        let free = total.saturating_sub(used);
-        let used_pct = if total > 0 {
-            (used as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
-        serde_json::json!({
-            "totalBytes": total,
-            "usedBytes": used,
-            "freeBytes": free,
-            "usedPercent": used_pct,
-            "scope": "mediaDir",
-            "mountPoint": mount,
-            "mediaDir": state.media_dir,
-            "mediaRoot": media_root.display().to_string()
-        })
-    });
-
-    let nets1 = Networks::new_with_refreshed_list().ok();
-    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-    let nets2 = Networks::new_with_refreshed_list().ok();
-    let mut total_rx = 0u64;
-    let mut total_tx = 0u64;
-    let mut external_interfaces = Vec::new();
-    let mut ignored_interfaces = Vec::new();
-    // Rates need both samples; a host that will not list its interfaces
-    // reports none.
-    let samples = nets1.as_ref().zip(nets2.as_ref());
-    for (iface, n2) in samples.into_iter().flat_map(|(_, nets2)| nets2.iter()) {
-        if let Some(n1) = samples.and_then(|(nets1, _)| nets1.get(iface)) {
-            let rx = n2.total_received().saturating_sub(n1.total_received());
-            let tx = n2
-                .total_transmitted()
-                .saturating_sub(n1.total_transmitted());
-            let active = rx > 0 || tx > 0;
-            let iface = iface.to_string_lossy();
-            if is_external_interface(&iface) {
-                total_rx += rx;
-                total_tx += tx;
-                if active {
-                    external_interfaces.push(serde_json::json!({
-                        "name": iface,
-                        "downloadBytesPerSec": rx * 4,
-                        "uploadBytesPerSec": tx * 4,
-                        "downloadKbps": (rx * 4 * 8) as f64 / 1000.0,
-                        "uploadKbps": (tx * 4 * 8) as f64 / 1000.0,
-                    }));
-                }
-            } else if active {
-                ignored_interfaces.push(iface.to_string());
-            }
-        }
-    }
-    let dl_bytes_sec = total_rx * 4;
-    let ul_bytes_sec = total_tx * 4;
+    let network = sample_external_network().await;
+    let dl_bytes_sec = network.rx_bytes_per_sec;
+    let ul_bytes_sec = network.tx_bytes_per_sec;
     let dl_kbps = (dl_bytes_sec * 8) as f64 / 1000.0;
     let ul_kbps = (ul_bytes_sec * 8) as f64 / 1000.0;
 
@@ -199,13 +110,13 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             "rtmps": tls_counters_json(&rtmps),
             "hlsPutTls": tls_counters_json(&hls_put_tls),
             "disk": {
-                "totalBytes": total_disk,
-                "usedBytes": used_disk,
+                "totalBytes": system_disk.total,
+                "usedBytes": system_disk.used,
                 "freeBytes": free_disk,
                 "usedPercent": disk_pct,
                 "scope": "systemRoot",
-                "mountPoint": disk_mount,
-                "root": system_root.display().to_string()
+                "mountPoint": system_disk.mount,
+                "root": system_disk.root.display().to_string()
             },
             "mediaDisk": media_disk,
             "network": {
@@ -214,12 +125,131 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 "uploadBytesPerSec": ul_bytes_sec,
                 "downloadKbps": dl_kbps,
                 "uploadKbps": ul_kbps,
-                "interfaces": external_interfaces,
-                "ignoredInterfaces": ignored_interfaces,
+                "interfaces": network.interfaces,
+                "ignoredInterfaces": network.ignored,
                 "sampleMs": 250
             }
         })
     }
+}
+
+fn used_percent(total: u64, used: u64) -> f64 {
+    if total > 0 {
+        (used as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    }
+}
+
+/// Usage of the disk holding the system root, or of every disk summed when
+/// none holds it.
+struct SystemDiskUsage {
+    root: PathBuf,
+    total: u64,
+    used: u64,
+    mount: Option<String>,
+}
+
+fn system_disk_usage(disks: &[sysinfo::Disk]) -> SystemDiskUsage {
+    let root = {
+        #[cfg(unix)]
+        {
+            PathBuf::from("/")
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        }
+    };
+    let (total, used, mount) = if let Some((total, used, mount)) = disk_usage_for_path(disks, &root)
+    {
+        (total, used, Some(mount))
+    } else {
+        let (total, used) = disks.iter().fold((0u64, 0u64), |(t, u), disk| {
+            (
+                t + disk.total_space(),
+                u + (disk.total_space() - disk.available_space()),
+            )
+        });
+        (total, used, None)
+    };
+    SystemDiskUsage {
+        root,
+        total,
+        used,
+        mount,
+    }
+}
+
+/// Usage of the disk holding the media directory, if one does.
+fn media_disk_json(media_dir: &str, disks: &[sysinfo::Disk]) -> Option<serde_json::Value> {
+    let media_root = {
+        let absolute = configured_media_root(media_dir);
+        std::fs::canonicalize(&absolute).unwrap_or(absolute)
+    };
+    disk_usage_for_path(disks, &media_root).map(|(total, used, mount)| {
+        serde_json::json!({
+            "totalBytes": total,
+            "usedBytes": used,
+            "freeBytes": total.saturating_sub(used),
+            "usedPercent": used_percent(total, used),
+            "scope": "mediaDir",
+            "mountPoint": mount,
+            "mediaDir": media_dir,
+            "mediaRoot": media_root.display().to_string()
+        })
+    })
+}
+
+/// External interfaces' traffic over a 250 ms sample, per second.
+struct NetworkSample {
+    rx_bytes_per_sec: u64,
+    tx_bytes_per_sec: u64,
+    interfaces: Vec<serde_json::Value>,
+    /// Active interfaces left out as not external.
+    ignored: Vec<String>,
+}
+
+async fn sample_external_network() -> NetworkSample {
+    let nets1 = Networks::new_with_refreshed_list().ok();
+    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    let nets2 = Networks::new_with_refreshed_list().ok();
+    let mut sample = NetworkSample {
+        rx_bytes_per_sec: 0,
+        tx_bytes_per_sec: 0,
+        interfaces: Vec::new(),
+        ignored: Vec::new(),
+    };
+    // Rates need both samples; a host that will not list its interfaces
+    // reports none.
+    let samples = nets1.as_ref().zip(nets2.as_ref());
+    for (iface, n2) in samples.into_iter().flat_map(|(_, nets2)| nets2.iter()) {
+        let Some(n1) = samples.and_then(|(nets1, _)| nets1.get(iface)) else {
+            continue;
+        };
+        let rx = n2.total_received().saturating_sub(n1.total_received());
+        let tx = n2
+            .total_transmitted()
+            .saturating_sub(n1.total_transmitted());
+        let active = rx > 0 || tx > 0;
+        let iface = iface.to_string_lossy();
+        if is_external_interface(&iface) {
+            sample.rx_bytes_per_sec += rx * 4;
+            sample.tx_bytes_per_sec += tx * 4;
+            if active {
+                sample.interfaces.push(serde_json::json!({
+                    "name": iface,
+                    "downloadBytesPerSec": rx * 4,
+                    "uploadBytesPerSec": tx * 4,
+                    "downloadKbps": (rx * 4 * 8) as f64 / 1000.0,
+                    "uploadKbps": (tx * 4 * 8) as f64 / 1000.0,
+                }));
+            }
+        } else if active {
+            sample.ignored.push(iface.to_string());
+        }
+    }
+    sample
 }
 
 /// One TLS egress transport's process-lifetime counters (RTMPS, HLS PUT).
