@@ -27,7 +27,7 @@ skills; load the skill for the area you touch.
 - Anywhere in `src/` or `crates/restream-*/src/`: no blocking or per-packet work on Tokio workers or Compio Owner threads; OS-thread entry points `catch_unwind`; codecs run only in FFmpeg child processes; SRT sockets and `PeerTable` stay on Owner threads (details: [media-pipeline](docs/agent-guidance/skills/media-pipeline/SKILL.md)).
 - Update docs when changing commands, configuration, architecture, protocols, or user-visible behavior.
 - Prefer targeted fixes over rewrites. Add abstractions only when they remove real complexity.
-- Size and complexity limits apply to functions, not files: clippy fails a function over 150 code lines (`too_many_lines`) or cognitive complexity 25 (`cognitive_complexity`), thresholds in `clippy.toml`. File length is a review trigger, not a limit. Before growing a Rust file of 800+ lines, apply the [file-growth policy](docs/agent-guidance/skills/layering-audit/SKILL.md#file-growth); do not reorganize unrelated files merely to shrink them.
+- Size and complexity limits apply to functions, not files: clippy fails a function over 150 code lines (`too_many_lines`) or cognitive complexity 25 (`cognitive_complexity`), thresholds in `clippy.toml`; `cargo xtask reportcard` fails one over cyclomatic complexity 20 (`[workspace.metadata.reportcard]` in `Cargo.toml`) unless it is a recorded pre-existing offender in `crates/xtask/reportcard-baseline.json`, a ratchet that only shrinks: split a new offender, never record it. File length is a review trigger, not a limit. Before growing a Rust file of 800+ lines, apply the [file-growth policy](docs/agent-guidance/skills/layering-audit/SKILL.md#file-growth); do not reorganize unrelated files merely to shrink them.
 
 ## Skills
 
@@ -81,6 +81,7 @@ cargo clippy
 cargo fmt --all
 
 cargo xtask setup-skills
+cargo xtask reportcard       # complexity report; needs rust-code-analysis-cli 0.0.25
 
 npm run test:frontend
 

@@ -39,6 +39,7 @@ mod fuzz;
 mod harness;
 mod qualify;
 mod release;
+mod reportcard;
 mod scan;
 #[cfg(test)]
 mod security_workflow;
@@ -109,6 +110,7 @@ fn command(args: &[&str]) -> workflow::WorkflowResult {
         ["deploy", ref rest @ ..] => deployment::run(rest),
         ["api-drift", ref rest @ ..] => api_drift::run(rest),
         ["require-test-filters", ref rest @ ..] => test_filters::run(rest),
+        ["reportcard", "--update-baseline"] => reportcard::update_baseline().map_err(Into::into),
         _ => checks::run(args).unwrap_or_else(|| Err(workflow::Error::usage(usage()))),
     }
 }
@@ -161,6 +163,9 @@ workflows (each prints its own usage):
   deploy install-systemd-service [--now]
   api-drift
   require-test-filters <cargo test ...> -- <filter>...
+  reportcard --update-baseline
+                        drop fixed or shrunk complexity offenders from the
+                        ratchet baseline (never adds or raises one)
 
 argv0 aliases: restream-container-shim, restream-cgroup-wrap";
 
