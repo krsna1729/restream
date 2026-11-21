@@ -74,6 +74,10 @@ fn mixed_input_matrix_names_are_explicit_and_supported() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 fn mixed_fast_breadth_is_small_but_axis_rich() {
     let names: Vec<_> = mixed_fast_breadth_cases()
         .iter()

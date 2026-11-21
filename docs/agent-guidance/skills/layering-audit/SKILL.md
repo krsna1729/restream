@@ -35,11 +35,12 @@ and hot-path dispatch/channel hops introduced solely for layering.
 
 ## File growth
 
-Two gates fail the build; file length is not one of them:
+Three gates fail the build; file length is not one of them:
 
-- clippy `too_many_lines` fails a function over 150 code lines (threshold in
-  `clippy.toml`). Split it along its steps; a function that predates the limit
-  carries `#[expect(clippy::too_many_lines, reason = ...)]`. Delete the expect
+- clippy `too_many_lines` fails a function over 150 code lines, and clippy
+  `cognitive_complexity` one over 25 (thresholds in `clippy.toml`; the
+  complexity target is 15). Split it along its steps; a function that predates
+  a limit carries `#[expect(clippy::<lint>, reason = ...)]`. Delete the expect
   when you split it, and never add one to new code.
 - `cargo xtask source-audit` fails on an orphaned `.rs` file, one no crate
   root reaches through `mod`, `#[path]` or `include!`, because it is never

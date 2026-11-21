@@ -627,6 +627,10 @@ async fn run_resource_ingest_only(
     Ok(aggregate)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_resource_ingest_growth(
     env: &ResourceSweepEnv,
     stack: &mut Option<ResourceSweepStack>,
@@ -759,6 +763,10 @@ async fn run_resource_ingest_growth(
     Ok(out)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_resource_egress_growth(
     env: &ResourceSweepEnv,
     stack: &mut Option<ResourceSweepStack>,

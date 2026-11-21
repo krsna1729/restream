@@ -351,6 +351,10 @@ async fn accept_loop(endpoint: &Endpoint, listener: &Rc<Listener>, max_connectio
 }
 
 /// One connection: handshake, SETUP, then origin or publisher.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: CapSlot) {
     let peer = incoming.remote_address();
     let accepted = match transport::accept(incoming).await {

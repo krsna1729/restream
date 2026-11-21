@@ -99,6 +99,10 @@ pub(crate) fn upload_session_token() -> String {
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn start_hls_put_upload(
     start: HlsUploadStart,
     store: Arc<HlsStore>,

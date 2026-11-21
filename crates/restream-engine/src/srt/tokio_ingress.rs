@@ -142,6 +142,10 @@ impl SrtServer {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     pub async fn run(self: Arc<Self>, port: u16) {
         let bind = match format!("0.0.0.0:{port}").parse() {
             Ok(bind) => bind,

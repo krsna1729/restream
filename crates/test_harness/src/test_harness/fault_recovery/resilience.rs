@@ -270,6 +270,10 @@ async fn terminate_restream_gracefully(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn fault_resilience() -> Result<Value, String> {
     let work_dir = artifact_path("fault.resilience");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;

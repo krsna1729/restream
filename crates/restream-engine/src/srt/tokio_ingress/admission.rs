@@ -295,6 +295,10 @@ impl SrtServer {
 
     /// The admission task: IP bans, the pipeline lookup (under its deadline),
     /// then publisher or reader registration, unless the peer is `gone`.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     async fn admit(
         self: Arc<Self>,
         peer: SocketAddr,

@@ -194,6 +194,10 @@ pub(crate) async fn fault_srt_output_stall() -> Result<Value, String> {
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, String> {
     let work_dir = artifact_path("fault.srt-output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -506,6 +510,10 @@ impl SrtRsReceiverObservation {
 #[expect(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
 )]
 async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
     let work_dir = artifact_path("fault.srt-output-stall");

@@ -306,6 +306,10 @@ struct PullState {
     re_expired: bool,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run(
     engine: Arc<MediaEngine>,
     ingest: Arc<HlsIngest>,

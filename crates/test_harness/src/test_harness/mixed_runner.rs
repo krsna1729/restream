@@ -578,6 +578,10 @@ pub(super) async fn create_mixed_pipeline(
     Ok((pipeline_id, stream_key))
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn run_mixed_file_config(
     env: &MixedEnv,
     api: &RampApi,

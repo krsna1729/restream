@@ -43,8 +43,9 @@ unused_must_use = "deny"
 undocumented_unsafe_blocks = "deny"
 result_large_err = "allow"
 chunks_exact_to_as_chunks = "allow"
-# Threshold and the pre-existing-offender rule: clippy.toml.
+# Thresholds and the pre-existing-offender rule: clippy.toml.
 too_many_lines = "warn"
+cognitive_complexity = "warn"
 
 [lints]
 workspace = true

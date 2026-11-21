@@ -345,6 +345,10 @@ impl Origin {
     /// Complete the handshake publishing the grant's pipeline and drive the
     /// session until the viewer leaves. Never panics on peer input; every
     /// end is logged.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     pub(crate) async fn serve<S: moq_net::transport::poll::Session>(
         self: Rc<Self>,
         grant: OriginGrant,
@@ -466,6 +470,10 @@ impl Origin {
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "this pipeline's attach lock (order: before its `selection`) serializes generation changes across the pipeline resolution"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
     )]
     async fn revalidate(self: Rc<Self>, pipeline_id: &str, generation: u64) {
         let _guard = self.attach_locks.lock(pipeline_id).await;

@@ -240,6 +240,10 @@ pub async fn converge_ingest_key_state(
 /// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
 /// stop before its runtime is torn down, and a pull task can never recreate
 /// the ring of a pipeline that is going away.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn converge_pull_inputs(
     db: &DeadlineDb,
     ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,

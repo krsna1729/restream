@@ -162,6 +162,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     fn activate_connected(
         &mut self,
         output_id: &OutputId,

@@ -547,6 +547,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     fn converts_receiver_side_tcp_info_fields() {
         let info = LinuxTcpInfo {
             tcpi_rtt: 12_000,

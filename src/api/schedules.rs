@@ -154,6 +154,10 @@ async fn audit_run(state: &AppState, schedule: &Schedule, ok: bool) {
 }
 
 /// Runs, records and audits one occurrence.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_occurrence(
     state: Arc<AppState>,
     db: DeadlineDb,

@@ -261,6 +261,10 @@ pub fn anomaly_alerts(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
     let generated_at = snapshot
         .get("generatedAt")

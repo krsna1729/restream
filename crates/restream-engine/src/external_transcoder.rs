@@ -101,6 +101,10 @@ fn external_output_stream_idx(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn run_external_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,

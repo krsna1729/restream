@@ -6,6 +6,10 @@ use super::*;
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(in super::super) async fn run_mixed_anchor_config(
     env: &MixedEnv,
     api: &RampApi,
@@ -397,6 +401,10 @@ pub(in super::super) async fn run_mixed_anchor_config(
     Ok(result)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(in super::super) async fn run_mixed_live_config(
     env: &MixedEnv,
     api: &RampApi,

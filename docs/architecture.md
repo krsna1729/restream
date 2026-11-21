@@ -696,7 +696,8 @@ egress tasks, and `src/logging/mod.rs` still call `crate::db` with a pool.
 - Only approved owners read environment variables (mainly `src/config/mod.rs` and
   `crates/restream-engine/src/config/env.rs`).
 - Split files by ownership, not by size. Functions fail above 150 code lines
-  (clippy `too_many_lines`); files have no line limit. For a file of 800+
+  or cognitive complexity 25 (clippy `too_many_lines`, `cognitive_complexity`);
+  files have no line limit. For a file of 800+
   lines, apply the
   [file-growth policy](agent-guidance/skills/layering-audit/SKILL.md#file-growth)
   rather than mechanically splitting it.

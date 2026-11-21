@@ -47,6 +47,10 @@ pub fn level_name(level_idc: u8) -> String {
 
 /// Parses an SPS NAL unit payload: the bytes after the one-byte NAL header,
 /// emulation-prevention bytes still present.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
     let sps = rbsp(payload);
     let &[profile_idc, _constraints, level_idc] = sps.first_chunk::<3>()?;

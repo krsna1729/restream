@@ -25,6 +25,10 @@ pub(super) const WORKLOAD_TOLERANCE: f64 = 0.05;
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) fn sample_validity(
     sample: &Value,
     expected_outputs: u64,

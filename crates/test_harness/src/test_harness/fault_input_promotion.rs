@@ -78,6 +78,10 @@ async fn wait_for_input_preview(
     Err(format!("input {input_id} preview did not become ready"))
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn run_input_promotion_case(
     api: &RampApi,
     ports: &TestPorts,

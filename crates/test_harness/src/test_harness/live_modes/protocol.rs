@@ -256,6 +256,10 @@ async fn create_srt_policy_pipeline_with_key(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
     let work_dir = artifact_path("srt.policy");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -458,6 +462,10 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
     Ok(value)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let work_dir = artifact_path("timestamp.bframe");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
