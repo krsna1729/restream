@@ -4,7 +4,7 @@
 //! a name here instead of repeating the commands.
 
 use crate::workflow::{self, WorkflowResult};
-use crate::{docs_audit, frontend_style, fuzz, scan, source_audit, test_filters};
+use crate::{docs_audit, frontend_style, fuzz, reportcard, scan, source_audit, test_filters};
 use std::fmt::{self, Write as _};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -286,6 +286,7 @@ static SOURCE_AUDIT: Step =
     Step::builtin("source-audit", || source_audit::run().map_err(Into::into));
 static DOCS_AUDIT: Step = Step::builtin("docs-audit", docs_audit::run);
 static FRONTEND_STYLE: Step = Step::builtin("frontend-style", frontend_style::run);
+static REPORTCARD: Step = Step::builtin("reportcard", || reportcard::run().map_err(Into::into));
 
 static TEST_HYGIENE: Step =
     Step::builtin("test-hygiene", || scan::test_hygiene().map_err(Into::into));
@@ -486,8 +487,8 @@ static GROUPS: &[Group] = &[
     },
     Group {
         name: "architecture",
-        about: "source, Markdown and dashboard audits",
-        steps: &[&SOURCE_AUDIT, &DOCS_AUDIT, &FRONTEND_STYLE],
+        about: "source, Markdown, dashboard and complexity audits",
+        steps: &[&SOURCE_AUDIT, &DOCS_AUDIT, &FRONTEND_STYLE, &REPORTCARD],
     },
     Group {
         name: "unit",

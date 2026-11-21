@@ -34,6 +34,13 @@ exclude = ["vendor/hang", "vendor/moq-msf", "vendor/moq-net", "vendor/rml_rtmp"]
 [workspace.package]
 version = "0.1.0"
 
+# `cargo xtask reportcard`: per-function cyclomatic complexity of the product
+# sources, measured by rust-code-analysis-cli. Recorded offenders live in
+# `crates/xtask/reportcard-baseline.json`, a ratchet that only shrinks.
+# Cognitive complexity is gated by clippy (`clippy.toml`), not here.
+[workspace.metadata.reportcard]
+max_cyclomatic = 20
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(kani)'] }
 unsafe_op_in_unsafe_fn = "deny"
