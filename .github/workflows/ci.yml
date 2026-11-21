@@ -224,6 +224,8 @@ jobs:
         with:
           system_deps_profile: live
           rust_cache: 'true'
+      # fault.resilience runs RTMPS outputs.
+      - uses: ./.github/actions/kernel-tls
       - name: Run concurrency lifecycle proof
         env:
           # Hosted runners cannot preserve the optional private network
