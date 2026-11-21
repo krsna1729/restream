@@ -93,8 +93,10 @@ async fn require_push_auth(auth: PushAuth, headers: &HeaderMap) -> Result<(), Re
 
 use restream_engine::hls_ingest::playlist::normalize_path;
 use restream_engine::hls_ingest::{
-    AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectKind, ObjectOutcome,
+    AuthorizeError, BodyError, DispatchError, DispatchOrigin, HlsIngest, ObjectBody, ObjectKind,
+    ObjectOutcome,
 };
+use restream_engine::ingest_auth::AuthenticatedPipeline;
 
 pub(super) async fn hls_ingest_handler(
     State(state): State<HlsIngestState>,
@@ -104,7 +106,6 @@ pub(super) async fn hls_ingest_handler(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let ingest = state.ingest;
     let stores = match method {
         Method::PUT | Method::POST => true,
         Method::DELETE => false,
@@ -118,36 +119,11 @@ pub(super) async fn hls_ingest_handler(
     };
     let client = connect_info.map(|Extension(ConnectInfo(addr))| addr);
     let client_ip = client.map_or_else(|| "unknown".to_string(), |addr| addr.ip().to_string());
-    let pipeline = match ingest.authorize(&stream_key, &client_ip).await {
+    let pipeline = match authorize_push(&state, &stream_key, &client_ip, &headers).await {
         Ok(pipeline) => pipeline,
-        Err(AuthorizeError::Forbidden) => {
-            return (StatusCode::FORBIDDEN, "invalid stream key").into_response();
-        }
-        // Not a bad credential: the stored input is broken until fixed.
-        Err(AuthorizeError::InputUnreadable) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the input's stored configuration is unreadable",
-            )
-                .into_response();
-        }
+        Err(response) => return response,
     };
-    // Read the admission index rather than a credential cache: a catalog write
-    // refreshes it before returning, so updates and clears apply to the very
-    // next object, even in an existing session.
-    let auth = match state.catalog.snapshot().get(&stream_key) {
-        Some(grant)
-            if grant.input_id == pipeline.input_id
-                && grant.pipeline_id == pipeline.id
-                && grant.accepts_push =>
-        {
-            grant.push_auth.clone()
-        }
-        _ => return StatusCode::FORBIDDEN.into_response(),
-    };
-    if let Err(response) = require_push_auth(auth, &headers).await {
-        return response;
-    }
+    let ingest = state.ingest;
     if !stores {
         // FFmpeg's `delete_segments` removes old segments; nothing is kept
         // after publishing, so there is nothing to delete.
@@ -177,38 +153,10 @@ pub(super) async fn hls_ingest_handler(
         )
             .into_response();
     };
-    // A stalled or trickling upload must not hold its slot and budget: each
-    // frame has the idle floor to arrive, the whole body (including waits
-    // for the key's buffer share) its deadline, and everything claimed is
-    // released on expiry.
-    let body_deadline = tokio::time::Instant::now() + ingest.body_deadline(&pipeline.input_id);
-    let object = tokio::time::timeout_at(
-        body_deadline,
-        ingest.object_body(kind, content_length, &pipeline.input_id),
-    )
-    .await;
-    let mut object = match object {
-        Ok(Ok(object)) => object,
-        Ok(Err(error)) => return body_error(error),
-        Err(_) => return body_too_slow(),
+    let object = match read_object(&ingest, kind, content_length, &pipeline.input_id, body).await {
+        Ok(object) => object,
+        Err(response) => return response,
     };
-    let mut frames = body.into_data_stream();
-    loop {
-        let frame_deadline = body_deadline.min(tokio::time::Instant::now() + idle_floor);
-        let frame = match tokio::time::timeout_at(frame_deadline, frames.next()).await {
-            Ok(Some(frame)) => frame,
-            Ok(None) => break,
-            Err(_) => return body_too_slow(),
-        };
-        let Ok(frame) = frame else {
-            return (StatusCode::BAD_REQUEST, "request body failed").into_response();
-        };
-        match tokio::time::timeout_at(body_deadline, object.push(&frame)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => return body_error(error),
-            Err(_) => return body_too_slow(),
-        }
-    }
 
     // The object is complete. Encoders that never read the response may
     // reset the connection now, which drops this handler; the object must
@@ -231,7 +179,96 @@ pub(super) async fn hls_ingest_handler(
         drop(slot);
         outcome
     });
-    match dispatch.await {
+    dispatch_response(dispatch.await)
+}
+
+/// Resolves the stream key, then checks the input's push credential against
+/// the admission index.
+async fn authorize_push(
+    state: &HlsIngestState,
+    stream_key: &str,
+    client_ip: &str,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedPipeline, Response> {
+    let pipeline = match state.ingest.authorize(stream_key, client_ip).await {
+        Ok(pipeline) => pipeline,
+        Err(AuthorizeError::Forbidden) => {
+            return Err((StatusCode::FORBIDDEN, "invalid stream key").into_response());
+        }
+        // Not a bad credential: the stored input is broken until fixed.
+        Err(AuthorizeError::InputUnreadable) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the input's stored configuration is unreadable",
+            )
+                .into_response());
+        }
+    };
+    // Read the admission index rather than a credential cache: a catalog write
+    // refreshes it before returning, so updates and clears apply to the very
+    // next object, even in an existing session.
+    let auth = match state.catalog.snapshot().get(stream_key) {
+        Some(grant)
+            if grant.input_id == pipeline.input_id
+                && grant.pipeline_id == pipeline.id
+                && grant.accepts_push =>
+        {
+            grant.push_auth.clone()
+        }
+        _ => return Err(StatusCode::FORBIDDEN.into_response()),
+    };
+    require_push_auth(auth, headers).await?;
+    Ok(pipeline)
+}
+
+/// Reads the request body into the object, within the idle floor per frame
+/// and the body deadline overall.
+async fn read_object(
+    ingest: &HlsIngest,
+    kind: ObjectKind,
+    content_length: Option<u64>,
+    input_id: &str,
+    body: Body,
+) -> Result<ObjectBody, Response> {
+    let idle_floor = ingest.limits().idle_floor;
+    // A stalled or trickling upload must not hold its slot and budget: each
+    // frame has the idle floor to arrive, the whole body (including waits
+    // for the key's buffer share) its deadline, and everything claimed is
+    // released on expiry.
+    let body_deadline = tokio::time::Instant::now() + ingest.body_deadline(input_id);
+    let object = tokio::time::timeout_at(
+        body_deadline,
+        ingest.object_body(kind, content_length, input_id),
+    )
+    .await;
+    let mut object = match object {
+        Ok(Ok(object)) => object,
+        Ok(Err(error)) => return Err(body_error(error)),
+        Err(_) => return Err(body_too_slow()),
+    };
+    let mut frames = body.into_data_stream();
+    loop {
+        let frame_deadline = body_deadline.min(tokio::time::Instant::now() + idle_floor);
+        let frame = match tokio::time::timeout_at(frame_deadline, frames.next()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return Ok(object),
+            Err(_) => return Err(body_too_slow()),
+        };
+        let Ok(frame) = frame else {
+            return Err((StatusCode::BAD_REQUEST, "request body failed").into_response());
+        };
+        match tokio::time::timeout_at(body_deadline, object.push(&frame)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(body_error(error)),
+            Err(_) => return Err(body_too_slow()),
+        }
+    }
+}
+
+fn dispatch_response(
+    dispatch: Result<Result<ObjectOutcome, DispatchError>, tokio::task::JoinError>,
+) -> Response {
+    match dispatch {
         Ok(Ok(ObjectOutcome::Stored | ObjectOutcome::Dropped)) => StatusCode::OK.into_response(),
         Ok(Ok(ObjectOutcome::Held)) => StatusCode::ACCEPTED.into_response(),
         Ok(Ok(ObjectOutcome::Malformed(error))) => (StatusCode::BAD_REQUEST, error).into_response(),
