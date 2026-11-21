@@ -168,6 +168,10 @@ name = "shared_ts_mux"
 harness = false
 
 [[bench]]
+name = "rtmp_ingest"
+harness = false
+
+[[bench]]
 name = "egress_visit"
 harness = false
 required-features = ["egress-test-driver"]
