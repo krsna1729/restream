@@ -582,146 +582,36 @@ async fn persist(
 }
 
 /// Reads one probe per pipeline from the engine and the runtime state.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 async fn collect_probes(
     hub: &StateHub,
     engine: &MediaEngine,
     inspector: Option<&restream_engine::stream_inspector::StreamInspector>,
 ) -> Vec<PipelineProbe> {
-    let egresses: HashMap<String, EgressProbe> = engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .map(|egress| {
-            let quality = restream_sync::lock::lock(&egress.quality);
-            (
-                egress.output_id.clone(),
-                EgressProbe {
-                    offered_bps: quality.offered_bps,
-                    delivered_bps: quality.delivered_bps,
-                    resyncs: egress.resync_count.load(Ordering::Relaxed),
-                    feed_lag: egress.feed_lag_units.load(Ordering::Relaxed),
-                },
-            )
-        })
-        .collect();
+    let egresses = egress_probes(engine).await;
     let mut ingests: HashMap<String, IngestProbe> = HashMap::new();
     // Each AAC track's frame length, for the inspector's clock drift.
     let mut aac_frames: HashMap<String, HashMap<u32, f64>> = HashMap::new();
     for (pipeline_id, ingest) in engine.ingests.active.read().await.iter() {
         let metadata = ingest.metadata();
-        // Every track a multi-track source declared, else its one track.
-        let tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
-        let frames: HashMap<u32, f64> = tracks
-            .iter()
-            .chain(
-                tracks
-                    .is_empty()
-                    .then_some(metadata.audio.as_ref())
-                    .flatten(),
-            )
-            .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
-            .filter_map(|track| {
-                restream_engine::stream_inspector::aac_frame_ms(track.sample_rate)
-                    .map(|frame_ms| (track.track_index, frame_ms))
-            })
-            .collect();
-        aac_frames.insert(pipeline_id.clone(), frames);
-        let quality = &metadata.quality;
-        let receive_buffer = match (
-            quality.srt_recv_buf_packets,
-            quality.srt_recv_buf_capacity_packets,
-        ) {
-            (Some(held), Some(capacity)) if capacity > 0 => {
-                Some(f64::from(held) / f64::from(capacity))
-            }
-            _ => None,
-        };
-        let video = metadata.video.as_ref();
+        aac_frames.insert(pipeline_id.clone(), aac_frame_lengths(ingest, &metadata));
         ingests.insert(
             pipeline_id.clone(),
-            IngestProbe {
-                input_id: ingest.input_id.clone(),
-                protocol: ingest.protocol.clone(),
-                bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
-                packets_per_sec: ingest.metrics.snapshot().packets_per_sec,
-                video_codec: video
-                    .map(|video| video.codec.clone())
-                    .filter(|codec| !codec.is_empty()),
-                width: video.map(|video| video.width).filter(|width| *width > 0),
-                height: video.map(|video| video.height).filter(|height| *height > 0),
-                fps: video.map(|video| video.fps).filter(|fps| *fps > 0.0),
-                keyframe_ms: restream_sync::lock::lock(&ingest.keyframe_times).clone(),
-                rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
-                loss_per_sec: quality.packets_received_loss_per_sec,
-                retrans_per_sec: quality.packets_received_retrans_per_sec,
-                receive_buffer,
-                qa: engine.stream_qa(pipeline_id),
-                timeline: inspector.and_then(|inspector| inspector.inspection(pipeline_id)),
-            },
+            ingest_probe(engine, inspector, pipeline_id, ingest, &metadata),
         );
     }
-    let mut rings: HashMap<String, RingHealth> = HashMap::new();
-    let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
-    let mut watched = Vec::new();
     // Copied, so no engine lock is held while the next one is taken.
     let source_rings: HashMap<String, Arc<restream_sync::RingBuffer>> =
         engine.ingests.pipelines.read().await.clone();
-    // An FFmpeg stage's reader on its source ring is named by its key.
-    for (key, runtime) in engine.stages.runtimes.read().await.iter() {
-        let (Some(pipe), Some(ring)) = (
-            runtime.pipe_metrics.as_ref(),
-            source_rings.get(key.pipeline.as_str()),
-        ) else {
-            continue;
-        };
-        let name = key.to_string();
-        let Some(reader) = ring
-            .reader_snapshots()
-            .into_iter()
-            .find(|reader| reader.name == name)
-        else {
-            continue;
-        };
-        decoders
-            .entry(key.pipeline.as_str().to_string())
-            .or_default()
-            .push(DecoderProbe {
-                stage: key.kind.to_string(),
-                lag_slots: reader.lag_slots as u64,
-                packets_per_sec: ring.estimated_pkt_rate(),
-                stall_us: pipe.snapshot().stall_us,
-            });
-    }
+    let mut decoders = decoder_probes(engine, &source_rings).await;
+    let mut rings: HashMap<String, RingHealth> = HashMap::new();
+    let mut watched = Vec::new();
     for (pipeline_id, ring) in source_rings.iter() {
         watched.push(restream_engine::stream_inspector::Watched {
             pipeline_id: pipeline_id.clone(),
             ring: Arc::downgrade(ring),
             aac_frame_ms: aac_frames.remove(pipeline_id).unwrap_or_default(),
         });
-        let (fill, capacity) = ring.fill_and_capacity();
-        let readers = ring.reader_snapshots();
-        rings.insert(
-            pipeline_id.clone(),
-            RingHealth {
-                fill: fill as u64,
-                capacity: capacity as u64,
-                worst_lag_slots: readers
-                    .iter()
-                    .map(|reader| reader.lag_slots as u64)
-                    .max()
-                    .unwrap_or(0),
-                overflows: readers
-                    .iter()
-                    .map(|reader| reader.overflow_count as u64)
-                    .sum(),
-            },
-        );
+        rings.insert(pipeline_id.clone(), ring_health(ring));
     }
     if let Some(inspector) = inspector {
         inspector.watch(watched);
@@ -754,6 +644,141 @@ async fn collect_probes(
             .collect()
     })
     .await
+}
+
+async fn egress_probes(engine: &MediaEngine) -> HashMap<String, EgressProbe> {
+    engine
+        .egresses
+        .active
+        .read()
+        .await
+        .values()
+        .map(|egress| {
+            let quality = restream_sync::lock::lock(&egress.quality);
+            (
+                egress.output_id.clone(),
+                EgressProbe {
+                    offered_bps: quality.offered_bps,
+                    delivered_bps: quality.delivered_bps,
+                    resyncs: egress.resync_count.load(Ordering::Relaxed),
+                    feed_lag: egress.feed_lag_units.load(Ordering::Relaxed),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Each AAC track's frame length: every track a multi-track source
+/// declared, else its one track.
+fn aac_frame_lengths(
+    ingest: &restream_engine::engine::ActiveIngest,
+    metadata: &restream_engine::engine::IngestMetadata,
+) -> HashMap<u32, f64> {
+    let tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
+    tracks
+        .iter()
+        .chain(
+            tracks
+                .is_empty()
+                .then_some(metadata.audio.as_ref())
+                .flatten(),
+        )
+        .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
+        .filter_map(|track| {
+            restream_engine::stream_inspector::aac_frame_ms(track.sample_rate)
+                .map(|frame_ms| (track.track_index, frame_ms))
+        })
+        .collect()
+}
+
+fn ingest_probe(
+    engine: &MediaEngine,
+    inspector: Option<&restream_engine::stream_inspector::StreamInspector>,
+    pipeline_id: &str,
+    ingest: &restream_engine::engine::ActiveIngest,
+    metadata: &restream_engine::engine::IngestMetadata,
+) -> IngestProbe {
+    let quality = &metadata.quality;
+    let receive_buffer = match (
+        quality.srt_recv_buf_packets,
+        quality.srt_recv_buf_capacity_packets,
+    ) {
+        (Some(held), Some(capacity)) if capacity > 0 => Some(f64::from(held) / f64::from(capacity)),
+        _ => None,
+    };
+    let video = metadata.video.as_ref();
+    IngestProbe {
+        input_id: ingest.input_id.clone(),
+        protocol: ingest.protocol.clone(),
+        bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
+        packets_per_sec: ingest.metrics.snapshot().packets_per_sec,
+        video_codec: video
+            .map(|video| video.codec.clone())
+            .filter(|codec| !codec.is_empty()),
+        width: video.map(|video| video.width).filter(|width| *width > 0),
+        height: video.map(|video| video.height).filter(|height| *height > 0),
+        fps: video.map(|video| video.fps).filter(|fps| *fps > 0.0),
+        keyframe_ms: restream_sync::lock::lock(&ingest.keyframe_times).clone(),
+        rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
+        loss_per_sec: quality.packets_received_loss_per_sec,
+        retrans_per_sec: quality.packets_received_retrans_per_sec,
+        receive_buffer,
+        qa: engine.stream_qa(pipeline_id),
+        timeline: inspector.and_then(|inspector| inspector.inspection(pipeline_id)),
+    }
+}
+
+/// Each FFmpeg stage's reader on its source ring, by pipeline. The reader
+/// is named by the stage's key.
+async fn decoder_probes(
+    engine: &MediaEngine,
+    source_rings: &HashMap<String, Arc<restream_sync::RingBuffer>>,
+) -> HashMap<String, Vec<DecoderProbe>> {
+    let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
+    for (key, runtime) in engine.stages.runtimes.read().await.iter() {
+        let (Some(pipe), Some(ring)) = (
+            runtime.pipe_metrics.as_ref(),
+            source_rings.get(key.pipeline.as_str()),
+        ) else {
+            continue;
+        };
+        let name = key.to_string();
+        let Some(reader) = ring
+            .reader_snapshots()
+            .into_iter()
+            .find(|reader| reader.name == name)
+        else {
+            continue;
+        };
+        decoders
+            .entry(key.pipeline.as_str().to_string())
+            .or_default()
+            .push(DecoderProbe {
+                stage: key.kind.to_string(),
+                lag_slots: reader.lag_slots as u64,
+                packets_per_sec: ring.estimated_pkt_rate(),
+                stall_us: pipe.snapshot().stall_us,
+            });
+    }
+    decoders
+}
+
+fn ring_health(ring: &restream_sync::RingBuffer) -> RingHealth {
+    let (fill, capacity) = ring.fill_and_capacity();
+    let readers = ring.reader_snapshots();
+    RingHealth {
+        fill: fill as u64,
+        capacity: capacity as u64,
+        worst_lag_slots: readers
+            .iter()
+            .map(|reader| reader.lag_slots as u64)
+            .max()
+            .unwrap_or(0),
+        overflows: readers
+            .iter()
+            .map(|reader| reader.overflow_count as u64)
+            .sum(),
+    }
 }
 
 /// Every running egress's readings for its baseline: delivery ratio, round
