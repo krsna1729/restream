@@ -225,22 +225,10 @@ impl AgentService {
                 if desired_state != previous.desired_state
                     || (desired_state == DesiredOutputState::Running && previous.retries_exhausted)
                 {
-                    current = match desired_state {
-                        DesiredOutputState::Running => crate::application::outputs::request_start(
-                            &self.db,
-                            pipeline_id,
-                            &output_id,
-                        )
+                    current = self
+                        .request_desired_state(pipeline_id, &output_id, desired_state)
                         .await
-                        .map_err(|err| format!("failed to update desired state: {err}"))?,
-                        DesiredOutputState::Stopped => crate::application::outputs::request_stop(
-                            &self.db,
-                            pipeline_id,
-                            &output_id,
-                        )
-                        .await
-                        .map_err(|err| format!("failed to update desired state: {err}"))?,
-                    };
+                        .map_err(|err| format!("failed to update desired state: {err}"))?;
                 }
                 Ok(AgentOutputMutationOutcome::Updated { previous, current })
             }
@@ -268,21 +256,28 @@ impl AgentService {
                 let previous = self
                     .load_output_for_mutation(pipeline_id, &output_id)
                     .await?;
-                let current = match desired_state {
-                    DesiredOutputState::Running => crate::application::outputs::request_start(
-                        &self.db,
-                        pipeline_id,
-                        &output_id,
-                    )
+                let current = self
+                    .request_desired_state(pipeline_id, &output_id, desired_state)
                     .await
-                    .map_err(|err| format!("failed to set desired state: {err}"))?,
-                    DesiredOutputState::Stopped => {
-                        crate::application::outputs::request_stop(&self.db, pipeline_id, &output_id)
-                            .await
-                            .map_err(|err| format!("failed to set desired state: {err}"))?
-                    }
-                };
+                    .map_err(|err| format!("failed to set desired state: {err}"))?;
                 Ok(AgentOutputMutationOutcome::DesiredStateUpdated { previous, current })
+            }
+        }
+    }
+
+    #[cfg(feature = "agent-execution")]
+    async fn request_desired_state(
+        &self,
+        pipeline_id: &str,
+        output_id: &str,
+        desired_state: DesiredOutputState,
+    ) -> crate::application::services::error::ServiceResult<Output> {
+        match desired_state {
+            DesiredOutputState::Running => {
+                crate::application::outputs::request_start(&self.db, pipeline_id, output_id).await
+            }
+            DesiredOutputState::Stopped => {
+                crate::application::outputs::request_stop(&self.db, pipeline_id, output_id).await
             }
         }
     }

@@ -427,17 +427,13 @@ fn project_output(
         attempts: retry.attempts,
         next_attempt_at_ms: retry.next_retry_at_ms,
     });
-    let convergence = match output.desired_state {
-        DesiredOutputState::Stopped if active.is_some() => Convergence::Stopping,
-        DesiredOutputState::Stopped => Convergence::Converged,
-        DesiredOutputState::Running if output.retries_exhausted => Convergence::RetriesExhausted,
-        // A stall is a flow problem (`flow: stalled`), not a convergence one.
-        DesiredOutputState::Running if delivering => Convergence::Converged,
-        DesiredOutputState::Running if active.is_some() => Convergence::Starting,
-        DesiredOutputState::Running if retry.is_some() => Convergence::Retrying,
-        DesiredOutputState::Running if !has_ingest => Convergence::WaitingForIngest,
-        DesiredOutputState::Running => Convergence::Starting,
-    };
+    let convergence = convergence_of(
+        output,
+        active.is_some(),
+        delivering,
+        retry.is_some(),
+        has_ingest,
+    );
     let flow = if stalled {
         Flow::Stalled
     } else if delivering && progressed && has_ingest {
@@ -446,13 +442,7 @@ fn project_output(
         Flow::Idle
     };
     let evidence = match active {
-        Some(egress) => restream_sync::lock::lock(&egress.last_error)
-            .clone()
-            .map(|error| FailureEvidence {
-                error,
-                phase: restream_sync::lock::lock(&egress.failure_phase).clone(),
-                at_ms: egress.last_error_ms.load(Ordering::Relaxed),
-            }),
+        Some(egress) => active_failure_evidence(egress),
         None => recent_evidence.cloned(),
     };
     let backpressure = active
@@ -468,17 +458,7 @@ fn project_output(
             .cloned(),
         shard: active
             .and_then(|egress| egress.fabric.as_ref())
-            .map(|slot| {
-                let health = context
-                    .shards
-                    .get(slot.feed.as_str())
-                    .and_then(|feed| feed.get(&slot.shard))
-                    .copied()
-                    // A fabric output whose shard reports no heartbeat yet is
-                    // starting on it, not failing.
-                    .unwrap_or(ShardHealth::Healthy);
-                (slot.shard, health)
-            }),
+            .map(|slot| (slot.shard, shard_health(context, slot))),
         failing: matches!(actual, Some(EgressPhase::Retrying | EgressPhase::Failed))
             || (active.is_none() && retry.is_some()),
         last_failure: evidence
@@ -511,6 +491,55 @@ fn project_output(
         diagnosis,
         state_since_ms: 0,
     }
+}
+
+/// How far the output is from its desired state.
+fn convergence_of(
+    output: &Output,
+    active: bool,
+    delivering: bool,
+    retrying: bool,
+    has_ingest: bool,
+) -> Convergence {
+    match output.desired_state {
+        DesiredOutputState::Stopped if active => Convergence::Stopping,
+        DesiredOutputState::Stopped => Convergence::Converged,
+        DesiredOutputState::Running if output.retries_exhausted => Convergence::RetriesExhausted,
+        // A stall is a flow problem (`flow: stalled`), not a convergence one.
+        DesiredOutputState::Running if delivering => Convergence::Converged,
+        DesiredOutputState::Running if active => Convergence::Starting,
+        DesiredOutputState::Running if retrying => Convergence::Retrying,
+        DesiredOutputState::Running if !has_ingest => Convergence::WaitingForIngest,
+        DesiredOutputState::Running => Convergence::Starting,
+    }
+}
+
+/// The active egress's last error, if any.
+fn active_failure_evidence(
+    egress: &restream_engine::engine::ActiveEgress,
+) -> Option<FailureEvidence> {
+    restream_sync::lock::lock(&egress.last_error)
+        .clone()
+        .map(|error| FailureEvidence {
+            error,
+            phase: restream_sync::lock::lock(&egress.failure_phase).clone(),
+            at_ms: egress.last_error_ms.load(Ordering::Relaxed),
+        })
+}
+
+/// The health of the shard a fabric output is placed on.
+fn shard_health(
+    context: &ProjectContext<'_>,
+    slot: &restream_engine::engine::FabricSlot,
+) -> ShardHealth {
+    context
+        .shards
+        .get(slot.feed.as_str())
+        .and_then(|feed| feed.get(&slot.shard))
+        .copied()
+        // A fabric output whose shard reports no heartbeat yet is
+        // starting on it, not failing.
+        .unwrap_or(ShardHealth::Healthy)
 }
 
 /// The entity-level difference from `old` to `new` (epoch and revision left
