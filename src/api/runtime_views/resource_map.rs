@@ -456,10 +456,79 @@ fn source_ring_node(ring: &Value) -> Value {
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
+/// The telemetry rows under `key`, kept to `pipeline_id` when one is given.
+fn scoped_rows(telemetry: &Value, key: &str, pipeline_id: Option<&str>) -> Vec<Value> {
+    telemetry
+        .get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| {
+            pipeline_id.is_none_or(|pipeline_id| {
+                row.get("pipelineId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|row_pipeline| row_pipeline == pipeline_id)
+            })
+        })
+        .collect()
+}
+
+/// The restream process and, when any run, its external FFmpeg children.
+fn runtime_process_nodes(process: &ProcessResourceSnapshot) -> Vec<Value> {
+    let mut nodes = vec![json!({
+        "id": "runtime:restream",
+        "kind": "runtime_process",
+        "label": "restream",
+        "execution": "process",
+        "cpuPercent": process.restream_cpu_percent,
+        "memory": memory(process.restream_memory_bytes, "measured", "process_rss"),
+        "threads": { "process": process.process_thread_count },
+        "hotspots": if process.restream_cpu_percent >= 75.0 { vec!["cpu"] } else { Vec::<&str>::new() },
+    })];
+    if process.external_ffmpeg_count > 0 {
+        nodes.push(json!({
+            "id": "runtime:external-ffmpeg",
+            "kind": "child_process_group",
+            "label": "External FFmpeg",
+            "execution": "child_process",
+            "cpuPercent": process.external_ffmpeg_cpu_percent,
+            "memory": memory(process.external_ffmpeg_memory_bytes, "measured", "child_process_rss"),
+            "threads": { "childProcess": process.external_ffmpeg_count },
+            "hotspots": if process.external_ffmpeg_cpu_percent >= 75.0 { vec!["cpu"] } else { Vec::<&str>::new() },
+        }));
+    }
+    nodes
+}
+
+/// Every source ring for the runtime map; the pipeline's own ring for a
+/// pipeline-scoped one.
+fn source_ring_nodes(
+    memory_accounting: &Value,
+    telemetry: &Value,
+    pipeline_id: Option<&str>,
+) -> Vec<Value> {
+    match pipeline_id {
+        None => memory_accounting
+            .get("sourceRings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(source_ring_node)
+            .collect(),
+        Some(pipeline_id) => telemetry
+            .get("sourceRing")
+            .filter(|ring| !ring.is_null())
+            .map(|ring| {
+                let mut ring = ring.clone();
+                ring["pipelineId"] = Value::String(pipeline_id.to_string());
+                source_ring_node(&ring)
+            })
+            .into_iter()
+            .collect(),
+    }
+}
+
 pub(crate) async fn resource_map(
     engine: &MediaEngine,
     config: &crate::config::AppConfig,
@@ -477,36 +546,8 @@ pub(crate) async fn resource_map(
         .get("memoryAccounting")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let stages = engine_telemetry
-        .get("stages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|stage| {
-            pipeline_id.is_none_or(|pipeline_id| {
-                stage
-                    .get("pipelineId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|stage_pipeline| stage_pipeline == pipeline_id)
-            })
-        })
-        .collect::<Vec<_>>();
-    let egresses = engine_telemetry
-        .get("egresses")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|egress| {
-            pipeline_id.is_none_or(|pipeline_id| {
-                egress
-                    .get("pipelineId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|egress_pipeline| egress_pipeline == pipeline_id)
-            })
-        })
-        .collect::<Vec<_>>();
+    let stages = scoped_rows(&engine_telemetry, "stages", pipeline_id);
+    let egresses = scoped_rows(&engine_telemetry, "egresses", pipeline_id);
     let ingests = telemetry
         .get("ingests")
         .and_then(Value::as_array)
@@ -520,46 +561,14 @@ pub(crate) async fn resource_map(
                 .collect()
         });
 
-    let mut nodes = Vec::new();
     let child_resources =
         sample_child_process_resources(stages.iter().filter_map(stage_backend_pid));
-    nodes.push(json!({
-        "id": "runtime:restream",
-        "kind": "runtime_process",
-        "label": "restream",
-        "execution": "process",
-        "cpuPercent": process.restream_cpu_percent,
-        "memory": memory(process.restream_memory_bytes, "measured", "process_rss"),
-        "threads": { "process": process.process_thread_count },
-        "hotspots": if process.restream_cpu_percent >= 75.0 { vec!["cpu"] } else { Vec::<&str>::new() },
-    }));
-    if process.external_ffmpeg_count > 0 {
-        nodes.push(json!({
-            "id": "runtime:external-ffmpeg",
-            "kind": "child_process_group",
-            "label": "External FFmpeg",
-            "execution": "child_process",
-            "cpuPercent": process.external_ffmpeg_cpu_percent,
-            "memory": memory(process.external_ffmpeg_memory_bytes, "measured", "child_process_rss"),
-            "threads": { "childProcess": process.external_ffmpeg_count },
-            "hotspots": if process.external_ffmpeg_cpu_percent >= 75.0 { vec!["cpu"] } else { Vec::<&str>::new() },
-        }));
-    }
-
-    if pipeline_id.is_none() {
-        for ring in memory_accounting
-            .get("sourceRings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            nodes.push(source_ring_node(ring));
-        }
-    } else if let Some(ring) = telemetry.get("sourceRing").filter(|ring| !ring.is_null()) {
-        let mut ring = ring.clone();
-        ring["pipelineId"] = Value::String(pipeline_id.unwrap_or_default().to_string());
-        nodes.push(source_ring_node(&ring));
-    }
+    let mut nodes = runtime_process_nodes(&process);
+    nodes.extend(source_ring_nodes(
+        &memory_accounting,
+        &telemetry,
+        pipeline_id,
+    ));
 
     let shard_nodes = placed_shard_nodes(
         engine
