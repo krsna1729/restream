@@ -46,6 +46,5 @@
   "src/application/services/agent_service.rs::AgentService::apply_output_mutation#0": 23,
   "src/db/log_repo.rs::list_app_logs#0": 31,
   "src/diag/checks.rs::check_publisher_transport#0": 44,
-  "src/infrastructure/bootstrap/egress.rs::EgressStarter::start#0": 22,
   "src/infrastructure/bootstrap/egress_task.rs::EgressTask::run#0": 23
 }

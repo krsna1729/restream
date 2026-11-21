@@ -33,10 +33,8 @@ use restream_engine::engine::MediaEngine;
 
 #[path = "egress_task.rs"]
 mod egress_task;
-use egress_task::{
-    EgressTask, HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask,
-    SrtFabricTask, prepare_moq_fabric_task,
-};
+use egress_task::{EgressTask, prepare_moq_fabric_task};
+mod fabric_startup;
 mod planning_panics;
 use planning_panics::PlanningPanics;
 
@@ -429,14 +427,6 @@ impl AttemptJob {
 }
 
 impl EgressStarter {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn start(self, output: Output) {
         let output = &output;
         let correlation_id = restream_engine::correlation_id::next_correlation_id("out");
@@ -479,273 +469,31 @@ impl EgressStarter {
             output.id.clone(),
         );
 
-        let use_rtmp_fabric = matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
-        let rtmp_fabric = if use_rtmp_fabric {
-            match crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_startup(
-                &self.engine,
-                output,
-                &prepared,
-            )
-            .await
-            {
-                Ok(startup) => {
-                    let feed =
-                        crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_feed(&prepared);
-                    let mut spec = crate::application::egress_rtmp_fabric::rtmp_fabric_output_spec(
-                        output,
-                        registration.attempt_id,
-                        feed.feed_id.clone(),
-                    );
-                    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    if let Some(sink) = self
-                        .engine
-                        .with_active_egress(&output.id, |egress| {
-                            restream_engine::egress::leaf::EgressProgressSink {
-                                bytes_sent: Some(egress.bytes_sent.clone()),
-                                metrics: Some(egress.metrics.clone()),
-                                last_progress_ms: Some(egress.last_progress_ms.clone()),
-                                resync_count: Some(egress.resync_count.clone()),
-                                feed_lag_units: Some(egress.feed_lag_units.clone()),
-                                backpressure_reason: Some(egress.backpressure_reason.clone()),
-                                quality: Some(egress.quality.clone()),
-                                terminated_unexpectedly: Some(terminated.clone()),
-                                upload_status: None,
-                            }
-                        })
-                        .await
-                    {
-                        spec.progress = sink;
-                    }
-                    Some(RtmpFabricTask {
-                        spec,
-                        feed_id: feed.feed_id,
-                        feed: feed.feed,
-                        startup: startup.into(),
-                        terminated,
-                    })
-                }
-                Err(error) => {
-                    self.engine
-                        .record_egress_error_if_current(
-                            &output.id,
-                            &registration,
-                            "rtmp_fabric_startup",
-                            error,
-                        )
-                        .await;
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let srt_fabric = if use_srt_fabric {
-            let feed = crate::application::egress::prepare_srt_fabric_feed(
-                &self.engine,
-                output,
-                &prepared,
-                registration.attempt_id,
-            )
+        let rtmp_fabric = self
+            .prepare_rtmp_fabric(url_scheme, output, &prepared, &registration)
             .await;
-            stages.push(feed.muxer_lease);
-            let mut spec = crate::application::egress::srt_fabric_output_spec(
-                output,
-                registration.attempt_id,
-                feed.feed_id.clone(),
-                std::time::Duration::from_millis(self.engine.config.srt_connect_timeout_ms),
-            );
-            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            if let Some(sink) = self
-                .engine
-                .with_active_egress(&output.id, |egress| {
-                    restream_engine::egress::leaf::EgressProgressSink {
-                        bytes_sent: Some(egress.bytes_sent.clone()),
-                        metrics: Some(egress.metrics.clone()),
-                        last_progress_ms: Some(egress.last_progress_ms.clone()),
-                        resync_count: Some(egress.resync_count.clone()),
-                        feed_lag_units: Some(egress.feed_lag_units.clone()),
-                        backpressure_reason: Some(egress.backpressure_reason.clone()),
-                        quality: Some(egress.quality.clone()),
-                        terminated_unexpectedly: Some(terminated.clone()),
-                        upload_status: None,
-                    }
-                })
-                .await
-            {
-                spec.progress = sink;
-            }
-            Some(SrtFabricTask {
-                spec,
-                feed_id: feed.feed_id,
-                feed: feed.feed,
-                source: feed.source,
-                terminated,
-            })
+        let srt_fabric = if use_srt_fabric {
+            Some(
+                self.prepare_srt_fabric(output, &prepared, &registration, &mut stages)
+                    .await,
+            )
         } else {
             None
         };
-
-        let use_sink_fabric = matches!(url_scheme, OutputUrlScheme::Sink);
-        let sink_fabric = if use_sink_fabric {
-            let feed = crate::application::egress::prepare_sink_fabric_feed(output, &prepared);
-            let mut spec = crate::application::egress::sink_fabric_output_spec(
-                output,
-                registration.attempt_id,
-                feed.feed_id.clone(),
-            );
-            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            if let Some(sink) = self
-                .engine
-                .with_active_egress(&output.id, |egress| {
-                    restream_engine::egress::leaf::EgressProgressSink {
-                        bytes_sent: Some(egress.bytes_sent.clone()),
-                        metrics: Some(egress.metrics.clone()),
-                        last_progress_ms: Some(egress.last_progress_ms.clone()),
-                        resync_count: Some(egress.resync_count.clone()),
-                        feed_lag_units: Some(egress.feed_lag_units.clone()),
-                        backpressure_reason: Some(egress.backpressure_reason.clone()),
-                        terminated_unexpectedly: Some(terminated.clone()),
-                        ..Default::default()
-                    }
-                })
-                .await
-            {
-                spec.progress = sink;
-            }
-            Some(SinkFabricTask {
-                spec,
-                feed_id: feed.feed_id,
-                feed: feed.feed,
-                terminated,
-            })
+        let sink_fabric = if matches!(url_scheme, OutputUrlScheme::Sink) {
+            Some(
+                self.prepare_sink_fabric(output, &prepared, &registration)
+                    .await,
+            )
         } else {
             None
         };
-
-        let use_pipeline_fabric = matches!(url_scheme, OutputUrlScheme::Pipeline);
-        let pipeline_fabric = if use_pipeline_fabric {
-            // A parse failure here just leaves `pipeline_fabric` `None` —
-            // `EgressTask::run`'s `OutputUrlScheme::Pipeline` arm re-parses
-            // the same `output.url` itself (pure function, identical input)
-            // and records the same error there, so nothing is lost by not
-            // duplicating that here. That arm's `Ok` branch is otherwise
-            // unreachable given this parse already succeeded whenever
-            // `pipeline_fabric` is `Some` — kept as a defensive fallback
-            // rather than an `unwrap_err()`, so a future refactor that
-            // breaks this coupling degrades to the working (if
-            // non-fabric) recirculation path instead of a panic.
-            match restream_domain::domain::output_spec::RecirculationTarget::parse(&output.url) {
-                Ok(target) => {
-                    let feed = crate::application::egress::prepare_recirculation_fabric_feed(
-                        output, &prepared,
-                    );
-                    let mut spec = crate::application::egress::recirculation_fabric_output_spec(
-                        output,
-                        registration.attempt_id,
-                        feed.feed_id.clone(),
-                        &target,
-                    );
-                    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    if let Some(sink) = self
-                        .engine
-                        .with_active_egress(&output.id, |egress| {
-                            restream_engine::egress::leaf::EgressProgressSink {
-                                bytes_sent: Some(egress.bytes_sent.clone()),
-                                metrics: Some(egress.metrics.clone()),
-                                last_progress_ms: Some(egress.last_progress_ms.clone()),
-                                resync_count: Some(egress.resync_count.clone()),
-                                feed_lag_units: Some(egress.feed_lag_units.clone()),
-                                backpressure_reason: Some(egress.backpressure_reason.clone()),
-                                terminated_unexpectedly: Some(terminated.clone()),
-                                ..Default::default()
-                            }
-                        })
-                        .await
-                    {
-                        spec.progress = sink;
-                    }
-                    Some(PipelineFabricTask {
-                        spec,
-                        feed_id: feed.feed_id,
-                        feed: feed.feed,
-                        target_pipeline_id: target.pipeline_id().to_string(),
-                        target_input_id: target.input_id().to_string(),
-                        terminated,
-                    })
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-
-        // HTTPS on the fabric needs kernel TLS (no userspace fallback);
-        // without it HTTPS outputs stay on the Reqwest uploader.
-        let use_hls_put_fabric = self.engine.config.egress_fabric.hls_put_fabric
-            && match url_scheme {
-                OutputUrlScheme::Http => true,
-                OutputUrlScheme::Https => {
-                    // The first call probes the kernel (sockets, setsockopt):
-                    // keep it off the Tokio worker. Later calls hit the cache.
-                    let available = tokio::task::spawn_blocking(
-                        restream_engine::egress::tls::ktls::egress_available,
-                    )
-                    .await
-                    .unwrap_or(false);
-                    if !available {
-                        static LOGGED: std::sync::Once = std::sync::Once::new();
-                        LOGGED.call_once(|| {
-                            warn!(
-                                "kernel TLS unavailable; HTTPS HLS outputs use the Reqwest uploader"
-                            );
-                        });
-                    }
-                    available
-                }
-                _ => false,
-            };
-        let hls_put_fabric = if use_hls_put_fabric {
-            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let upload_status = Arc::new(std::sync::Mutex::new(
-                restream_engine::egress::leaf::UploadStatus::default(),
-            ));
-            let mut spec = restream_engine::egress::OutputSpec {
-                id: restream_engine::egress::OutputId::new(output.id.clone()),
-                generation: registration.attempt_id,
-                feed: restream_engine::engine_hls_egress_fabric::hls_put_feed_id(
-                    &output.pipeline_id,
-                ),
-                protocol: restream_engine::egress::ProtocolSpec::HlsPut {
-                    url: output.url.clone(),
-                },
-                policy: restream_engine::egress::LeafPolicy::default(),
-                progress: Default::default(),
-            };
-            if let Some(sink) = self
-                .engine
-                .with_active_egress(&output.id, |egress| {
-                    restream_engine::egress::leaf::EgressProgressSink {
-                        bytes_sent: Some(egress.bytes_sent.clone()),
-                        metrics: Some(egress.metrics.clone()),
-                        last_progress_ms: Some(egress.last_progress_ms.clone()),
-                        terminated_unexpectedly: Some(terminated.clone()),
-                        upload_status: Some(upload_status.clone()),
-                        ..Default::default()
-                    }
-                })
-                .await
-            {
-                spec.progress = sink;
-            }
-            Some(HlsPutFabricTask {
-                spec,
-                terminated,
-                upload_status,
-            })
-        } else {
-            None
-        };
+        let pipeline_fabric = self
+            .prepare_pipeline_fabric(url_scheme, output, &prepared, &registration)
+            .await;
+        let hls_put_fabric = self
+            .prepare_hls_put_fabric(url_scheme, output, &registration)
+            .await;
 
         let moq_fabric = if matches!(url_scheme, OutputUrlScheme::Moqt) {
             prepare_moq_fabric_task(&self.engine, output, &prepared, &registration).await
