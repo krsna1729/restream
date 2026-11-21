@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use crate::application::pipeline_inputs::PipelineInputStore;
-use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::save_recording_settings;
 use crate::application::settings::load_settings_snapshot;
@@ -17,6 +16,7 @@ use crate::application::srt_ingest::{
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
+use crate::db::DeadlineDb;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
@@ -32,30 +32,19 @@ const SERVER_NAME_META_KEY: &str = "server_name";
 /// Application service that assembles the operator-facing settings surface from
 /// meta/config stores plus pipeline and output catalog reads.
 pub struct SettingsService {
-    meta_store: Arc<dyn MetaStore>,
-    meta_writer: Arc<dyn MetaStoreWriter>,
-    ingest_host_store: Arc<dyn IngestHostStore>,
-    job_store: Arc<dyn JobStore>,
+    db: DeadlineDb,
     input_store: Arc<dyn PipelineInputStore>,
     pipeline_service: PipelineService,
 }
 
 impl SettingsService {
-    /// Builds the service from the stores needed to assemble and persist the
-    /// dashboard settings surface.
-    pub fn with_stores(
-        meta_store: Arc<dyn MetaStore>,
-        meta_writer: Arc<dyn MetaStoreWriter>,
-        ingest_host_store: Arc<dyn IngestHostStore>,
-        job_store: Arc<dyn JobStore>,
+    pub fn new(
+        db: DeadlineDb,
         input_store: Arc<dyn PipelineInputStore>,
         pipeline_service: PipelineService,
     ) -> Self {
         Self {
-            meta_store,
-            meta_writer,
-            ingest_host_store,
-            job_store,
+            db,
             input_store,
             pipeline_service,
         }
@@ -67,7 +56,7 @@ impl SettingsService {
         &self,
         security: &IngestSecurityService,
     ) -> ServiceResult<crate::application::settings::SettingsSnapshot> {
-        load_settings_snapshot(&*self.meta_store, &*self.ingest_host_store, security)
+        load_settings_snapshot(&self.db, security)
             .await
             .map_err(|e| ServiceError::internal(format!("load settings: {e}")))
     }
@@ -80,17 +69,19 @@ impl SettingsService {
 
     /// Lists background jobs that should appear in the operator settings view.
     pub async fn list_jobs(&self) -> ServiceResult<Vec<Job>> {
-        self.job_store
-            .list_jobs()
+        let jobs = self
+            .db
+            .read(crate::db::list_jobs)
             .await
-            .map_err(|e| ServiceError::internal(format!("list jobs: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list jobs: {e}")))?;
+        Ok(jobs.into_iter().map(Job::from).collect())
     }
 
     /// Returns the raw persisted ingest host value without applying the
     /// pipeline service's localhost fallback.
     pub async fn get_ingest_host_raw(&self) -> ServiceResult<String> {
-        self.ingest_host_store
-            .get_ingest_host()
+        self.db
+            .read(crate::db::get_ingest_host)
             .await
             .map(|h| h.unwrap_or_default())
             .map_err(|e| ServiceError::internal(format!("get ingest host: {e}")))
@@ -105,8 +96,9 @@ impl SettingsService {
     /// Persists the ingest host override that pipeline and dashboard views use
     /// for generated publish URLs.
     pub async fn set_ingest_host(&self, host: &str) -> ServiceResult<()> {
-        self.ingest_host_store
-            .set_ingest_host(host)
+        let host = host.to_owned();
+        self.db
+            .write(move |pool| async move { crate::db::set_ingest_host(&pool, &host).await })
             .await
             .map(|_| ())
             .map_err(|e| ServiceError::internal(format!("set ingest host: {e}")))
@@ -115,17 +107,17 @@ impl SettingsService {
     /// Reads one arbitrary settings meta entry for callers that work with
     /// feature-specific persisted values.
     pub async fn get_meta(&self, key: &str) -> ServiceResult<Option<String>> {
-        self.meta_store
-            .get_meta(key)
+        self.db
+            .read(|pool| crate::db::get_meta(pool, key))
             .await
             .map_err(|e| ServiceError::internal(format!("get meta: {e}")))
     }
 
-    /// Persists one arbitrary settings meta entry and hides the writer store's
-    /// concrete return value from higher layers.
+    /// Persists one arbitrary settings meta entry.
     pub async fn set_meta(&self, key: &str, value: &str) -> ServiceResult<()> {
-        self.meta_writer
-            .set_meta(key, value)
+        let (key, value) = (key.to_owned(), value.to_owned());
+        self.db
+            .write(move |pool| async move { crate::db::set_meta(&pool, &key, &value).await })
             .await
             .map(|_| ())
             .map_err(|e| ServiceError::internal(format!("set meta: {e}")))
@@ -137,7 +129,7 @@ impl SettingsService {
         &self,
         config: &IngestSecurityConfig,
     ) -> ServiceResult<()> {
-        save_ingest_security_config(self.meta_writer.as_ref(), config)
+        save_ingest_security_config(&self.db, config)
             .await
             .map_err(|e| ServiceError::internal(format!("save ingest security config: {e}")))
     }
@@ -145,14 +137,14 @@ impl SettingsService {
     /// Saves recording settings that influence operator-visible recording
     /// behavior across pipelines.
     pub async fn save_recording_settings(&self, settings: &RecordingSettings) -> ServiceResult<()> {
-        save_recording_settings(self.meta_writer.as_ref(), settings)
+        save_recording_settings(&self.db, settings)
             .await
             .map_err(|e| ServiceError::internal(format!("save recording settings: {e}")))
     }
 
     /// Saves the transcode profile catalog exposed through dashboard settings.
     pub async fn save_transcode_profiles(&self, profiles: &TranscodeProfiles) -> ServiceResult<()> {
-        save_transcode_profiles(self.meta_writer.as_ref(), profiles)
+        save_transcode_profiles(&self.db, profiles)
             .await
             .map_err(|e| ServiceError::internal(format!("save transcode profiles: {e}")))
     }
@@ -168,9 +160,7 @@ impl SettingsService {
     ) -> ServiceResult<()> {
         // Rebuild the policy store from persisted global settings plus the
         // current pipeline catalog so the SRT ingress owner sees one coherent snapshot.
-        let global =
-            load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
-                .await;
+        let global = load_global_srt_ingest_config(&self.db, srt_passphrase, srt_pbkeylen).await;
         let pipelines = self.list_pipelines().await?;
         let inputs = list_pipeline_inputs(self.input_store.as_ref(), &pipelines)
             .await
@@ -188,115 +178,61 @@ impl SettingsService {
         engine: &restream_engine::engine::MediaEngine,
         pipeline_ids: &[String],
     ) -> std::collections::HashMap<String, bool> {
-        load_recording_enabled_map(self.meta_store.as_ref(), engine, pipeline_ids).await
+        load_recording_enabled_map(&self.db, engine, pipeline_ids).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-    use std::sync::Mutex;
-
-    use crate::application::ports::{
-        JobListFuture, MetaLookupError, MetaLookupFuture, MetaWriteFuture,
-    };
     use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
     use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+    use restream_domain::domain::output_spec::OutputConfig;
     use restream_domain::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
+    use restream_domain::domain::state::DesiredOutputState;
     use restream_domain::models::JobStatus;
     use restream_engine::security::IngestSecurityService;
     use restream_engine::srt::SrtIngestPolicyStore;
 
-    #[derive(Default)]
-    struct FakeSettingsStore {
-        meta: Mutex<BTreeMap<String, String>>,
-        jobs: Mutex<Vec<Job>>,
-    }
-
-    impl FakeSettingsStore {
-        fn with_defaults() -> Self {
-            let store = Self::default();
-            store
-                .meta
-                .lock()
-                .unwrap()
-                .insert(SERVER_NAME_META_KEY.to_string(), "Control".to_string());
-            store
-                .meta
-                .lock()
-                .unwrap()
-                .insert("ingest_host".to_string(), "ingest.local".to_string());
-            store.jobs.lock().unwrap().push(Job {
-                id: "job-1".to_string(),
-                pipeline_id: "pipe-1".to_string(),
-                output_id: "out-1".to_string(),
-                status: JobStatus::Running,
-                started_at: "2026-07-09T00:00:00Z".to_string(),
-                ended_at: None,
-            });
-            store
-        }
-    }
-
-    impl MetaStore for FakeSettingsStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move { Ok(self.meta.lock().unwrap().get(key).cloned()) })
-        }
-    }
-
-    impl MetaStoreWriter for FakeSettingsStore {
-        fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-            Box::pin(async move {
-                self.meta
-                    .lock()
-                    .unwrap()
-                    .insert(key.to_string(), value.to_string());
-                Ok(value.to_string())
-            })
-        }
-    }
-
-    impl IngestHostStore for FakeSettingsStore {
-        fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a> {
-            Box::pin(async move { Ok(self.meta.lock().unwrap().get("ingest_host").cloned()) })
-        }
-
-        fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a> {
-            Box::pin(async move {
-                if host == "fail" {
-                    return Err(MetaLookupError::new("ingest host failed"));
-                }
-                let trimmed = host.trim().to_string();
-                self.meta
-                    .lock()
-                    .unwrap()
-                    .insert("ingest_host".to_string(), trimmed.clone());
-                Ok(trimmed)
-            })
-        }
-    }
-
-    impl JobStore for FakeSettingsStore {
-        fn list_jobs<'a>(&'a self) -> JobListFuture<'a> {
-            Box::pin(async move { Ok(self.jobs.lock().unwrap().clone()) })
-        }
-    }
-
     #[tokio::test]
-    async fn settings_service_uses_injected_stores_for_snapshot_and_writes() {
+    async fn settings_service_reads_and_writes_the_settings_surface() {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        let store = Arc::new(FakeSettingsStore::with_defaults());
-        let service = SettingsService::with_stores(
-            store.clone(),
-            store.clone(),
-            store.clone(),
-            store,
+        crate::db::set_meta(&pool, SERVER_NAME_META_KEY, "Control")
+            .await
+            .unwrap();
+        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "key-1", None, None)
+            .await
+            .unwrap();
+        crate::db::create_output(
+            &pool,
+            "out-1",
+            "pipe-1",
+            "Out",
+            "rtmp://127.0.0.1:9/live/out",
+            None,
+            DesiredOutputState::Stopped,
+            &OutputConfig::source(),
+        )
+        .await
+        .unwrap();
+        crate::db::create_job(
+            &pool,
+            "job-1",
+            "pipe-1",
+            "out-1",
+            JobStatus::Running,
+            "2026-07-09T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let db = DeadlineDb::api(pool.clone());
+        let service = SettingsService::new(
+            db.clone(),
             Arc::new(
                 crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                    crate::db::DeadlineDb::api(pool.clone()),
+                    db.clone(),
                 ),
             ),
             SqliteServiceFactory::new(&pool).pipeline_service(),
@@ -331,7 +267,9 @@ mod tests {
         );
         assert_eq!(service.get_ingest_host_raw().await.unwrap(), "edge.local");
         assert_eq!(service.list_jobs().await.unwrap()[0].id, "job-1");
-        assert!(service.list_pipelines().await.unwrap().is_empty());
+        let pipelines = service.list_pipelines().await.unwrap();
+        assert_eq!(pipelines.len(), 1);
+        assert_eq!(pipelines[0].id, "pipe-1");
 
         let recording_enabled = service
             .recording_enabled_map(

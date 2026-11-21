@@ -44,9 +44,6 @@ fn infrastructure_owns_sqlite_service_composition() {
             "crate::infrastructure::sqlite_ports",
             "SqlitePipelineStore",
             "SqliteIngestLookup",
-            "SqliteMetaStore",
-            "SqliteJobStore",
-            "SqliteRecordingStore",
         ] {
             if production_source.contains(forbidden) {
                 storage_coupled_services.push(format!("{} uses {forbidden}", path.display()));

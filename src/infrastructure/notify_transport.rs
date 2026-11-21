@@ -1,7 +1,6 @@
 //! Sends notifications over HTTP: JSON posts to webhooks, Slack and Discord,
 //! and encrypted Web Push messages signed with the engine's VAPID key.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -9,9 +8,8 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use tokio::sync::OnceCell;
 
 use crate::application::notify::PushSubscription;
-use crate::application::ports::{
-    MetaStore, MetaStoreWriter, NotifyTransport, PostFuture, PostOutcome,
-};
+use crate::application::ports::{NotifyTransport, PostFuture, PostOutcome};
+use crate::db::DeadlineDb;
 
 use super::web_push::{self, VapidKey};
 
@@ -22,13 +20,12 @@ const PUSH_TTL_SECONDS: &str = "3600";
 
 pub struct HttpNotifyTransport {
     client: reqwest::Client,
-    meta: Arc<dyn MetaStore>,
-    meta_writer: Arc<dyn MetaStoreWriter>,
+    db: DeadlineDb,
     vapid: OnceCell<VapidKey>,
 }
 
 impl HttpNotifyTransport {
-    pub fn new(meta: Arc<dyn MetaStore>, meta_writer: Arc<dyn MetaStoreWriter>) -> Self {
+    pub fn new(db: DeadlineDb) -> Self {
         let client = restream_http::client_builder()
             .timeout(Duration::from_secs(10))
             // A receiver must answer where it was configured; a redirect
@@ -39,8 +36,7 @@ impl HttpNotifyTransport {
             .unwrap_or_else(|_| restream_http::client());
         Self {
             client,
-            meta,
-            meta_writer,
+            db,
             vapid: OnceCell::new(),
         }
     }
@@ -50,16 +46,19 @@ impl HttpNotifyTransport {
         self.vapid
             .get_or_try_init(|| async {
                 let stored = self
-                    .meta
-                    .get_meta(VAPID_META_KEY)
+                    .db
+                    .read(|pool| crate::db::get_meta(pool, VAPID_META_KEY))
                     .await
                     .map_err(|e| e.to_string())?;
                 let pkcs8 = match stored.and_then(|value| STANDARD.decode(value).ok()) {
                     Some(pkcs8) => pkcs8,
                     None => {
                         let pkcs8 = VapidKey::generate_pkcs8().map_err(|e| e.to_string())?;
-                        self.meta_writer
-                            .set_meta(VAPID_META_KEY, &STANDARD.encode(&pkcs8))
+                        let encoded = STANDARD.encode(&pkcs8);
+                        self.db
+                            .write(move |pool| async move {
+                                crate::db::set_meta(&pool, VAPID_META_KEY, &encoded).await
+                            })
                             .await
                             .map_err(|e| e.to_string())?;
                         pkcs8

@@ -178,9 +178,8 @@ async fn serve(
         .map_err(|error| format!("failed to reset stale running jobs: {error}"))?;
 
     let api_db = db::DeadlineDb::api(pool.clone());
-    let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(api_db.clone());
     let sec_config =
-        crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
+        crate::application::ingest_security::load_ingest_security_config(&api_db).await;
     let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
@@ -190,7 +189,7 @@ async fn serve(
         crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(api_db.clone());
     let srt_ingest_policy_store = Arc::new(
         match crate::application::srt_ingest::load_policy_store(
-            &meta_store,
+            &api_db,
             &pipeline_store,
             &pipeline_input_store,
             config.srt_passphrase.clone(),
@@ -206,7 +205,7 @@ async fn serve(
                 );
                 restream_engine::srt::SrtIngestPolicyStore::new(
                     crate::application::srt_ingest::load_global_srt_ingest_config(
-                        &meta_store,
+                        &api_db,
                         config.srt_passphrase.clone(),
                         config.srt_pbkeylen,
                     )
@@ -223,7 +222,7 @@ async fn serve(
     let auth_service = crate::application::services::AuthService::new(api_db.clone());
     let services_factory =
         crate::infrastructure::service_wiring::SqliteServiceFactory::with_databases(
-            api_db,
+            api_db.clone(),
             lifecycle.clone(),
         );
     auth::initialize_auth_with_bootstrap_file(
@@ -233,7 +232,7 @@ async fn serve(
         config.initial_admin_password.as_deref(),
     )
     .await?;
-    crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
+    crate::application::transcode_profiles::load_transcode_profiles(&api_db).await;
 
     let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
         config.engine.clone(),

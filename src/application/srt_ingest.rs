@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
-use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
+use crate::application::ports::{PipelineStore, PipelineStoreError};
+use crate::db::DeadlineDb;
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{
     SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
@@ -26,12 +27,12 @@ pub fn serialize_persisted_srt_ingest_policy(
 }
 
 pub async fn load_global_srt_ingest_config(
-    meta_store: &dyn MetaStore,
+    db: &DeadlineDb,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
 ) -> SrtGlobalIngestConfig {
-    let from_store = meta_store
-        .get_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY)
+    let from_store = db
+        .read(|pool| crate::db::get_meta(pool, SRT_INGEST_GLOBAL_CONFIG_META_KEY))
         .await
         .ok()
         .flatten()
@@ -51,13 +52,13 @@ pub async fn load_global_srt_ingest_config(
 }
 
 pub async fn load_policy_store(
-    meta_store: &dyn MetaStore,
+    db: &DeadlineDb,
     pipeline_catalog: &dyn PipelineStore,
     input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
 ) -> Result<SrtIngestPolicyStore, PipelineStoreError> {
-    let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
+    let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
     let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
     let entries = srt_ingest_policy_entries(&pipelines, &inputs);
@@ -66,13 +67,13 @@ pub async fn load_policy_store(
 
 pub async fn refresh_policy_store(
     policy_store: &SrtIngestPolicyStore,
-    meta_store: &dyn MetaStore,
+    db: &DeadlineDb,
     pipeline_catalog: &dyn PipelineStore,
     input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
 ) -> Result<(), PipelineStoreError> {
-    let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
+    let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
     let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
     let entries = srt_ingest_policy_entries(&pipelines, &inputs);
@@ -157,9 +158,8 @@ mod tests {
         InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
         PipelineInputStore, PipelineInputStoreError,
     };
-    use crate::application::ports::{
-        MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
-    };
+    use crate::application::ports::{PipelineListFuture, PipelineStore};
+    use crate::infrastructure::bootstrap::test_support::memory_pool;
     use restream_domain::domain::pipeline_input::{
         PipelineInput, PipelineInputRole, PipelineInputSource,
     };
@@ -168,19 +168,15 @@ mod tests {
     };
     use restream_domain::models::Pipeline;
 
-    struct FakeMetaStore {
-        value: Option<String>,
-    }
-
-    impl MetaStore for FakeMetaStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move {
-                if key != SRT_INGEST_GLOBAL_CONFIG_META_KEY {
-                    return Err(MetaLookupError::new("unexpected key"));
-                }
-                Ok(self.value.clone())
-            })
+    /// An in-memory database whose global SRT config is `value`.
+    async fn meta_db(value: Option<serde_json::Value>) -> DeadlineDb {
+        let pool = memory_pool().await;
+        if let Some(value) = value {
+            crate::db::set_meta(&pool, SRT_INGEST_GLOBAL_CONFIG_META_KEY, &value.to_string())
+                .await
+                .unwrap();
         }
+        DeadlineDb::api(pool)
     }
 
     struct FakePipelineStore {
@@ -347,16 +343,12 @@ mod tests {
 
     #[tokio::test]
     async fn global_srt_ingest_config_loads_from_meta_store() {
-        let store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "encrypted",
-                    "passphrase": "secret-pass-123",
-                    "pbkeylen": 24
-                })
-                .to_string(),
-            ),
-        };
+        let store = meta_db(Some(serde_json::json!({
+            "mode": "encrypted",
+            "passphrase": "secret-pass-123",
+            "pbkeylen": 24
+        })))
+        .await;
 
         let config = load_global_srt_ingest_config(&store, None, 16).await;
 
@@ -367,16 +359,12 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_encrypted_global_srt_ingest_config_fails_closed() {
-        let store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "encrypted",
-                    "passphrase": "short",
-                    "pbkeylen": 99
-                })
-                .to_string(),
-            ),
-        };
+        let store = meta_db(Some(serde_json::json!({
+            "mode": "encrypted",
+            "passphrase": "short",
+            "pbkeylen": 99
+        })))
+        .await;
 
         let config = load_global_srt_ingest_config(&store, None, 16).await;
 
@@ -386,15 +374,11 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_plaintext_global_srt_ingest_config_falls_back_to_default() {
-        let store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "plaintext",
-                    "pbkeylen": 99
-                })
-                .to_string(),
-            ),
-        };
+        let store = meta_db(Some(serde_json::json!({
+            "mode": "plaintext",
+            "pbkeylen": 99
+        })))
+        .await;
 
         let config = load_global_srt_ingest_config(&store, None, 16).await;
 
@@ -403,16 +387,12 @@ mod tests {
 
     #[tokio::test]
     async fn load_policy_store_builds_store_from_meta_and_catalog() {
-        let store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "encrypted",
-                    "passphrase": "global-pass-123",
-                    "pbkeylen": 24
-                })
-                .to_string(),
-            ),
-        };
+        let store = meta_db(Some(serde_json::json!({
+            "mode": "encrypted",
+            "passphrase": "global-pass-123",
+            "pbkeylen": 24
+        })))
+        .await;
         let catalog = FakePipelineStore {
             pipelines: vec![Pipeline {
                 id: "pipeline-1".to_string(),
@@ -454,24 +434,16 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_policy_store_replaces_existing_policies() {
-        let initial_store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "plaintext"
-                })
-                .to_string(),
-            ),
-        };
-        let updated_store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "encrypted",
-                    "passphrase": "updated-pass-123",
-                    "pbkeylen": 32
-                })
-                .to_string(),
-            ),
-        };
+        let initial_store = meta_db(Some(serde_json::json!({
+            "mode": "plaintext"
+        })))
+        .await;
+        let updated_store = meta_db(Some(serde_json::json!({
+            "mode": "encrypted",
+            "passphrase": "updated-pass-123",
+            "pbkeylen": 32
+        })))
+        .await;
         let catalog = FakePipelineStore {
             pipelines: vec![Pipeline {
                 id: "pipeline-1".to_string(),
@@ -675,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn global_srt_ingest_config_falls_back_to_appconfig_passphrase_when_meta_store_empty() {
-        let store = FakeMetaStore { value: None };
+        let store = meta_db(None).await;
 
         let config =
             load_global_srt_ingest_config(&store, Some("app-pass-123".to_string()), 24).await;
@@ -687,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn global_srt_ingest_config_falls_back_to_default_when_no_meta_and_no_passphrase() {
-        let store = FakeMetaStore { value: None };
+        let store = meta_db(None).await;
 
         let config = load_global_srt_ingest_config(&store, None, 16).await;
 
@@ -696,14 +668,10 @@ mod tests {
 
     #[tokio::test]
     async fn global_srt_ingest_config_prefers_meta_store_over_appconfig_passphrase() {
-        let store = FakeMetaStore {
-            value: Some(
-                serde_json::json!({
-                    "mode": "plaintext"
-                })
-                .to_string(),
-            ),
-        };
+        let store = meta_db(Some(serde_json::json!({
+            "mode": "plaintext"
+        })))
+        .await;
 
         let config =
             load_global_srt_ingest_config(&store, Some("app-pass-123".to_string()), 24).await;

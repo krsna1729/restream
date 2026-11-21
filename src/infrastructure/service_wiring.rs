@@ -15,9 +15,7 @@ use crate::application::services::{
 use crate::db::DeadlineDb;
 use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePipelineInputStore};
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
-use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
-};
+use crate::infrastructure::sqlite_ports::{SqliteIngestLookup, SqlitePipelineStore};
 use restream_engine::recording::RecordingMetadataReporter;
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
@@ -79,7 +77,11 @@ impl SqliteServiceFactory {
         let recirculation_service =
             RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
         let ingest_service = self.ingest_service();
-        let settings_service = self.settings_service_with(pipeline_service.clone());
+        let settings_service = SettingsService::new(
+            self.db.clone(),
+            Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
+            pipeline_service.clone(),
+        );
 
         AppServices {
             db: self.db.clone(),
@@ -87,7 +89,14 @@ impl SqliteServiceFactory {
             recirculation_service,
             auth_service: AuthService::new(self.db.clone()),
             team_service: TeamService::new(self.db.clone()),
-            notify_service: self.notify_service(),
+            notify_service: NotifyService::new(
+                self.db.clone(),
+                Arc::new(
+                    crate::infrastructure::notify_transport::HttpNotifyTransport::new(
+                        self.db.clone(),
+                    ),
+                ),
+            ),
             settings_service,
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
             media_library_service: self
@@ -117,35 +126,6 @@ impl SqliteServiceFactory {
         IngestService::with_ports(store.clone(), store)
     }
 
-    fn notify_service(&self) -> NotifyService {
-        let meta = Arc::new(SqliteMetaStore::new(self.db.clone()));
-        NotifyService::new(
-            self.db.clone(),
-            Arc::new(
-                crate::infrastructure::notify_transport::HttpNotifyTransport::new(
-                    meta.clone(),
-                    meta,
-                ),
-            ),
-        )
-    }
-
-    pub fn settings_service(&self) -> SettingsService {
-        self.settings_service_with(self.pipeline_service())
-    }
-
-    fn settings_service_with(&self, pipeline_service: PipelineService) -> SettingsService {
-        let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
-        SettingsService::with_stores(
-            meta_store.clone(),
-            meta_store.clone(),
-            meta_store,
-            Arc::new(SqliteJobStore::new(self.db.clone())),
-            Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipeline_service,
-        )
-    }
-
     pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {
         let ingest_store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
         FileIngestService::with_ports(
@@ -162,26 +142,15 @@ impl SqliteServiceFactory {
         pipeline_service: PipelineService,
         ingest_service: IngestService,
     ) -> MediaLibraryService {
-        let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
-        MediaLibraryService::with_stores(
-            meta_store.clone(),
-            meta_store,
-            Arc::new(SqliteRecordingStore::new(self.db.clone())),
-            pipeline_service,
-            ingest_service,
-        )
-        .with_recording_metadata(self.recording_metadata())
+        MediaLibraryService::new(self.db.clone(), pipeline_service, ingest_service)
+            .with_recording_metadata(self.recording_metadata())
     }
 
     pub fn agent_service(&self) -> AgentService {
-        let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         AgentService::with_stores(
             self.db.clone(),
             Arc::new(SqlitePipelineStore::new(self.db.clone())),
-            Arc::new(SqliteJobStore::new(self.db.clone())),
             Arc::new(SqliteIngestLookup::new(self.db.clone())),
-            meta_store.clone(),
-            meta_store,
         )
     }
 }

@@ -2,7 +2,7 @@
 
 pub(super) mod records;
 
-use self::records::{ingest_model, job_model, pipeline_model};
+use self::records::{ingest_model, pipeline_model};
 use crate::application::ports::*;
 use crate::db::DeadlineDb;
 use restream_domain::models::Pipeline;
@@ -25,21 +25,6 @@ pub struct SqliteIngestLookup {
     db: DeadlineDb,
 }
 
-#[derive(Clone)]
-pub struct SqliteMetaStore {
-    db: DeadlineDb,
-}
-
-#[derive(Clone)]
-pub struct SqliteJobStore {
-    db: DeadlineDb,
-}
-
-#[derive(Clone)]
-pub struct SqliteRecordingStore {
-    db: DeadlineDb,
-}
-
 impl SqlitePipelineStore {
     pub fn new(db: DeadlineDb) -> Self {
         Self { db }
@@ -47,24 +32,6 @@ impl SqlitePipelineStore {
 }
 
 impl SqliteIngestLookup {
-    pub fn new(db: DeadlineDb) -> Self {
-        Self { db }
-    }
-}
-
-impl SqliteMetaStore {
-    pub fn new(db: DeadlineDb) -> Self {
-        Self { db }
-    }
-}
-
-impl SqliteJobStore {
-    pub fn new(db: DeadlineDb) -> Self {
-        Self { db }
-    }
-}
-
-impl SqliteRecordingStore {
     pub fn new(db: DeadlineDb) -> Self {
         Self { db }
     }
@@ -393,89 +360,6 @@ impl IngestWriter for SqliteIngestLookup {
         })
     }
 }
-
-impl MetaStore for SqliteMetaStore {
-    fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(|pool| crate::db::get_meta(pool, key))
-                .await
-                .map_err(|err| MetaLookupError::new(err.to_string()))
-        })
-    }
-}
-
-impl MetaStoreWriter for SqliteMetaStore {
-    fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-        Box::pin(async move {
-            let (key, value) = (key.to_owned(), value.to_owned());
-            self.db
-                .write(move |pool| async move { crate::db::set_meta(&pool, &key, &value).await })
-                .await
-                .map_err(|err| MetaLookupError::new(err.to_string()))
-        })
-    }
-}
-
-impl IngestHostStore for SqliteMetaStore {
-    fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(crate::db::get_ingest_host)
-                .await
-                .map_err(|err| MetaLookupError::new(err.to_string()))
-        })
-    }
-
-    fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a> {
-        Box::pin(async move {
-            let host = host.to_owned();
-            self.db
-                .write(move |pool| async move { crate::db::set_ingest_host(&pool, &host).await })
-                .await
-                .map_err(|err| MetaLookupError::new(err.to_string()))
-        })
-    }
-}
-
-impl JobStore for SqliteJobStore {
-    fn list_jobs<'a>(&'a self) -> JobListFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(crate::db::list_jobs)
-                .await
-                .map(|records| records.into_iter().map(job_model).collect())
-                .map_err(|err| JobStoreError::new(err.to_string()))
-        })
-    }
-}
-
-impl RecordingStore for SqliteRecordingStore {
-    fn list_recordings<'a>(&'a self) -> RecordingListFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(crate::db::list_recordings)
-                .await
-                .map(|rows| rows.into_iter().map(recording_catalog_row).collect())
-                .map_err(|err| RecordingStoreError::new(err.to_string()))
-        })
-    }
-}
-
-fn recording_catalog_row(row: crate::db::RecordingRow) -> RecordingCatalogRow {
-    RecordingCatalogRow {
-        recording_id: row.recording_id,
-        pipeline_id: row.pipeline_id,
-        started_at: row.started_at,
-        ended_at: row.ended_at,
-        status: row.status,
-        temp_path: row.temp_path,
-        final_path: row.final_path,
-        codec_summary: row.codec_summary,
-        error: row.error,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,55 +511,5 @@ mod tests {
         assert!(duplicate.is_err());
         assert_eq!(ingests.len(), 1);
         assert_eq!(ingests[0].id, "i1");
-    }
-
-    #[tokio::test]
-    async fn sqlite_meta_store_returns_meta_value() {
-        let pool = test_pool().await;
-        crate::db::set_meta(&pool, "test-key", "test-value")
-            .await
-            .unwrap();
-        let store = SqliteMetaStore::new(DeadlineDb::api(pool.clone()));
-
-        let value = store.get_meta("test-key").await.unwrap();
-
-        assert_eq!(value.as_deref(), Some("test-value"));
-    }
-
-    #[tokio::test]
-    async fn sqlite_meta_store_writes_meta_value() {
-        let pool = test_pool().await;
-        let store = SqliteMetaStore::new(DeadlineDb::api(pool.clone()));
-
-        store.set_meta("test-key", "test-value").await.unwrap();
-
-        let value = crate::db::get_meta(&pool, "test-key").await.unwrap();
-        assert_eq!(value.as_deref(), Some("test-value"));
-    }
-
-    #[tokio::test]
-    async fn sqlite_recording_store_lists_recordings() {
-        let pool = test_pool().await;
-        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "stream-key", None, None)
-            .await
-            .unwrap();
-        crate::db::create_recording(
-            &pool,
-            &restream_domain::domain::ids::RecordingId::from("rec-1"),
-            "pipe-1",
-            "2026-07-09T00:00:00Z",
-            Some("/media/recording_1.ts"),
-            Some("h264/aac"),
-        )
-        .await
-        .unwrap();
-        let store = SqliteRecordingStore::new(DeadlineDb::api(pool.clone()));
-
-        let rows = store.list_recordings().await.unwrap();
-
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].recording_id, "rec-1");
-        assert_eq!(rows[0].pipeline_id, "pipe-1");
-        assert_eq!(rows[0].temp_path.as_deref(), Some("/media/recording_1.ts"));
     }
 }

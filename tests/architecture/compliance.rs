@@ -438,7 +438,9 @@ fn recording_metadata_persistence_is_infrastructure_owned() {
         .split("#[cfg(test)]")
         .next()
         .expect("application recording module should have production section");
-    for forbidden in ["SqlitePool", "crate::db", "sqlx::"] {
+    // Recording settings are read through `DeadlineDb` like every concrete
+    // application service; the pool and sqlx stay out of this module.
+    for forbidden in ["SqlitePool", "sqlx::"] {
         assert!(
             !production_recording.contains(forbidden),
             "application recording runtime should not own concrete DB detail {forbidden}"

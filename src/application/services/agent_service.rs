@@ -7,9 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::application::ports::{
-    IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
-};
+use crate::application::ports::{IngestLookup, PipelineStore};
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::db::DeadlineDb;
 use restream_domain::models::{Ingest, Job, Output, Pipeline};
@@ -82,10 +80,7 @@ pub(crate) enum AgentOutputMutationOutcome {
 pub struct AgentService {
     db: DeadlineDb,
     pipeline_store: Arc<dyn PipelineStore>,
-    job_store: Arc<dyn JobStore>,
     ingest_store: Arc<dyn IngestLookup>,
-    meta_store: Arc<dyn MetaStore>,
-    ingest_host_store: Arc<dyn IngestHostStore>,
 }
 
 impl AgentService {
@@ -93,18 +88,12 @@ impl AgentService {
     pub fn with_stores(
         db: DeadlineDb,
         pipeline_store: Arc<dyn PipelineStore>,
-        job_store: Arc<dyn JobStore>,
         ingest_store: Arc<dyn IngestLookup>,
-        meta_store: Arc<dyn MetaStore>,
-        ingest_host_store: Arc<dyn IngestHostStore>,
     ) -> Self {
         Self {
             db,
             pipeline_store,
-            job_store,
             ingest_store,
-            meta_store,
-            ingest_host_store,
         }
     }
 
@@ -122,19 +111,18 @@ impl AgentService {
         let outputs = crate::application::outputs::list_outputs(&self.db)
             .await
             .unwrap_or_default();
-        let jobs = self.job_store.list_jobs().await.unwrap_or_default();
+        let jobs: Vec<Job> = self
+            .db
+            .read(crate::db::list_jobs)
+            .await
+            .map(|rows| rows.into_iter().map(Job::from).collect())
+            .unwrap_or_default();
         let ingests = self.ingest_store.list_ingests().await.unwrap_or_default();
 
-        let settings = load_settings_snapshot(
-            self.meta_store.as_ref(),
-            self.ingest_host_store.as_ref(),
-            security,
-        )
-        .await
-        .ok();
+        let settings = load_settings_snapshot(&self.db, security).await.ok();
         let custom_encoding_len = self
-            .meta_store
-            .get_meta(CUSTOM_ENCODING_META_KEY)
+            .db
+            .read(|pool| crate::db::get_meta(pool, CUSTOM_ENCODING_META_KEY))
             .await
             .ok()
             .flatten()

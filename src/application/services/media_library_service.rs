@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
+use crate::db::DeadlineDb;
 use restream_domain::models::Pipeline;
 use restream_engine::engine::MediaEngine;
 use restream_engine::recording::RecordingMetadataReporter;
@@ -42,9 +42,7 @@ pub struct MediaRecordingMetadata {
 /// Application service that joins filesystem entries, ingest references, and
 /// recording metadata into the dashboard's media-library view.
 pub struct MediaLibraryService {
-    meta_store: Arc<dyn MetaStore>,
-    meta_writer: Arc<dyn MetaStoreWriter>,
-    recording_store: Arc<dyn RecordingStore>,
+    db: DeadlineDb,
     pipeline_service: PipelineService,
     ingest_service: IngestService,
     recording_metadata: Option<RecordingMetadataReporter>,
@@ -125,25 +123,36 @@ pub enum MediaDeleteError {
 }
 
 impl MediaLibraryService {
-    /// Builds the service from the persistence ports it coordinates.
+    /// Builds the service over the database it reads recordings and
+    /// recording switches from.
     ///
     /// Handlers stay HTTP-focused while this layer owns the cross-store joining
     /// needed for media-library responses and rename/delete workflows.
-    pub fn with_stores(
-        meta_store: Arc<dyn MetaStore>,
-        meta_writer: Arc<dyn MetaStoreWriter>,
-        recording_store: Arc<dyn RecordingStore>,
+    pub fn new(
+        db: DeadlineDb,
         pipeline_service: PipelineService,
         ingest_service: IngestService,
     ) -> Self {
         Self {
-            meta_store,
-            meta_writer,
-            recording_store,
+            db,
             pipeline_service,
             ingest_service,
             recording_metadata: None,
         }
+    }
+
+    /// Persists one pipeline's recording switch (`"1"` on, `"0"` off).
+    async fn set_recording_switch(
+        &self,
+        pipeline_id: &str,
+        value: &'static str,
+    ) -> Result<(), String> {
+        let key = recording_enabled_meta_key(pipeline_id);
+        self.db
+            .write(move |pool| async move { crate::db::set_meta(&pool, &key, value).await })
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     /// Attaches the optional recording metadata reporter used to enrich media
@@ -371,15 +380,13 @@ impl MediaLibraryService {
         input_source: Option<String>,
         media_dir: &str,
     ) -> ServiceResult<bool> {
-        let meta_key = recording_enabled_meta_key(pipeline_id);
-        self.meta_writer
-            .set_meta(&meta_key, "1")
+        self.set_recording_switch(pipeline_id, "1")
             .await
             .map_err(|e| ServiceError::internal(format!("set recording enabled: {e}")))?;
 
         let has_ingest = engine.ingests.active.read().await.contains_key(pipeline_id);
         if has_ingest && !engine.is_recording_active(pipeline_id).await {
-            let recording_settings = load_recording_settings(self.meta_store.as_ref()).await;
+            let recording_settings = load_recording_settings(&self.db).await;
             spawn_recording_task(
                 engine.clone(),
                 pipeline_name,
@@ -402,9 +409,7 @@ impl MediaLibraryService {
         engine: &Arc<MediaEngine>,
         pipeline_id: &str,
     ) -> ServiceResult<()> {
-        let meta_key = recording_enabled_meta_key(pipeline_id);
-        self.meta_writer
-            .set_meta(&meta_key, "0")
+        self.set_recording_switch(pipeline_id, "0")
             .await
             .map_err(|e| ServiceError::internal(format!("set recording disabled: {e}")))?;
         engine.unregister_recording(pipeline_id).await;
@@ -426,8 +431,8 @@ impl MediaLibraryService {
         }
 
         let rows = self
-            .recording_store
-            .list_recordings()
+            .db
+            .read(crate::db::list_recordings)
             .await
             .map_err(|e| ServiceError::internal(format!("list recordings: {e}")))?;
         let mut metadata = HashMap::new();

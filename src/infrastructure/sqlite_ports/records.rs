@@ -1,30 +1,4 @@
-use restream_domain::models::{Ingest, Job, JobStatus, Pipeline};
-
-impl From<JobStatus> for crate::db::JobStatusRecord {
-    fn from(status: JobStatus) -> Self {
-        match status {
-            JobStatus::Running => Self::Running,
-            JobStatus::Stopped => Self::Stopped,
-            JobStatus::Failed => Self::Failed,
-        }
-    }
-}
-
-impl From<crate::db::JobStatusRecord> for JobStatus {
-    fn from(status: crate::db::JobStatusRecord) -> Self {
-        match status {
-            crate::db::JobStatusRecord::Running => Self::Running,
-            crate::db::JobStatusRecord::Stopped => Self::Stopped,
-            crate::db::JobStatusRecord::Failed => Self::Failed,
-        }
-    }
-}
-
-impl PartialEq<JobStatus> for crate::db::JobStatusRecord {
-    fn eq(&self, other: &JobStatus) -> bool {
-        JobStatus::from(*self) == *other
-    }
-}
+use restream_domain::models::{Ingest, Pipeline};
 
 pub(super) fn pipeline_model(record: crate::db::PipelineRecord) -> Pipeline {
     Pipeline {
@@ -50,16 +24,5 @@ pub(super) fn ingest_model(record: crate::db::IngestRecord) -> Ingest {
             .as_deref()
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default(),
-    }
-}
-
-pub(super) fn job_model(record: crate::db::JobRecord) -> Job {
-    Job {
-        id: record.id,
-        pipeline_id: record.pipeline_id,
-        output_id: record.output_id,
-        status: record.status.into(),
-        started_at: record.started_at,
-        ended_at: record.ended_at,
     }
 }

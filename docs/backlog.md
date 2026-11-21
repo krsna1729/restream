@@ -34,13 +34,25 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-118 [architecture] [opus] One concrete control-plane composition root
 - Goal: HTTP handlers reach `db::*`, `MediaEngine` and config through one
   concrete application root, not `AppServices` (`src/api/mod.rs`) built by
-  `SqliteServiceFactory` (`src/infrastructure/service_wiring.rs`) over
-  `Arc<dyn …Store>` ports whose only production implementations are the
-  SQLite adapters in `src/infrastructure/` (tests add fakes).
-  Logs, outputs and health are already plain application functions.
-- Keep the services that hold policy (stream-key lookup, auth and sessions,
-  settings workflows, file ingest, media library, agent mutations); delete
-  ports, adapters and factory methods that only forward to `db::*`.
+  `SqliteServiceFactory` (`src/infrastructure/service_wiring.rs`).
+  Team, notify, auth, meta, jobs and recordings already call `crate::db`
+  through `DeadlineDb`.
+- Remaining ports, each with one SQLite adapter, to delete:
+  - Catalog: `PipelineStore`, `IngestLookup`, `IngestWriter`
+    (`SqlitePipelineStore`, `SqliteIngestLookup`, `sqlite_ports/records.rs`
+    conversions into `db` as `From` impls). `IngestService` is then a shell.
+  - Inputs: `PipelineInputStore`, `PipelineInputLookup`, `CatalogAuthSource`
+    (`SqlitePipelineInputStore`, `SqliteCatalogSource`).
+  - Then the factory: `AppServices` fields built directly from one root.
+- Each catalog/input port has test fakes that inject failures or races
+  (`ingest/tests.rs`, `file_ingest` tests, `media_library_service/tests.rs`
+  rename rollback, `catalog_auth` staleness, `housekeeping`, `recirculation`,
+  `srt_ingest`, `tests/api/schedules.rs`, `tests/api/hls_ingest`,
+  `tests/hls_push_ingest.rs`); move each onto real SQLite (triggers, update
+  hooks, held connections, closed pools).
+- Keep `NotifyTransport` (scripted HTTP sends) and the services that hold
+  policy (stream-key lookup, settings workflows, file ingest, media library,
+  agent mutations).
 - Gates: one vertical slice per change with its handler tests unchanged;
   API contract tests stay green; the noun checks in
   `tests/architecture/service_wiring.rs` go with the types they name; net
