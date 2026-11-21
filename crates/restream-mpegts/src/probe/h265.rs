@@ -39,19 +39,7 @@ where
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
-    const MAX_SHORT_TERM_REF_PIC_SETS: u32 = 64;
-    const MAX_DELTA_POCS: u32 = 64;
-    const MAX_LONG_TERM_REF_PICS: u32 = 32;
-
     if sps.len() < 2 {
         return None;
     }
@@ -60,8 +48,96 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
     let _vps_id = reader.read_bits(4)?;
     let max_sub_layers = reader.read_bits(3)?.checked_add(1)?;
     reader.skip(1)?; // temporal_id_nesting
+    read_profile_tier_level(&mut reader, max_sub_layers, meta)?;
 
-    // profile_tier_level
+    let _sps_id = reader.read_ue()?;
+    let chroma_format_idc = reader.read_ue()?;
+    if chroma_format_idc > 3 {
+        return None;
+    }
+    if chroma_format_idc == 3 {
+        reader.skip(1)?; // separate_colour_plane_flag
+    }
+    read_picture_size(&mut reader, chroma_format_idc, meta)?;
+
+    let bit_depth_luma = reader.read_ue()?.checked_add(8)?;
+    let bit_depth_chroma = reader.read_ue()?.checked_add(8)?;
+    if bit_depth_luma > 16 || bit_depth_chroma > 16 {
+        return None;
+    }
+    let log2_max_pic_order_cnt = reader.read_ue()?.checked_add(4)?;
+    if log2_max_pic_order_cnt > 16 {
+        return None;
+    }
+
+    skip_coding_structure(&mut reader, max_sub_layers)?;
+
+    skip_short_term_ref_pic_sets(&mut reader)?;
+    skip_long_term_ref_pics(&mut reader, log2_max_pic_order_cnt)?;
+
+    reader.skip(1)?; // sps_temporal_mvp_enabled_flag
+    reader.skip(1)?; // strong_intra_smoothing_enabled_flag
+
+    let vui_present = reader.read_bits(1)?;
+    if vui_present == 1 {
+        read_vui_frame_rate(&mut reader, meta)?;
+    }
+
+    Some(())
+}
+
+/// Skips the SPS fields between the POC size and the reference picture
+/// sets: sub-layer ordering info, block sizes, scaling lists, AMP/SAO and
+/// PCM.
+fn skip_coding_structure(reader: &mut BitReader, max_sub_layers: u32) -> Option<()> {
+    let sub_layer_ordering_info_present = reader.read_bits(1)?;
+    let start = if sub_layer_ordering_info_present == 1 {
+        0
+    } else {
+        max_sub_layers.checked_sub(1)?
+    };
+    for _ in start..max_sub_layers {
+        reader.read_ue()?; // max_dec_pic_buffering
+        reader.read_ue()?; // max_num_reorder_pics
+        reader.read_ue()?; // max_latency_increase
+    }
+
+    let _log2_min_luma_coding_block_size = reader.read_ue()?.checked_add(3)?;
+    let _log2_diff_max_min_luma_coding_block_size = reader.read_ue()?;
+    let _log2_min_luma_transform_block_size = reader.read_ue()?.checked_add(2)?;
+    let _log2_diff_max_min_luma_transform_block_size = reader.read_ue()?;
+    let _max_transform_hierarchy_depth_inter = reader.read_ue()?;
+    let _max_transform_hierarchy_depth_intra = reader.read_ue()?;
+
+    let scaling_list_enabled = reader.read_bits(1)?;
+    if scaling_list_enabled == 1 {
+        let scaling_list_data_present = reader.read_bits(1)?;
+        if scaling_list_data_present == 1 {
+            skip_scaling_list_data(reader)?;
+        }
+    }
+
+    reader.skip(1)?; // amp_enabled_flag
+    reader.skip(1)?; // sample_adaptive_offset_enabled_flag
+
+    let pcm_enabled = reader.read_bits(1)?;
+    if pcm_enabled == 1 {
+        reader.skip(4)?; // pcm_sample_bit_depth_luma_minus1
+        reader.skip(4)?; // pcm_sample_bit_depth_chroma_minus1
+        reader.read_ue()?; // log2_min_pcm_luma_coding_block_size_minus3
+        reader.read_ue()?; // log2_diff_max_min_pcm_luma_coding_block_size
+        reader.skip(1)?; // pcm_loop_filter_disabled_flag
+    }
+    Some(())
+}
+
+/// profile_tier_level() (H.265 §7.3.3): records the general profile and
+/// level, skips the sub-layer profile info.
+fn read_profile_tier_level(
+    reader: &mut BitReader,
+    max_sub_layers: u32,
+    meta: &mut VideoMeta,
+) -> Option<()> {
     reader.skip(2)?; // general_profile_space
     reader.skip(1)?; // general_tier_flag
     let general_profile_idc = reader.read_bits(5)?;
@@ -84,7 +160,6 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
         (general_level_idc % 30) / 3
     ));
 
-    // Skip sub-layer profile info
     if max_sub_layers > 1 {
         // max_sub_layers is 2..=8 here (3 bits plus one).
         let sub_layers = usize::try_from(max_sub_layers.checked_sub(1)?).ok()?;
@@ -104,16 +179,16 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
             }
         }
     }
+    Some(())
+}
 
-    let _sps_id = reader.read_ue()?;
-    let chroma_format_idc = reader.read_ue()?;
-    if chroma_format_idc > 3 {
-        return None;
-    }
-    if chroma_format_idc == 3 {
-        reader.skip(1)?; // separate_colour_plane_flag
-    }
-
+/// pic_width/height_in_luma_samples less the conformance window; `None`
+/// for a zero or over-cropped size.
+fn read_picture_size(
+    reader: &mut BitReader,
+    chroma_format_idc: u32,
+    meta: &mut VideoMeta,
+) -> Option<()> {
     let width = reader.read_ue()?;
     let height = reader.read_ue()?;
     if width == 0 || height == 0 {
@@ -145,55 +220,14 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
     if meta.width == 0 || meta.height == 0 {
         return None;
     }
+    Some(())
+}
 
-    let bit_depth_luma = reader.read_ue()?.checked_add(8)?;
-    let bit_depth_chroma = reader.read_ue()?.checked_add(8)?;
-    if bit_depth_luma > 16 || bit_depth_chroma > 16 {
-        return None;
-    }
-    let log2_max_pic_order_cnt = reader.read_ue()?.checked_add(4)?;
-    if log2_max_pic_order_cnt > 16 {
-        return None;
-    }
-
-    let sub_layer_ordering_info_present = reader.read_bits(1)?;
-    let start = if sub_layer_ordering_info_present == 1 {
-        0
-    } else {
-        max_sub_layers.checked_sub(1)?
-    };
-    for _ in start..max_sub_layers {
-        reader.read_ue()?; // max_dec_pic_buffering
-        reader.read_ue()?; // max_num_reorder_pics
-        reader.read_ue()?; // max_latency_increase
-    }
-
-    let _log2_min_luma_coding_block_size = reader.read_ue()?.checked_add(3)?;
-    let _log2_diff_max_min_luma_coding_block_size = reader.read_ue()?;
-    let _log2_min_luma_transform_block_size = reader.read_ue()?.checked_add(2)?;
-    let _log2_diff_max_min_luma_transform_block_size = reader.read_ue()?;
-    let _max_transform_hierarchy_depth_inter = reader.read_ue()?;
-    let _max_transform_hierarchy_depth_intra = reader.read_ue()?;
-
-    let scaling_list_enabled = reader.read_bits(1)?;
-    if scaling_list_enabled == 1 {
-        let scaling_list_data_present = reader.read_bits(1)?;
-        if scaling_list_data_present == 1 {
-            skip_scaling_list_data(&mut reader)?;
-        }
-    }
-
-    reader.skip(1)?; // amp_enabled_flag
-    reader.skip(1)?; // sample_adaptive_offset_enabled_flag
-
-    let pcm_enabled = reader.read_bits(1)?;
-    if pcm_enabled == 1 {
-        reader.skip(4)?; // pcm_sample_bit_depth_luma_minus1
-        reader.skip(4)?; // pcm_sample_bit_depth_chroma_minus1
-        reader.read_ue()?; // log2_min_pcm_luma_coding_block_size_minus3
-        reader.read_ue()?; // log2_diff_max_min_pcm_luma_coding_block_size
-        reader.skip(1)?; // pcm_loop_filter_disabled_flag
-    }
+/// Skips the SPS's st_ref_pic_set()s (H.265 §7.3.7), bounded so a hostile
+/// SPS cannot make the parser loop or allocate without limit.
+fn skip_short_term_ref_pic_sets(reader: &mut BitReader) -> Option<()> {
+    const MAX_SHORT_TERM_REF_PIC_SETS: u32 = 64;
+    const MAX_DELTA_POCS: u32 = 64;
 
     let num_short_term_rps = reader.read_ue()?;
     if num_short_term_rps > MAX_SHORT_TERM_REF_PIC_SETS {
@@ -202,28 +236,13 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
     let mut num_delta_pocs = Vec::with_capacity(num_short_term_rps as usize);
     for i in 0..num_short_term_rps {
         let inter_pred = if i > 0 { reader.read_bits(1)? } else { 0 };
-        if inter_pred == 1 {
+        let count = if inter_pred == 1 {
             // delta_idx_minus1 is not present in SPS context (stRpsIdx < num_short_term_rps)
             reader.skip(1)?; // delta_rps_sign
             reader.read_ue()?; // abs_delta_rps_minus1
             // RefRpsIdx = i - 1 (delta_idx_minus1 defaults to 0 in SPS)
-            let count = *num_delta_pocs.get(usize::try_from(i.checked_sub(1)?).ok()?)?;
-            let mut this_count = 0u32;
-            for _ in 0..=count {
-                let used = reader.read_bits(1)?;
-                if used == 0 {
-                    let use_delta = reader.read_bits(1)?;
-                    if use_delta == 1 {
-                        this_count = this_count.checked_add(1)?;
-                    }
-                } else {
-                    this_count = this_count.checked_add(1)?;
-                }
-            }
-            if this_count > MAX_DELTA_POCS {
-                return None;
-            }
-            num_delta_pocs.push(this_count);
+            let reference = *num_delta_pocs.get(usize::try_from(i.checked_sub(1)?).ok()?)?;
+            skip_inter_ref_pic_set(reader, reference)?
         } else {
             let num_negative = reader.read_ue()?;
             let num_positive = reader.read_ue()?;
@@ -231,17 +250,38 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
             if total > MAX_DELTA_POCS {
                 return None;
             }
-            for _ in 0..num_negative {
-                reader.read_ue()?; // delta_poc_s0_minus1
-                reader.skip(1)?; // used_by_curr_pic_s0_flag
+            // delta_poc_s0_minus1 + used_by_curr_pic_s0_flag for each
+            // negative picture, then the same (s1) for each positive one.
+            for _ in 0..total {
+                reader.read_ue()?;
+                reader.skip(1)?;
             }
-            for _ in 0..num_positive {
-                reader.read_ue()?; // delta_poc_s1_minus1
-                reader.skip(1)?; // used_by_curr_pic_s1_flag
-            }
-            num_delta_pocs.push(total);
+            total
+        };
+        if count > MAX_DELTA_POCS {
+            return None;
+        }
+        num_delta_pocs.push(count);
+    }
+    Some(())
+}
+
+/// An inter-predicted set's used/use-delta flags over its reference set's
+/// `reference_count + 1` entries; returns its own delta POC count.
+fn skip_inter_ref_pic_set(reader: &mut BitReader, reference_count: u32) -> Option<u32> {
+    let mut count = 0u32;
+    for _ in 0..=reference_count {
+        // used_by_curr_pic_flag, else use_delta_flag.
+        if reader.read_bits(1)? == 1 || reader.read_bits(1)? == 1 {
+            count = count.checked_add(1)?;
         }
     }
+    Some(count)
+}
+
+/// Skips the SPS's long-term reference pictures, bounded.
+fn skip_long_term_ref_pics(reader: &mut BitReader, log2_max_pic_order_cnt: u32) -> Option<()> {
+    const MAX_LONG_TERM_REF_PICS: u32 = 32;
 
     let long_term_ref_pics_present = reader.read_bits(1)?;
     if long_term_ref_pics_present == 1 {
@@ -254,56 +294,54 @@ pub fn parse_sps(sps: &[u8], meta: &mut VideoMeta) -> Option<()> {
             reader.skip(1)?; // used_by_curr_pic_lt_flag
         }
     }
+    Some(())
+}
 
-    reader.skip(1)?; // sps_temporal_mvp_enabled_flag
-    reader.skip(1)?; // strong_intra_smoothing_enabled_flag
-
-    let vui_present = reader.read_bits(1)?;
-    if vui_present == 1 {
-        let aspect_ratio_present = reader.read_bits(1)?;
-        if aspect_ratio_present == 1 {
-            let sar_idx = reader.read_bits(8)?;
-            if sar_idx == 255 {
-                reader.skip(32)?; // sar_width + sar_height
-            }
-        }
-        let overscan_present = reader.read_bits(1)?;
-        if overscan_present == 1 {
-            reader.skip(1)?;
-        }
-        let video_signal_present = reader.read_bits(1)?;
-        if video_signal_present == 1 {
-            reader.skip(3 + 1)?; // video_format + video_full_range
-            let colour_desc_present = reader.read_bits(1)?;
-            if colour_desc_present == 1 {
-                reader.skip(24)?; // colour_primaries + transfer + matrix
-            }
-        }
-        let chroma_loc_present = reader.read_bits(1)?;
-        if chroma_loc_present == 1 {
-            reader.read_ue()?;
-            reader.read_ue()?;
-        }
-        reader.skip(3)?; // neutral_chroma, field_seq, frame_field_info
-
-        let default_display_window = reader.read_bits(1)?;
-        if default_display_window == 1 {
-            reader.read_ue()?;
-            reader.read_ue()?;
-            reader.read_ue()?;
-            reader.read_ue()?;
-        }
-
-        let timing_info_present = reader.read_bits(1)?;
-        if timing_info_present == 1 {
-            let num_units_in_tick = reader.read_bits(32)?;
-            let time_scale = reader.read_bits(32)?;
-            if num_units_in_tick > 0 && time_scale > 0 {
-                meta.fps = time_scale as f64 / num_units_in_tick as f64;
-            }
+/// vui_parameters() up to the timing info (H.265 Annex E): records the
+/// frame rate when both timing fields are non-zero.
+fn read_vui_frame_rate(reader: &mut BitReader, meta: &mut VideoMeta) -> Option<()> {
+    let aspect_ratio_present = reader.read_bits(1)?;
+    if aspect_ratio_present == 1 {
+        let sar_idx = reader.read_bits(8)?;
+        if sar_idx == 255 {
+            reader.skip(32)?; // sar_width + sar_height
         }
     }
+    let overscan_present = reader.read_bits(1)?;
+    if overscan_present == 1 {
+        reader.skip(1)?;
+    }
+    let video_signal_present = reader.read_bits(1)?;
+    if video_signal_present == 1 {
+        reader.skip(3 + 1)?; // video_format + video_full_range
+        let colour_desc_present = reader.read_bits(1)?;
+        if colour_desc_present == 1 {
+            reader.skip(24)?; // colour_primaries + transfer + matrix
+        }
+    }
+    let chroma_loc_present = reader.read_bits(1)?;
+    if chroma_loc_present == 1 {
+        reader.read_ue()?;
+        reader.read_ue()?;
+    }
+    reader.skip(3)?; // neutral_chroma, field_seq, frame_field_info
 
+    let default_display_window = reader.read_bits(1)?;
+    if default_display_window == 1 {
+        reader.read_ue()?;
+        reader.read_ue()?;
+        reader.read_ue()?;
+        reader.read_ue()?;
+    }
+
+    let timing_info_present = reader.read_bits(1)?;
+    if timing_info_present == 1 {
+        let num_units_in_tick = reader.read_bits(32)?;
+        let time_scale = reader.read_bits(32)?;
+        if num_units_in_tick > 0 && time_scale > 0 {
+            meta.fps = time_scale as f64 / num_units_in_tick as f64;
+        }
+    }
     Some(())
 }
 
