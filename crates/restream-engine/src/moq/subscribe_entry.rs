@@ -428,16 +428,11 @@ async fn read_track(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 async fn run_async(
     config: SubscriberConfig,
     tls: compio::quic::ClientConfig,
 ) -> Result<SubscriberOutcome, SubscriberError> {
     let (remote, setup_path) = parse_target(&config.url).map_err(SubscriberError::Config)?;
-    let started = Instant::now();
     let mut report = SubscriberReport {
         url: config.url.clone(),
         broadcast: config.broadcast.clone(),
@@ -446,105 +441,46 @@ async fn run_async(
         watch_secs: config.watch.as_secs_f64(),
         ..SubscriberReport::default()
     };
-    let connect = async {
-        let endpoint = transport::client_endpoint(AddressFamily::V4)
-            .await
-            .map_err(|error| format!("MoQ client endpoint: {error}"))?;
-        let session = transport::connect(&endpoint, remote, &config.server_name, tls)
-            .await
-            .map_err(|error| error.to_string())?;
-        let (viewer, origin_driver) =
-            origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
-        compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
-        let (session, driver) = moq_net::Client::new()
-            .with_subscriber(viewer.clone())
-            .with_path(setup_path)
-            .connect(std::time::Instant::now(), session)
-            .await
-            .map_err(|error| format!("MoQ handshake: {error}"))?;
-        compio::runtime::spawn(transport::run_driver(driver)).detach();
-        Ok::<_, String>((viewer, session, endpoint))
-    };
-    let connected = compio::time::timeout(config.connect_timeout, connect).await;
-    let (viewer, _session, _endpoint) = match connected {
-        Ok(Ok(parts)) => {
-            report.connected = true;
-            report.connection_ms = started.elapsed().as_secs_f64() * 1000.0;
-            parts
-        }
-        Ok(Err(error)) => {
-            report.connection_ms = started.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(error);
-            return Ok(SubscriberOutcome { report });
-        }
-        Err(_) => {
-            report.connection_ms = started.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!(
-                "MoQ connect exceeded {} s",
-                config.connect_timeout.as_secs()
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-    };
-    let connected_at = Instant::now();
+    if let Err(error) = observe(&config, tls, remote, setup_path, &mut report).await {
+        report.error = Some(error);
+    }
+    Ok(SubscriberOutcome { report })
+}
 
-    let consumer = viewer.consume();
-    let catalog = compio::time::timeout(
-        config.catalog_timeout,
-        consumer.routed_broadcast(config.broadcast.as_str()),
+fn elapsed_ms(since: Instant) -> f64 {
+    since.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Connects, resolves the catalog, subscribes to both media tracks and
+/// watches them, recording each phase in `report`. An error ends the run
+/// and becomes `report.error`; what was recorded before it is kept.
+async fn observe(
+    config: &SubscriberConfig,
+    tls: compio::quic::ClientConfig,
+    remote: SocketAddr,
+    setup_path: String,
+    report: &mut SubscriberReport,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let connected = compio::time::timeout(
+        config.connect_timeout,
+        connect(config, tls, remote, setup_path),
     )
     .await;
-    let broadcast = match catalog {
-        Ok(Ok(broadcast)) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            broadcast
-        }
-        Ok(Err(error)) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!("resolve broadcast {:?}: {error}", config.broadcast));
-            return Ok(SubscriberOutcome { report });
-        }
-        Err(_) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!(
-                "broadcast {:?} did not resolve within {} s",
-                config.broadcast,
-                config.catalog_timeout.as_secs()
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-    };
+    report.connection_ms = elapsed_ms(started);
+    // The session and endpoint stay alive until the watch ends.
+    let (viewer, _session, _endpoint) = connected.map_err(|_| {
+        format!(
+            "MoQ connect exceeded {} s",
+            config.connect_timeout.as_secs()
+        )
+    })??;
+    report.connected = true;
 
-    let catalog = match compio::time::timeout(config.catalog_timeout, async {
-        let mut catalog = hang::Catalog::<()>::subscribe(&broadcast).await?;
-        catalog.next().await
-    })
-    .await
-    {
-        Ok(Ok(Some(catalog))) => catalog,
-        Ok(Ok(None)) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!(
-                "broadcast {:?} ended its catalog track without a catalog",
-                config.broadcast
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-        Ok(Err(error)) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!("read {CATALOG_TRACK}: {error}"));
-            return Ok(SubscriberOutcome { report });
-        }
-        Err(_) => {
-            report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
-            report.error = Some(format!(
-                "catalog track did not resolve within {} s",
-                config.catalog_timeout.as_secs()
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-    };
-    report.catalog_ms = connected_at.elapsed().as_secs_f64() * 1000.0;
+    let connected_at = Instant::now();
+    let resolved = resolve_catalog(config, &viewer).await;
+    report.catalog_ms = elapsed_ms(connected_at);
+    let (broadcast, catalog) = resolved?;
 
     let video_track = catalog
         .video
@@ -563,58 +499,115 @@ async fn run_async(
     report.video_track = Some(video_track.clone());
     report.audio_track = Some(audio_track.clone());
 
-    let video = match broadcast
-        .track(&video_track)
-        .map_err(|error| format!("video track {video_track:?}: {error}"))
-        .map(|track| track.subscribe(None::<moq_net::track::Subscription>))
-    {
-        Ok(subscribe) => compio::time::timeout(config.catalog_timeout, subscribe).await,
-        Err(error) => {
-            report.error = Some(error);
-            return Ok(SubscriberOutcome { report });
-        }
-    };
-    let video = match video {
-        Ok(Ok(subscriber)) => container::Consumer::new(subscriber, loc::Wire(Kind::Video)),
-        Ok(Err(error)) => {
-            report.error = Some(format!("subscribe to {video_track:?}: {error}"));
-            return Ok(SubscriberOutcome { report });
-        }
-        Err(_) => {
-            report.error = Some(format!(
-                "subscribe to {video_track:?} exceeded {} s",
-                config.catalog_timeout.as_secs()
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-    };
+    let video = subscribe_track(&broadcast, &video_track, Kind::Video, config).await?;
+    let audio = subscribe_track(&broadcast, &audio_track, Kind::Audio, config).await?;
+    watch_tracks(video, audio, config, report).await
+}
 
-    let audio = match broadcast
-        .track(&audio_track)
-        .map_err(|error| format!("audio track {audio_track:?}: {error}"))
-        .map(|track| track.subscribe(None::<moq_net::track::Subscription>))
-    {
-        Ok(subscribe) => compio::time::timeout(config.catalog_timeout, subscribe).await,
-        Err(error) => {
-            report.error = Some(error);
-            return Ok(SubscriberOutcome { report });
-        }
-    };
-    let audio = match audio {
-        Ok(Ok(subscriber)) => container::Consumer::new(subscriber, loc::Wire(Kind::Audio)),
-        Ok(Err(error)) => {
-            report.error = Some(format!("subscribe to {audio_track:?}: {error}"));
-            return Ok(SubscriberOutcome { report });
-        }
-        Err(_) => {
-            report.error = Some(format!(
-                "subscribe to {audio_track:?} exceeded {} s",
-                config.catalog_timeout.as_secs()
-            ));
-            return Ok(SubscriberOutcome { report });
-        }
-    };
+/// The QUIC endpoint and session, MoQ handshake included, with the
+/// subscriber's origin.
+async fn connect(
+    config: &SubscriberConfig,
+    tls: compio::quic::ClientConfig,
+    remote: SocketAddr,
+    setup_path: String,
+) -> Result<(origin::Producer, moq_net::Session, compio::quic::Endpoint), String> {
+    let endpoint = transport::client_endpoint(AddressFamily::V4)
+        .await
+        .map_err(|error| format!("MoQ client endpoint: {error}"))?;
+    let session = transport::connect(&endpoint, remote, &config.server_name, tls)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (viewer, origin_driver) =
+        origin::Producer::new(origin::Config::new(moq_net::Hop::random()));
+    compio::runtime::spawn(transport::run_driver(origin_driver)).detach();
+    let (session, driver) = moq_net::Client::new()
+        .with_subscriber(viewer.clone())
+        .with_path(setup_path)
+        .connect(std::time::Instant::now(), session)
+        .await
+        .map_err(|error| format!("MoQ handshake: {error}"))?;
+    compio::runtime::spawn(transport::run_driver(driver)).detach();
+    Ok((viewer, session, endpoint))
+}
 
+/// The routed broadcast and its first catalog, each bounded by the catalog
+/// timeout.
+async fn resolve_catalog(
+    config: &SubscriberConfig,
+    viewer: &origin::Producer,
+) -> Result<(moq_net::broadcast::Consumer, hang::Catalog<()>), String> {
+    let consumer = viewer.consume();
+    let broadcast = compio::time::timeout(
+        config.catalog_timeout,
+        consumer.routed_broadcast(config.broadcast.as_str()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "broadcast {:?} did not resolve within {} s",
+            config.broadcast,
+            config.catalog_timeout.as_secs()
+        )
+    })?
+    .map_err(|error| format!("resolve broadcast {:?}: {error}", config.broadcast))?;
+
+    let catalog = compio::time::timeout(config.catalog_timeout, async {
+        let mut catalog = hang::Catalog::<()>::subscribe(&broadcast).await?;
+        catalog.next().await
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "catalog track did not resolve within {} s",
+            config.catalog_timeout.as_secs()
+        )
+    })?
+    .map_err(|error| format!("read {CATALOG_TRACK}: {error}"))?
+    .ok_or_else(|| {
+        format!(
+            "broadcast {:?} ended its catalog track without a catalog",
+            config.broadcast
+        )
+    })?;
+    Ok((broadcast, catalog))
+}
+
+/// Subscribes to `track`, bounded by the catalog timeout.
+async fn subscribe_track(
+    broadcast: &moq_net::broadcast::Consumer,
+    track: &str,
+    kind: Kind,
+    config: &SubscriberConfig,
+) -> Result<container::Consumer<loc::Wire>, String> {
+    let label = match kind {
+        Kind::Video => "video",
+        _ => "audio",
+    };
+    let subscribe = broadcast
+        .track(track)
+        .map_err(|error| format!("{label} track {track:?}: {error}"))?
+        .subscribe(None::<moq_net::track::Subscription>);
+    let subscriber = compio::time::timeout(config.catalog_timeout, subscribe)
+        .await
+        .map_err(|_| {
+            format!(
+                "subscribe to {track:?} exceeded {} s",
+                config.catalog_timeout.as_secs()
+            )
+        })?
+        .map_err(|error| format!("subscribe to {track:?}: {error}"))?;
+    Ok(container::Consumer::new(subscriber, loc::Wire(kind)))
+}
+
+/// Counts both tracks for the watch window into `report`; a failed track
+/// is the run's error.
+async fn watch_tracks(
+    video: container::Consumer<loc::Wire>,
+    audio: container::Consumer<loc::Wire>,
+    config: &SubscriberConfig,
+    report: &mut SubscriberReport,
+) -> Result<(), String> {
     let shared = Rc::new(RefCell::new(Observation::default()));
     let watch = config.watch;
     let video_task =
@@ -622,14 +615,10 @@ async fn run_async(
     let audio_task =
         compio::runtime::spawn(read_track(audio, Kind::Audio, Rc::clone(&shared), watch));
     let (video_end, audio_end) = futures_util::join!(video_task, audio_task);
-    let video_end = match video_end {
-        Ok(end) => end,
-        Err(error) => TrackEnd::Failed(format!("video task: {error}")),
-    };
-    let audio_end = match audio_end {
-        Ok(end) => end,
-        Err(error) => TrackEnd::Failed(format!("audio task: {error}")),
-    };
+    let video_end =
+        video_end.unwrap_or_else(|error| TrackEnd::Failed(format!("video task: {error}")));
+    let audio_end =
+        audio_end.unwrap_or_else(|error| TrackEnd::Failed(format!("audio task: {error}")));
     let observation = shared.borrow();
     let mut counters = observation.counters.clone();
     counters.p95_abs_skew_us = counters.p95();
@@ -640,12 +629,10 @@ async fn run_async(
         (first - config.publish_ready_unix_ms as f64).max(0.0)
     });
     report.ended = matches!(video_end, TrackEnd::Ended) && matches!(audio_end, TrackEnd::Ended);
-    let error = match (video_end, audio_end) {
-        (TrackEnd::Failed(error), _) | (_, TrackEnd::Failed(error)) => Some(error),
-        _ => None,
-    };
-    report.error = error;
-    Ok(SubscriberOutcome { report })
+    match (video_end, audio_end) {
+        (TrackEnd::Failed(error), _) | (_, TrackEnd::Failed(error)) => Err(error),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
