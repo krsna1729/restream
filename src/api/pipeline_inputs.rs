@@ -222,55 +222,9 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
     }
     match kind.as_str() {
         "none" => Ok(PullAuth::None),
-        "bearer" => {
-            let token = token.ok_or_else(|| "a bearer auth requires token".to_string())?;
-            if token.is_empty() || token.len() > MAX_AUTH_TOKEN_LEN {
-                return Err(format!(
-                    "bearer token must be 1 to {MAX_AUTH_TOKEN_LEN} bytes"
-                ));
-            }
-            if let Some(message) = invalid_header_value("bearer token", &token) {
-                return Err(message);
-            }
-            Ok(PullAuth::Bearer { token })
-        }
-        "cookies" => {
-            let cookies = cookies.ok_or_else(|| "a cookies auth requires cookies".to_string())?;
-            if cookies.is_empty() || cookies.len() > MAX_AUTH_COOKIES_LEN {
-                return Err(format!(
-                    "cookie string must be 1 to {MAX_AUTH_COOKIES_LEN} bytes"
-                ));
-            }
-            // One header line, sent as one `Cookie` header: the same type the
-            // puller builds decides what a valid value is.
-            if let Some(message) = invalid_header_value("cookie string", &cookies) {
-                return Err(message);
-            }
-            Ok(PullAuth::Cookies { cookies })
-        }
-        "basic" => {
-            let username = username.ok_or_else(|| "a basic auth requires username".to_string())?;
-            let password = password.ok_or_else(|| "a basic auth requires password".to_string())?;
-            if username.is_empty() || username.len() > MAX_AUTH_USERNAME_LEN {
-                return Err(format!(
-                    "basic username must be 1 to {MAX_AUTH_USERNAME_LEN} bytes"
-                ));
-            }
-            if password.is_empty() || password.len() > MAX_AUTH_PASSWORD_LEN {
-                return Err(format!(
-                    "basic password must be 1 to {MAX_AUTH_PASSWORD_LEN} bytes"
-                ));
-            }
-            // Basic is base64-encoded into an `Authorization` header, so any
-            // UTF-8 survives — including control and non-ASCII bytes, which is
-            // why a legitimate non-ASCII password must not be refused here. The
-            // one rule is RFC 7617's: the first colon delimits, so a colon in
-            // the username would be read as the start of the password.
-            if username.contains(':') {
-                return Err("basic username must not contain a colon".to_string());
-            }
-            Ok(PullAuth::Basic { username, password })
-        }
+        "bearer" => build_bearer_auth(token),
+        "cookies" => build_cookies_auth(cookies),
+        "basic" => build_basic_auth(username, password),
         "headers" => {
             let headers = headers.ok_or_else(|| "a headers auth requires headers".to_string())?;
             if let Some(message) = validate_headers(&headers) {
@@ -282,6 +236,61 @@ fn build_auth(payload: AuthPayload) -> Result<PullAuth, String> {
             "unknown auth kind \"{other}\": expected \"none\", \"bearer\", \"cookies\", \"basic\", or \"headers\""
         )),
     }
+}
+
+fn build_bearer_auth(token: Option<String>) -> Result<PullAuth, String> {
+    let token = token.ok_or_else(|| "a bearer auth requires token".to_string())?;
+    if token.is_empty() || token.len() > MAX_AUTH_TOKEN_LEN {
+        return Err(format!(
+            "bearer token must be 1 to {MAX_AUTH_TOKEN_LEN} bytes"
+        ));
+    }
+    if let Some(message) = invalid_header_value("bearer token", &token) {
+        return Err(message);
+    }
+    Ok(PullAuth::Bearer { token })
+}
+
+fn build_cookies_auth(cookies: Option<String>) -> Result<PullAuth, String> {
+    let cookies = cookies.ok_or_else(|| "a cookies auth requires cookies".to_string())?;
+    if cookies.is_empty() || cookies.len() > MAX_AUTH_COOKIES_LEN {
+        return Err(format!(
+            "cookie string must be 1 to {MAX_AUTH_COOKIES_LEN} bytes"
+        ));
+    }
+    // One header line, sent as one `Cookie` header: the same type the
+    // puller builds decides what a valid value is.
+    if let Some(message) = invalid_header_value("cookie string", &cookies) {
+        return Err(message);
+    }
+    Ok(PullAuth::Cookies { cookies })
+}
+
+fn build_basic_auth(
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<PullAuth, String> {
+    let username = username.ok_or_else(|| "a basic auth requires username".to_string())?;
+    let password = password.ok_or_else(|| "a basic auth requires password".to_string())?;
+    if username.is_empty() || username.len() > MAX_AUTH_USERNAME_LEN {
+        return Err(format!(
+            "basic username must be 1 to {MAX_AUTH_USERNAME_LEN} bytes"
+        ));
+    }
+    if password.is_empty() || password.len() > MAX_AUTH_PASSWORD_LEN {
+        return Err(format!(
+            "basic password must be 1 to {MAX_AUTH_PASSWORD_LEN} bytes"
+        ));
+    }
+    // Basic is base64-encoded into an `Authorization` header, so any
+    // UTF-8 survives — including control and non-ASCII bytes, which is
+    // why a legitimate non-ASCII password must not be refused here. The
+    // one rule is RFC 7617's: the first colon delimits, so a colon in
+    // the username would be read as the start of the password.
+    if username.contains(':') {
+        return Err("basic username must not contain a colon".to_string());
+    }
+    Ok(PullAuth::Basic { username, password })
 }
 
 /// Push passwords use the dashboard's salted scrypt storage, never plaintext.
@@ -373,6 +382,54 @@ fn build_source(
             })
         }
     }
+}
+
+/// The source fields of a create or update request.
+struct SourceFields {
+    kind: Option<String>,
+    source_url: Option<String>,
+    variant_rule: Option<String>,
+    auth: Option<AuthPayload>,
+    push_auth: Option<AuthPayload>,
+}
+
+/// Resolves a mutation's source against the input it updates (`None` on
+/// create). An absent field keeps the stored value, or the default on
+/// create. Auth is write-only: an absent `auth` keeps the stored
+/// credential so a PATCH that does not mention auth never clears it;
+/// `{"kind":"none"}` clears it and any other variant replaces it wholesale.
+async fn resolve_source(
+    fields: SourceFields,
+    current: Option<&PipelineInput>,
+) -> Result<PipelineInputSource, Response> {
+    let kind = match fields.kind.as_deref() {
+        None => current.map_or(PipelineInputSourceKind::Keyed, |input| input.source_kind),
+        Some(raw) => parse_source_kind(raw).map_err(bad_request)?,
+    };
+    let variant_rule = match fields.variant_rule.as_deref() {
+        None => current.map_or_else(VariantRule::default, |input| input.variant_rule),
+        Some(raw) => parse_variant_rule(raw).map_err(bad_request)?,
+    };
+    let auth = match fields.auth {
+        Some(auth) => build_auth(auth).map_err(bad_request)?,
+        None => current.map_or(PullAuth::None, |input| input.source_auth.clone()),
+    };
+    let url = match kind {
+        // A keyed input has no URL: passing one is rejected, not ignored.
+        PipelineInputSourceKind::Keyed => fields.source_url,
+        PipelineInputSourceKind::HlsPull | PipelineInputSourceKind::SrtCall => {
+            fields.source_url.or_else(|| {
+                current
+                    .filter(|input| input.source_kind == kind)
+                    .and_then(|input| input.source_url.clone())
+            })
+        }
+    };
+    let push_auth = match fields.push_auth {
+        Some(auth) => build_push_auth(auth).await?,
+        None => current.map_or(PushAuth::None, |input| input.push_auth.clone()),
+    };
+    build_source(kind, url, variant_rule, auth, push_auth).map_err(bad_request)
 }
 
 async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serde_json::Value {
@@ -496,37 +553,16 @@ pub async fn pipeline_inputs_post_handler(
     if let Some(response) = validate_label(&payload.label) {
         return response;
     }
-    let kind = match payload.kind.as_deref() {
-        None => PipelineInputSourceKind::Keyed,
-        Some(raw) => match parse_source_kind(raw) {
-            Ok(kind) => kind,
-            Err(message) => return bad_request(message),
-        },
+    let fields = SourceFields {
+        kind: payload.kind,
+        source_url: payload.source_url,
+        variant_rule: payload.variant_rule,
+        auth: payload.auth,
+        push_auth: payload.push_auth,
     };
-    let variant_rule = match payload.variant_rule.as_deref() {
-        None => VariantRule::default(),
-        Some(raw) => match parse_variant_rule(raw) {
-            Ok(rule) => rule,
-            Err(message) => return bad_request(message),
-        },
-    };
-    let auth = match payload.auth {
-        Some(auth) => match build_auth(auth) {
-            Ok(auth) => auth,
-            Err(message) => return bad_request(message),
-        },
-        None => PullAuth::None,
-    };
-    let push_auth = match payload.push_auth {
-        Some(auth) => match build_push_auth(auth).await {
-            Ok(auth) => auth,
-            Err(response) => return response,
-        },
-        None => PushAuth::None,
-    };
-    let source = match build_source(kind, payload.source_url, variant_rule, auth, push_auth) {
+    let source = match resolve_source(fields, None).await {
         Ok(source) => source,
-        Err(message) => return bad_request(message),
+        Err(response) => return response,
     };
     let input = match state
         .pipeline_input_service
@@ -574,52 +610,18 @@ pub async fn pipeline_input_patch_handler(
         .as_deref()
         .map(str::trim)
         .unwrap_or(&current.label);
-    let kind = match payload.kind.as_deref() {
-        None => current.source_kind,
-        Some(raw) => match parse_source_kind(raw) {
-            Ok(kind) => kind,
-            Err(message) => return bad_request(message),
-        },
+    let fields = SourceFields {
+        kind: payload.kind,
+        source_url: payload.source_url,
+        variant_rule: payload.variant_rule,
+        auth: payload.auth,
+        push_auth: payload.push_auth,
     };
-    let variant_rule = match payload.variant_rule.as_deref() {
-        None => current.variant_rule,
-        Some(raw) => match parse_variant_rule(raw) {
-            Ok(rule) => rule,
-            Err(message) => return bad_request(message),
-        },
-    };
-    // Auth is write-only. An absent `auth` keeps the stored credential so a
-    // PATCH that does not mention auth never clears it; `{"kind":"none"}`
-    // clears it and any other variant replaces it wholesale.
-    let auth = match payload.auth {
-        Some(auth) => match build_auth(auth) {
-            Ok(auth) => auth,
-            Err(message) => return bad_request(message),
-        },
-        None => current.source_auth.clone(),
-    };
-    let url = match kind {
-        // A keyed input has no URL: passing one is rejected, not ignored.
-        PipelineInputSourceKind::Keyed => payload.source_url,
-        PipelineInputSourceKind::HlsPull | PipelineInputSourceKind::SrtCall => {
-            payload.source_url.or_else(|| {
-                (current.source_kind == kind)
-                    .then(|| current.source_url.clone())
-                    .flatten()
-            })
-        }
-    };
-    let push_auth = match payload.push_auth {
-        Some(auth) => match build_push_auth(auth).await {
-            Ok(auth) => auth,
-            Err(response) => return response,
-        },
-        None => current.push_auth.clone(),
-    };
-    let source = match build_source(kind, url, variant_rule, auth, push_auth) {
+    let source = match resolve_source(fields, Some(&current)).await {
         Ok(source) => source,
-        Err(message) => return bad_request(message),
+        Err(response) => return response,
     };
+    let kind = source.kind;
     let input = match state
         .pipeline_input_service
         .update(
