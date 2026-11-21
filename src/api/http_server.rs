@@ -92,10 +92,6 @@ impl ServeOptions {
 /// drain. Accept errors that concern one connection are skipped; others
 /// (descriptor exhaustion) are logged and retried after a second, as
 /// `axum::serve` does.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
     let max_connections = options.max_connections.clamp(1, Semaphore::MAX_PERMITS);
     let permits = Arc::new(Semaphore::new(max_connections));
@@ -108,69 +104,101 @@ pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
                 Err(_closed) => break,
             },
         };
-        let (stream, remote) = tokio::select! {
+        let accepted = tokio::select! {
             () = options.shutdown.cancelled() => break,
-            accepted = listener.accept() => match accepted {
-                Ok(accepted) => accepted,
-                Err(accept_error) => {
-                    if !matches!(
-                        accept_error.kind(),
-                        io::ErrorKind::ConnectionRefused
-                            | io::ErrorKind::ConnectionAborted
-                            | io::ErrorKind::ConnectionReset
-                    ) {
-                        error!(err = %accept_error, "HTTP accept error");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                    continue;
-                }
-            },
+            accepted = accept(&listener) => accepted,
         };
-        // Small JSON replies and SSE events are single short writes; without
-        // this each waits on the client's delayed ACK of the previous one.
-        if let Err(nodelay_error) = stream.set_nodelay(true) {
-            debug!(err = %nodelay_error, "TCP_NODELAY not set on HTTP connection");
-        }
+        let Some((stream, remote)) = accepted else {
+            continue;
+        };
         let service = match make_service.call(remote).await {
             Ok(service) => service,
             Err(never) => match never {},
         };
-        let pace = options.progress;
-        let service =
-            TowerToHyperService::new(service.map_request(move |request: Request<Incoming>| {
-                request.map(|body| Body::new(progress::PacedBody::new(body, pace)))
-            }));
-        let shutdown = options.shutdown.clone();
-        let header_read_timeout = options.header_read_timeout;
-        tokio::spawn(async move {
-            let _permit = permit;
-            let (half_close, stream) = tokio::select! {
-                () = shutdown.cancelled() => return,
-                classified = classify(stream) => classified,
-            };
-            let connection = hyper::server::conn::http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(header_read_timeout)
-                .half_close(half_close)
-                .serve_connection(TokioIo::new(progress::PacedIo::new(stream, pace)), service)
-                .with_upgrades();
-            let mut connection = std::pin::pin!(connection);
-            let result = tokio::select! {
-                result = connection.as_mut() => result,
-                () = shutdown.cancelled() => {
-                    connection.as_mut().graceful_shutdown();
-                    connection.await
-                }
-            };
-            if let Err(serve_error) = result {
-                debug!(err = %serve_error, "HTTP connection ended with an error");
-            }
-        });
+        spawn_connection(stream, service, permit, &options);
     }
     // Refuse new connections while the live ones finish.
     drop(listener);
+    drain(&permits, max_connections, options.drain_timeout).await;
+}
+
+/// One accepted connection, set up for short writes. `None` for an accept
+/// error: one that concerns a single connection is skipped; others
+/// (descriptor exhaustion) are logged and retried after a second.
+async fn accept(listener: &TcpListener) -> Option<(TcpStream, SocketAddr)> {
+    let (stream, remote) = match listener.accept().await {
+        Ok(accepted) => accepted,
+        Err(accept_error) => {
+            if !matches!(
+                accept_error.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+            ) {
+                error!(err = %accept_error, "HTTP accept error");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            return None;
+        }
+    };
+    // Small JSON replies and SSE events are single short writes; without
+    // this each waits on the client's delayed ACK of the previous one.
+    if let Err(nodelay_error) = stream.set_nodelay(true) {
+        debug!(err = %nodelay_error, "TCP_NODELAY not set on HTTP connection");
+    }
+    Some((stream, remote))
+}
+
+/// The router as served to one connection, with its peer address.
+type ConnectionService =
+    axum::middleware::AddExtension<Router, axum::extract::ConnectInfo<SocketAddr>>;
+
+/// Serves one connection in a task of its own, holding its permit until it
+/// ends. Shutdown before classification drops it; after, it drains
+/// gracefully.
+fn spawn_connection(
+    stream: TcpStream,
+    service: ConnectionService,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    options: &ServeOptions,
+) {
+    let pace = options.progress;
+    let service =
+        TowerToHyperService::new(service.map_request(move |request: Request<Incoming>| {
+            request.map(|body| Body::new(progress::PacedBody::new(body, pace)))
+        }));
+    let shutdown = options.shutdown.clone();
+    let header_read_timeout = options.header_read_timeout;
+    tokio::spawn(async move {
+        let _permit = permit;
+        let (half_close, stream) = tokio::select! {
+            () = shutdown.cancelled() => return,
+            classified = classify(stream) => classified,
+        };
+        let connection = hyper::server::conn::http1::Builder::new()
+            .timer(TokioTimer::new())
+            .header_read_timeout(header_read_timeout)
+            .half_close(half_close)
+            .serve_connection(TokioIo::new(progress::PacedIo::new(stream, pace)), service)
+            .with_upgrades();
+        let mut connection = std::pin::pin!(connection);
+        let result = tokio::select! {
+            result = connection.as_mut() => result,
+            () = shutdown.cancelled() => {
+                connection.as_mut().graceful_shutdown();
+                connection.await
+            }
+        };
+        if let Err(serve_error) = result {
+            debug!(err = %serve_error, "HTTP connection ended with an error");
+        }
+    });
+}
+
+/// Waits up to `drain_timeout` for every connection's permit to return.
+async fn drain(permits: &Semaphore, max_connections: usize, drain_timeout: Duration) {
     let all = u32::try_from(max_connections).unwrap_or(u32::MAX);
-    if tokio::time::timeout(options.drain_timeout, permits.acquire_many(all))
+    if tokio::time::timeout(drain_timeout, permits.acquire_many(all))
         .await
         .is_err()
     {
