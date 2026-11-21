@@ -15,10 +15,9 @@ use crate::application::services::{
 use crate::db::DeadlineDb;
 use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePipelineInputStore};
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
-use crate::infrastructure::sqlite_ports::{SqliteIngestLookup, SqlitePipelineStore};
 use restream_engine::recording::RecordingMetadataReporter;
 
-/// Infrastructure-owned factory for SQLite application-port adapters.
+/// Infrastructure-owned factory for SQLite-backed application services.
 ///
 /// Every service it builds shares one ingest admission index, so a catalog
 /// write through any of them refreshes the index the ingest listeners read.
@@ -108,10 +107,7 @@ impl SqliteServiceFactory {
     }
 
     pub fn pipeline_service(&self) -> PipelineService {
-        PipelineService::with_store(
-            Arc::new(SqlitePipelineStore::new(self.db.clone())),
-            self.catalog_auth.clone(),
-        )
+        PipelineService::new(self.db.clone(), self.catalog_auth.clone())
     }
 
     pub fn pipeline_input_service(&self, pipelines: PipelineService) -> PipelineInputService {
@@ -122,16 +118,12 @@ impl SqliteServiceFactory {
     }
 
     pub fn ingest_service(&self) -> IngestService {
-        let store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
-        IngestService::with_ports(store.clone(), store)
+        IngestService::new(self.db.clone())
     }
 
     pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {
-        let ingest_store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
-        FileIngestService::with_ports(
-            ingest_store.clone(),
-            ingest_store,
-            Arc::new(SqlitePipelineStore::new(self.db.clone())),
+        FileIngestService::new(
+            self.db.clone(),
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
             pipeline_service,
         )
@@ -147,10 +139,6 @@ impl SqliteServiceFactory {
     }
 
     pub fn agent_service(&self) -> AgentService {
-        AgentService::with_stores(
-            self.db.clone(),
-            Arc::new(SqlitePipelineStore::new(self.db.clone())),
-            Arc::new(SqliteIngestLookup::new(self.db.clone())),
-        )
+        AgentService::new(self.db.clone())
     }
 }

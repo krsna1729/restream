@@ -183,14 +183,11 @@ async fn serve(
     let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
-    let pipeline_store =
-        crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(api_db.clone());
     let pipeline_input_store =
         crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(api_db.clone());
     let srt_ingest_policy_store = Arc::new(
         match crate::application::srt_ingest::load_policy_store(
             &api_db,
-            &pipeline_store,
             &pipeline_input_store,
             config.srt_passphrase.clone(),
             config.srt_pbkeylen,
@@ -313,9 +310,6 @@ async fn serve(
             config.clone(),
             lifecycle.clone(),
             engine.clone(),
-            Arc::new(
-                crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(lifecycle.clone()),
-            ),
             sessions_for_reconciler,
             recording_metadata,
         ));

@@ -1,307 +1,71 @@
 use super::*;
-use crate::application::ports::{
-    IngestCatalogFuture, IngestDeleteFuture, IngestLookupFuture, IngestUpdateFuture,
-    IngestWriteFuture, PipelineLookupFuture,
-};
-use std::collections::HashMap;
 use std::sync::Arc;
 
-struct FakePipelineStore {
-    pipelines: HashMap<String, Pipeline>,
-    error: Option<&'static str>,
+use crate::infrastructure::bootstrap::test_support::memory_pool;
+use sqlx::SqlitePool;
+
+async fn seed_ingest(pool: &SqlitePool, id: &str) -> Ingest {
+    db::create_ingest(
+        pool,
+        id,
+        "clip.mp4",
+        "stream-key",
+        true,
+        "00:00:05",
+        true,
+        4,
+    )
+    .await
+    .unwrap()
+    .into()
 }
 
-impl PipelineStore for FakePipelineStore {
-    fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(PipelineStoreError::new(message));
-            }
-            Ok(self.pipelines.get(stream_key).cloned())
-        })
-    }
-
-    fn list_pipelines<'a>(&'a self) -> crate::application::ports::PipelineListFuture<'a> {
-        Box::pin(async move { Ok(self.pipelines.values().cloned().collect()) })
-    }
-
-    fn get_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-    ) -> crate::application::ports::PipelineLookupFuture<'a> {
-        Box::pin(async move { Ok(self.pipelines.values().find(|p| p.id == id).cloned()) })
-    }
-
-    fn create_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> crate::application::ports::PipelineCreateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn update_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn delete_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-    ) -> crate::application::ports::PipelineDeleteFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn get_ingest_host<'a>(&'a self) -> crate::application::ports::PipelineIngestHostFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn update_pipeline_input_source<'a>(
-        &'a self,
-        pipeline: &'a Pipeline,
-        input_source: Option<&'a str>,
-    ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-        Box::pin(async move {
-            let mut updated = pipeline.clone();
-            updated.input_source = input_source.map(ToOwned::to_owned);
-            Ok(Some(updated))
-        })
-    }
+async fn seed_pipeline(pool: &SqlitePool, input_source: Option<&str>) -> Pipeline {
+    db::create_pipeline(
+        pool,
+        "pipeline-1",
+        "Pipeline",
+        "stream-key",
+        input_source,
+        None,
+    )
+    .await
+    .unwrap()
+    .into()
 }
 
-struct FakeIngestLookup {
-    by_id: HashMap<String, Ingest>,
-    by_stream_key: HashMap<String, Vec<Ingest>>,
-    error: Option<&'static str>,
+/// Simulate old catalog data with multiple file ingests for one stream key.
+async fn allow_legacy_duplicates(pool: &SqlitePool) {
+    sqlx::query("DROP INDEX idx_ingests_stream_key_unique")
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
-struct FakeIngestWriter {
-    created: std::sync::Mutex<Vec<Ingest>>,
-    deleted: std::sync::Mutex<Vec<String>>,
-    fail: Option<&'static str>,
-    update_returns_none: bool,
-}
-
-impl IngestWriter for FakeIngestWriter {
-    fn create_ingest<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-        stream_key: &'a str,
-        loop_flag: bool,
-        start_time: &'a str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.fail {
-                return Err(IngestWriteError::new(message));
-            }
-            let ingest = Ingest {
-                id: id.to_string(),
-                filename: filename.to_string(),
-                stream_key: stream_key.to_string(),
-                loop_flag,
-                start_time: start_time.to_string(),
-                live_optimized,
-                target_gop_seconds,
-                playlist: Vec::new(),
-            };
-            restream_sync::lock::lock(&self.created).push(ingest.clone());
-            Ok(ingest)
-        })
-    }
-
-    fn update_ingest<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-        stream_key: &'a str,
-        loop_flag: bool,
-        start_time: &'a str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            if self.update_returns_none {
-                return Ok(None);
-            }
-            self.create_ingest(
-                id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
-            )
-            .await
-            .map(Some)
-        })
-    }
-
-    fn update_ingest_filename<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            if self.update_returns_none {
-                return Ok(None);
-            }
-            if let Some(message) = self.fail {
-                return Err(IngestWriteError::new(message));
-            }
-            self.create_ingest(id, filename, "", false, "", false, 0)
-                .await
-                .map(Some)
-        })
-    }
-
-    fn set_ingest_playlist<'a>(
-        &'a self,
-        _id: &'a str,
-        _playlist: &'a [String],
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn rename_ingest_file<'a>(
-        &'a self,
-        _id: &'a str,
-        _from: &'a str,
-        _to: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.fail {
-                return Err(IngestWriteError::new(message));
-            }
-            restream_sync::lock::lock(&self.deleted).push(id.to_string());
-            Ok(true)
-        })
-    }
-}
-
-impl FakeIngestLookup {
-    fn ingest(id: &str, stream_key: &str) -> Ingest {
-        Ingest {
-            id: id.to_string(),
-            filename: "clip.mp4".to_string(),
-            stream_key: stream_key.to_string(),
-            loop_flag: true,
-            start_time: "00:00:05".to_string(),
-            live_optimized: true,
-            target_gop_seconds: 4,
-            playlist: Vec::new(),
-        }
-    }
-}
-
-impl IngestLookup for FakeIngestLookup {
-    fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(IngestLookupError::new(message));
-            }
-            Ok(self.by_id.get(id).cloned())
-        })
-    }
-
-    fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(IngestLookupError::new(message));
-            }
-            Ok(self
-                .by_stream_key
-                .get(stream_key)
-                .and_then(|ingests| ingests.last().cloned()))
-        })
-    }
-
-    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(IngestLookupError::new(message));
-            }
-            Ok(self.by_id.values().cloned().collect())
-        })
-    }
-
-    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(IngestLookupError::new(message));
-            }
-            Ok(self
-                .by_id
-                .values()
-                .filter(|ingest| ingest.filename == filename)
-                .cloned()
-                .collect())
-        })
-    }
-
-    fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            if let Some(message) = self.error {
-                return Err(IngestLookupError::new(message));
-            }
-            Ok(self
-                .by_stream_key
-                .get(stream_key)
-                .cloned()
-                .unwrap_or_default())
-        })
+fn replacement_config() -> FileIngestConfig {
+    FileIngestConfig {
+        filename: "updated.mp4".to_string(),
+        loop_flag: false,
+        start_time: "00:00:10".to_string(),
+        live_optimized: false,
+        target_gop_seconds: 2,
+        playlist: Vec::new(),
     }
 }
 
 #[tokio::test]
 async fn resolve_file_ingest_context_returns_none_for_missing_ingest() {
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::new(),
-        error: None,
-    };
-    let pipeline_lookup = FakePipelineStore {
-        pipelines: HashMap::new(),
-        error: None,
-    };
-
-    let result = resolve_file_ingest_context(&ingest_lookup, &pipeline_lookup, "missing")
-        .await
-        .unwrap();
+    let db = DeadlineDb::api(memory_pool().await);
+    let result = resolve_file_ingest_context(&db, "missing").await.unwrap();
 
     assert!(result.is_none());
 }
 
 #[tokio::test]
 async fn resolve_file_ingest_context_surfaces_missing_pipeline() {
-    let ingest = FakeIngestLookup::ingest("ingest-1", "stream-key");
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::from([(ingest.id.clone(), ingest.clone())]),
-        by_stream_key: HashMap::from([("stream-key".to_string(), vec![ingest])]),
-        error: None,
-    };
-    let pipeline_lookup = FakePipelineStore {
-        pipelines: HashMap::new(),
-        error: None,
-    };
-
-    let result = resolve_file_ingest_context(&ingest_lookup, &pipeline_lookup, "ingest-1").await;
+    let pool = memory_pool().await;
+    seed_ingest(&pool, "ingest-1").await;
+    let result = resolve_file_ingest_context(&DeadlineDb::api(pool), "ingest-1").await;
 
     assert!(matches!(
         result,
@@ -312,25 +76,10 @@ async fn resolve_file_ingest_context_surfaces_missing_pipeline() {
 
 #[tokio::test]
 async fn resolve_file_ingest_context_returns_ingest_and_pipeline() {
-    let ingest = FakeIngestLookup::ingest("ingest-1", "stream-key");
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::from([(ingest.id.clone(), ingest.clone())]),
-        by_stream_key: HashMap::from([("stream-key".to_string(), vec![ingest.clone()])]),
-        error: None,
-    };
-    let pipeline_lookup = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
-
-    let result = resolve_file_ingest_context(&ingest_lookup, &pipeline_lookup, "ingest-1")
+    let pool = memory_pool().await;
+    seed_pipeline(&pool, None).await;
+    seed_ingest(&pool, "ingest-1").await;
+    let result = resolve_file_ingest_context(&DeadlineDb::api(pool), "ingest-1")
         .await
         .unwrap()
         .unwrap();
@@ -341,23 +90,12 @@ async fn resolve_file_ingest_context_returns_ingest_and_pipeline() {
 
 #[tokio::test]
 async fn load_pipeline_file_ingest_state_returns_latest_ingest_and_running_flag() {
-    let ingest = FakeIngestLookup::ingest("ingest-1", "stream-key");
-    let lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::from([("stream-key".to_string(), vec![ingest.clone()])]),
-        error: None,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, None).await;
+    let ingest = seed_ingest(&pool, "ingest-1").await;
     let engine = MediaEngine::new();
     engine.mark_file_ingest_running(&ingest.id).await;
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-
-    let state = load_pipeline_file_ingest_state(&lookup, &engine, &pipeline)
+    let state = load_pipeline_file_ingest_state(&DeadlineDb::api(pool), &engine, &pipeline)
         .await
         .unwrap();
 
@@ -367,23 +105,9 @@ async fn load_pipeline_file_ingest_state_returns_latest_ingest_and_running_flag(
 
 #[tokio::test]
 async fn clear_stream_key_file_ingests_unregisters_pipeline_and_clears_running_state() {
-    let ingest = FakeIngestLookup::ingest("ingest-1", "stream-key");
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::from([("stream-key".to_string(), vec![ingest.clone()])]),
-        error: None,
-    };
-    let pipeline_lookup = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, None).await;
+    let ingest = seed_ingest(&pool, "ingest-1").await;
     let engine = Arc::new(MediaEngine::new());
     let _registration = engine
         .try_register_ingest(&pipeline.id, &pipeline.stream_key, "file")
@@ -391,14 +115,9 @@ async fn clear_stream_key_file_ingests_unregisters_pipeline_and_clears_running_s
         .expect("pipeline should register");
     engine.mark_file_ingest_running(&ingest.id).await;
 
-    clear_stream_key_file_ingests(
-        &pipeline_lookup,
-        &ingest_lookup,
-        &engine,
-        &pipeline.stream_key,
-    )
-    .await
-    .unwrap();
+    clear_stream_key_file_ingests(&DeadlineDb::api(pool), &engine, &pipeline.stream_key)
+        .await
+        .unwrap();
 
     assert!(!engine.has_active_ingest(&pipeline.id).await);
     assert!(!engine.is_file_ingest_running(&ingest.id).await);
@@ -406,71 +125,45 @@ async fn clear_stream_key_file_ingests_unregisters_pipeline_and_clears_running_s
 
 #[tokio::test]
 async fn persist_pipeline_file_ingest_updates_pipeline_and_deletes_stale_ingests() {
-    let current = FakeIngestLookup::ingest("ingest-current", "stream-key");
-    let stale = FakeIngestLookup::ingest("ingest-stale", "stream-key");
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::from([(
-            "stream-key".to_string(),
-            vec![stale.clone(), current.clone()],
-        )]),
-        error: None,
-    };
-    let pipeline_store = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
-    let ingest_writer = FakeIngestWriter {
-        created: std::sync::Mutex::new(Vec::new()),
-        deleted: std::sync::Mutex::new(Vec::new()),
-        fail: None,
-        update_returns_none: false,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, None).await;
+    allow_legacy_duplicates(&pool).await;
+    seed_ingest(&pool, "ingest-stale").await;
+    seed_ingest(&pool, "ingest-current").await;
 
     let saved = persist_pipeline_file_ingest(
-        &ingest_lookup,
-        &ingest_writer,
-        &pipeline_store,
+        &DeadlineDb::api(pool.clone()),
         &pipeline,
-        &FileIngestConfig {
-            filename: "updated.mp4".to_string(),
-            loop_flag: false,
-            start_time: "00:00:10".to_string(),
-            live_optimized: false,
-            target_gop_seconds: 2,
-            playlist: Vec::new(),
-        },
-        || "generated".to_string(),
+        replacement_config(),
+        || panic!("updating an existing ingest must not generate a new ID"),
     )
     .await
     .unwrap();
 
     assert_eq!(saved.id, "ingest-current");
     assert_eq!(saved.filename, "updated.mp4");
-    let deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
-    assert_eq!(deleted, vec!["ingest-stale".to_string()]);
+    let ingests = db::list_ingests_for_stream_key(&pool, &pipeline.stream_key)
+        .await
+        .unwrap();
+    assert_eq!(ingests.len(), 1);
+    assert_eq!(ingests[0].id, saved.id);
+    assert_eq!(ingests[0].filename, saved.filename);
+    assert_eq!(
+        db::get_pipeline(&pool, &pipeline.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .input_source
+            .as_deref(),
+        Some("file:updated.mp4")
+    );
 }
 
 #[tokio::test]
 async fn resolve_file_ingest_context_surfaces_ingest_lookup_error() {
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::new(),
-        error: Some("db unavailable"),
-    };
-    let pipeline_lookup = FakePipelineStore {
-        pipelines: HashMap::new(),
-        error: None,
-    };
-
-    let result = resolve_file_ingest_context(&ingest_lookup, &pipeline_lookup, "ingest-1").await;
+    let pool = memory_pool().await;
+    pool.close().await;
+    let result = resolve_file_ingest_context(&DeadlineDb::api(pool), "ingest-1").await;
 
     assert!(matches!(
         result,
@@ -480,35 +173,13 @@ async fn resolve_file_ingest_context_surfaces_ingest_lookup_error() {
 
 #[tokio::test]
 async fn persist_pipeline_file_ingest_creates_new_ingest_when_none_exists() {
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::new(),
-        error: None,
-    };
-    let pipeline_store = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
-    let ingest_writer = FakeIngestWriter {
-        created: std::sync::Mutex::new(Vec::new()),
-        deleted: std::sync::Mutex::new(Vec::new()),
-        fail: None,
-        update_returns_none: false,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, None).await;
 
     let saved = persist_pipeline_file_ingest(
-        &ingest_lookup,
-        &ingest_writer,
-        &pipeline_store,
+        &DeadlineDb::api(pool.clone()),
         &pipeline,
-        &FileIngestConfig {
+        FileIngestConfig {
             filename: "new.mp4".to_string(),
             loop_flag: true,
             start_time: "00:00:00".to_string(),
@@ -523,100 +194,91 @@ async fn persist_pipeline_file_ingest_creates_new_ingest_when_none_exists() {
 
     assert_eq!(saved.id, "generated-id");
     assert_eq!(saved.filename, "new.mp4");
-    let created = restream_sync::lock::lock(&ingest_writer.created).clone();
-    assert_eq!(created.len(), 1);
-    assert_eq!(created[0].id, "generated-id");
-    let deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
-    assert!(deleted.is_empty());
+    let ingests = db::list_ingests(&pool).await.unwrap();
+    assert_eq!(ingests.len(), 1);
+    assert_eq!(ingests[0].id, saved.id);
+    assert_eq!(ingests[0].filename, saved.filename);
 }
 
 #[tokio::test]
 async fn persist_pipeline_file_ingest_surfaces_race_when_update_target_disappears() {
-    let existing = FakeIngestLookup::ingest("ingest-current", "stream-key");
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::from([("stream-key".to_string(), vec![existing])]),
-        error: None,
-    };
-    let pipeline_store = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
-    let ingest_writer = FakeIngestWriter {
-        created: std::sync::Mutex::new(Vec::new()),
-        deleted: std::sync::Mutex::new(Vec::new()),
-        fail: None,
-        update_returns_none: true,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, None).await;
+    seed_ingest(&pool, "ingest-current").await;
+    // Remove the row after the lookup but before the UPDATE changes it.
+    // IGNORE abandons the outer update without rolling back the deletion.
+    sqlx::query(
+        "CREATE TRIGGER delete_ingest_before_update BEFORE UPDATE ON ingests
+         BEGIN
+             DELETE FROM ingests WHERE id = OLD.id;
+             SELECT RAISE(IGNORE);
+         END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let result = persist_pipeline_file_ingest(
-        &ingest_lookup,
-        &ingest_writer,
-        &pipeline_store,
+        &DeadlineDb::api(pool.clone()),
         &pipeline,
-        &FileIngestConfig {
-            filename: "updated.mp4".to_string(),
-            loop_flag: false,
-            start_time: "00:00:10".to_string(),
-            live_optimized: false,
-            target_gop_seconds: 2,
-            playlist: Vec::new(),
-        },
-        || "generated".to_string(),
+        replacement_config(),
+        || panic!("a vanished update target must not be recreated"),
     )
     .await;
 
     assert!(matches!(
         result,
-        Err(PersistFileIngestError::IngestWrite(_))
+        Err(PersistFileIngestError::IngestWrite(
+            sqlx::Error::RowNotFound
+        ))
     ));
+    assert!(db::list_ingests(&pool).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn remove_pipeline_file_ingest_deletes_all_ingests_and_clears_input_source() {
-    let first = FakeIngestLookup::ingest("ingest-1", "stream-key");
-    let second = FakeIngestLookup::ingest("ingest-2", "stream-key");
-    let pipeline = Pipeline {
-        id: "pipeline-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: Some("file:clip.mp4".to_string()),
-        srt_ingest_policy: None,
-    };
-    let ingest_lookup = FakeIngestLookup {
-        by_id: HashMap::new(),
-        by_stream_key: HashMap::from([(
-            "stream-key".to_string(),
-            vec![first.clone(), second.clone()],
-        )]),
-        error: None,
-    };
-    let pipeline_store = FakePipelineStore {
-        pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
-        error: None,
-    };
-    let ingest_writer = FakeIngestWriter {
-        created: std::sync::Mutex::new(Vec::new()),
-        deleted: std::sync::Mutex::new(Vec::new()),
-        fail: None,
-        update_returns_none: false,
-    };
+    let pool = memory_pool().await;
+    let pipeline = seed_pipeline(&pool, Some("file:clip.mp4")).await;
+    allow_legacy_duplicates(&pool).await;
+    seed_ingest(&pool, "ingest-1").await;
+    seed_ingest(&pool, "ingest-2").await;
 
-    remove_pipeline_file_ingest(&ingest_lookup, &ingest_writer, &pipeline_store, &pipeline)
+    remove_pipeline_file_ingest(&DeadlineDb::api(pool.clone()), &pipeline)
         .await
         .unwrap();
 
-    let mut deleted = restream_sync::lock::lock(&ingest_writer.deleted).clone();
-    deleted.sort();
-    assert_eq!(
-        deleted,
-        vec!["ingest-1".to_string(), "ingest-2".to_string()]
+    assert!(db::list_ingests(&pool).await.unwrap().is_empty());
+    assert!(
+        db::get_pipeline(&pool, &pipeline.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .input_source
+            .is_none()
     );
+}
+
+#[tokio::test]
+async fn remove_file_ingest_does_not_revert_concurrent_pipeline_rename_or_key_rotation() {
+    let pool = memory_pool().await;
+    let stale = seed_pipeline(&pool, Some("file:clip.mp4")).await;
+    db::update_pipeline(
+        &pool,
+        &stale.id,
+        "Renamed",
+        "rotated",
+        Some("file:clip.mp4"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    remove_pipeline_file_ingest(&DeadlineDb::api(pool.clone()), &stale)
+        .await
+        .unwrap();
+
+    let after = db::get_pipeline(&pool, &stale.id).await.unwrap().unwrap();
+    assert_eq!(after.name, "Renamed");
+    assert_eq!(after.stream_key, "rotated");
+    assert!(after.input_source.is_none());
 }

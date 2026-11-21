@@ -684,11 +684,10 @@ flowchart TD
 Application services hold a `DeadlineDb` and call `crate::db` directly, as
 `AuthService`, `TeamService`, `NotifyService`, `SettingsService`,
 `MediaLibraryService`, `RecirculationService`, `application::outputs`,
-`application::topology` and the meta-backed settings modules do. The
-remaining `application::ports` traits with one SQLite adapter each in
-`infrastructure::sqlite_ports` are being removed (backlog Q-118); a port
-stays only for an effect tests must script, such as `NotifyTransport`'s
-HTTP sends.
+`application::topology`, the pipeline and ingest catalogs, and the meta-backed
+settings modules do. Pipeline and ingest row mapping lives in `db`. Pipeline
+inputs and admission still use the adapters in
+`infrastructure::pipeline_input_store` (backlog Q-118).
 
 ### Layering rules
 

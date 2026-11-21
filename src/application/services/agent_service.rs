@@ -1,15 +1,12 @@
 //! Application service wrapper for agent catalog reads and output mutations.
 //!
-//! This module gathers data from several persistence ports so the API layer can
-//! expose a single operator/agent context view without duplicating cross-store
-//! reads or fallback policy. When agent execution is enabled, it also owns the
+//! This module gathers catalog data so the API layer can expose a single
+//! operator/agent context without duplicating reads or fallback policy.
+//! When agent execution is enabled, it also owns the
 //! persistence/runtime coordination for already-validated output changes.
 
-use std::sync::Arc;
-
-use crate::application::ports::{IngestLookup, PipelineStore};
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
-use crate::db::DeadlineDb;
+use crate::db::{self, DeadlineDb};
 use restream_domain::models::{Ingest, Job, Output, Pipeline};
 use restream_engine::security::IngestSecurityService;
 
@@ -79,22 +76,11 @@ pub(crate) enum AgentOutputMutationOutcome {
 #[derive(Clone)]
 pub struct AgentService {
     db: DeadlineDb,
-    pipeline_store: Arc<dyn PipelineStore>,
-    ingest_store: Arc<dyn IngestLookup>,
 }
 
 impl AgentService {
-    /// Builds the service from the stores used by agent catalogs and mutations.
-    pub fn with_stores(
-        db: DeadlineDb,
-        pipeline_store: Arc<dyn PipelineStore>,
-        ingest_store: Arc<dyn IngestLookup>,
-    ) -> Self {
-        Self {
-            db,
-            pipeline_store,
-            ingest_store,
-        }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 
     /// Loads the full read-only catalog used by agent context endpoints,
@@ -104,9 +90,10 @@ impl AgentService {
         security: &IngestSecurityService,
     ) -> AgentContextCatalog {
         let pipelines = self
-            .pipeline_store
-            .list_pipelines()
+            .db
+            .read(db::list_pipelines)
             .await
+            .map(|rows| rows.into_iter().map(Pipeline::from).collect())
             .unwrap_or_default();
         let outputs = crate::application::outputs::list_outputs(&self.db)
             .await
@@ -117,7 +104,12 @@ impl AgentService {
             .await
             .map(|rows| rows.into_iter().map(Job::from).collect())
             .unwrap_or_default();
-        let ingests = self.ingest_store.list_ingests().await.unwrap_or_default();
+        let ingests = self
+            .db
+            .read(db::list_ingests)
+            .await
+            .map(|rows| rows.into_iter().map(Ingest::from).collect())
+            .unwrap_or_default();
 
         let settings = load_settings_snapshot(&self.db, security).await.ok();
         let custom_encoding_len = self
@@ -153,9 +145,10 @@ impl AgentService {
         &self,
     ) -> Result<AgentPipelineOutputCatalog, String> {
         let pipelines = self
-            .pipeline_store
-            .list_pipelines()
+            .db
+            .read(db::list_pipelines)
             .await
+            .map(|rows| rows.into_iter().map(Pipeline::from).collect())
             .map_err(|error| format!("failed to list pipelines: {error}"))?;
         let outputs = crate::application::outputs::list_outputs(&self.db)
             .await

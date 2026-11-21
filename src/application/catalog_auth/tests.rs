@@ -63,7 +63,7 @@ impl CatalogAuthSource for FakeCatalog {
                 gate.wait_for(|open| *open).await.unwrap();
             }
             if self.failing.load(Ordering::SeqCst) {
-                return Err(PipelineStoreError::new("database is locked"));
+                return Err(sqlx::Error::PoolClosed);
             }
             Ok(inputs.into_iter().map(Ok).collect())
         })

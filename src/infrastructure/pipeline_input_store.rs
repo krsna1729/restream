@@ -6,7 +6,6 @@ use crate::application::pipeline_inputs::{
     InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
     PipelineInputStore, PipelineInputStoreError,
 };
-use crate::application::ports::PipelineStoreError;
 use restream_domain::domain::pipeline_input::PipelineInputSource;
 
 #[derive(Clone)]
@@ -168,7 +167,6 @@ impl PipelineInputLookup for SqlitePipelineInputStore {
                     })
                 })
                 .await
-                .map_err(|error| PipelineStoreError::new(error.to_string()))
         })
     }
 }
@@ -198,8 +196,7 @@ impl CatalogAuthSource for SqliteCatalogSource {
                         crate::db::list_pipeline_inputs_for_admission(pool)
                     })
                 })
-                .await
-                .map_err(|error| PipelineStoreError::new(error.to_string()))?;
+                .await?;
             Ok(rows
                 .into_iter()
                 .map(|row| {

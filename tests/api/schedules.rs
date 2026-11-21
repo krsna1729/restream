@@ -225,40 +225,6 @@ fn scheduler_state_with(services: api::AppServices) -> Arc<api::AppState> {
     ))
 }
 
-/// A file-source catalog whose every read never answers: one pipeline's
-/// hung database read.
-struct StalledIngestLookup;
-
-impl restream::application::ports::IngestLookup for StalledIngestLookup {
-    fn get_ingest<'a>(
-        &'a self,
-        _: &'a str,
-    ) -> restream::application::ports::IngestLookupFuture<'a> {
-        Box::pin(std::future::pending())
-    }
-    fn get_ingest_by_stream_key<'a>(
-        &'a self,
-        _: &'a str,
-    ) -> restream::application::ports::IngestLookupFuture<'a> {
-        Box::pin(std::future::pending())
-    }
-    fn list_ingests<'a>(&'a self) -> restream::application::ports::IngestCatalogFuture<'a> {
-        Box::pin(std::future::pending())
-    }
-    fn list_ingests_for_filename<'a>(
-        &'a self,
-        _: &'a str,
-    ) -> restream::application::ports::IngestCatalogFuture<'a> {
-        Box::pin(std::future::pending())
-    }
-    fn list_ingests_for_stream_key<'a>(
-        &'a self,
-        _: &'a str,
-    ) -> restream::application::ports::IngestCatalogFuture<'a> {
-        Box::pin(std::future::pending())
-    }
-}
-
 async fn last_result(db: &db::DeadlineDb, id: &str) -> Option<String> {
     schedules::get(db, id, jiff::Timestamp::now().as_millisecond())
         .await
@@ -272,7 +238,7 @@ async fn last_result(db: &db::DeadlineDb, id: &str) -> Option<String> {
 /// passes, A's row says it is still running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
-    use restream::infrastructure::{pipeline_input_store, sqlite_ports};
+    use restream::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
     let (pool, lifecycle, dir) = file_pools().await;
     for pipeline in ["pipe-a", "pipe-b"] {
         db::create_pipeline(
@@ -332,15 +298,17 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         .await
         .unwrap();
     }
+    let ingest_pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(dir.join("db.sqlite")))
+        .await
+        .unwrap();
+    let held = ingest_pool.acquire().await.unwrap();
     let mut services =
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
-    services.file_ingest_service = restream::application::services::FileIngestService::with_ports(
-        Arc::new(StalledIngestLookup),
-        Arc::new(sqlite_ports::SqliteIngestLookup::new(services.db.clone())),
-        Arc::new(sqlite_ports::SqlitePipelineStore::new(services.db.clone())),
-        Arc::new(pipeline_input_store::SqlitePipelineInputStore::new(
-            services.db.clone(),
-        )),
+    services.file_ingest_service = restream::application::services::FileIngestService::new(
+        db::DeadlineDb::api(ingest_pool),
+        Arc::new(SqlitePipelineInputStore::new(services.db.clone())),
         services.pipeline_service.clone(),
     );
 
@@ -386,6 +354,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
     .await;
     scheduler.abort();
     let interrupted = last_result(&db::DeadlineDb::api(pool.clone()), "sch_a").await;
+    drop(held);
     let _ = std::fs::remove_dir_all(dir);
     assert_eq!(
         b.ok().as_deref(),

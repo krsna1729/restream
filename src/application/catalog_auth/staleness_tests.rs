@@ -4,79 +4,6 @@
 
 use super::write_visibility_tests::Catalog;
 use super::*;
-use crate::application::ports::{
-    PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
-    PipelineLookupFuture, PipelineStore, PipelineUpdateFuture,
-};
-use crate::application::services::PipelineService;
-use crate::infrastructure::sqlite_ports::SqlitePipelineStore;
-use restream_domain::models::Pipeline;
-
-/// The SQLite store, except that `update_pipeline` holds its answer behind a
-/// gate after the update has committed: the window in which a cancelled
-/// caller used to skip its refresh.
-struct CommitThenWait {
-    inner: SqlitePipelineStore,
-    committed: tokio::sync::Notify,
-    gate: tokio::sync::watch::Receiver<bool>,
-}
-
-impl PipelineStore for CommitThenWait {
-    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
-        self.inner.get_pipeline(id)
-    }
-    fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
-        self.inner.get_pipeline_by_stream_key(stream_key)
-    }
-    fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-        self.inner.list_pipelines()
-    }
-    fn create_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a> {
-        self.inner
-            .create_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
-    }
-    fn update_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        Box::pin(async move {
-            let updated = self
-                .inner
-                .update_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
-                .await;
-            self.committed.notify_one();
-            let mut gate = self.gate.clone();
-            let _ = gate.wait_for(|open| *open).await;
-            updated
-        })
-    }
-    fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a> {
-        self.inner.delete_pipeline(id)
-    }
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-        self.inner.get_ingest_host()
-    }
-    fn update_pipeline_input_source<'a>(
-        &'a self,
-        pipeline: &'a Pipeline,
-        input_source: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        self.inner
-            .update_pipeline_input_source(pipeline, input_source)
-    }
-}
-
 /// Polls admission until `key` is refused or `within` passes.
 async fn eventually_refused(c: &Catalog, key: &str, within: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + within;
@@ -104,23 +31,41 @@ async fn a_rotation_whose_caller_is_cancelled_after_commit_is_still_enforced() {
         .create_pipeline("pipe", "Pipe", "key-a", None, None)
         .await
         .unwrap();
-    let (open, gate) = tokio::sync::watch::channel(false);
-    let store = Arc::new(CommitThenWait {
-        inner: SqlitePipelineStore::new(crate::db::DeadlineDb::api(c.pool.clone())),
-        committed: tokio::sync::Notify::new(),
-        gate,
-    });
-    let service = PipelineService::with_store(store.clone(), c.catalog.clone());
+    // The independent reload pool cannot serve a read until released, but
+    // the API pool can both commit the update and prove it is visible.
+    let mut held = Vec::new();
+    for _ in 0..c.lifecycle.options().get_max_connections() {
+        held.push(c.lifecycle.acquire().await.unwrap());
+    }
+    let service = c.pipelines.clone();
 
     let caller = tokio::spawn(async move {
         service
             .update_pipeline("pipe", "Pipe", "key-b", None, None)
             .await
     });
-    store.committed.notified().await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while c
+            .pipelines
+            .get_by_stream_key("key-b")
+            .await
+            .unwrap()
+            .is_none()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the key rotation commits before admission reloads");
+    assert!(!caller.is_finished());
+    assert!(
+        c.admitted(PipelineAccessMode::RtmpPublish, "key-a")
+            .await
+            .is_some()
+    );
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
-    open.send(true).unwrap();
+    drop(held);
 
     assert!(
         eventually_refused(&c, "key-a", Duration::from_secs(2)).await,
