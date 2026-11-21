@@ -7,13 +7,10 @@ use tracing::error;
 
 use crate::engine::MediaEngine;
 use crate::ts_chunk_ring::TsChunkRing;
+use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) fn start_shared_ts_muxer(
     pipeline_id: &str,
     stage_key: &str,
@@ -37,111 +34,26 @@ pub(crate) fn start_shared_ts_muxer(
         },
         cancel.clone(),
         async move {
-            // Wait for ingest metadata before starting the MPEG-TS muxer
-            let (video_meta, audio_tracks) = loop {
-                if cancel.is_cancelled() {
-                    return;
-                }
-                let result = engine
-                    .with_active_ingest(&pipeline_id_str, |ingest| {
-                        let metadata = ingest.metadata();
-                        let video = metadata.video;
-                        video.as_ref()?;
-                        let tracks = if let Some(routed_tracks) = source_ring.audio_tracks()
-                            && !routed_tracks.is_empty()
-                        {
-                            std::sync::Arc::new(routed_tracks.to_vec())
-                        } else {
-                            let lock = restream_sync::lock::lock(&ingest.audio_tracks);
-                            if lock.is_empty()
-                                && let Some(audio) = metadata.audio
-                            {
-                                std::sync::Arc::new(vec![audio])
-                            } else {
-                                std::sync::Arc::clone(&lock)
-                            }
-                        };
-                        Some((video, tracks))
-                    })
-                    .await
-                    .flatten();
-                if let Some(meta) = result {
-                    break meta;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                if !engine.has_active_ingest(&pipeline_id_str).await {
-                    error!(
-                        "[srt-shared-muxer] Ingest gone while waiting for probe: {}",
-                        pipeline_id_str
-                    );
-                    cancel.cancel();
-                    return;
-                }
+            let Some((video_meta, audio_tracks)) =
+                wait_for_ingest_metadata(&engine, &pipeline_id_str, &source_ring, &cancel).await
+            else {
+                return;
             };
-
-            // Feed loop: read from source_ring, mux inline, write to ts_ring
-            let muxer_video_meta = {
-                let ring_codec = source_ring.codec_hint_str();
-                let ingest_codec = video_meta.as_ref().map(|v| v.codec.as_str()).unwrap_or("");
-                if !ring_codec.is_empty() && ring_codec != ingest_codec {
-                    error!(
-                        "[srt-shared-muxer] codec_hint override: ingest={} ring={}",
-                        ingest_codec, ring_codec
-                    );
-                    let mut vm = video_meta.clone();
-                    if let Some(ref mut v) = vm {
-                        v.codec = ring_codec.to_string();
-                    }
-                    vm
-                } else {
-                    video_meta.clone()
-                }
-            };
-
-            let mut muxer = restream_mpegts::TsMuxer::new(muxer_video_meta.as_ref(), &audio_tracks);
-            let num_streams = (video_meta.is_some() as usize) + audio_tracks.len();
-            let mut dts_enforcer = restream_sync::DtsEnforcer::new(num_streams);
-            let mut nalu_len_size: usize = 4;
-            // source_ring's own cache always wins: for a preset/transcoded egress
-            // muxer, source_ring is the transcoder's output ring, which describes
-            // a different resolution/codec than the pipeline-level ingest
-            // sequence-header cache below. That ingest cache is keyed only by
-            // pipeline_id (see MediaEngine::cache_sequence_header), so it cannot
-            // distinguish "source" from "preset" — only fall back to it when the
-            // ring itself has nothing cached yet.
-            let mut sps_pps_cache: Vec<u8> = if let Some(parameter_sets) =
-                source_ring.video_parameter_sets()
-            {
-                parameter_sets.to_vec()
-            } else {
-                let (vsh, _) = engine.get_sequence_headers(&pipeline_id_str).await;
-                if let Some(ref flv_sh) = vsh {
-                    if flv_sh.len() > 5 {
-                        let (nls, annexb) = restream_core::codec::parse_avcc_config(&flv_sh[5..]);
-                        nalu_len_size = nls;
-                        annexb
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                }
-            };
-
+            let mut mux = BurstMux::new(
+                &engine,
+                &pipeline_id_str,
+                &source_ring,
+                video_meta.as_ref(),
+                audio_tracks,
+            )
+            .await;
             let mut reader = Reader::new(
                 format!("ts_shared_muxer:{}:{}", pipeline_id_str, stage_key_str),
                 source_ring.clone(),
             );
-            let mut video_conv_buf = Vec::<u8>::new();
-            let mut audio_conv_buf = Vec::<u8>::new();
-            // `chunk_ends` records (byte_offset_end, media type, is_keyframe) for each muxed
-            // chunk so we can slice a single frozen `Bytes` into per-chunk `Bytes` after the
-            // inner loop. This converts N malloc+memcpy calls (one per chunk) to 1 malloc per
-            // burst.
-            let mut chunk_ends: Vec<(usize, MediaType, bool)> =
-                Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
             let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
+            // Feed loop: read from source_ring, mux inline, write to ts_ring
             loop {
                 if cancel.is_cancelled() {
                     break;
@@ -150,112 +62,8 @@ pub(crate) fn start_shared_ts_muxer(
                     _ = cancel.cancelled() => break,
                     _ = reader.wait_for_data() => {
                         pull_packets.clear();
-                        match reader.pull_burst(&mut pull_packets, MEDIA_PULL_BURST_PACKETS) {
-                            Ok(0) | Err(_) => {}
-                            Ok(_) => {
-                                chunk_ends.clear();
-                                // One allocation for the burst's TS output, sized to
-                                // the actual media payloads. A fixed 64 KiB floor
-                                // pins excessive memory in the retained TS ring
-                                // when the muxer wakes for one small packet.
-                                let mut ts_accum = Vec::<u8>::with_capacity(
-                                    estimate_ts_accum_capacity(&pull_packets),
-                                );
-                                for pkt in &pull_packets {
-                                    let payload: &[u8] = match pkt.media_type {
-                                        MediaType::Video => {
-                                            if sps_pps_cache.is_empty()
-                                                && let Some(parameter_sets) =
-                                                    reader.current_ring().video_parameter_sets()
-                                            {
-                                                sps_pps_cache.extend_from_slice(&parameter_sets);
-                                            }
-                                            match crate::codec::video_for_ts_into(
-                                                &pkt.payload,
-                                                pkt.format,
-                                                &mut nalu_len_size,
-                                                &mut sps_pps_cache,
-                                                &mut video_conv_buf,
-                                            ) {
-                                                Some(p) => p,
-                                                None => continue,
-                                            }
-                                        }
-                                        MediaType::Audio => {
-                                            let track = audio_tracks
-                                                .iter()
-                                                .find(|a| a.track_index == pkt.track_index)
-                                                .or(audio_tracks.first());
-                                            let (sr, ch) = track
-                                                .map(|a| (a.sample_rate, a.channels))
-                                                .unwrap_or((48000, 1));
-                                            match crate::codec::audio_for_ts_into(
-                                                &pkt.payload,
-                                                pkt.format,
-                                                sr,
-                                                ch,
-                                                &mut audio_conv_buf,
-                                            ) {
-                                                Some(p) => p,
-                                                None => continue,
-                                            }
-                                        }
-                                    };
-
-                                    let stream_idx = match pkt.media_type {
-                                        MediaType::Video => 0,
-                                        MediaType::Audio => {
-                                            let video_offset = video_meta.is_some() as usize;
-                                            match audio_tracks
-                                                .iter()
-                                                .position(|a| a.track_index == pkt.track_index)
-                                            {
-                                                Some(i) => i + video_offset,
-                                                None => continue,
-                                            }
-                                        }
-                                    };
-
-                                    let (pts, dts) =
-                                        dts_enforcer.enforce(stream_idx, pkt.pts, pkt.dts);
-                                    // Mux directly into the burst accumulator: the muxer
-                                    // appends TS packets to `ts_accum` with no intermediate
-                                    // per-packet buffer or memmove into the accumulator.
-                                    let before = ts_accum.len();
-                                    muxer.mux_packet_into(
-                                        pkt.media_type,
-                                        pkt.track_index,
-                                        restream_mpegts::PacketMeta {
-                                            pts_ms: pts,
-                                            dts_ms: dts,
-                                            is_keyframe: pkt.is_keyframe,
-                                        },
-                                        payload,
-                                        &mut ts_accum,
-                                    );
-                                    if ts_accum.len() > before {
-                                        chunk_ends.push((
-                                            ts_accum.len(),
-                                            pkt.media_type,
-                                            pkt.is_keyframe,
-                                        ));
-                                    }
-                                }
-                                if !chunk_ends.is_empty() {
-                                    // Bytes::from(Vec) is an O(1) ownership transfer of the
-                                    // accumulator's allocation into a shared Arc-backed Bytes.
-                                    // slice() below only bumps the refcount — no extra allocations.
-                                    let frozen = bytes::Bytes::from(ts_accum);
-                                    let mut prev = 0usize;
-                                    ts_ring_clone.push_batch(chunk_ends.drain(..).map(
-                                        move |(end, media_type, is_kf)| {
-                                            let chunk = frozen.slice(prev..end);
-                                            prev = end;
-                                            (chunk, media_type, is_kf)
-                                        },
-                                    ));
-                                }
-                            }
+                        if let Ok(1..) = reader.pull_burst(&mut pull_packets, MEDIA_PULL_BURST_PACKETS) {
+                            mux.mux_burst(&pull_packets, reader.current_ring(), &ts_ring_clone);
                         }
                     }
                 }
@@ -277,6 +85,267 @@ pub(crate) fn start_shared_ts_muxer(
     );
 
     ts_ring
+}
+
+/// Waits for the ingest's video metadata and its audio tracks (the ring's
+/// routed tracks win, else the ingest's, else its one audio track). `None`
+/// when cancelled, or when the ingest went away (the stage is cancelled).
+async fn wait_for_ingest_metadata(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+    source_ring: &RingBuffer,
+    cancel: &CancellationToken,
+) -> Option<(Option<VideoMeta>, Arc<Vec<AudioMeta>>)> {
+    loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let result = engine
+            .with_active_ingest(pipeline_id, |ingest| {
+                let metadata = ingest.metadata();
+                let video = metadata.video;
+                video.as_ref()?;
+                let tracks = if let Some(routed_tracks) = source_ring.audio_tracks()
+                    && !routed_tracks.is_empty()
+                {
+                    Arc::new(routed_tracks.to_vec())
+                } else {
+                    let lock = restream_sync::lock::lock(&ingest.audio_tracks);
+                    if lock.is_empty()
+                        && let Some(audio) = metadata.audio
+                    {
+                        Arc::new(vec![audio])
+                    } else {
+                        Arc::clone(&lock)
+                    }
+                };
+                Some((video, tracks))
+            })
+            .await
+            .flatten();
+        if result.is_some() {
+            return result;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if !engine.has_active_ingest(pipeline_id).await {
+            error!(
+                "[srt-shared-muxer] Ingest gone while waiting for probe: {}",
+                pipeline_id
+            );
+            cancel.cancel();
+            return None;
+        }
+    }
+}
+
+/// The video metadata the muxer is built from: the ring's codec hint wins
+/// over the ingest's codec.
+fn muxer_video_meta(source_ring: &RingBuffer, video_meta: Option<&VideoMeta>) -> Option<VideoMeta> {
+    let ring_codec = source_ring.codec_hint_str();
+    let ingest_codec = video_meta.map(|v| v.codec.as_str()).unwrap_or("");
+    let mut vm = video_meta.cloned();
+    if !ring_codec.is_empty() && ring_codec != ingest_codec {
+        error!(
+            "[srt-shared-muxer] codec_hint override: ingest={} ring={}",
+            ingest_codec, ring_codec
+        );
+        if let Some(ref mut v) = vm {
+            v.codec = ring_codec.to_string();
+        }
+    }
+    vm
+}
+
+/// Converts ring packets into the elementary-stream payloads TS carries,
+/// reusing its buffers across packets.
+struct TsPayloadConverter {
+    nalu_len_size: usize,
+    /// Annex B parameter sets prepended to keyframes.
+    sps_pps_cache: Vec<u8>,
+    video_conv_buf: Vec<u8>,
+    audio_conv_buf: Vec<u8>,
+}
+
+impl TsPayloadConverter {
+    /// source_ring's own cache always wins: for a preset/transcoded egress
+    /// muxer, source_ring is the transcoder's output ring, which describes
+    /// a different resolution/codec than the pipeline-level ingest
+    /// sequence-header cache. That ingest cache is keyed only by
+    /// pipeline_id (see MediaEngine::cache_sequence_header), so it cannot
+    /// distinguish "source" from "preset" — only fall back to it when the
+    /// ring itself has nothing cached yet.
+    async fn new(engine: &MediaEngine, pipeline_id: &str, source_ring: &RingBuffer) -> Self {
+        let mut nalu_len_size: usize = 4;
+        let sps_pps_cache = if let Some(parameter_sets) = source_ring.video_parameter_sets() {
+            parameter_sets
+        } else {
+            match engine.get_sequence_headers(pipeline_id).await.0 {
+                Some(flv_sh) if flv_sh.len() > 5 => {
+                    let (nls, annexb) = restream_core::codec::parse_avcc_config(&flv_sh[5..]);
+                    nalu_len_size = nls;
+                    annexb
+                }
+                _ => Vec::new(),
+            }
+        };
+        Self {
+            nalu_len_size,
+            sps_pps_cache,
+            video_conv_buf: Vec::new(),
+            audio_conv_buf: Vec::new(),
+        }
+    }
+
+    /// The packet's TS payload; `None` when it cannot be converted.
+    fn convert<'a>(
+        &'a mut self,
+        pkt: &'a MediaPacket,
+        current_ring: &RingBuffer,
+        audio_tracks: &[AudioMeta],
+    ) -> Option<&'a [u8]> {
+        match pkt.media_type {
+            MediaType::Video => {
+                if self.sps_pps_cache.is_empty()
+                    && let Some(parameter_sets) = current_ring.video_parameter_sets()
+                {
+                    self.sps_pps_cache.extend_from_slice(&parameter_sets);
+                }
+                crate::codec::video_for_ts_into(
+                    &pkt.payload,
+                    pkt.format,
+                    &mut self.nalu_len_size,
+                    &mut self.sps_pps_cache,
+                    &mut self.video_conv_buf,
+                )
+            }
+            MediaType::Audio => {
+                let track = audio_tracks
+                    .iter()
+                    .find(|a| a.track_index == pkt.track_index)
+                    .or(audio_tracks.first());
+                let (sr, ch) = track
+                    .map(|a| (a.sample_rate, a.channels))
+                    .unwrap_or((48000, 1));
+                crate::codec::audio_for_ts_into(
+                    &pkt.payload,
+                    pkt.format,
+                    sr,
+                    ch,
+                    &mut self.audio_conv_buf,
+                )
+            }
+        }
+    }
+}
+
+/// Muxes pull bursts into the shared TS ring: one allocation per burst,
+/// sliced into one `Bytes` per muxed packet.
+struct BurstMux {
+    muxer: restream_mpegts::TsMuxer,
+    dts_enforcer: restream_sync::DtsEnforcer,
+    converter: TsPayloadConverter,
+    has_video: bool,
+    audio_tracks: Arc<Vec<AudioMeta>>,
+    /// (byte_offset_end, media type, is_keyframe) for each muxed chunk, so
+    /// a single frozen `Bytes` is sliced into per-chunk `Bytes` after the
+    /// burst. This converts N malloc+memcpy calls (one per chunk) to 1
+    /// malloc per burst.
+    chunk_ends: Vec<(usize, MediaType, bool)>,
+}
+
+impl BurstMux {
+    async fn new(
+        engine: &MediaEngine,
+        pipeline_id: &str,
+        source_ring: &RingBuffer,
+        video_meta: Option<&VideoMeta>,
+        audio_tracks: Arc<Vec<AudioMeta>>,
+    ) -> Self {
+        let muxer = restream_mpegts::TsMuxer::new(
+            muxer_video_meta(source_ring, video_meta).as_ref(),
+            &audio_tracks,
+        );
+        let has_video = video_meta.is_some();
+        let num_streams = usize::from(has_video) + audio_tracks.len();
+        Self {
+            muxer,
+            dts_enforcer: restream_sync::DtsEnforcer::new(num_streams),
+            converter: TsPayloadConverter::new(engine, pipeline_id, source_ring).await,
+            has_video,
+            audio_tracks,
+            chunk_ends: Vec::with_capacity(MEDIA_PULL_BURST_PACKETS),
+        }
+    }
+
+    fn mux_burst(
+        &mut self,
+        packets: &[Arc<MediaPacket>],
+        current_ring: &RingBuffer,
+        ts_ring: &TsChunkRing,
+    ) {
+        self.chunk_ends.clear();
+        // One allocation for the burst's TS output, sized to the actual
+        // media payloads. A fixed 64 KiB floor pins excessive memory in the
+        // retained TS ring when the muxer wakes for one small packet.
+        let mut ts_accum = Vec::<u8>::with_capacity(estimate_ts_accum_capacity(packets));
+        for pkt in packets {
+            let Some(payload) = self
+                .converter
+                .convert(pkt, current_ring, &self.audio_tracks)
+            else {
+                continue;
+            };
+            let stream_idx = match pkt.media_type {
+                MediaType::Video => 0,
+                MediaType::Audio => {
+                    match self
+                        .audio_tracks
+                        .iter()
+                        .position(|a| a.track_index == pkt.track_index)
+                    {
+                        Some(i) => i + usize::from(self.has_video),
+                        None => continue,
+                    }
+                }
+            };
+            let (pts, dts) = self.dts_enforcer.enforce(stream_idx, pkt.pts, pkt.dts);
+            // Mux directly into the burst accumulator: the muxer appends TS
+            // packets to `ts_accum` with no intermediate per-packet buffer or
+            // memmove into the accumulator.
+            let before = ts_accum.len();
+            self.muxer.mux_packet_into(
+                pkt.media_type,
+                pkt.track_index,
+                restream_mpegts::PacketMeta {
+                    pts_ms: pts,
+                    dts_ms: dts,
+                    is_keyframe: pkt.is_keyframe,
+                },
+                payload,
+                &mut ts_accum,
+            );
+            if ts_accum.len() > before {
+                self.chunk_ends
+                    .push((ts_accum.len(), pkt.media_type, pkt.is_keyframe));
+            }
+        }
+        if !self.chunk_ends.is_empty() {
+            // Bytes::from(Vec) is an O(1) ownership transfer of the
+            // accumulator's allocation into a shared Arc-backed Bytes.
+            // slice() below only bumps the refcount — no extra allocations.
+            let frozen = bytes::Bytes::from(ts_accum);
+            let mut prev = 0usize;
+            ts_ring.push_batch(
+                self.chunk_ends
+                    .drain(..)
+                    .map(move |(end, media_type, is_kf)| {
+                        let chunk = frozen.slice(prev..end);
+                        prev = end;
+                        (chunk, media_type, is_kf)
+                    }),
+            );
+        }
+    }
 }
 
 pub(super) fn estimate_ts_accum_capacity(packets: &[Arc<MediaPacket>]) -> usize {
