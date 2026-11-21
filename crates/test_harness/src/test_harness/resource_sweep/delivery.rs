@@ -193,7 +193,7 @@ pub(super) async fn sample_with(
     measure: &Value,
     sinks: HarnessSinks<'_>,
 ) -> Result<DeliverySample, String> {
-    let client = reqwest::Client::new();
+    let client = restream_http::client();
     let mut destinations = BTreeMap::new();
     for (listener, metrics) in sinks.rtmp.iter().enumerate() {
         for (connection, bytes) in metrics.per_connection_bytes().into_iter().enumerate() {

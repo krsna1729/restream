@@ -95,6 +95,7 @@ const PRODUCTION_ROOTS: &[&str] = &[
     "crates/restream-domain",
     "crates/restream-engine",
     "crates/restream-health",
+    "crates/restream-http",
     "crates/restream-mcp",
     "crates/restream-sync",
     "crates/restream-mpegts",

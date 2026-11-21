@@ -476,7 +476,7 @@ async fn serve_http(backend: Arc<Recording>) -> Option<(String, tokio::task::Joi
 
 /// POST one JSON-RPC message, optionally under a session and accepting SSE.
 async fn post(url: &str, session: Option<&str>, sse: bool, message: Value) -> reqwest::Response {
-    let mut request = reqwest::Client::new()
+    let mut request = restream_http::client()
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(serde_json::to_vec(&message).unwrap());

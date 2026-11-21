@@ -20,6 +20,7 @@ agent-execution = ["restream-agent-contract/agent-execution"]
 
 [dependencies]
 restream-agent-contract = { path = "../restream-agent-contract" }
+restream-http = { path = "../restream-http" }
 restream-sync = { path = "../restream-sync" }
 tokio = { version = "1.39", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 axum = "0.8"
@@ -28,7 +29,7 @@ futures-util = "0.3"
 rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "cookies"] }
 
 [dev-dependencies]
 # The build-identity test compares this crate's stamp with the product's

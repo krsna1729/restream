@@ -430,7 +430,7 @@ async fn api_smoke() -> Result<Value, String> {
 const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bound on any single HTTP request the harness makes to a restream/mediamtx
-/// process under test. `reqwest::Client::new()` has no default request
+/// process under test. `restream_http::client()` has no default request
 /// timeout, so a stalled/deadlocked server response would hang the
 /// awaiting `.send().await` call forever — invisible to every caller-side
 /// deadline (`wait_for_http_ok`'s own retry loop, a scenario's
@@ -448,7 +448,7 @@ pub(crate) const HARNESS_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30
 /// Environment proxies (`HTTP_PROXY`, `ALL_PROXY`) and redirects are therefore
 /// disabled so no request or body can leave the host.
 pub(crate) fn harness_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    restream_http::client_builder()
         .timeout(HARNESS_HTTP_REQUEST_TIMEOUT)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())

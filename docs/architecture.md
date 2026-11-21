@@ -103,8 +103,8 @@ stops or retries media work. See
 
 ## Workspace layout
 
-The root `Cargo.toml` defines fifteen packages: the `restream` application,
-twelve library crates under `crates/restream-*`, and the `test_harness` and
+The root `Cargo.toml` defines sixteen packages: the `restream` application,
+thirteen library crates under `crates/restream-*`, and the `test_harness` and
 `xtask` command packages. They share one `Cargo.lock`; all are default
 workspace members. These are source and compilation boundaries, not separate
 services or additional thread families.
@@ -119,6 +119,7 @@ flowchart TD
     Harness --> Engine
     Harness --> Domain
     Harness --> Sync
+    Harness --> Http
     App --> Engine["restream-engine"]
     App --> Health["restream-health"]
     Health --> Domain
@@ -131,6 +132,7 @@ flowchart TD
     Agent --> Sync
     App -.->|"mcp-core"| Mcp["restream-mcp"]
     Mcp --> Contract
+    Mcp --> Http
     Contract --> Domain
     App --> Core["restream-core"]
     App --> Domain["restream-domain"]
@@ -139,6 +141,7 @@ flowchart TD
     App --> Rtmp["restream-rtmp"]
     App --> Srt["restream-srt"]
     App --> Moq["restream-moq"]
+    App --> Http["restream-http"]
     Engine --> Core
     Engine --> Domain
     Engine --> Sync
@@ -146,6 +149,7 @@ flowchart TD
     Engine --> Rtmp
     Engine --> Srt
     Engine --> Moq
+    Engine --> Http
     Domain --> Core
     Sync --> Core
     Ts --> Core
@@ -157,12 +161,12 @@ flowchart TD
 ```
 
 The harness imports the root library and the engine plus the domain
-vocabulary and the poison-tolerant lock helpers; it does not directly depend
-on the core package. `xtask` invokes repository commands and tools rather than
-linking the application. The root application depends on the engine, the
-health crate and the seven libraries below them (and, by Cargo feature, on
-the agent contract and MCP crates), so checking a leaf package does not
-validate its downstream integration.
+vocabulary, the poison-tolerant lock helpers and the HTTP client constructor;
+it does not directly depend on the core package. `xtask` invokes repository
+commands and tools rather than linking the application. The root application
+depends on the engine, the health crate and the eight libraries below them
+(and, by Cargo feature, on the agent contract and MCP crates), so checking a
+leaf package does not validate its downstream integration.
 
 ### Package boundaries and runtime seams
 
@@ -191,6 +195,13 @@ validate its downstream integration.
   ingest, origin and egress lifecycle remain in `crates/restream-engine/src/moq/`. A
   `tokio-rustls` dependency used for rustls configuration does not move QUIC
   sockets onto Tokio.
+- **HTTP clients:** `restream-http` is the one constructor of `reqwest`
+  clients (`client`, `client_builder`, `client_builder_with_pem_roots`,
+  `client_builder_with_tls`). Each hands reqwest a finished rustls config
+  (ring; webpki-roots plus any caller roots), so no client needs a
+  process-default crypto provider or reads the platform trust store.
+  `clippy.toml` bans reqwest's own constructors and its root and TLS-backend
+  builder methods elsewhere.
 - **Media engine:** `restream-engine` (`crates/restream-engine/src/`, library
   `restream_engine`) owns `MediaEngine`, pipeline admission, stages, input
   selection, shard lifecycle, thread-affine transport integration, the

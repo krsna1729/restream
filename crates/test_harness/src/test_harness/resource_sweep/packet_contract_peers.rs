@@ -121,7 +121,7 @@ pub(super) fn peer_state_from_json(host: &str, value: &Value) -> Result<PeerStat
 /// telemetry it depends on. Concurrency matters because a slow or unreachable
 /// peer must not stretch the sampling window it is part of.
 pub(super) async fn poll_peers(config: PeerStateConfig) -> Vec<PeerReading> {
-    let client = reqwest::Client::builder()
+    let client = restream_http::client_builder()
         .timeout(Duration::from_secs(3))
         .build();
     let client = match client {

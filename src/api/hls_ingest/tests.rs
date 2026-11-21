@@ -111,7 +111,7 @@ async fn put(
     path: &str,
     body: impl Into<reqwest::Body>,
 ) -> reqwest::Response {
-    reqwest::Client::new()
+    restream_http::client()
         .put(url(server, key, path))
         .body(body)
         .send()
@@ -138,7 +138,7 @@ async fn a_wrong_key_is_refused_before_any_body_byte_is_read() {
     >());
     let response = tokio::time::timeout(
         Duration::from_secs(5),
-        reqwest::Client::new()
+        restream_http::client()
             .put(url(&server, "wrong-key", "index0.ts"))
             .body(endless)
             .send(),
@@ -148,7 +148,7 @@ async fn a_wrong_key_is_refused_before_any_body_byte_is_read() {
     .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    let delete = reqwest::Client::new()
+    let delete = restream_http::client()
         .delete(url(&server, "wrong-key", "index0.ts"))
         .send()
         .await
@@ -224,7 +224,7 @@ async fn hls_push_basic_rejects_before_polling_body_including_delete() {
 async fn hls_push_basic_real_http_accepts_and_observes_replace_clear() {
     let password = random_password();
     let server = serve_with_auth(HlsIngestLimits::default(), basic_auth(&password).await).await;
-    let client = reqwest::Client::new();
+    let client = restream_http::client();
     for method in [
         reqwest::Method::PUT,
         reqwest::Method::POST,
@@ -342,13 +342,15 @@ async fn hls_push_basic_bounds_headers_and_refuses_ambiguous_authorization() {
 #[tokio::test]
 async fn methods_other_than_put_post_and_delete_are_not_allowed() {
     let server = serve(HlsIngestLimits::default()).await;
-    let response = reqwest::get(url(&server, STREAM_KEY, "index.m3u8"))
+    let response = restream_http::client()
+        .get(url(&server, STREAM_KEY, "index.m3u8"))
+        .send()
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers()["allow"], "PUT, POST, DELETE");
 
-    let delete = reqwest::Client::new()
+    let delete = restream_http::client()
         .delete(url(&server, STREAM_KEY, "index0.ts"))
         .send()
         .await

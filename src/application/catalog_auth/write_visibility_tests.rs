@@ -352,7 +352,7 @@ async fn every_access_mode_authenticates_while_the_database_pool_is_exhausted() 
     // The HLS push route: admission plus its per-object credential check.
     let response = tokio::time::timeout(
         DEADLINE,
-        reqwest::Client::new()
+        restream_http::client()
             .delete(format!("http://{address}/ingest/hls/live-key/index0.ts"))
             .send(),
     )

@@ -9,7 +9,6 @@ mod auth;
 mod guards;
 mod origin;
 
-use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::time::Duration;
 
@@ -72,7 +71,7 @@ fn a_credential_is_scoped_to_the_source_origin_including_its_scheme() {
         HeaderValue::from_static("Bearer TOKEN"),
     );
     let scope = AuthScope::new(&source, RequestAuth::Headers(headers));
-    let client = Client::new();
+    let client = restream_http::client();
     let applied = |raw: &str| {
         scope
             .apply(&Url::parse(raw).unwrap(), client.get(raw))

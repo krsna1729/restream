@@ -25,6 +25,7 @@ ts = ["dep:ts-rs"]
 restream-core = { path = "../restream-core" }
 restream-domain = { path = "../restream-domain" }
 restream-sync = { path = "../restream-sync" }
+restream-http = { path = "../restream-http" }
 restream-mpegts = { path = "../restream-mpegts" }
 restream-rtmp = { path = "../restream-rtmp" }
 restream-moq = { path = "../restream-moq" }
@@ -53,7 +54,7 @@ arc-swap = "1"
 memchr = "2.7"
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
 webpki-roots = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "cookies"] }
 url = "2"
 # MoQ (moq-lite + hang, IETF MOQT drafts 14-22): the moq.dev drivers and media
 # conventions, pinned; Restream supplies the Compio transport. `unsend` is the
