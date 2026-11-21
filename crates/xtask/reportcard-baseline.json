@@ -15,7 +15,6 @@
   "crates/restream-engine/src/egress/tls/connection.rs::KtlsConnection::read_records#0": 21,
   "crates/restream-engine/src/external_file_ingest.rs::run_external_file_ingest#0": 21,
   "crates/restream-engine/src/ffmpeg_binary.rs::fetch_into#0": 24,
-  "crates/restream-engine/src/hls/segmenter.rs::run_hls_segmenter#0": 23,
   "crates/restream-engine/src/hls/upload.rs::start_hls_put_upload#0": 30,
   "crates/restream-engine/src/hls_ingest/playlist.rs::parse_with#0": 41,
   "crates/restream-engine/src/hls_pull.rs::run#0": 23,
