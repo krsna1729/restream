@@ -165,8 +165,8 @@ impl SettingsService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::catalog_auth::CatalogAuth;
     use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
-    use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use restream_domain::domain::output_spec::OutputConfig;
     use restream_domain::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
@@ -208,7 +208,8 @@ mod tests {
         .await
         .unwrap();
         let db = DeadlineDb::api(pool.clone());
-        let service = SettingsService::new(db, SqliteServiceFactory::new(&pool).pipeline_service());
+        let pipelines = PipelineService::new(db.clone(), CatalogAuth::new(db.clone()));
+        let service = SettingsService::new(db, pipelines);
 
         service.set_server_name("Studio").await.unwrap();
         service.set_ingest_host(" edge.local ").await.unwrap();

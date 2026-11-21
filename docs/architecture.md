@@ -681,15 +681,34 @@ flowchart TD
 | `infrastructure` | External adapters, service wiring, bootstrap tasks | Domain policy |
 | `restream-agent-contract` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
 
-Application services hold a `DeadlineDb` and call `crate::db` directly, as
-`AuthService`, `TeamService`, `NotifyService`, `SettingsService`,
-`MediaLibraryService`, `RecirculationService`, `application::outputs`,
-`application::topology`, the pipeline, ingest and input catalogs,
-`CatalogAuth` and the meta-backed settings modules do. Their row mapping lives
-in `db`. A trait remains only where callers must script an external effect,
-such as `NotifyTransport`'s HTTP sends; SQLite timing and failures are tested
-with triggers, held connections, closed pools or test-only observation inside
-the owner.
+`infrastructure::service_wiring::ControlPlane` is the control plane's one
+composition root. It builds every API service once from the API `DeadlineDb`,
+the lifecycle `DeadlineDb`, one `CatalogAuth` and one recording metadata
+reporter. Startup hands its services to `AppState` and its admission index and
+reporter to the listeners and housekeeping.
+
+Ownership rule: a workflow that persists holds a `DeadlineDb` and calls
+`crate::db` directly. `AuthService`, `TeamService`, `NotifyService`,
+`SettingsService`, `MediaLibraryService`, `RecirculationService`,
+`application::outputs`, `application::topology`, the pipeline, ingest and
+input catalogs, `CatalogAuth` and the meta-backed settings modules all follow
+it, and their row mapping lives in `db`. The catalog, input and admission
+traits that once sat in front of SQLite each had one production
+implementation. Their tests now run against real SQLite: triggers inject
+write faults and races, held or closed pools model exhaustion and shutdown,
+and a dropped index models legacy duplicates. Seams that remain:
+
+- `application::ports::NotifyTransport`: the external HTTP and Web Push sends
+  that notification tests script. A local database cannot reproduce a remote
+  endpoint's answers.
+- `Housekeeping::run_ticks` takes its tick as a closure, so a test can inject a
+  panic into the real loop. No database fault produces that panic.
+- `CatalogAuth`'s `#[cfg(test)]` reload probe observes a real query after it
+  returns. The coalescing test uses it to interleave a write; it never
+  substitutes for SQLite.
+
+This is a review rule, not a lint: a new trait needs an effect that tests must
+script and that real SQLite cannot produce.
 
 ### Layering rules
 

@@ -214,11 +214,8 @@ async fn serve(
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
     let auth_service = crate::application::services::AuthService::new(api_db.clone());
-    let services_factory =
-        crate::infrastructure::service_wiring::SqliteServiceFactory::with_databases(
-            api_db.clone(),
-            lifecycle.clone(),
-        );
+    let control_plane =
+        crate::infrastructure::service_wiring::ControlPlane::new(api_db.clone(), lifecycle.clone());
     auth::initialize_auth_with_bootstrap_file(
         &auth_service,
         &sessions,
@@ -236,7 +233,7 @@ async fn serve(
     engine.start_ingest_release_drain();
     // Ingest admission reads this index, never SQLite; it is filled before
     // any listener (or the HLS ingest registry) can authenticate a connect.
-    let catalog_auth = services_factory.catalog_auth();
+    let catalog_auth = control_plane.catalog_auth.clone();
     catalog_auth
         .load()
         .await
@@ -255,8 +252,8 @@ async fn serve(
     let sessions_for_reconciler = sessions.clone();
     // The one recording catalog writer: the media library's and
     // housekeeping's recordings report to it.
-    let recording_metadata = services_factory.recording_metadata();
-    let services = services_factory.compose();
+    let recording_metadata = control_plane.recording_metadata.clone();
+    let services = control_plane.services;
     let state = Arc::new(crate::api::AppState::new(
         services,
         security.clone(),

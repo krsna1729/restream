@@ -80,7 +80,7 @@ async fn test_state() -> (Arc<api::AppState>, SqlitePool, Arc<MediaEngine>) {
     let engine = Arc::new(MediaEngine::new());
 
     let state = Arc::new(api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         security,
         ingest_policy_store,
         sessions,
@@ -106,7 +106,7 @@ async fn test_app_with_secure_cookies() -> axum::Router {
     let engine = Arc::new(MediaEngine::new());
 
     let mut state = api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         security,
         ingest_policy_store,
         sessions,
@@ -145,7 +145,7 @@ async fn authenticated_app_with_temp_media()
     let media_dir = temp_dir.to_string_lossy().to_string();
 
     let state = Arc::new(api::AppState::test_new_with_media_dir(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         security,
         ingest_policy_store,
         sessions,
@@ -185,7 +185,7 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
     let media_dir = temp_dir.to_string_lossy().to_string();
 
     let state = Arc::new(api::AppState::test_new_with_media_dir(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         security,
         ingest_policy_store,
         sessions,

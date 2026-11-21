@@ -891,7 +891,7 @@ mod tests {
         .unwrap();
         let (logs, _) = tokio::sync::broadcast::channel(8);
         let state = AppState::test_new(
-            crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+            crate::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
             Arc::new(restream_engine::security::IngestSecurityService::new(
                 restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
             )),

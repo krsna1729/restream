@@ -9,7 +9,6 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
-- [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -36,23 +35,6 @@ the [assurance roadmap](assurance-roadmap.md).
   cases, ported to Restream tests against the public API. Then delete
   `vendor/<crate>` and its `[patch.crates-io]` entries in the root and
   `fuzz/` manifests, and the `moq_ingest` fuzz smoke stays clean.
-
-### Q-118 [architecture] [opus] One concrete control-plane composition root
-- Goal: HTTP handlers reach `db::*`, `MediaEngine` and config through one
-  concrete application root, not `AppServices` (`src/api/mod.rs`) built by
-  `SqliteServiceFactory` (`src/infrastructure/service_wiring.rs`).
-  Every catalog, input and admission service already calls `crate::db`
-  through `DeadlineDb`.
-- Remaining: replace the factory with `AppServices` fields built directly
-  from one root (API database, lifecycle database, `CatalogAuth`, recording
-  reporter), and migrate the tests that call factory methods.
-- Keep `NotifyTransport` (scripted HTTP sends) and the services that hold
-  policy (stream-key lookup, settings workflows, file ingest, media library,
-  agent mutations).
-- Gates: one vertical slice per change with its handler tests unchanged;
-  API contract tests stay green; the noun checks in
-  `tests/architecture/service_wiring.rs` go with the types they name; net
-  production lines go down.
 
 ## Not planned
 

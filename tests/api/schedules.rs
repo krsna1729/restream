@@ -207,7 +207,7 @@ async fn file_pools() -> (SqlitePool, SqlitePool, std::path::PathBuf) {
 
 fn scheduler_state(pool: &SqlitePool) -> Arc<api::AppState> {
     scheduler_state_with(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(pool).services,
     )
 }
 
@@ -304,7 +304,7 @@ async fn another_pipelines_occurrence_runs_while_one_occurrence_is_stalled() {
         .unwrap();
     let held = ingest_pool.acquire().await.unwrap();
     let mut services =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services;
     services.file_ingest_service = restream::application::services::FileIngestService::new(
         db::DeadlineDb::api(ingest_pool),
         services.pipeline_service.clone(),

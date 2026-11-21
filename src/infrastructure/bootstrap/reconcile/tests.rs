@@ -16,8 +16,7 @@ fn reconciler(engine: Arc<MediaEngine>, db: DeadlineDb, pool: &sqlx::SqlitePool)
         engine.clone(),
         Arc::new(
             crate::application::catalog_auth::CatalogIngestAuthenticator::new(
-                crate::infrastructure::service_wiring::SqliteServiceFactory::new(pool)
-                    .catalog_auth(),
+                crate::infrastructure::service_wiring::ControlPlane::on_pool(pool).catalog_auth,
                 security.clone(),
             ),
         ),

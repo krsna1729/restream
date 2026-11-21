@@ -651,7 +651,7 @@ mod mutation_admission_tests {
             .await
             .unwrap();
         let mut state = AppState::test_new(
-            crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+            crate::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
             Arc::new(IngestSecurityService::new(
                 restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG,
             )),

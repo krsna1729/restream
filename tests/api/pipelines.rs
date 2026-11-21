@@ -374,7 +374,7 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
     let (log_broadcast, _) = broadcast::channel(32);
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&auth_pool).services,
         security,
         ingest_policy_store,
         sessions,
@@ -382,8 +382,9 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
         log_broadcast,
     );
     state.pipeline_service =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pipeline_pool)
-            .pipeline_service();
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pipeline_pool)
+            .services
+            .pipeline_service;
     pipeline_pool.close().await;
     let app = api::create_router(Arc::new(state));
     let cookie = login(&app).await;
@@ -803,7 +804,7 @@ async fn a_successful_mutation_requests_a_reconcile_pass() {
     restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
     let (log_broadcast, _) = broadcast::channel(32);
     let state = Arc::new(api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),

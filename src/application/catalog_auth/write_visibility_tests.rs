@@ -6,7 +6,7 @@
 use super::*;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::PipelineService;
-use crate::infrastructure::service_wiring::SqliteServiceFactory;
+use crate::infrastructure::service_wiring::ControlPlane;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::pipeline_input::PipelineInputSource;
 
@@ -42,7 +42,7 @@ pub(super) struct Catalog {
 }
 
 impl Catalog {
-    /// Production wiring: one factory's services share the index that the
+    /// Production wiring: the composition root's services share the index that the
     /// authenticator reads, loaded as startup loads it.
     pub(super) async fn open(tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!(
@@ -59,14 +59,14 @@ impl Catalog {
         let pool = crate::db::create_pool(&url).await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
         let lifecycle = crate::db::create_lifecycle_pool(&url).await.unwrap();
-        let factory = SqliteServiceFactory::with_lifecycle_db(
-            &pool,
+        let root = ControlPlane::new(
+            crate::db::DeadlineDb::api(pool.clone()),
             crate::db::DeadlineDb::new(lifecycle.clone(), crate::db::SHARED_LOOP_DEADLINE),
         );
-        let catalog = factory.catalog_auth();
+        let catalog = root.catalog_auth;
         catalog.load().await.unwrap();
-        let pipelines = factory.pipeline_service();
-        let inputs = factory.pipeline_input_service(pipelines.clone());
+        let pipelines = root.services.pipeline_service;
+        let inputs = root.services.pipeline_input_service;
         // No bans: the matrix refuses keys on purpose.
         let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig {
             failure_limit: 10_000,
