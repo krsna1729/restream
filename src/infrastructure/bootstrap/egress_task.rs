@@ -2,9 +2,8 @@
 //! to the fabric-backed path (RTMP/RTMPS, SRT, sink discard, pipeline
 //! recirculation) or the output type's own dedicated task (HLS
 //! segmenting/PUT upload), and owns the shared retry/backoff/status
-//! bookkeeping every path funnels back through. Split out of `egress.rs`
-//! (which owns `EgressReconciler` and output start-up preparation) purely
-//! to stay under the source-audit line cap — not a module-boundary change.
+//! bookkeeping every path funnels back through. `egress.rs` owns
+//! `EgressReconciler` and output start-up preparation.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -141,10 +140,6 @@ impl EgressTask {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     pub(super) async fn run(self) {
         let url_scheme = OutputUrlScheme::from_url(&self.url);
         if !url_scheme.is_supported_output() {
@@ -157,124 +152,7 @@ impl EgressTask {
         // the output is unregistered, as before.
         let mut hls_lease: Option<restream_engine::engine_hls::PersistentLease> = None;
         let panicked = std::panic::AssertUnwindSafe(async {
-            match url_scheme {
-                OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
-                    if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
-                        self.run_rtmp_fabric(fabric).await;
-                    }
-                }
-                OutputUrlScheme::Srt => {
-                    if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
-                        self.run_srt_fabric(fabric).await;
-                    }
-                }
-                OutputUrlScheme::Sink => {
-                    if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
-                        self.run_sink_fabric(fabric).await;
-                    } else {
-                        restream_engine::egress::backends::sink::start_sink_egress(
-                            self.output_id.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
-                    }
-                }
-                OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
-                    let (store, already_running) =
-                        self.engine.ensure_hls_segmenter(&self.pipeline_id).await;
-                    if !already_running {
-                        let Some(hls_cancel) =
-                            self.engine.get_hls_cancel_token(&self.pipeline_id).await
-                        else {
-                            warn!(
-                                correlation_id = %self.correlation_id,
-                                pipeline_id = %self.pipeline_id,
-                                output_id = %self.output_id,
-                                "HLS segmenter token missing — skipping"
-                            );
-                            return;
-                        };
-                        crate::infrastructure::bootstrap::hls_segmenter::spawn_pipeline_hls_segmenter(
-                            self.engine.clone(),
-                            self.pipeline_id.clone(),
-                            store.clone(),
-                            self.ring.clone(),
-                            hls_cancel,
-                            self.terminal_stage_key.clone(),
-                            self.stages.clone(),
-                        );
-                    }
-                    hls_lease = self
-                        .engine
-                        .lease_hls_persistent_consumer(&self.pipeline_id)
-                        .await;
-                    if let Some(fabric) = self.hls_put_fabric.clone() {
-                        self.run_hls_put_fabric(fabric, store).await;
-                    } else if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
-                        restream_engine::hls_upload::start_hls_put_upload(
-                            restream_engine::hls_upload::HlsUploadStart {
-                                output_id: self.output_id.clone(),
-                                pipeline_id: self.pipeline_id.clone(),
-                                target_url: self.url.clone(),
-                                terminal_stage_key: self.terminal_stage_key.clone(),
-                            },
-                            store,
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
-                    } else {
-                        self.engine
-                            .update_egress_phase_if_current(
-                                &self.output_id,
-                                &self.registration,
-                                EgressPhase::Segmenting,
-                            )
-                            .await;
-                        tokio::select! {
-                            _ = self.registration.cancel_token.cancelled() => {}
-                            () = self.own_stage_ended() => {}
-                        }
-                    }
-                }
-                OutputUrlScheme::Pipeline => {
-                    if let Some(fabric) = self.pipeline_fabric.as_ref().cloned() {
-                        self.run_pipeline_fabric(fabric).await;
-                    } else {
-                        match restream_domain::domain::output_spec::RecirculationTarget::parse(&self.url) {
-                            Ok(target) => {
-                                restream_engine::recirculation::start_pipeline_recirculation(
-                                    self.output_id.clone(),
-                                    self.ring.clone(),
-                                    target.pipeline_id().to_string(),
-                                    target.input_id().to_string(),
-                                    self.engine.clone(),
-                                    self.registration.clone(),
-                                )
-                                .await;
-                            }
-                            Err(error) => {
-                                self.engine
-                                    .record_egress_error_if_current(
-                                        &self.output_id,
-                                        &self.registration,
-                                        "recirculation_target_parse",
-                                        error.message(),
-                                    )
-                                    .await;
-                            }
-                        }
-                    }
-                }
-                OutputUrlScheme::Moqt => {
-                    if let Some(fabric) = self.moq_fabric.as_ref().cloned() {
-                        self.run_moq_fabric(fabric).await;
-                    }
-                }
-                OutputUrlScheme::Unknown => {}
-            }
+            self.run_scheme(url_scheme, &mut hls_lease).await;
         })
         .catch_unwind()
         .await
@@ -293,6 +171,165 @@ impl EgressTask {
         }
 
         let is_cancelled = self.registration.cancel_token.is_cancelled();
+        self.settle_retry_state(is_cancelled).await;
+
+        let _was_current = self
+            .engine
+            .unregister_egress_if_current(&self.output_id, &self.registration)
+            .await;
+        drop(hls_lease);
+
+        self.job.finish(if is_cancelled {
+            JobStatus::Stopped
+        } else {
+            JobStatus::Failed
+        });
+    }
+
+    /// Runs this output's path for `url_scheme` until it ends. The HLS path
+    /// stores its persistent lease in `hls_lease`, which `run` holds until
+    /// the output is unregistered, panics included.
+    async fn run_scheme(
+        &self,
+        url_scheme: OutputUrlScheme,
+        hls_lease: &mut Option<restream_engine::engine_hls::PersistentLease>,
+    ) {
+        match url_scheme {
+            OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
+                if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
+                    self.run_rtmp_fabric(fabric).await;
+                }
+            }
+            OutputUrlScheme::Srt => {
+                if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
+                    self.run_srt_fabric(fabric).await;
+                }
+            }
+            OutputUrlScheme::Sink => {
+                if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
+                    self.run_sink_fabric(fabric).await;
+                } else {
+                    restream_engine::egress::backends::sink::start_sink_egress(
+                        self.output_id.clone(),
+                        self.ring.clone(),
+                        self.engine.clone(),
+                        self.registration.clone(),
+                    )
+                    .await;
+                }
+            }
+            OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
+                self.run_hls(url_scheme, hls_lease).await;
+            }
+            OutputUrlScheme::Pipeline => {
+                if let Some(fabric) = self.pipeline_fabric.as_ref().cloned() {
+                    self.run_pipeline_fabric(fabric).await;
+                } else {
+                    self.run_pipeline_recirculation().await;
+                }
+            }
+            OutputUrlScheme::Moqt => {
+                if let Some(fabric) = self.moq_fabric.as_ref().cloned() {
+                    self.run_moq_fabric(fabric).await;
+                }
+            }
+            OutputUrlScheme::Unknown => {}
+        }
+    }
+
+    /// HLS, HTTP and HTTPS outputs: starts the pipeline's segmenter if no
+    /// other output has, leases it, then uploads (HTTP/HTTPS) or waits
+    /// (local HLS) until stopped.
+    async fn run_hls(
+        &self,
+        url_scheme: OutputUrlScheme,
+        hls_lease: &mut Option<restream_engine::engine_hls::PersistentLease>,
+    ) {
+        let (store, already_running) = self.engine.ensure_hls_segmenter(&self.pipeline_id).await;
+        if !already_running {
+            let Some(hls_cancel) = self.engine.get_hls_cancel_token(&self.pipeline_id).await else {
+                warn!(
+                    correlation_id = %self.correlation_id,
+                    pipeline_id = %self.pipeline_id,
+                    output_id = %self.output_id,
+                    "HLS segmenter token missing — skipping"
+                );
+                return;
+            };
+            crate::infrastructure::bootstrap::hls_segmenter::spawn_pipeline_hls_segmenter(
+                self.engine.clone(),
+                self.pipeline_id.clone(),
+                store.clone(),
+                self.ring.clone(),
+                hls_cancel,
+                self.terminal_stage_key.clone(),
+                self.stages.clone(),
+            );
+        }
+        *hls_lease = self
+            .engine
+            .lease_hls_persistent_consumer(&self.pipeline_id)
+            .await;
+        if let Some(fabric) = self.hls_put_fabric.clone() {
+            self.run_hls_put_fabric(fabric, store).await;
+        } else if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
+            restream_engine::hls_upload::start_hls_put_upload(
+                restream_engine::hls_upload::HlsUploadStart {
+                    output_id: self.output_id.clone(),
+                    pipeline_id: self.pipeline_id.clone(),
+                    target_url: self.url.clone(),
+                    terminal_stage_key: self.terminal_stage_key.clone(),
+                },
+                store,
+                self.engine.clone(),
+                self.registration.clone(),
+            )
+            .await;
+        } else {
+            self.engine
+                .update_egress_phase_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    EgressPhase::Segmenting,
+                )
+                .await;
+            tokio::select! {
+                _ = self.registration.cancel_token.cancelled() => {}
+                () = self.own_stage_ended() => {}
+            }
+        }
+    }
+
+    /// The non-fabric recirculation path into another pipeline's input.
+    async fn run_pipeline_recirculation(&self) {
+        match restream_domain::domain::output_spec::RecirculationTarget::parse(&self.url) {
+            Ok(target) => {
+                restream_engine::recirculation::start_pipeline_recirculation(
+                    self.output_id.clone(),
+                    self.ring.clone(),
+                    target.pipeline_id().to_string(),
+                    target.input_id().to_string(),
+                    self.engine.clone(),
+                    self.registration.clone(),
+                )
+                .await;
+            }
+            Err(error) => {
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "recirculation_target_parse",
+                        error.message(),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    /// Clears the failure record on a stop; otherwise counts the retry and
+    /// publishes its backoff, or clears the retry state once retries run out.
+    async fn settle_retry_state(&self, is_cancelled: bool) {
         let had_progress = self
             .engine
             .egress_has_recorded_progress_if_current(&self.output_id, &self.registration)
@@ -325,18 +362,6 @@ impl EgressTask {
         } else {
             self.engine.clear_egress_retry_state(&self.output_id).await;
         }
-
-        let _was_current = self
-            .engine
-            .unregister_egress_if_current(&self.output_id, &self.registration)
-            .await;
-        drop(hls_lease);
-
-        self.job.finish(if is_cancelled {
-            JobStatus::Stopped
-        } else {
-            JobStatus::Failed
-        });
     }
 
     /// Waits for explicit cancellation (normal stop/reconfigure), the fabric
