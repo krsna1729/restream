@@ -16,8 +16,8 @@ use crate::db::DeadlineDb;
 use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePipelineInputStore};
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteNotifyStore, SqlitePipelineStore,
-    SqliteRecordingStore, SqliteSessionStore,
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
+    SqliteSessionStore,
 };
 use restream_engine::recording::RecordingMetadataReporter;
 
@@ -127,10 +127,10 @@ impl SqliteServiceFactory {
         )
     }
 
-    pub fn notify_service(&self) -> NotifyService {
+    fn notify_service(&self) -> NotifyService {
         let meta = Arc::new(SqliteMetaStore::new(self.db.clone()));
-        NotifyService::with_ports(
-            Arc::new(SqliteNotifyStore::new(self.db.clone())),
+        NotifyService::new(
+            self.db.clone(),
             Arc::new(
                 crate::infrastructure::notify_transport::HttpNotifyTransport::new(
                     meta.clone(),

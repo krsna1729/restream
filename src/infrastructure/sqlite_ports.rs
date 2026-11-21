@@ -1,9 +1,6 @@
 //! SQLite-backed implementations of application storage ports.
 
-mod notify;
 pub(super) mod records;
-
-pub use notify::SqliteNotifyStore;
 
 use self::records::{ingest_model, job_model, pipeline_model};
 use crate::application::ports::*;

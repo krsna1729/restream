@@ -1,7 +1,7 @@
 //! Application-layer port traits defining the storage and catalog capabilities
 //! that orchestration code depends on.
 
-use crate::application::notify::{Delivery, NotifyChannel, PushSubscription};
+use crate::application::notify::PushSubscription;
 use restream_domain::models::{Ingest, Job, Pipeline};
 use std::fmt;
 use std::future::Future;
@@ -205,26 +205,6 @@ pub trait SessionStore: Send + Sync {
     fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a>;
     fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
     fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
-}
-
-pub type NotifyFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, NotifyStoreError>> + Send + 'a>>;
-
-pub type NotifyStoreError = StoreError;
-
-/// Notification channels, browser push subscriptions and the delivery log.
-pub trait NotifyStore: Send + Sync {
-    fn list_channels(&self) -> NotifyFuture<'_, Vec<NotifyChannel>>;
-    /// Inserts or replaces by id.
-    fn save_channel<'a>(&'a self, channel: &'a NotifyChannel) -> NotifyFuture<'a, ()>;
-    fn delete_channel<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool>;
-    fn list_subscriptions(&self) -> NotifyFuture<'_, Vec<PushSubscription>>;
-    /// Inserts, or replaces the subscription with the same endpoint.
-    fn save_subscription<'a>(&'a self, subscription: &'a PushSubscription) -> NotifyFuture<'a, ()>;
-    fn delete_subscription<'a>(&'a self, id: &'a str) -> NotifyFuture<'a, bool>;
-    fn append_delivery<'a>(&'a self, delivery: &'a Delivery) -> NotifyFuture<'a, ()>;
-    /// Newest first.
-    fn list_deliveries(&self, limit: u32) -> NotifyFuture<'_, Vec<Delivery>>;
 }
 
 /// How one HTTP attempt ended: the status it got, or why it got none.
