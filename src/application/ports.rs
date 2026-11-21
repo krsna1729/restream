@@ -31,12 +31,6 @@ pub type MetaLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<String>, MetaLookupError>> + Send + 'a>>;
 pub type MetaWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<String, MetaLookupError>> + Send + 'a>>;
-pub type SessionWriteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(), SessionStoreError>> + Send + 'a>>;
-pub type SessionListFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<String>, SessionStoreError>> + Send + 'a>>;
-pub type SessionLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<i64>, SessionStoreError>> + Send + 'a>>;
 pub type JobListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Job>, JobStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
@@ -88,8 +82,6 @@ pub type IngestLookupError = StoreError;
 pub type IngestWriteError = StoreError;
 
 pub type MetaLookupError = StoreError;
-
-pub type SessionStoreError = StoreError;
 
 pub type JobStoreError = StoreError;
 
@@ -196,15 +188,6 @@ pub trait MetaStoreWriter: Send + Sync {
 pub trait IngestHostStore: Send + Sync {
     fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a>;
     fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a>;
-}
-
-pub trait SessionStore: Send + Sync {
-    fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a>;
-    fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
-    fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
-    fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a>;
-    fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
-    fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
 }
 
 /// How one HTTP attempt ended: the status it got, or why it got none.

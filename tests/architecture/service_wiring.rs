@@ -43,10 +43,8 @@ fn infrastructure_owns_sqlite_service_composition() {
         for forbidden in [
             "crate::infrastructure::sqlite_ports",
             "SqlitePipelineStore",
-            "SqliteOutputStore",
             "SqliteIngestLookup",
             "SqliteMetaStore",
-            "SqliteSessionStore",
             "SqliteJobStore",
             "SqliteRecordingStore",
         ] {

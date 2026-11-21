@@ -17,7 +17,6 @@ use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePip
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
-    SqliteSessionStore,
 };
 use restream_engine::recording::RecordingMetadataReporter;
 
@@ -86,7 +85,7 @@ impl SqliteServiceFactory {
             db: self.db.clone(),
             pipeline_input_service,
             recirculation_service,
-            auth_service: self.auth_service(),
+            auth_service: AuthService::new(self.db.clone()),
             team_service: TeamService::new(self.db.clone()),
             notify_service: self.notify_service(),
             settings_service,
@@ -116,15 +115,6 @@ impl SqliteServiceFactory {
     pub fn ingest_service(&self) -> IngestService {
         let store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
         IngestService::with_ports(store.clone(), store)
-    }
-
-    pub fn auth_service(&self) -> AuthService {
-        let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
-        AuthService::with_stores(
-            meta_store.clone(),
-            meta_store,
-            Arc::new(SqliteSessionStore::new(self.db.clone())),
-        )
     }
 
     fn notify_service(&self) -> NotifyService {

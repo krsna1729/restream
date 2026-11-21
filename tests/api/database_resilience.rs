@@ -1,10 +1,8 @@
 //! Real SQLite failures and caller cancellation at the API security boundary.
 
 use super::*;
-use restream::application::ports::{MetaStoreWriter, MetaWriteFuture};
-use restream::application::services::{AuthService, TeamService};
+use restream::application::services::TeamService;
 use restream::infrastructure::service_wiring::SqliteServiceFactory;
-use restream::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteSessionStore};
 use tokio::sync::oneshot;
 
 const CURRENT_TOKEN: &str = "database-resilience-current";
@@ -193,32 +191,40 @@ async fn public_api_misses_do_not_consult_unavailable_authentication() {
     }
 }
 
-/// Observes the real password write, then pauses its return to the handler.
-/// The test cancels the request only after the SQLite mutation has committed.
-struct CommitThenPause {
-    inner: SqliteMetaStore,
-    pause: std::sync::Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
-}
-
-impl MetaStoreWriter for CommitThenPause {
-    fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-        Box::pin(async move {
-            let stored = self.inner.set_meta(key, value).await?;
-            if key == "dashboardPasswordHash" {
-                let pause = self.pause.lock().unwrap().take();
-                if let Some((committed, resume)) = pause {
-                    let _ = committed.send(());
-                    let _ = resume.await;
+/// Pauses the API pool's one connection inside the request's session
+/// revocation (`DELETE FROM sessions`), after the password write committed
+/// in its own earlier statement and before any session row is gone. Sends
+/// the tables written since the hook was set, then waits for `resume`.
+async fn pause_at_session_revocation(
+    pool: &SqlitePool,
+) -> (oneshot::Receiver<Vec<String>>, std::sync::mpsc::Sender<()>) {
+    let (reached_tx, reached_rx) = oneshot::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let mut pause = Some((reached_tx, resume_rx));
+    let mut written = Vec::new();
+    let mut connection = pool.acquire().await.unwrap();
+    connection
+        .lock_handle()
+        .await
+        .unwrap()
+        .set_update_hook(move |change| {
+            let revoking = change.table == "sessions"
+                && matches!(change.operation, sqlx::sqlite::SqliteOperation::Delete);
+            if !revoking {
+                if pause.is_some() {
+                    written.push(change.table.to_owned());
                 }
+            } else if let Some((reached, resume)) = pause.take() {
+                let _ = reached.send(std::mem::take(&mut written));
+                let _ = resume.recv();
             }
-            Ok(stored)
-        })
-    }
+        });
+    (reached_rx, resume_tx)
 }
 
 #[tokio::test]
 async fn cancelling_password_change_after_commit_still_revokes_sessions_and_audits() {
-    let (mut state, pool, sessions) = fixture().await;
+    let (state, pool, sessions) = fixture().await;
     let initial_password = format!("initial-{}", rand::random::<u64>());
     let updated_password = format!("updated-{}-password", rand::random::<u64>());
     restream::infrastructure::bootstrap::initialize_auth_for_test(
@@ -231,16 +237,7 @@ async fn cancelling_password_change_after_commit_still_revokes_sessions_and_audi
         .await
         .unwrap()
         .unwrap();
-    let (committed_tx, committed_rx) = oneshot::channel();
-    let (resume_tx, resume_rx) = oneshot::channel();
-    state.auth_service = AuthService::with_stores(
-        Arc::new(SqliteMetaStore::new(state.db.clone())),
-        Arc::new(CommitThenPause {
-            inner: SqliteMetaStore::new(state.db.clone()),
-            pause: std::sync::Mutex::new(Some((committed_tx, resume_rx))),
-        }),
-        Arc::new(SqliteSessionStore::new(state.db.clone())),
-    );
+    let (committed_rx, resume_tx) = pause_at_session_revocation(&pool).await;
     let state = Arc::new(state);
     let app = api::create_router(state.clone());
     let payload = serde_json::json!({
@@ -254,21 +251,15 @@ async fn cancelling_password_change_after_commit_still_revokes_sessions_and_audi
         &cookie(CURRENT_TOKEN),
         Some(&payload),
     )));
-    tokio::time::timeout(Duration::from_secs(15), committed_rx)
+    let written = tokio::time::timeout(Duration::from_secs(15), committed_rx)
         .await
-        .expect("the password write must reach the real commit observer")
+        .expect("the request must reach session revocation")
         .unwrap();
-    assert_ne!(
-        db::get_meta(&pool, "dashboardPasswordHash").await.unwrap(),
-        Some(original_hash),
-        "the cancellation point is after the password actually committed"
-    );
-    assert!(
-        db::get_session_created_at(&pool, &token_hash(OTHER_TOKEN))
-            .await
-            .unwrap()
-            .is_some(),
-        "session invalidation has not yet run at the cancellation point"
+    assert_eq!(
+        written,
+        ["meta"],
+        "the cancellation point is after the password write committed and \
+         before session invalidation removed a row"
     );
 
     request.abort();
@@ -297,6 +288,11 @@ async fn cancelling_password_change_after_commit_still_revokes_sessions_and_audi
     })
     .await
     .expect("the detached mutation must finish durable/cache revocation and its success audit");
+    assert_ne!(
+        db::get_meta(&pool, "dashboardPasswordHash").await.unwrap(),
+        Some(original_hash),
+        "the password change committed"
+    );
 
     let revoked = app
         .clone()

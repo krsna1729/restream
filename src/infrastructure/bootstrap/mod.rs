@@ -220,12 +220,12 @@ async fn serve(
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     let bootstrap_password_path =
         std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
+    let auth_service = crate::application::services::AuthService::new(api_db.clone());
     let services_factory =
         crate::infrastructure::service_wiring::SqliteServiceFactory::with_databases(
             api_db,
             lifecycle.clone(),
         );
-    let auth_service = services_factory.auth_service();
     auth::initialize_auth_with_bootstrap_file(
         &auth_service,
         &sessions,
