@@ -173,32 +173,8 @@ impl MediaLibraryService {
 
     /// Lists visible media files and folds companion recording artifacts into a
     /// single response row when possible.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     pub async fn list_media_files(&self, media_dir: &str) -> Vec<MediaLibraryFile> {
-        let mut entries = HashMap::<String, MediaDirEntry>::new();
-        if let Ok(mut media_dir_entries) = tokio::fs::read_dir(media_dir).await {
-            while let Ok(Some(entry)) = media_dir_entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if media_filename_is_supported(&name)
-                    && let Ok(metadata) = entry.metadata().await
-                {
-                    let (modified_at, modified_ms) = entry_modified(&metadata);
-                    entries.insert(
-                        name.clone(),
-                        MediaDirEntry {
-                            name,
-                            size: metadata.len(),
-                            modified_at,
-                            modified_ms,
-                        },
-                    );
-                }
-            }
-        }
-
+        let entries = read_media_entries(media_dir).await;
         let mut files = Vec::new();
         let mut consumed = HashSet::new();
         let mut names = entries.keys().cloned().collect::<Vec<_>>();
@@ -215,19 +191,9 @@ impl MediaLibraryService {
             let Some(entry) = entries.get(&name).cloned() else {
                 continue;
             };
-            if name.ends_with(".mp4") {
-                let companion_source_name = Path::new(&name)
-                    .with_extension("ts")
-                    .file_name()
-                    .map(|value| value.to_string_lossy().to_string());
-                if let Some(companion_source_name) = companion_source_name
-                    && restream_engine::recording::is_recording_source_filename(
-                        &companion_source_name,
-                    )
-                    && entries.contains_key(&companion_source_name)
-                {
-                    continue;
-                }
+            // A recording's MP4 is listed on its `.ts` source's row.
+            if name.ends_with(".mp4") && has_recording_source(&name, &entries) {
+                continue;
             }
 
             let ingests = self
@@ -235,113 +201,31 @@ impl MediaLibraryService {
                 .list_for_filename(&name)
                 .await
                 .unwrap_or_default();
-            let lower_name = name.to_ascii_lowercase();
             let recording_meta = recording_metadata.get(&name);
-            let kind = if recording_meta.is_some() || lower_name.contains("recording") {
-                "recording"
-            } else {
-                "source"
-            };
-            let RecordingFields {
-                recording_id,
-                pipeline_id,
-                recording_status,
-                recording_started_at,
-                recording_ended_at,
-                recording_codec_summary,
-                recording_error,
-            } = recording_fields(recording_meta);
-
-            if restream_engine::recording::is_recording_source_filename(&name) {
-                let source_path = Path::new(media_dir).join(&name);
-                let converted_name = restream_engine::recording::build_mp4_path(&source_path)
-                    .file_name()
-                    .map(|value| value.to_string_lossy().to_string())
-                    .filter(|candidate| entries.contains_key(candidate));
-                let converted_entry = converted_name
-                    .as_ref()
-                    .and_then(|candidate| entries.get(candidate).cloned());
-                if let Some(converted_name) = &converted_name {
-                    consumed.insert(converted_name.clone());
-                }
-                let conversion_state =
-                    restream_engine::recording::load_conversion_state(&source_path);
-                let conversion_status = if converted_entry.is_some() {
-                    Some("ready".to_string())
+            let kind =
+                if recording_meta.is_some() || name.to_ascii_lowercase().contains("recording") {
+                    "recording"
                 } else {
-                    conversion_state.as_ref().map(|state| match state.status {
-                        restream_engine::recording::RecordingConversionStatus::Converting => {
-                            "converting".to_string()
-                        }
-                        restream_engine::recording::RecordingConversionStatus::Ready => {
-                            "ready".to_string()
-                        }
-                        restream_engine::recording::RecordingConversionStatus::Failed => {
-                            "failed".to_string()
-                        }
-                    })
+                    "source"
                 };
-                let conversion_error = conversion_state
-                    .as_ref()
-                    .and_then(|state| state.error.clone());
-                let conversion_updated_at = conversion_state
-                    .as_ref()
-                    .map(|state| state.updated_at.clone());
-                let converted_size = converted_entry.as_ref().map(|value| value.size);
-                let total_size = entry.size + converted_size.unwrap_or(0);
-                let modified_at = converted_entry
-                    .as_ref()
-                    .filter(|value| value.modified_ms > entry.modified_ms)
-                    .map(|value| value.modified_at.clone())
-                    .unwrap_or_else(|| entry.modified_at.clone());
-
-                files.push(MediaLibraryFile {
-                    name,
-                    size: total_size,
-                    modified_at,
-                    ingest_count: ingests.len(),
-                    kind: kind.to_string(),
-                    source_name: entry.name,
-                    source_size: entry.size,
-                    converted_name: converted_entry.as_ref().map(|value| value.name.clone()),
-                    converted_size,
-                    play_name: converted_entry.as_ref().map(|value| value.name.clone()),
-                    conversion_status,
-                    conversion_error,
-                    conversion_updated_at,
-                    recording_id,
-                    pipeline_id,
-                    recording_status,
-                    recording_started_at,
-                    recording_ended_at,
-                    recording_codec_summary,
-                    recording_error,
-                });
-                continue;
-            }
-
-            files.push(MediaLibraryFile {
+            let source_modified_ms = entry.modified_ms;
+            let mut file = media_file(
                 name,
-                size: entry.size,
-                modified_at: entry.modified_at,
-                ingest_count: ingests.len(),
-                kind: kind.to_string(),
-                source_name: entry.name.clone(),
-                source_size: entry.size,
-                converted_name: None,
-                converted_size: None,
-                play_name: Some(entry.name),
-                conversion_status: None,
-                conversion_error: None,
-                conversion_updated_at: None,
-                recording_id,
-                pipeline_id,
-                recording_status,
-                recording_started_at,
-                recording_ended_at,
-                recording_codec_summary,
-                recording_error,
-            });
+                entry,
+                ingests.len(),
+                kind,
+                recording_fields(recording_meta),
+            );
+            if restream_engine::recording::is_recording_source_filename(&file.name) {
+                apply_conversion(
+                    &mut file,
+                    source_modified_ms,
+                    media_dir,
+                    &entries,
+                    &mut consumed,
+                );
+            }
+            files.push(file);
         }
 
         files
@@ -667,6 +551,120 @@ fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
         .map(restream_domain::timestamp::rfc3339)
         .unwrap_or_default();
     (modified_at, modified_ms)
+}
+
+/// The library's supported files by name.
+async fn read_media_entries(media_dir: &str) -> HashMap<String, MediaDirEntry> {
+    let mut entries = HashMap::new();
+    let Ok(mut media_dir_entries) = tokio::fs::read_dir(media_dir).await else {
+        return entries;
+    };
+    while let Ok(Some(entry)) = media_dir_entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if media_filename_is_supported(&name)
+            && let Ok(metadata) = entry.metadata().await
+        {
+            let (modified_at, modified_ms) = entry_modified(&metadata);
+            entries.insert(
+                name.clone(),
+                MediaDirEntry {
+                    name,
+                    size: metadata.len(),
+                    modified_at,
+                    modified_ms,
+                },
+            );
+        }
+    }
+    entries
+}
+
+/// Whether an MP4 has the recording `.ts` source it was converted from.
+fn has_recording_source(mp4_name: &str, entries: &HashMap<String, MediaDirEntry>) -> bool {
+    Path::new(mp4_name)
+        .with_extension("ts")
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .is_some_and(|source| {
+            restream_engine::recording::is_recording_source_filename(&source)
+                && entries.contains_key(&source)
+        })
+}
+
+/// A row for one file played as it is.
+fn media_file(
+    name: String,
+    entry: MediaDirEntry,
+    ingest_count: usize,
+    kind: &str,
+    recording: RecordingFields,
+) -> MediaLibraryFile {
+    MediaLibraryFile {
+        name,
+        size: entry.size,
+        modified_at: entry.modified_at,
+        ingest_count,
+        kind: kind.to_string(),
+        source_name: entry.name.clone(),
+        source_size: entry.size,
+        converted_name: None,
+        converted_size: None,
+        play_name: Some(entry.name),
+        conversion_status: None,
+        conversion_error: None,
+        conversion_updated_at: None,
+        recording_id: recording.recording_id,
+        pipeline_id: recording.pipeline_id,
+        recording_status: recording.recording_status,
+        recording_started_at: recording.recording_started_at,
+        recording_ended_at: recording.recording_ended_at,
+        recording_codec_summary: recording.recording_codec_summary,
+        recording_error: recording.recording_error,
+    }
+}
+
+/// Folds a recording source's MP4 conversion into its row: the MP4 (only
+/// when it exists) is what plays, its size adds to the row's, the newer
+/// time wins, and the conversion state is shown. The MP4 is marked consumed.
+fn apply_conversion(
+    file: &mut MediaLibraryFile,
+    source_modified_ms: i64,
+    media_dir: &str,
+    entries: &HashMap<String, MediaDirEntry>,
+    consumed: &mut HashSet<String>,
+) {
+    let source_path = Path::new(media_dir).join(&file.name);
+    let converted = restream_engine::recording::build_mp4_path(&source_path)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .and_then(|candidate| entries.get(&candidate));
+    if let Some(converted) = converted {
+        consumed.insert(converted.name.clone());
+    }
+    let conversion_state = restream_engine::recording::load_conversion_state(&source_path);
+    file.conversion_status = if converted.is_some() {
+        Some("ready".to_string())
+    } else {
+        conversion_state.as_ref().map(|state| {
+            match state.status {
+                restream_engine::recording::RecordingConversionStatus::Converting => "converting",
+                restream_engine::recording::RecordingConversionStatus::Ready => "ready",
+                restream_engine::recording::RecordingConversionStatus::Failed => "failed",
+            }
+            .to_string()
+        })
+    };
+    file.conversion_error = conversion_state
+        .as_ref()
+        .and_then(|state| state.error.clone());
+    file.conversion_updated_at = conversion_state.map(|state| state.updated_at);
+    file.converted_name = converted.map(|value| value.name.clone());
+    file.converted_size = converted.map(|value| value.size);
+    file.play_name = file.converted_name.clone();
+    file.size = file.source_size + file.converted_size.unwrap_or(0);
+    if let Some(converted) = converted.filter(|value| value.modified_ms > source_modified_ms) {
+        file.modified_at = converted.modified_at.clone();
+    }
 }
 
 #[cfg(test)]
