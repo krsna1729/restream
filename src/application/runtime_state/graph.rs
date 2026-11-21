@@ -226,22 +226,55 @@ fn edge(from: impl Into<String>, to: impl Into<String>, label: impl Into<String>
 /// from an earlier plan is not drawn); one egress node per output, through
 /// a TS mux for SRT; recirculation targets; recording and HLS preview.
 /// `outputs` are the pipeline's own.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) fn pipeline_graph(
     pipeline_id: &str,
     outputs: &[&Output],
     runtime: &GraphRuntime,
 ) -> PipelineGraph {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-
+    let mut graph = PipelineGraph {
+        pipeline_id: pipeline_id.to_string(),
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
     let ingest = runtime.ingests.get(pipeline_id);
-    let ingest_protocol = ingest.map(|ingest| ingest.protocol.as_str());
+    let rb_node_id = push_source_chain(&mut graph, ingest, runtime);
+    let ingest_video_codec = ingest.and_then(|ingest| ingest.video_codec.as_deref());
+    let visible = visible_stage_keys(
+        pipeline_id,
+        outputs,
+        runtime,
+        ingest.is_some(),
+        ingest_video_codec,
+    );
+    push_stages(&mut graph, runtime, &visible, &rb_node_id);
+
+    let ingest_is_hevc =
+        ingest_video_codec.is_some_and(|codec| VideoCodecKind::from_codec_name(codec).is_hevc());
+    let mut added = AddedNodes::default();
+    for output in outputs {
+        push_output(
+            &mut graph,
+            output,
+            runtime,
+            &rb_node_id,
+            ingest_is_hevc,
+            &mut added,
+        );
+    }
+    push_taps(&mut graph, runtime, &rb_node_id);
+    graph
+}
+
+/// Ingest, demux and source ring with the edges between them. Returns the
+/// source ring's node id.
+fn push_source_chain(
+    graph: &mut PipelineGraph,
+    ingest: Option<&GraphIngest>,
+    runtime: &GraphRuntime,
+) -> String {
+    let pipeline_id = graph.pipeline_id.clone();
     let ingest_node_id = format!("{pipeline_id}_ingest");
-    nodes.push(node(
+    graph.nodes.push(node(
         ingest_node_id.clone(),
         "ingest",
         ingest
@@ -251,7 +284,7 @@ pub(crate) fn pipeline_graph(
         NodeSource::Ingest,
     ));
     let demux_node_id = format!("{pipeline_id}_ingest_demux");
-    nodes.push(node(
+    graph.nodes.push(node(
         demux_node_id.clone(),
         "demux",
         ingest
@@ -266,28 +299,39 @@ pub(crate) fn pipeline_graph(
         NodeSource::Demux,
     ));
     let rb_node_id = format!("{pipeline_id}_source_rb");
-    nodes.push(node(
+    graph.nodes.push(node(
         rb_node_id.clone(),
         "ring_buffer",
         "Source Buffer",
-        runtime.rings.contains(pipeline_id),
+        runtime.rings.contains(&pipeline_id),
         NodeSource::SourceRing,
     ));
-    edges.push(edge(
+    graph.edges.push(edge(
         ingest_node_id,
         demux_node_id.clone(),
-        ingest_protocol
-            .map(MediaEngine::graph_protocol_label)
+        ingest
+            .map(|ingest| MediaEngine::graph_protocol_label(&ingest.protocol))
             .unwrap_or_else(|| "input".to_string()),
     ));
-    edges.push(edge(demux_node_id, rb_node_id.clone(), "push(MediaPacket)"));
+    graph
+        .edges
+        .push(edge(demux_node_id, rb_node_id.clone(), "push(MediaPacket)"));
+    rb_node_id
+}
 
-    let ingest_video_codec = ingest.and_then(|ingest| ingest.video_codec.as_deref());
+/// The stages the planner keeps for the outputs that want to run or are
+/// running, while an ingest is live.
+fn visible_stage_keys(
+    pipeline_id: &str,
+    outputs: &[&Output],
+    runtime: &GraphRuntime,
+    has_ingest: bool,
+    ingest_video_codec: Option<&str>,
+) -> HashSet<StageKey> {
     let visible_outputs = outputs
         .iter()
         .filter(|output| {
-            ingest.is_some()
-                && (output.wants_running() || runtime.egresses.contains_key(&output.id))
+            has_ingest && (output.wants_running() || runtime.egresses.contains_key(&output.id))
         })
         .map(|output| {
             PlannedOutput::new(
@@ -297,20 +341,27 @@ pub(crate) fn pipeline_graph(
             )
         })
         .collect::<Vec<_>>();
-    let visible_stage_keys: HashSet<StageKey> =
-        plan_pipeline_graph(pipeline_id, ingest_video_codec, &visible_outputs, false)
-            .stages
-            .into_iter()
-            .filter(|stage| stage.kind != StageKind::Source)
-            .map(|stage| stage.key)
-            .collect();
+    plan_pipeline_graph(pipeline_id, ingest_video_codec, &visible_outputs, false)
+        .stages
+        .into_iter()
+        .filter(|stage| stage.kind != StageKind::Source)
+        .map(|stage| stage.key)
+        .collect()
+}
 
+fn push_stages(
+    graph: &mut PipelineGraph,
+    runtime: &GraphRuntime,
+    visible: &HashSet<StageKey>,
+    rb_node_id: &str,
+) {
+    let pipeline_id = graph.pipeline_id.clone();
     for (key, active) in &runtime.stages {
-        if key.pipeline.as_str() != pipeline_id || !visible_stage_keys.contains(key) {
+        if key.pipeline.as_str() != pipeline_id || !visible.contains(key) {
             continue;
         }
         let kind = &key.kind;
-        let stage_id = kind.graph_node_id(pipeline_id);
+        let stage_id = kind.graph_node_id(&pipeline_id);
         let mut stage = node(
             stage_id.clone(),
             kind.graph_type(),
@@ -320,132 +371,174 @@ pub(crate) fn pipeline_graph(
         );
         stage.stage_key = Some(kind.to_string());
         stage.metrics_stage = Some(key.to_string());
-        nodes.push(stage);
+        graph.nodes.push(stage);
+        if let Some((from, label)) = stage_input_edge(kind, &pipeline_id, rb_node_id) {
+            graph.edges.push(edge(from, stage_id, label));
+        }
+    }
+}
 
-        if let Some(upstream) = kind.upstream() {
-            let (from, label) = if matches!(upstream, StageKind::Source) {
-                let label = if matches!(kind, StageKind::CodecEdge { .. }) {
-                    "codec conversion"
-                } else {
-                    "audio select"
-                };
-                (rb_node_id.clone(), label)
-            } else if matches!(kind, StageKind::CodecEdge { .. }) {
-                (upstream.graph_node_id(pipeline_id), "codec conversion")
+/// Where a stage reads from, and the edge's label.
+fn stage_input_edge(
+    kind: &StageKind,
+    pipeline_id: &str,
+    rb_node_id: &str,
+) -> Option<(String, String)> {
+    let codec_edge = matches!(kind, StageKind::CodecEdge { .. });
+    match kind.upstream() {
+        Some(StageKind::Source) => {
+            let label = if codec_edge {
+                "codec conversion"
             } else {
-                (
-                    upstream.graph_node_id(pipeline_id),
-                    "video copy + audio select",
-                )
+                "audio select"
             };
-            edges.push(edge(from, stage_id, label));
-        } else if let StageKind::VideoPreset { preset, .. } = kind {
-            edges.push(edge(
-                rb_node_id.clone(),
-                stage_id,
-                format!("decode → {preset} encode"),
-            ));
+            Some((rb_node_id.to_string(), label.to_string()))
         }
+        Some(upstream) => {
+            let label = if codec_edge {
+                "codec conversion"
+            } else {
+                "video copy + audio select"
+            };
+            Some((upstream.graph_node_id(pipeline_id), label.to_string()))
+        }
+        None => match kind {
+            StageKind::VideoPreset { preset, .. } => {
+                Some((rb_node_id.to_string(), format!("decode → {preset} encode")))
+            }
+            _ => None,
+        },
     }
+}
 
-    let ingest_is_hevc =
-        ingest_video_codec.is_some_and(|codec| VideoCodecKind::from_codec_name(codec).is_hevc());
-    let mut added_packetizers = HashSet::new();
-    let mut added_recirculation_targets = HashSet::new();
-    for output in outputs {
-        let output_node_id = format!("{pipeline_id}_output_{}", output.id);
-        let protocol = MediaEngine::egress_protocol_from_url(&output.url);
-        let protocol_label = MediaEngine::graph_protocol_label(protocol);
-        let mut egress = node(
-            output_node_id.clone(),
-            "egress",
-            format!("{protocol_label} sender: {}", output.name.as_str()),
-            runtime.egresses.get(&output.id).copied().unwrap_or(false),
-            NodeSource::Egress,
+/// Shared nodes already drawn: one TS mux per encoding, one node per
+/// recirculation target.
+#[derive(Default)]
+struct AddedNodes {
+    packetizers: HashSet<String>,
+    recirculation_targets: HashSet<String>,
+}
+
+/// One output's egress node, fed from its terminal stage (through a TS mux
+/// for SRT), and its recirculation target, if any.
+fn push_output(
+    graph: &mut PipelineGraph,
+    output: &Output,
+    runtime: &GraphRuntime,
+    rb_node_id: &str,
+    ingest_is_hevc: bool,
+    added: &mut AddedNodes,
+) {
+    let pipeline_id = graph.pipeline_id.clone();
+    let output_node_id = format!("{pipeline_id}_output_{}", output.id);
+    let protocol = MediaEngine::egress_protocol_from_url(&output.url);
+    let protocol_label = MediaEngine::graph_protocol_label(protocol);
+    let mut egress = node(
+        output_node_id.clone(),
+        "egress",
+        format!("{protocol_label} sender: {}", output.name.as_str()),
+        runtime.egresses.get(&output.id).copied().unwrap_or(false),
+        NodeSource::Egress,
+    );
+    // Clients join egress nodes to outputs on this, running or not.
+    egress.output_id = Some(output.id.clone());
+    graph.nodes.push(egress);
+
+    let output_for_plan = [PlannedOutput::new(
+        output.id.as_str(),
+        output.config.clone(),
+        output.url.as_str(),
+    )];
+    let terminal_kind = plan_pipeline_graph(
+        &pipeline_id,
+        ingest_is_hevc.then_some("hevc"),
+        &output_for_plan,
+        false,
+    )
+    .terminal_stage
+    .kind;
+    let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
+        rb_node_id.to_string()
+    } else {
+        terminal_kind.graph_node_id(&pipeline_id)
+    };
+
+    if protocol == "srt" {
+        let encoding = output.stage_encoding_label();
+        let mux_slug = MediaEngine::graph_slug(encoding.as_str());
+        let mux_node_id = format!(
+            "{pipeline_id}_ts_mux_{}",
+            if mux_slug.is_empty() {
+                "source"
+            } else {
+                mux_slug.as_str()
+            }
         );
-        // Clients join egress nodes to outputs on this, running or not.
-        egress.output_id = Some(output.id.clone());
-        nodes.push(egress);
-
-        let output_for_plan = [PlannedOutput::new(
-            output.id.as_str(),
-            output.config.clone(),
-            output.url.as_str(),
-        )];
-        let terminal_kind = plan_pipeline_graph(
-            pipeline_id,
-            ingest_is_hevc.then_some("hevc"),
-            &output_for_plan,
-            false,
-        )
-        .terminal_stage
-        .kind;
-        let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
-            rb_node_id.clone()
-        } else {
-            terminal_kind.graph_node_id(pipeline_id)
-        };
-
-        if protocol == "srt" {
-            let encoding = output.stage_encoding_label();
-            let mux_slug = MediaEngine::graph_slug(encoding.as_str());
-            let mux_node_id = format!(
-                "{pipeline_id}_ts_mux_{}",
-                if mux_slug.is_empty() {
-                    "source"
-                } else {
-                    mux_slug.as_str()
-                }
-            );
-            if added_packetizers.insert(mux_node_id.clone()) {
-                let key = format!("{pipeline_id}:{encoding}");
-                nodes.push(node(
-                    mux_node_id.clone(),
-                    "packetizer",
-                    format!("MPEG-TS mux: {encoding}"),
-                    runtime.ts_muxers.get(&key).copied().unwrap_or(false),
-                    NodeSource::Packetizer { key, encoding },
-                ));
-                edges.push(edge(terminal_node_id, mux_node_id.clone(), "media packets"));
-            }
-            edges.push(edge(mux_node_id, output_node_id.clone(), "SRT send"));
-        } else {
-            edges.push(edge(
-                terminal_node_id,
-                output_node_id.clone(),
-                MediaEngine::source_to_egress_label(protocol),
+        if added.packetizers.insert(mux_node_id.clone()) {
+            let key = format!("{pipeline_id}:{encoding}");
+            graph.nodes.push(node(
+                mux_node_id.clone(),
+                "packetizer",
+                format!("MPEG-TS mux: {encoding}"),
+                runtime.ts_muxers.get(&key).copied().unwrap_or(false),
+                NodeSource::Packetizer { key, encoding },
             ));
+            graph
+                .edges
+                .push(edge(terminal_node_id, mux_node_id.clone(), "media packets"));
         }
-
-        if let Ok(target) = RecirculationTarget::parse(&output.url) {
-            let target_node_id = format!(
-                "{}_input_{}",
-                target.pipeline_id(),
-                MediaEngine::graph_slug(target.input_id())
-            );
-            if added_recirculation_targets.insert(target_node_id.clone()) {
-                nodes.push(node(
-                    target_node_id.clone(),
-                    "recirculation_input",
-                    format!(
-                        "Recirculation input: {}/{}",
-                        target.pipeline_id(),
-                        target.input_id()
-                    ),
-                    false,
-                    NodeSource::Recirculation(target),
-                ));
-            }
-            edges.push(edge(
-                output_node_id,
-                target_node_id,
-                "in-process recirculation",
-            ));
-        }
+        graph
+            .edges
+            .push(edge(mux_node_id, output_node_id.clone(), "SRT send"));
+    } else {
+        graph.edges.push(edge(
+            terminal_node_id,
+            output_node_id.clone(),
+            MediaEngine::source_to_egress_label(protocol),
+        ));
     }
 
-    if let Some(active) = runtime.recordings.get(pipeline_id) {
-        let key = plan_recording_graph(pipeline_id).terminal_stage;
+    if let Ok(target) = RecirculationTarget::parse(&output.url) {
+        push_recirculation(graph, output_node_id, target, added);
+    }
+}
+
+fn push_recirculation(
+    graph: &mut PipelineGraph,
+    output_node_id: String,
+    target: RecirculationTarget,
+    added: &mut AddedNodes,
+) {
+    let target_node_id = format!(
+        "{}_input_{}",
+        target.pipeline_id(),
+        MediaEngine::graph_slug(target.input_id())
+    );
+    if added.recirculation_targets.insert(target_node_id.clone()) {
+        graph.nodes.push(node(
+            target_node_id.clone(),
+            "recirculation_input",
+            format!(
+                "Recirculation input: {}/{}",
+                target.pipeline_id(),
+                target.input_id()
+            ),
+            false,
+            NodeSource::Recirculation(target),
+        ));
+    }
+    graph.edges.push(edge(
+        output_node_id,
+        target_node_id,
+        "in-process recirculation",
+    ));
+}
+
+/// Recording and HLS preview, both reading the source ring.
+fn push_taps(graph: &mut PipelineGraph, runtime: &GraphRuntime, rb_node_id: &str) {
+    let pipeline_id = graph.pipeline_id.clone();
+    if let Some(active) = runtime.recordings.get(&pipeline_id) {
+        let key = plan_recording_graph(&pipeline_id).terminal_stage;
         let rec_id = format!("{pipeline_id}_recording");
         let mut recording = node(
             rec_id.clone(),
@@ -455,12 +548,12 @@ pub(crate) fn pipeline_graph(
             NodeSource::Recording(key.clone()),
         );
         recording.metrics_stage = Some(key.to_string());
-        nodes.push(recording);
-        edges.push(edge(rb_node_id.clone(), rec_id, "MKV mux"));
+        graph.nodes.push(recording);
+        graph.edges.push(edge(rb_node_id, rec_id, "MKV mux"));
     }
 
-    if let Some(active) = runtime.hls.get(pipeline_id) {
-        let key = StageKey::new(pipeline_id, StageKind::hls());
+    if let Some(active) = runtime.hls.get(&pipeline_id) {
+        let key = StageKey::new(pipeline_id.as_str(), StageKind::hls());
         let hls_id = format!("{pipeline_id}_hls_preview");
         let mut hls = node(
             hls_id.clone(),
@@ -470,13 +563,9 @@ pub(crate) fn pipeline_graph(
             NodeSource::Hls(key.clone()),
         );
         hls.metrics_stage = Some(key.to_string());
-        nodes.push(hls);
-        edges.push(edge(rb_node_id, hls_id, "MPEG-TS segment"));
-    }
-
-    PipelineGraph {
-        pipeline_id: pipeline_id.to_string(),
-        nodes,
-        edges,
+        graph.nodes.push(hls);
+        graph
+            .edges
+            .push(edge(rb_node_id, hls_id, "MPEG-TS segment"));
     }
 }
