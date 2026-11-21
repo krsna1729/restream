@@ -17,6 +17,7 @@ path = "src/main.rs"
 restream = { path = "../.." }
 restream-domain = { path = "../restream-domain" }
 restream-engine = { path = "../restream-engine" }
+restream-http = { path = "../restream-http" }
 restream-sync = { path = "../restream-sync" }
 restream-srt = { path = "../restream-srt" }
 axum = { version = "0.8", features = ["macros"] }
@@ -27,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 srt-proto = { git = "https://github.com/krsna1729/srt-rs", rev = "4dad48521ee8f69c44b3845953bc2b4a478666c6" }
 srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "4dad48521ee8f69c44b3845953bc2b4a478666c6", features = ["compio"] }
 tokio-util = "0.7"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "cookies"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "cookies"] }
 serde_json = "1.0"
 tokio = { version = "1.39", features = ["full", "test-util"] }
 futures-util = "0.3"

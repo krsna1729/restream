@@ -233,20 +233,19 @@ fn expected_sha256<'a>(listing: &'a str, asset: &str) -> Option<&'a str> {
 /// bundle in `SSL_CERT_FILE`, if set: hosts behind a TLS-inspecting proxy
 /// name its CA there.
 fn http_client() -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder();
-    if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
-        let pem = std::fs::read(&path).map_err(|error| {
-            format!(
-                "reading SSL_CERT_FILE {}: {error}",
-                Path::new(&path).display()
-            )
-        })?;
-        let certificates = reqwest::Certificate::from_pem_bundle(&pem)
-            .map_err(|error| format!("SSL_CERT_FILE is not a PEM bundle: {error}"))?;
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate);
+    let builder = match std::env::var_os("SSL_CERT_FILE") {
+        Some(path) => {
+            let pem = std::fs::read(&path).map_err(|error| {
+                format!(
+                    "reading SSL_CERT_FILE {}: {error}",
+                    Path::new(&path).display()
+                )
+            })?;
+            restream_http::client_builder_with_pem_roots(&pem)
+                .map_err(|error| format!("SSL_CERT_FILE: {error}"))?
         }
-    }
+        None => restream_http::client_builder(),
+    };
     builder
         .build()
         .map_err(|error| format!("building the HTTP client: {}", with_causes(&error)))

@@ -226,7 +226,7 @@ enum YoutubeMonitoringFetchError {
 // Monitoring fetches use short timeouts and a bounded response size because
 // they are advisory dashboard checks, not stream-critical control paths.
 fn youtube_monitoring_client() -> Result<reqwest::Client, YoutubeMonitoringFetchError> {
-    reqwest::Client::builder()
+    restream_http::client_builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
         .connect_timeout(YOUTUBE_MONITORING_CONNECT_TIMEOUT)
         .timeout(YOUTUBE_MONITORING_TIMEOUT)

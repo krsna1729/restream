@@ -479,7 +479,7 @@ pub(super) fn build_client(
         warn!(%error, "HLS pull TLS configuration unusable; using the default roots");
         crate::egress::tls::rustls_client_config()
     });
-    Client::builder()
+    restream_http::client_builder_with_tls((*tls).clone())
         .user_agent(USER_AGENT)
         // Mechanism 2 (signed cookies): a `Set-Cookie` on a playlist is
         // presented with that playlist's segments, as a browser or FFmpeg
@@ -504,7 +504,6 @@ pub(super) fn build_client(
                 attempt.follow()
             }
         }))
-        .use_preconfigured_tls((*tls).clone())
         // The resolver guard holds only when the client connects directly: a
         // proxy (reqwest reads `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` by
         // default) resolves the target name itself, out of the guard's
@@ -519,7 +518,7 @@ pub(super) fn build_client(
         .build()
         .unwrap_or_else(|error| {
             warn!(%error, "HLS pull client build failed; using a default client");
-            Client::new()
+            restream_http::client()
         })
 }
 

@@ -60,7 +60,7 @@ impl HttpAgentBackend {
         connect: Duration,
         request: Duration,
     ) -> Result<Self, AgentError> {
-        let client = reqwest::Client::builder()
+        let client = restream_http::client_builder()
             .connect_timeout(connect)
             .timeout(request)
             .build()

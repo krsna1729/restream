@@ -29,14 +29,14 @@ pub struct HttpNotifyTransport {
 
 impl HttpNotifyTransport {
     pub fn new(meta: Arc<dyn MetaStore>, meta_writer: Arc<dyn MetaStoreWriter>) -> Self {
-        let client = reqwest::Client::builder()
+        let client = restream_http::client_builder()
             .timeout(Duration::from_secs(10))
             // A receiver must answer where it was configured; a redirect
             // could point the engine at an internal address.
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("restream/", env!("CARGO_PKG_VERSION")))
             .build()
-            .unwrap_or_default();
+            .unwrap_or_else(|_| restream_http::client());
         Self {
             client,
             meta,

@@ -8,6 +8,15 @@ disallowed-methods = [
   { path = "tokio::process::Child::wait", reason = "unbounded: await a child through restream_engine::child_process::reap (grace, then SIGKILL)" },
   { path = "tokio::process::Child::wait_with_output", reason = "unbounded: run a tool to completion through restream_engine::ffmpeg_binary::run_tool (bounded, killed past it)" },
   { path = "tokio::process::Command::output", reason = "unbounded: run a tool to completion through restream_engine::ffmpeg_binary::run_tool (bounded, killed past it)" },
+  { path = "reqwest::Client::new", reason = "reqwest's own rustls setup panics without a process-default crypto provider and trusts the platform store: build through restream_http::client (ring, webpki-roots)" },
+  { path = "reqwest::Client::builder", reason = "reqwest's own rustls setup panics without a process-default crypto provider and trusts the platform store: build through restream_http::client_builder (ring, webpki-roots)" },
+  { path = "reqwest::ClientBuilder::new", reason = "reqwest's own rustls setup panics without a process-default crypto provider: build through restream_http::client_builder" },
+  { path = "reqwest::get", reason = "builds a reqwest::Client::new: send through a restream_http::client" },
+  { path = "reqwest::ClientBuilder::tls_backend_rustls", reason = "brings back reqwest's own rustls setup (panics without a process-default crypto provider)" },
+  { path = "reqwest::ClientBuilder::use_rustls_tls", reason = "brings back reqwest's own rustls setup (panics without a process-default crypto provider)" },
+  { path = "reqwest::ClientBuilder::add_root_certificate", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_pem_roots" },
+  { path = "reqwest::ClientBuilder::tls_certs_merge", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_pem_roots" },
+  { path = "reqwest::ClientBuilder::tls_certs_only", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_tls" },
 ]
 # `clippy::await_holding_invalid_type`: a tokio guard held across an await
 # (another lock's acquisition included) is how a registry read re-acquired

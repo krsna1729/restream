@@ -56,15 +56,14 @@ fn hls_upload_clients(extra_trust_roots_pem_path: Option<&str>) -> &'static HlsU
                 crate::egress::tls::rustls_client_config()
             });
         let build = |fresh: bool| {
-            let mut builder = Client::builder()
-                .user_agent(HLS_UPLOAD_USER_AGENT)
-                .use_preconfigured_tls((*tls).clone());
+            let mut builder = restream_http::client_builder_with_tls((*tls).clone())
+                .user_agent(HLS_UPLOAD_USER_AGENT);
             if fresh {
                 builder = builder.pool_max_idle_per_host(0);
             }
             builder.build().unwrap_or_else(|error| {
                 warn!(error = %error, "HLS upload client build failed; using a default client");
-                Client::new()
+                restream_http::client()
             })
         };
         HlsUploadClients {

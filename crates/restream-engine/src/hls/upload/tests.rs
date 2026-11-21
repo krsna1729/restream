@@ -279,7 +279,7 @@ async fn put_bytes_times_out_against_hung_sink() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let client = Client::new();
+    let client = restream_http::client();
     let request = UploadRequest {
         target: UploadTarget::Playlist {
             last_sequence: None,

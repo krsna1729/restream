@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-115 reqwest 0.13](#q-115-platform-sonnet-move-to-reqwest-013-without-a-crypto-provider-panic-or-a-trust-root-change)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
 - [Q-118 concrete control-plane composition](#q-118-architecture-opus-one-concrete-control-plane-composition-root)
 - [Q-119 egress abstraction review](#q-119-architecture-opus-delete-egress-abstractions-that-only-forward)
@@ -23,23 +22,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-115 [platform] [sonnet] Move to reqwest 0.13 without a crypto-provider panic or a trust-root change
-- Goal: every crate builds against reqwest 0.13; `.github/dependabot.yml`
-  holds it at 0.12 until then. 0.13 renamed `rustls-tls`; its `rustls`
-  feature brings aws-lc-rs, a second provider beside ring. With
-  `rustls-no-provider`, a `Client` built without preconfigured TLS panics
-  unless a process-default provider is installed; its roots come from the
-  platform store (`rustls-platform-verifier`), not `webpki-roots` as now.
-  `use_preconfigured_tls` is deprecated, and `RequestBuilder::query`
-  needs the `query` feature.
-- Scope: 6 crates and 16 `Client` construction sites, including tests.
-  `ffmpeg_binary.rs` adds PEM roots with `add_root_certificate`, which
-  preconfigured TLS ignores.
-- Gates: no client construction can panic for want of a provider (one
-  shared builder or a provider installed before any client, covering
-  tests); trust roots stay webpki-roots plus the custom PEM roots; aws-lc-rs
-  stays out of `Cargo.lock`; the Dependabot ignore is removed.
 
 ### Q-117 [platform] [sonnet] Drop the vendored hang and moq-msf
 - Goal: `hang` and `moq-msf` come from crates.io again, so Dependabot and
