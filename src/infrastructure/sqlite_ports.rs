@@ -2,10 +2,8 @@
 
 mod notify;
 pub(super) mod records;
-mod team;
 
 pub use notify::SqliteNotifyStore;
-pub use team::SqliteTeamStore;
 
 use self::records::{ingest_model, job_model, pipeline_model};
 use crate::application::ports::*;

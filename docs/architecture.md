@@ -681,10 +681,12 @@ flowchart TD
 | `infrastructure` | SQLite adapters, service wiring, bootstrap tasks | Domain policy |
 | `restream-agent-contract` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
 
-`application::ports` with SQLite adapters in `infrastructure::sqlite_ports`
-is the target shape. Some application modules (for example
-`application::outputs` and `application::topology`), bootstrap reconcile and
-egress tasks, and `src/logging/mod.rs` still call `crate::db` with a pool.
+Application services hold a `DeadlineDb` and call `crate::db` directly, as
+`TeamService`, `RecirculationService`, `application::outputs` and
+`application::topology` do. The remaining `application::ports` traits with
+one SQLite adapter each in `infrastructure::sqlite_ports` are being removed
+(backlog Q-118); a port stays only for an effect tests must script, such as
+`NotifyTransport`'s HTTP sends.
 
 ### Layering rules
 
