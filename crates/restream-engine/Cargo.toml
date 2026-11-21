@@ -112,6 +112,10 @@ name = "ring_buffer"
 harness = false
 
 [[bench]]
+name = "hls_segmenter"
+harness = false
+
+[[bench]]
 name = "ingest_handoff"
 harness = false
 
