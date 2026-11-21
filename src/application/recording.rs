@@ -1,8 +1,8 @@
 //! Application-layer recording control that owns persisted recording settings
 //! and translates them into engine-facing recording commands.
 
-use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
+use crate::db::DeadlineDb;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_engine::engine::MediaEngine;
 use restream_engine::recording::{RecordingMetadataReporter, RecordingStart};
@@ -17,40 +17,37 @@ pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
     format!("{RECORDING_ENABLED_META_PREFIX}{pipeline_id}")
 }
 
-/// Whether recording is switched on for `pipeline_id`; an error when the
+/// Whether recording is switched on for `pipeline_id`; `None` when the
 /// switch could not be read, which is neither on nor off.
-pub async fn load_recording_enabled(
-    meta_store: &dyn MetaStore,
-    pipeline_id: &str,
-) -> Result<bool, MetaLookupError> {
-    Ok(meta_store
-        .get_meta(&recording_enabled_meta_key(pipeline_id))
-        .await?
-        .is_some_and(|value| value == "1"))
+pub async fn load_recording_enabled(db: &DeadlineDb, pipeline_id: &str) -> Option<bool> {
+    let key = recording_enabled_meta_key(pipeline_id);
+    db.read(|pool| crate::db::get_meta(pool, &key))
+        .await
+        .ok()
+        .map(|value| value.is_some_and(|value| value == "1"))
 }
 
 /// Each pipeline's recording switch. One whose switch cannot be read keeps
 /// its current state: on while its recording runs, so a pool timeout never
 /// shows a running recording as switched off.
 pub async fn load_recording_enabled_map(
-    meta_store: &dyn MetaStore,
+    db: &DeadlineDb,
     engine: &MediaEngine,
     pipeline_ids: &[String],
 ) -> HashMap<String, bool> {
     let mut enabled = HashMap::with_capacity(pipeline_ids.len());
     for pipeline_id in pipeline_ids {
-        let on = match load_recording_enabled(meta_store, pipeline_id).await {
-            Ok(on) => on,
-            Err(_) => engine.is_recording_active(pipeline_id).await,
+        let on = match load_recording_enabled(db, pipeline_id).await {
+            Some(on) => on,
+            None => engine.is_recording_active(pipeline_id).await,
         };
         enabled.insert(pipeline_id.clone(), on);
     }
     enabled
 }
 
-pub async fn load_recording_settings(meta_store: &dyn MetaStore) -> RecordingSettings {
-    meta_store
-        .get_meta(RECORDING_SETTINGS_META_KEY)
+pub async fn load_recording_settings(db: &DeadlineDb) -> RecordingSettings {
+    db.read(|pool| crate::db::get_meta(pool, RECORDING_SETTINGS_META_KEY))
         .await
         .ok()
         .flatten()
@@ -59,15 +56,16 @@ pub async fn load_recording_settings(meta_store: &dyn MetaStore) -> RecordingSet
 }
 
 pub async fn save_recording_settings(
-    meta_store: &dyn MetaStoreWriter,
+    db: &DeadlineDb,
     settings: &RecordingSettings,
-) -> Result<(), MetaLookupError> {
-    let raw =
-        serde_json::to_string(settings).map_err(|error| MetaLookupError::new(error.to_string()))?;
-    meta_store
-        .set_meta(RECORDING_SETTINGS_META_KEY, &raw)
-        .await
-        .map(|_| ())
+) -> Result<(), String> {
+    let raw = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    db.write(move |pool| async move {
+        crate::db::set_meta(&pool, RECORDING_SETTINGS_META_KEY, &raw).await
+    })
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 /// Spawns a recorder for `pipeline_id`, or returns `None` if a recording is
@@ -157,35 +155,28 @@ pub async fn apply_recording_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
+    use crate::infrastructure::bootstrap::test_support::memory_pool;
     use restream_domain::domain::stage::StageKey;
     use std::path::PathBuf;
-    use std::sync::Mutex;
     use std::time::Duration;
 
-    struct FakeMetaStore {
-        values: Mutex<HashMap<String, String>>,
-        fail_keys: HashMap<String, String>,
+    /// An in-memory database holding `values` in its meta table.
+    async fn meta_db(values: &[(&str, &str)]) -> (DeadlineDb, sqlx::SqlitePool) {
+        let pool = memory_pool().await;
+        for (key, value) in values {
+            crate::db::set_meta(&pool, key, value).await.unwrap();
+        }
+        (DeadlineDb::api(pool.clone()), pool)
     }
 
-    impl MetaStore for FakeMetaStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move {
-                if let Some(message) = self.fail_keys.get(key) {
-                    return Err(MetaLookupError::new(message.clone()));
-                }
-                Ok(restream_sync::lock::lock(&self.values).get(key).cloned())
-            })
-        }
-    }
-
-    impl MetaStoreWriter for FakeMetaStore {
-        fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-            Box::pin(async move {
-                restream_sync::lock::lock(&self.values).insert(key.to_string(), value.to_string());
-                Ok(value.to_string())
-            })
-        }
+    /// Stores a value the meta read cannot decode as text, so reading this
+    /// one key fails while the others still read.
+    async fn make_unreadable(pool: &sqlx::SqlitePool, key: &str) {
+        sqlx::query("INSERT INTO meta (key, value) VALUES (?, X'FF')")
+            .bind(key)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -198,40 +189,24 @@ mod tests {
 
     #[tokio::test]
     async fn load_recording_enabled_reads_truthy_meta_value() {
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::from([(
-                "recording_enabled:pipeline-a".to_string(),
-                "1".to_string(),
-            )])),
-            fail_keys: HashMap::new(),
-        };
+        let (db, _pool) = meta_db(&[("recording_enabled:pipeline-a", "1")]).await;
 
-        assert!(load_recording_enabled(&store, "pipeline-a").await.unwrap());
-        assert!(!load_recording_enabled(&store, "pipeline-b").await.unwrap());
+        assert!(load_recording_enabled(&db, "pipeline-a").await.unwrap());
+        assert!(!load_recording_enabled(&db, "pipeline-b").await.unwrap());
     }
 
     /// A switch that cannot be read keeps the pipeline's current state: a
     /// running recording reads as on, an idle pipeline as off.
     #[tokio::test]
     async fn an_unreadable_recording_switch_keeps_the_current_state() {
-        let unreadable = |pipeline: &str| {
-            (
-                format!("recording_enabled:{pipeline}"),
-                "db unavailable".to_string(),
-            )
-        };
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::from([(
-                "recording_enabled:pipeline-a".to_string(),
-                "1".to_string(),
-            )])),
-            fail_keys: HashMap::from([unreadable("pipeline-b"), unreadable("pipeline-c")]),
-        };
+        let (db, pool) = meta_db(&[("recording_enabled:pipeline-a", "1")]).await;
+        make_unreadable(&pool, "recording_enabled:pipeline-b").await;
+        make_unreadable(&pool, "recording_enabled:pipeline-c").await;
         let engine = MediaEngine::new();
         let _recording = engine.register_recording("pipeline-b").await;
 
         let enabled = load_recording_enabled_map(
-            &store,
+            &db,
             &engine,
             &[
                 "pipeline-a".to_string(),
@@ -252,13 +227,10 @@ mod tests {
 
     #[tokio::test]
     async fn load_recording_settings_defaults_when_missing() {
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::new()),
-            fail_keys: HashMap::new(),
-        };
+        let (db, _pool) = meta_db(&[]).await;
 
         assert_eq!(
-            load_recording_settings(&store).await,
+            load_recording_settings(&db).await,
             RecordingSettings {
                 retain_source_ts: false,
             }
@@ -267,29 +239,20 @@ mod tests {
 
     #[tokio::test]
     async fn load_recording_settings_falls_back_to_default_on_malformed_json() {
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::from([(
-                RECORDING_SETTINGS_META_KEY.to_string(),
-                "{not valid json".to_string(),
-            )])),
-            fail_keys: HashMap::new(),
-        };
+        let (db, _pool) = meta_db(&[(RECORDING_SETTINGS_META_KEY, "{not valid json")]).await;
 
         assert_eq!(
-            load_recording_settings(&store).await,
+            load_recording_settings(&db).await,
             RecordingSettings::default()
         );
     }
 
     #[tokio::test]
     async fn save_recording_settings_serializes_to_meta_store() {
-        let store = FakeMetaStore {
-            values: Mutex::new(HashMap::new()),
-            fail_keys: HashMap::new(),
-        };
+        let (db, pool) = meta_db(&[]).await;
 
         save_recording_settings(
-            &store,
+            &db,
             &RecordingSettings {
                 retain_source_ts: true,
             },
@@ -298,12 +261,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            store
-                .values
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(RECORDING_SETTINGS_META_KEY)
-                .cloned(),
+            crate::db::get_meta(&pool, RECORDING_SETTINGS_META_KEY)
+                .await
+                .unwrap(),
             Some("{\"retainSourceTs\":true}".to_string())
         );
     }
@@ -443,25 +403,5 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("recording stage snapshot did not appear for planned key");
-    }
-
-    #[tokio::test]
-    async fn recording_settings_default_to_deleting_source_ts() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("in-memory sqlite should connect");
-        crate::db::setup_database_schema(&pool)
-            .await
-            .expect("schema should initialize");
-        let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(
-            crate::db::DeadlineDb::api(pool.clone()),
-        );
-
-        assert_eq!(
-            crate::application::recording::load_recording_settings(&meta_store).await,
-            RecordingSettings {
-                retain_source_ts: false
-            }
-        );
     }
 }

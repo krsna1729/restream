@@ -1,17 +1,17 @@
-//! Application-layer persistence adapter for ingest security configuration.
-//! This file owns the metadata key and JSON round-tripping between the
-//! `MetaStore` port and the domain config; validation semantics live in
+//! Persistence for ingest security configuration.
+//! This file owns the metadata key and JSON round-tripping between the meta
+//! table and the domain config; validation semantics live in
 //! `restream_domain::domain::ingest_security`, while runtime enforcement lives in
 //! `restream_engine::security`.
 
-use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
+use crate::db::DeadlineDb;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 
 pub const INGEST_SECURITY_CONFIG_META_KEY: &str = "ingest_security_config";
 
-pub async fn load_ingest_security_config(meta_store: &dyn MetaStore) -> IngestSecurityConfig {
-    let mut config = meta_store
-        .get_meta(INGEST_SECURITY_CONFIG_META_KEY)
+pub async fn load_ingest_security_config(db: &DeadlineDb) -> IngestSecurityConfig {
+    let mut config = db
+        .read(|pool| crate::db::get_meta(pool, INGEST_SECURITY_CONFIG_META_KEY))
         .await
         .ok()
         .flatten()
@@ -22,75 +22,55 @@ pub async fn load_ingest_security_config(meta_store: &dyn MetaStore) -> IngestSe
 }
 
 pub async fn save_ingest_security_config(
-    meta_store: &dyn MetaStoreWriter,
+    db: &DeadlineDb,
     config: &IngestSecurityConfig,
-) -> Result<(), MetaLookupError> {
+) -> Result<(), String> {
     let mut config = config.clone();
     config.normalize();
-    let raw =
-        serde_json::to_string(&config).map_err(|error| MetaLookupError::new(error.to_string()))?;
-    meta_store
-        .set_meta(INGEST_SECURITY_CONFIG_META_KEY, &raw)
-        .await
-        .map(|_| ())
+    let raw = serde_json::to_string(&config).map_err(|error| error.to_string())?;
+    db.write(move |pool| async move {
+        crate::db::set_meta(&pool, INGEST_SECURITY_CONFIG_META_KEY, &raw).await
+    })
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
-    use std::sync::Mutex;
+    use crate::infrastructure::bootstrap::test_support::memory_pool;
 
-    struct FakeMetaStore {
-        value: Mutex<Option<String>>,
-        fail: bool,
+    async fn db_with(value: Option<&str>) -> (DeadlineDb, sqlx::SqlitePool) {
+        let pool = memory_pool().await;
+        if let Some(value) = value {
+            crate::db::set_meta(&pool, INGEST_SECURITY_CONFIG_META_KEY, value)
+                .await
+                .unwrap();
+        }
+        (DeadlineDb::api(pool.clone()), pool)
     }
 
-    impl MetaStore for FakeMetaStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move {
-                if key != INGEST_SECURITY_CONFIG_META_KEY {
-                    return Err(MetaLookupError::new("unexpected key"));
-                }
-                if self.fail {
-                    return Err(MetaLookupError::new("db unavailable"));
-                }
-                Ok(restream_sync::lock::lock(&self.value).clone())
-            })
-        }
-    }
-
-    impl MetaStoreWriter for FakeMetaStore {
-        fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-            Box::pin(async move {
-                if key != INGEST_SECURITY_CONFIG_META_KEY {
-                    return Err(MetaLookupError::new("unexpected key"));
-                }
-                if self.fail {
-                    return Err(MetaLookupError::new("db unavailable"));
-                }
-                *restream_sync::lock::lock(&self.value) = Some(value.to_string());
-                Ok(value.to_string())
-            })
-        }
+    async fn persisted(pool: &sqlx::SqlitePool) -> IngestSecurityConfig {
+        let raw = crate::db::get_meta(pool, INGEST_SECURITY_CONFIG_META_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(&raw).unwrap()
     }
 
     #[tokio::test]
     async fn load_ingest_security_config_reads_valid_json() {
-        let store = FakeMetaStore {
-            value: Mutex::new(Some(
-                serde_json::json!({
-                    "failureLimit": 3,
-                    "failureWindowMs": 10_000,
-                    "banMs": 30_000,
-                    "trackedIpLimit": 42
-                })
-                .to_string(),
-            )),
-            fail: false,
-        };
+        let raw = serde_json::json!({
+            "failureLimit": 3,
+            "failureWindowMs": 10_000,
+            "banMs": 30_000,
+            "trackedIpLimit": 42
+        })
+        .to_string();
+        let (db, _pool) = db_with(Some(&raw)).await;
 
-        let config = load_ingest_security_config(&store).await;
+        let config = load_ingest_security_config(&db).await;
 
         assert_eq!(config.failure_limit, 3);
         assert_eq!(config.failure_window_ms, 10_000);
@@ -100,12 +80,10 @@ mod tests {
 
     #[tokio::test]
     async fn load_ingest_security_config_falls_back_to_default_on_error() {
-        let store = FakeMetaStore {
-            value: Mutex::new(Some("{\"failureLimit\":\"bad\"}".to_string())),
-            fail: true,
-        };
+        let (db, pool) = db_with(Some("{\"failureLimit\":\"bad\"}")).await;
+        pool.close().await;
 
-        let config = load_ingest_security_config(&store).await;
+        let config = load_ingest_security_config(&db).await;
         let default = IngestSecurityConfig::default();
 
         assert_eq!(config.failure_limit, default.failure_limit);
@@ -116,20 +94,16 @@ mod tests {
 
     #[tokio::test]
     async fn load_ingest_security_config_normalizes_persisted_values() {
-        let store = FakeMetaStore {
-            value: Mutex::new(Some(
-                serde_json::json!({
-                    "failureLimit": 0,
-                    "failureWindowMs": -10,
-                    "banMs": 0,
-                    "trackedIpLimit": -3
-                })
-                .to_string(),
-            )),
-            fail: false,
-        };
+        let raw = serde_json::json!({
+            "failureLimit": 0,
+            "failureWindowMs": -10,
+            "banMs": 0,
+            "trackedIpLimit": -3
+        })
+        .to_string();
+        let (db, _pool) = db_with(Some(&raw)).await;
 
-        let config = load_ingest_security_config(&store).await;
+        let config = load_ingest_security_config(&db).await;
 
         assert_eq!(config.failure_limit, 1);
         assert_eq!(config.failure_window_ms, 1);
@@ -139,10 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_ingest_security_config_serializes_to_meta_store() {
-        let store = FakeMetaStore {
-            value: Mutex::new(None),
-            fail: false,
-        };
+        let (db, pool) = db_with(None).await;
         let config = IngestSecurityConfig {
             failure_limit: 3,
             failure_window_ms: 10_000,
@@ -150,10 +121,9 @@ mod tests {
             tracked_ip_limit: 42,
         };
 
-        save_ingest_security_config(&store, &config).await.unwrap();
+        save_ingest_security_config(&db, &config).await.unwrap();
 
-        let persisted = restream_sync::lock::lock(&store.value).clone().unwrap();
-        let roundtrip: IngestSecurityConfig = serde_json::from_str(&persisted).unwrap();
+        let roundtrip = persisted(&pool).await;
         assert_eq!(roundtrip.failure_limit, config.failure_limit);
         assert_eq!(roundtrip.failure_window_ms, config.failure_window_ms);
         assert_eq!(roundtrip.ban_ms, config.ban_ms);
@@ -162,10 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_ingest_security_config_persists_normalized_values() {
-        let store = FakeMetaStore {
-            value: Mutex::new(None),
-            fail: false,
-        };
+        let (db, pool) = db_with(None).await;
         let config = IngestSecurityConfig {
             failure_limit: 0,
             failure_window_ms: -10,
@@ -173,10 +140,9 @@ mod tests {
             tracked_ip_limit: -3,
         };
 
-        save_ingest_security_config(&store, &config).await.unwrap();
+        save_ingest_security_config(&db, &config).await.unwrap();
 
-        let persisted = restream_sync::lock::lock(&store.value).clone().unwrap();
-        let roundtrip: IngestSecurityConfig = serde_json::from_str(&persisted).unwrap();
+        let roundtrip = persisted(&pool).await;
         assert_eq!(roundtrip.failure_limit, 1);
         assert_eq!(roundtrip.failure_window_ms, 1);
         assert_eq!(roundtrip.ban_ms, 1);

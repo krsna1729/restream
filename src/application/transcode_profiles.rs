@@ -2,7 +2,7 @@
 //! This file owns the meta-table key, JSON round-tripping, and syncing the
 //! persisted profile set into the runtime cache used by the media layer.
 
-use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
+use crate::db::DeadlineDb;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
 use tracing::{info, warn};
 
@@ -16,8 +16,11 @@ pub fn default_transcode_profiles() -> TranscodeProfiles {
     clippy::cognitive_complexity,
     reason = "predates the complexity limit; split it before growing it"
 )]
-pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
-    let profiles = match meta_store.get_meta(TRANSCODE_PROFILES_META_KEY).await {
+pub async fn load_transcode_profiles(db: &DeadlineDb) {
+    let stored = db
+        .read(|pool| crate::db::get_meta(pool, TRANSCODE_PROFILES_META_KEY))
+        .await;
+    let profiles = match stored {
         Ok(Some(json_str)) => match serde_json::from_str::<TranscodeProfiles>(&json_str) {
             Ok(p) if !p.is_empty() => {
                 info!(count = p.len(), "loaded profiles from meta store");
@@ -46,14 +49,15 @@ pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
 }
 
 pub async fn save_transcode_profiles(
-    meta_store: &dyn MetaStoreWriter,
+    db: &DeadlineDb,
     profiles: &TranscodeProfiles,
-) -> Result<(), MetaLookupError> {
-    let json =
-        serde_json::to_string(profiles).map_err(|error| MetaLookupError::new(error.to_string()))?;
-    meta_store
-        .set_meta(TRANSCODE_PROFILES_META_KEY, &json)
-        .await?;
+) -> Result<(), String> {
+    let json = serde_json::to_string(profiles).map_err(|error| error.to_string())?;
+    db.write(move |pool| async move {
+        crate::db::set_meta(&pool, TRANSCODE_PROFILES_META_KEY, &json).await
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     restream_engine::profiles::replace_runtime_profiles(profiles).await;
     info!(
         count = profiles.len(),
@@ -65,43 +69,8 @@ pub async fn save_transcode_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
+    use crate::infrastructure::bootstrap::test_support::memory_pool;
     use restream_domain::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
-    use std::sync::Mutex;
-
-    struct FakeMetaStore {
-        value: Mutex<Option<String>>,
-        fail: bool,
-    }
-
-    impl MetaStore for FakeMetaStore {
-        fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
-            Box::pin(async move {
-                if key != TRANSCODE_PROFILES_META_KEY {
-                    return Err(MetaLookupError::new("unexpected key"));
-                }
-                if self.fail {
-                    return Err(MetaLookupError::new("db unavailable"));
-                }
-                Ok(restream_sync::lock::lock(&self.value).clone())
-            })
-        }
-    }
-
-    impl MetaStoreWriter for FakeMetaStore {
-        fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
-            Box::pin(async move {
-                if key != TRANSCODE_PROFILES_META_KEY {
-                    return Err(MetaLookupError::new("unexpected key"));
-                }
-                if self.fail {
-                    return Err(MetaLookupError::new("db unavailable"));
-                }
-                *restream_sync::lock::lock(&self.value) = Some(value.to_string());
-                Ok(value.to_string())
-            })
-        }
-    }
 
     fn custom_profiles() -> TranscodeProfiles {
         TranscodeProfiles::from([(
@@ -122,12 +91,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_transcode_profiles_updates_runtime_cache_with_built_ins() {
-        let store = FakeMetaStore {
-            value: Mutex::new(None),
-            fail: false,
-        };
+        let db = DeadlineDb::api(memory_pool().await);
 
-        save_transcode_profiles(&store, &custom_profiles())
+        save_transcode_profiles(&db, &custom_profiles())
             .await
             .unwrap();
 
@@ -139,13 +105,13 @@ mod tests {
 
     #[tokio::test]
     async fn load_transcode_profiles_populates_runtime_cache_with_built_ins() {
+        let pool = memory_pool().await;
         let raw = serde_json::to_string(&custom_profiles()).unwrap();
-        let store = FakeMetaStore {
-            value: Mutex::new(Some(raw)),
-            fail: false,
-        };
+        crate::db::set_meta(&pool, TRANSCODE_PROFILES_META_KEY, &raw)
+            .await
+            .unwrap();
 
-        load_transcode_profiles(&store).await;
+        load_transcode_profiles(&DeadlineDb::api(pool)).await;
 
         let runtime = restream_engine::profiles::current_effective().await;
         assert!(runtime.contains_key("h264"));

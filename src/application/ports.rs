@@ -2,7 +2,7 @@
 //! that orchestration code depends on.
 
 use crate::application::notify::PushSubscription;
-use restream_domain::models::{Ingest, Job, Pipeline};
+use restream_domain::models::{Ingest, Pipeline};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -27,30 +27,8 @@ pub type IngestUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Ingest>, IngestWriteError>> + Send + 'a>>;
 pub type IngestDeleteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, IngestWriteError>> + Send + 'a>>;
-pub type MetaLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<String>, MetaLookupError>> + Send + 'a>>;
-pub type MetaWriteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<String, MetaLookupError>> + Send + 'a>>;
-pub type JobListFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<Job>, JobStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
-pub type RecordingListFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<Vec<RecordingCatalogRow>, RecordingStoreError>> + Send + 'a>,
->;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordingCatalogRow {
-    pub recording_id: String,
-    pub pipeline_id: String,
-    pub started_at: String,
-    pub ended_at: Option<String>,
-    pub status: String,
-    pub temp_path: Option<String>,
-    pub final_path: Option<String>,
-    pub codec_summary: Option<String>,
-    pub error: Option<String>,
-}
 
 /// The error every store port returns: what failed, as text. Each port keeps
 /// its own name for readability; they are one type.
@@ -80,12 +58,6 @@ pub type PipelineStoreError = StoreError;
 pub type IngestLookupError = StoreError;
 
 pub type IngestWriteError = StoreError;
-
-pub type MetaLookupError = StoreError;
-
-pub type JobStoreError = StoreError;
-
-pub type RecordingStoreError = StoreError;
 
 pub trait PipelineStore: Send + Sync {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
@@ -177,19 +149,6 @@ pub trait IngestWriter: Send + Sync {
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a>;
 }
 
-pub trait MetaStore: Send + Sync {
-    fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a>;
-}
-
-pub trait MetaStoreWriter: Send + Sync {
-    fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a>;
-}
-
-pub trait IngestHostStore: Send + Sync {
-    fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a>;
-    fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a>;
-}
-
 /// How one HTTP attempt ended: the status it got, or why it got none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostOutcome {
@@ -226,12 +185,4 @@ pub trait NotifyTransport: Send + Sync {
     ) -> PostFuture<'a>;
     /// The VAPID public key browsers subscribe with (base64url).
     fn push_public_key(&self) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>>;
-}
-
-pub trait JobStore: Send + Sync {
-    fn list_jobs<'a>(&'a self) -> JobListFuture<'a>;
-}
-
-pub trait RecordingStore: Send + Sync {
-    fn list_recordings<'a>(&'a self) -> RecordingListFuture<'a>;
 }

@@ -1,11 +1,9 @@
 use super::*;
 use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture, IngestUpdateFuture,
-    IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError, MetaStoreWriter,
-    MetaWriteFuture,
+    IngestWriteError, IngestWriteFuture, IngestWriter,
 };
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
-use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
 use restream_domain::domain::ids::RecordingId;
 use restream_domain::models::Ingest;
 use std::sync::Mutex;
@@ -57,12 +55,20 @@ struct RenameRollbackIngestStore {
     fail_filename: String,
 }
 
-struct FailingMetaWriter;
-
-impl MetaStoreWriter for FailingMetaWriter {
-    fn set_meta<'a>(&'a self, _key: &'a str, _value: &'a str) -> MetaWriteFuture<'a> {
-        Box::pin(async move { Err(MetaLookupError::new("injected meta write failure")) })
+/// An in-memory database whose meta writes fail, as an unavailable store's
+/// would.
+async fn failing_meta_writes_pool() -> sqlx::SqlitePool {
+    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    for trigger in [
+        "CREATE TRIGGER fail_meta_insert BEFORE INSERT ON meta \
+         BEGIN SELECT RAISE(ABORT, 'injected meta write failure'); END",
+        "CREATE TRIGGER fail_meta_update BEFORE UPDATE ON meta \
+         BEGIN SELECT RAISE(ABORT, 'injected meta write failure'); END",
+    ] {
+        sqlx::query(trigger).execute(&pool).await.unwrap();
     }
+    pool
 }
 
 impl RenameRollbackIngestStore {
@@ -443,16 +449,8 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
         new_name,
     ));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
+    let service = MediaLibraryService::new(
+        crate::db::DeadlineDb::api(pool.clone()),
         sqlite_pipeline_service(&pool),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
@@ -658,16 +656,8 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
     };
     let ingest_store = Arc::new(ConcurrentWriteIngestStore::new(ingest, "sk-rotated"));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
+    let service = MediaLibraryService::new(
+        crate::db::DeadlineDb::api(pool.clone()),
         sqlite_pipeline_service(&pool),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
@@ -696,16 +686,9 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
 
 #[tokio::test]
 async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    crate::db::setup_database_schema(&pool).await.unwrap();
-    let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(FailingMetaWriter),
-        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
+    let pool = failing_meta_writes_pool().await;
+    let service = MediaLibraryService::new(
+        crate::db::DeadlineDb::api(pool.clone()),
         sqlite_pipeline_service(&pool),
         sqlite_ingest_service(&pool),
     );
@@ -734,16 +717,9 @@ async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
 
 #[tokio::test]
 async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    crate::db::setup_database_schema(&pool).await.unwrap();
-    let service = MediaLibraryService::with_stores(
-        Arc::new(SqliteMetaStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        Arc::new(FailingMetaWriter),
-        Arc::new(SqliteRecordingStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
+    let pool = failing_meta_writes_pool().await;
+    let service = MediaLibraryService::new(
+        crate::db::DeadlineDb::api(pool.clone()),
         sqlite_pipeline_service(&pool),
         sqlite_ingest_service(&pool),
     );

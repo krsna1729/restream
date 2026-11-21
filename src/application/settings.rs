@@ -1,11 +1,11 @@
 //! Application-layer settings orchestration that assembles persisted config and
 //! runtime-backed defaults into the snapshot exposed by the API layer.
 //! This file owns cross-source settings reads; HTTP response shaping remains in
-//! `crate::api`, while persistence details stay behind the existing ports.
+//! `crate::api`.
 
-use crate::application::ports::{IngestHostStore, MetaStore};
 use crate::application::recording::load_recording_settings;
 use crate::application::srt_ingest::load_global_srt_ingest_config;
+use crate::db::DeadlineDb;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
@@ -23,20 +23,19 @@ pub struct SettingsSnapshot {
 }
 
 pub async fn load_settings_snapshot(
-    meta_store: &dyn MetaStore,
-    ingest_host_store: &dyn IngestHostStore,
+    db: &DeadlineDb,
     security: &IngestSecurityService,
 ) -> Result<SettingsSnapshot, Box<dyn std::error::Error + Send + Sync>> {
-    let server_name = meta_store
-        .get_meta("server_name")
+    let server_name = db
+        .read(|pool| crate::db::get_meta(pool, "server_name"))
         .await?
         .unwrap_or_else(|| "Name".to_string());
-    let ingest_host = ingest_host_store
-        .get_ingest_host()
+    let ingest_host = db
+        .read(crate::db::get_ingest_host)
         .await?
         .unwrap_or_default();
-    let recording_settings = load_recording_settings(meta_store).await;
-    let srt_ingest = load_global_srt_ingest_config(meta_store, None, 16).await;
+    let recording_settings = load_recording_settings(db).await;
+    let srt_ingest = load_global_srt_ingest_config(db, None, 16).await;
     let transcode_profiles = restream_engine::profiles::current_effective().await;
 
     Ok(SettingsSnapshot {
@@ -53,7 +52,6 @@ pub async fn load_settings_snapshot(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::infrastructure::sqlite_ports::SqliteMetaStore;
     use restream_domain::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use restream_engine::security::IngestSecurityService;
 
@@ -69,8 +67,7 @@ mod tests {
             .unwrap();
 
         let security = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
-        let store = SqliteMetaStore::new(crate::db::DeadlineDb::api(pool.clone()));
-        let snapshot = load_settings_snapshot(&store, &store, &security)
+        let snapshot = load_settings_snapshot(&crate::db::DeadlineDb::api(pool.clone()), &security)
             .await
             .unwrap();
 

@@ -38,6 +38,46 @@ impl JobStatusRecord {
     }
 }
 
+impl From<restream_domain::models::JobStatus> for JobStatusRecord {
+    fn from(status: restream_domain::models::JobStatus) -> Self {
+        use restream_domain::models::JobStatus;
+        match status {
+            JobStatus::Running => Self::Running,
+            JobStatus::Stopped => Self::Stopped,
+            JobStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<JobStatusRecord> for restream_domain::models::JobStatus {
+    fn from(status: JobStatusRecord) -> Self {
+        match status {
+            JobStatusRecord::Running => Self::Running,
+            JobStatusRecord::Stopped => Self::Stopped,
+            JobStatusRecord::Failed => Self::Failed,
+        }
+    }
+}
+
+impl PartialEq<restream_domain::models::JobStatus> for JobStatusRecord {
+    fn eq(&self, other: &restream_domain::models::JobStatus) -> bool {
+        restream_domain::models::JobStatus::from(*self) == *other
+    }
+}
+
+impl From<JobRecord> for restream_domain::models::Job {
+    fn from(record: JobRecord) -> Self {
+        Self {
+            id: record.id,
+            pipeline_id: record.pipeline_id,
+            output_id: record.output_id,
+            status: record.status.into(),
+            started_at: record.started_at,
+            ended_at: record.ended_at,
+        }
+    }
+}
+
 impl FromStr for JobStatusRecord {
     type Err = &'static str;
 
