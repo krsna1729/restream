@@ -55,10 +55,6 @@ impl AdtsFraming {
     /// timestamp belongs to the first frame that starts in the PES, and each
     /// frame after steps by 1024 samples. A frame cut at the PES end is kept
     /// and completed by the next PES.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     pub(super) fn frame(
         &mut self,
         payload: Bytes,
@@ -69,39 +65,14 @@ impl AdtsFraming {
         let data = payload;
         let mut first = None;
         let mut expected = self.next;
-        let mut resume = None;
-        if !self.carry.is_empty() {
-            match self.complete_carry(&data) {
-                Carried::Completed { frame, consumed } => {
-                    // The carried frame keeps the time it started with.
-                    match (expected, step_90k(&frame)) {
-                        (Some((pts, dts)), Some(step)) => {
-                            let unit = Bytes::from(frame);
-                            first = Some(unit.clone());
-                            push(output, track_index, pts, dts, unit);
-                            expected = Some((pts.saturating_add(step), dts.saturating_add(step)));
-                        }
-                        _ => debug!(
-                            target: "restream_engine::mpegts::demux::adts",
-                            track = track_index,
-                            "a carried AAC frame with no time or rate to give it; dropped"
-                        ),
-                    }
-                    resume = Some(consumed);
-                }
-                Carried::Pending => return Framed::Frames { first: None },
-                Carried::Rejected => {
-                    // Its time goes with it: a PES without a PTS must not
-                    // take the dropped frame's slot.
-                    expected = None;
-                    debug!(
-                        target: "restream_engine::mpegts::demux::adts",
-                        track = track_index,
-                        "an AAC frame the last PES ended inside does not continue in this one; dropped"
-                    );
-                }
+        let resume = if self.carry.is_empty() {
+            None
+        } else {
+            match self.finish_carry(&data, track_index, output, &mut first, &mut expected) {
+                Some(resume) => resume,
+                None => return Framed::Frames { first: None },
             }
-        }
+        };
         let carried = resume.is_some();
 
         let start = match resume {
@@ -124,11 +95,7 @@ impl AdtsFraming {
             // The first frame that starts in this PES takes its timestamp.
             let at = pes_first.take().or(expected);
             let Some((pts, dts)) = at else {
-                debug!(
-                    target: "restream_engine::mpegts::demux::adts",
-                    track = track_index,
-                    "AAC frame with no timestamp to give it; dropped"
-                );
+                log_untimed_frame(track_index);
                 break;
             };
             match frame_len(rest) {
@@ -140,12 +107,7 @@ impl AdtsFraming {
                             self.next = None;
                             return Framed::Whole(data.slice(start..));
                         }
-                        debug!(
-                            target: "restream_engine::mpegts::demux::adts",
-                            track = track_index,
-                            dropped = rest.len(),
-                            "AAC frames with no known sample rate after timed ones; dropped"
-                        );
+                        log_unrated_frames(track_index, rest.len());
                         break;
                     };
                     let unit = data.slice(offset..offset.saturating_add(len));
@@ -167,12 +129,7 @@ impl AdtsFraming {
                     return Framed::Frames { first };
                 }
                 None => {
-                    debug!(
-                        target: "restream_engine::mpegts::demux::adts",
-                        track = track_index,
-                        dropped = rest.len(),
-                        "AAC PES bytes after its last frame are not a frame; dropped"
-                    );
+                    log_unframed_tail(track_index, rest.len());
                     break;
                 }
             }
@@ -182,6 +139,48 @@ impl AdtsFraming {
             self.framed = true;
         }
         Framed::Frames { first }
+    }
+
+    /// Completes the frame the last PES ended inside and pushes it on the
+    /// time it started with. `None` while it is still incomplete; else
+    /// where this PES's own frames resume (`None` when it was rejected, its
+    /// time dropped with it so a PES without a PTS cannot take its slot).
+    fn finish_carry(
+        &mut self,
+        data: &[u8],
+        track_index: u32,
+        output: &mut Vec<MediaPacket>,
+        first: &mut Option<Bytes>,
+        expected: &mut Option<(i64, i64)>,
+    ) -> Option<Option<usize>> {
+        match self.complete_carry(data) {
+            Carried::Completed { frame, consumed } => {
+                match (*expected, step_90k(&frame)) {
+                    (Some((pts, dts)), Some(step)) => {
+                        let unit = Bytes::from(frame);
+                        *first = Some(unit.clone());
+                        push(output, track_index, pts, dts, unit);
+                        *expected = Some((pts.saturating_add(step), dts.saturating_add(step)));
+                    }
+                    _ => debug!(
+                        target: "restream_engine::mpegts::demux::adts",
+                        track = track_index,
+                        "a carried AAC frame with no time or rate to give it; dropped"
+                    ),
+                }
+                Some(Some(consumed))
+            }
+            Carried::Pending => None,
+            Carried::Rejected => {
+                *expected = None;
+                debug!(
+                    target: "restream_engine::mpegts::demux::adts",
+                    track = track_index,
+                    "an AAC frame the last PES ended inside does not continue in this one; dropped"
+                );
+                Some(None)
+            }
+        }
     }
 
     /// Join the carried frame start with what of `data` completes it, copying
@@ -249,6 +248,35 @@ impl AdtsFraming {
             dropped, "AAC PES holds no frame start; dropped"
         );
     }
+}
+
+#[cold]
+fn log_untimed_frame(track_index: u32) {
+    debug!(
+        target: "restream_engine::mpegts::demux::adts",
+        track = track_index,
+        "AAC frame with no timestamp to give it; dropped"
+    );
+}
+
+#[cold]
+fn log_unrated_frames(track_index: u32, dropped: usize) {
+    debug!(
+        target: "restream_engine::mpegts::demux::adts",
+        track = track_index,
+        dropped,
+        "AAC frames with no known sample rate after timed ones; dropped"
+    );
+}
+
+#[cold]
+fn log_unframed_tail(track_index: u32, dropped: usize) {
+    debug!(
+        target: "restream_engine::mpegts::demux::adts",
+        track = track_index,
+        dropped,
+        "AAC PES bytes after its last frame are not a frame; dropped"
+    );
 }
 
 fn push(output: &mut Vec<MediaPacket>, track_index: u32, pts: i64, dts: i64, payload: Bytes) {
