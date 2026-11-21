@@ -36,10 +36,8 @@ pub(super) fn run() -> WorkflowResult {
     for package in &scope.packages {
         clippy(package, &["--all-targets"])?;
     }
-    for (package, name) in scope.tests {
-        if !scope.packages.contains(package) {
-            clippy(package, &["--test", name])?;
-        }
+    for (package, name) in scope.standalone_tests() {
+        clippy(package, &["--test", name])?;
     }
     Ok(())
 }
@@ -55,6 +53,13 @@ struct Scope<'a> {
 }
 
 impl<'a> Scope<'a> {
+    fn standalone_tests(&self) -> impl Iterator<Item = (&'a str, &'a str)> + '_ {
+        self.tests
+            .iter()
+            .copied()
+            .filter(|(package, _)| !self.packages.contains(package))
+    }
+
     fn add(&mut self, path: &'a str, deleted: bool) {
         let outside_workspace = path.starts_with("vendor/") || path.starts_with("fuzz/");
         let shared = outside_workspace
@@ -123,4 +128,65 @@ fn clippy(package: &str, scope: &[&str]) -> WorkflowResult {
             .args(scope)
             .args(["--", "-D", "warnings"]),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scope;
+
+    #[test]
+    fn docs_only_does_not_schedule_rust_checks() {
+        let mut scope = Scope::default();
+        scope.add("docs/development.md", false);
+        assert!(scope.docs);
+        assert!(!scope.rust && !scope.source && !scope.shared);
+        assert!(scope.packages.is_empty() && scope.standalone_tests().next().is_none());
+    }
+
+    #[test]
+    fn package_changes_subsume_standalone_tests_in_that_package_only() {
+        let mut scope = Scope::default();
+        scope.add("tests/hls_push_ingest.rs", false);
+        scope.add("crates/restream-http/tests/trust_roots.rs", false);
+        assert_eq!(
+            scope.standalone_tests().collect::<Vec<_>>(),
+            [
+                ("restream", "hls_push_ingest"),
+                ("restream-http", "trust_roots")
+            ]
+        );
+        assert!(scope.packages.is_empty());
+
+        scope.add("tests/api/ingests.rs", false);
+        assert_eq!(
+            scope.packages.iter().copied().collect::<Vec<_>>(),
+            ["restream"]
+        );
+        assert_eq!(
+            scope.standalone_tests().collect::<Vec<_>>(),
+            [("restream-http", "trust_roots")]
+        );
+    }
+
+    #[test]
+    fn deleted_test_is_not_a_target_and_deleted_member_is_not_a_package() {
+        let mut scope = Scope::default();
+        scope.add("tests/removed_test.rs", true);
+        scope.add("crates/precommit-deleted-member/src/lib.rs", true);
+        assert!(scope.shared && scope.docs && scope.rust && scope.source);
+        assert_eq!(
+            scope.packages.iter().copied().collect::<Vec<_>>(),
+            ["restream"]
+        );
+        assert!(scope.standalone_tests().next().is_none());
+    }
+
+    #[test]
+    fn shared_config_requests_workspace_check_without_scheduling_package_clippy() {
+        let mut scope = Scope::default();
+        scope.add(".cargo/config.toml", false);
+        assert!(scope.shared && scope.rust && scope.source);
+        assert!(!scope.docs);
+        assert!(scope.packages.is_empty() && scope.standalone_tests().next().is_none());
+    }
 }
