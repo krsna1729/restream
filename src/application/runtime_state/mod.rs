@@ -225,10 +225,6 @@ pub struct Rows<'a> {
 /// Projects every entity from its rows and the engine's runtime maps. Each
 /// engine map is read once, so the projection is consistent per map and
 /// costs one pass over the outputs.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: u32) -> Projection {
     let Rows {
         pipelines,
@@ -236,37 +232,8 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
         inputs,
         endpoints,
     } = *rows;
-    let ingests: HashMap<String, IngestState> = engine
-        .ingests
-        .active
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, ingest)| {
-            let metadata = ingest.metadata();
-            (
-                pipeline_id.clone(),
-                IngestState {
-                    input_id: ingest.input_id.clone(),
-                    protocol: ingest.protocol.clone(),
-                    video_codec: metadata.video.map(|video| video.codec),
-                    bonded: metadata.quality.srt_bonded == Some(true),
-                    since_ms: 0,
-                },
-            )
-        })
-        .collect();
-    // Every connected input session (a configured file source too) that is
-    // not its pipeline's selected one is a warm standby.
-    let mut standby: HashMap<String, u32> = HashMap::new();
-    for session in engine.ingests.sessions.read().await.values() {
-        let selected = ingests
-            .get(&session.pipeline_id)
-            .is_some_and(|ingest| ingest.input_id == session.input_id);
-        if !selected {
-            *standby.entry(session.pipeline_id.clone()).or_default() += 1;
-        }
-    }
+    let ingests = read_ingests(engine).await;
+    let standby = count_standby_inputs(engine, &ingests).await;
     let recording: std::collections::HashSet<String> = engine
         .recordings
         .cancel_tokens
@@ -297,42 +264,8 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
             })
         })
         .collect();
-    let mut shards: HashMap<String, HashMap<u32, ShardHealth>> = HashMap::new();
-    for status in engine
-        .egress_fabric_shard_statuses(
-            restream_engine::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
-        )
-        .await
-    {
-        use restream_engine::egress::shard::EgressShardHealth as Health;
-        let health = match status.state {
-            Health::Healthy => ShardHealth::Healthy,
-            Health::Stalled => ShardHealth::Stalled,
-            Health::Stopped => ShardHealth::Stopped,
-            Health::Panicked => ShardHealth::Panicked,
-        };
-        shards
-            .entry(status.feed_id)
-            .or_default()
-            .insert(status.shard_index, health);
-    }
-    // Outputs share stages: look each terminal stage up once, with the
-    // egress map released (the stage registries are separate locks).
-    let terminal_keys: std::collections::HashSet<_> = engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .filter_map(|egress| egress.terminal_stage_key.clone())
-        .collect();
-    let mut blocked = HashMap::new();
-    for key in terminal_keys {
-        if let Some(stage) = engine.egress_blocked_by_stage_snapshot(&key).await {
-            let phase = restream_domain::runtime::stage::phase_name(&stage.phase).to_string();
-            blocked.insert(key, (stage.key.to_string(), phase));
-        }
-    }
+    let shards = read_shard_health(engine).await;
+    let blocked = read_blocked_terminals(engine).await;
     let context = ProjectContext {
         shards: &shards,
         blocked: &blocked,
@@ -367,6 +300,105 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
         );
     }
     projection.inputs = inputs::project_inputs(engine, inputs, endpoints).await;
+    projection.graphs = project_graphs(engine, pipelines, outputs).await;
+    projection
+}
+
+async fn read_ingests(engine: &MediaEngine) -> HashMap<String, IngestState> {
+    engine
+        .ingests
+        .active
+        .read()
+        .await
+        .iter()
+        .map(|(pipeline_id, ingest)| {
+            let metadata = ingest.metadata();
+            (
+                pipeline_id.clone(),
+                IngestState {
+                    input_id: ingest.input_id.clone(),
+                    protocol: ingest.protocol.clone(),
+                    video_codec: metadata.video.map(|video| video.codec),
+                    bonded: metadata.quality.srt_bonded == Some(true),
+                    since_ms: 0,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Every connected input session (a configured file source too) that is
+/// not its pipeline's selected one is a warm standby.
+async fn count_standby_inputs(
+    engine: &MediaEngine,
+    ingests: &HashMap<String, IngestState>,
+) -> HashMap<String, u32> {
+    let mut standby: HashMap<String, u32> = HashMap::new();
+    for session in engine.ingests.sessions.read().await.values() {
+        let selected = ingests
+            .get(&session.pipeline_id)
+            .is_some_and(|ingest| ingest.input_id == session.input_id);
+        if !selected {
+            *standby.entry(session.pipeline_id.clone()).or_default() += 1;
+        }
+    }
+    standby
+}
+
+/// Feed id -> shard index -> health.
+async fn read_shard_health(engine: &MediaEngine) -> HashMap<String, HashMap<u32, ShardHealth>> {
+    use restream_engine::egress::shard::EgressShardHealth as Health;
+    let mut shards: HashMap<String, HashMap<u32, ShardHealth>> = HashMap::new();
+    for status in engine
+        .egress_fabric_shard_statuses(
+            restream_engine::engine_egress_fabric_diagnostics::SHARD_STALL_AFTER,
+        )
+        .await
+    {
+        let health = match status.state {
+            Health::Healthy => ShardHealth::Healthy,
+            Health::Stalled => ShardHealth::Stalled,
+            Health::Stopped => ShardHealth::Stopped,
+            Health::Panicked => ShardHealth::Panicked,
+        };
+        shards
+            .entry(status.feed_id)
+            .or_default()
+            .insert(status.shard_index, health);
+    }
+    shards
+}
+
+/// Terminal stages not producing: key -> (blocking stage, phase). Outputs
+/// share stages: each terminal stage is looked up once, with the egress
+/// map released (the stage registries are separate locks).
+async fn read_blocked_terminals(
+    engine: &MediaEngine,
+) -> HashMap<restream_domain::domain::stage::StageKey, (String, String)> {
+    let terminal_keys: std::collections::HashSet<_> = engine
+        .egresses
+        .active
+        .read()
+        .await
+        .values()
+        .filter_map(|egress| egress.terminal_stage_key.clone())
+        .collect();
+    let mut blocked = HashMap::new();
+    for key in terminal_keys {
+        if let Some(stage) = engine.egress_blocked_by_stage_snapshot(&key).await {
+            let phase = restream_domain::runtime::stage::phase_name(&stage.phase).to_string();
+            blocked.insert(key, (stage.key.to_string(), phase));
+        }
+    }
+    blocked
+}
+
+/// Each pipeline's graph over its own outputs.
+async fn project_graphs(
+    engine: &MediaEngine,
+    pipelines: &[crate::db::PipelineRecord],
+    outputs: &[Output],
+) -> BTreeMap<String, graph::PipelineGraph> {
     let pipeline_ids: Vec<&str> = pipelines
         .iter()
         .map(|pipeline| pipeline.id.as_str())
@@ -379,14 +411,16 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
             .or_default()
             .push(output);
     }
-    for pipeline_id in pipeline_ids {
-        let own = outputs_of.get(pipeline_id).map_or(&[][..], Vec::as_slice);
-        projection.graphs.insert(
-            pipeline_id.to_string(),
-            graph::pipeline_graph(pipeline_id, own, &runtime),
-        );
-    }
-    projection
+    pipeline_ids
+        .into_iter()
+        .map(|pipeline_id| {
+            let own = outputs_of.get(pipeline_id).map_or(&[][..], Vec::as_slice);
+            (
+                pipeline_id.to_string(),
+                graph::pipeline_graph(pipeline_id, own, &runtime),
+            )
+        })
+        .collect()
 }
 
 /// Engine state read once per projection and shared by every output.
