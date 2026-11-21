@@ -295,44 +295,12 @@ async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
 /// video playlist ahead of the master looks like another variant's. Its
 /// first segment stays held until the master selects it, so every frame
 /// reaches the ring, both renditions merged in DTS order.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "reads FFmpeg's stderr on success, which `run_tool` drops; bounded by the timeout below"
-)]
 #[tokio::test]
 async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     let dir =
         std::env::temp_dir().join(format!("restream-hls-renditions-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).unwrap();
-    // FFmpeg runs in `dir`, so its binary and input need absolute paths.
-    let ffmpeg = std::path::absolute(restream_engine::ffmpeg_binary::ffmpeg_bin_path()).unwrap();
-    let fixture = std::path::absolute(Codec::H264.fixture()).unwrap();
-    let output = tokio::process::Command::new(ffmpeg)
-        .current_dir(&dir)
-        // `info` logs every object FFmpeg opens for writing, in its order.
-        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-i"])
-        .arg(fixture)
-        .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
-        .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
-        .args(["-hls_list_size", "0", "-hls_segment_type", "fmp4"])
-        .args([
-            "-var_stream_map",
-            "v:0,agroup:aud a:0,agroup:aud,default:yes",
-        ])
-        .args(["-master_pl_name", "master.m3u8", "stream_%v/index.m3u8"])
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let output = tokio::time::timeout(Duration::from_secs(60), output)
-        .await
-        .expect("ffmpeg finished")
-        .expect("ffmpeg ran");
-    assert!(
-        output.status.success(),
-        "ffmpeg exited with {}",
-        output.status
-    );
-    let log = String::from_utf8(output.stderr).unwrap();
+    let log = generate_separate_renditions(&dir).await;
     let writes: Vec<&str> = log
         .lines()
         .filter_map(|line| {
@@ -468,6 +436,42 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
         );
         newest = newest.max(packet.dts);
     }
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads FFmpeg's stderr on success, which `run_tool` drops; bounded by the timeout below"
+)]
+async fn generate_separate_renditions(dir: &std::path::Path) -> String {
+    // FFmpeg runs in `dir`, so its binary and input need absolute paths.
+    let ffmpeg = std::path::absolute(restream_engine::ffmpeg_binary::ffmpeg_bin_path()).unwrap();
+    let fixture = std::path::absolute(Codec::H264.fixture()).unwrap();
+    let output = tokio::process::Command::new(ffmpeg)
+        .current_dir(dir)
+        // `info` logs every object FFmpeg opens for writing, in its order.
+        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-i"])
+        .arg(fixture)
+        .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
+        .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
+        .args(["-hls_list_size", "0", "-hls_segment_type", "fmp4"])
+        .args([
+            "-var_stream_map",
+            "v:0,agroup:aud a:0,agroup:aud,default:yes",
+        ])
+        .args(["-master_pl_name", "master.m3u8", "stream_%v/index.m3u8"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(60), output)
+        .await
+        .expect("ffmpeg finished")
+        .expect("ffmpeg ran");
+    assert!(
+        output.status.success(),
+        "ffmpeg exited with {}",
+        output.status
+    );
+    String::from_utf8(output.stderr).unwrap()
 }
 
 /// What a live `-hls_list_size 3` push uploads for `playlist` once the
