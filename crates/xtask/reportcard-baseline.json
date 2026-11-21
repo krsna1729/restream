@@ -35,7 +35,5 @@
   "crates/restream-mpegts/src/mux.rs::TsMuxer::mux_packet_at#0": 33,
   "crates/restream-mpegts/src/probe/h265.rs::parse_sps#0": 165,
   "crates/restream-rtmp/src/flv.rs::flv_video_config#0": 26,
-  "crates/restream-rtmp/src/flv.rs::parse_flv_audio_meta#0": 36,
-  "src/application/runtime_state/mod.rs::project_output#0": 23,
-  "src/application/services/agent_service.rs::AgentService::apply_output_mutation#0": 23
+  "crates/restream-rtmp/src/flv.rs::parse_flv_audio_meta#0": 36
 }
