@@ -31,11 +31,6 @@ pub struct SqliteMetaStore {
 }
 
 #[derive(Clone)]
-pub struct SqliteSessionStore {
-    db: DeadlineDb,
-}
-
-#[derive(Clone)]
 pub struct SqliteJobStore {
     db: DeadlineDb,
 }
@@ -58,12 +53,6 @@ impl SqliteIngestLookup {
 }
 
 impl SqliteMetaStore {
-    pub fn new(db: DeadlineDb) -> Self {
-        Self { db }
-    }
-}
-
-impl SqliteSessionStore {
     pub fn new(db: DeadlineDb) -> Self {
         Self { db }
     }
@@ -445,70 +434,6 @@ impl IngestHostStore for SqliteMetaStore {
                 .write(move |pool| async move { crate::db::set_ingest_host(&pool, &host).await })
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
-        })
-    }
-}
-
-impl SessionStore for SqliteSessionStore {
-    fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a> {
-        Box::pin(async move {
-            let token = token.to_owned();
-            self.db
-                .write(
-                    move |pool| async move { crate::db::create_session(&pool, &token, ts).await },
-                )
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
-        })
-    }
-
-    fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
-        Box::pin(async move {
-            let token = token.to_owned();
-            self.db
-                .write(move |pool| async move { crate::db::delete_session(&pool, &token).await })
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
-        })
-    }
-
-    fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
-        Box::pin(async move {
-            let token = token.to_owned();
-            self.db.write(move |pool| async move {
-                crate::db::delete_sessions_except(&pool, &token).await
-            })
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
-        })
-    }
-
-    fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(|pool| crate::db::get_session_created_at(pool, token))
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
-        })
-    }
-
-    fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .write(move |pool| async move {
-                    crate::db::prune_expired_sessions(&pool, max_age_ms).await
-                })
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
-        })
-    }
-
-    fn list_sessions<'a>(&'a self) -> SessionListFuture<'a> {
-        Box::pin(async move {
-            self.db
-                .read(crate::db::list_sessions)
-                .await
-                .map_err(|err| SessionStoreError::new(err.to_string()))
         })
     }
 }

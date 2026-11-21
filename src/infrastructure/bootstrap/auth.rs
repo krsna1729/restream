@@ -8,7 +8,6 @@ use tracing::{info, warn};
 use crate::api::auth::hash_password;
 use crate::api::state::{BOOTSTRAP_PASSWORD_PROMPT_META_KEY, SESSION_MAX_AGE_SECONDS, to_hex};
 use crate::application::services::AuthService;
-use crate::infrastructure::service_wiring::SqliteServiceFactory;
 
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
 const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
@@ -77,7 +76,7 @@ pub async fn initialize_auth_for_test(
     sessions: &RwLock<HashSet<String>>,
     password: &str,
 ) {
-    let auth_service = SqliteServiceFactory::new(pool).auth_service();
+    let auth_service = AuthService::new(crate::db::DeadlineDb::api(pool.clone()));
     auth_service
         .set_password_hash(&hash_password(password))
         .await

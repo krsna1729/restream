@@ -682,8 +682,9 @@ flowchart TD
 | `restream-agent-contract` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
 
 Application services hold a `DeadlineDb` and call `crate::db` directly, as
-`TeamService`, `NotifyService`, `RecirculationService`, `application::outputs`
-and `application::topology` do. The remaining `application::ports` traits with
+`AuthService`, `TeamService`, `NotifyService`, `RecirculationService`,
+`application::outputs` and `application::topology` do. The remaining
+`application::ports` traits with
 one SQLite adapter each in `infrastructure::sqlite_ports` are being removed
 (backlog Q-118); a port stays only for an effect tests must script, such as
 `NotifyTransport`'s HTTP sends.
