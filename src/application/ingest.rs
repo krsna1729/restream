@@ -3,17 +3,8 @@
 //! [`crate::application::catalog_auth`].
 
 use crate::db::{self, DeadlineDb};
-use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
-use std::{future::Future, pin::Pin};
-
-pub type PipelineInputLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<PipelineInput>, sqlx::Error>> + Send + 'a>>;
-
-pub trait PipelineInputLookup: Send + Sync {
-    fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a>;
-}
 
 #[derive(Debug)]
 pub struct FileIngestContext {

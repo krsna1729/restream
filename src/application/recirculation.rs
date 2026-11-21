@@ -152,121 +152,11 @@ fn recirculation_edges(outputs: &[Output]) -> HashMap<&str, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::catalog_auth::CatalogAuth;
     use crate::application::services::PipelineService;
     use restream_domain::domain::output_spec::OutputConfig;
-    use restream_domain::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+    use restream_domain::domain::pipeline_input::{PipelineInputRole, PipelineInputSource};
     use restream_domain::domain::state::DesiredOutputState;
-    use std::sync::Arc;
-
-    struct ReadOnlyInputStore {
-        inputs: Vec<PipelineInput>,
-    }
-
-    impl crate::application::pipeline_inputs::PipelineInputStore for ReadOnlyInputStore {
-        fn get<'a>(
-            &'a self,
-            pipeline_id: &'a str,
-            input_id: &'a str,
-        ) -> crate::application::pipeline_inputs::InputLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .inputs
-                    .iter()
-                    .find(|input| input.pipeline_id == pipeline_id && input.id == input_id)
-                    .cloned())
-            })
-        }
-
-        fn get_by_stream_key<'a>(
-            &'a self,
-            stream_key: &'a str,
-        ) -> crate::application::pipeline_inputs::InputLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .inputs
-                    .iter()
-                    .find(|input| input.stream_key == stream_key)
-                    .cloned())
-            })
-        }
-
-        fn list<'a>(
-            &'a self,
-            pipeline_id: &'a str,
-        ) -> crate::application::pipeline_inputs::InputListFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .inputs
-                    .iter()
-                    .filter(|input| input.pipeline_id == pipeline_id)
-                    .cloned()
-                    .collect())
-            })
-        }
-
-        fn create<'a>(
-            &'a self,
-            _id: &'a str,
-            _pipeline_id: &'a str,
-            _label: &'a str,
-            _stream_key: &'a str,
-            _source: restream_domain::domain::pipeline_input::PipelineInputSource,
-        ) -> crate::application::pipeline_inputs::InputWriteFuture<'a> {
-            Box::pin(async move {
-                Err(
-                    crate::application::pipeline_inputs::PipelineInputStoreError::Internal(
-                        "read-only input store".to_string(),
-                    ),
-                )
-            })
-        }
-
-        fn update<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-            _label: &'a str,
-            _enabled: bool,
-            _source: restream_domain::domain::pipeline_input::PipelineInputSource,
-        ) -> crate::application::pipeline_inputs::InputUpdateFuture<'a> {
-            Box::pin(async move {
-                Err(
-                    crate::application::pipeline_inputs::PipelineInputStoreError::Internal(
-                        "read-only input store".to_string(),
-                    ),
-                )
-            })
-        }
-
-        fn delete<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-        ) -> crate::application::pipeline_inputs::InputDeleteFuture<'a> {
-            Box::pin(async move {
-                Err(
-                    crate::application::pipeline_inputs::PipelineInputStoreError::Internal(
-                        "read-only input store".to_string(),
-                    ),
-                )
-            })
-        }
-
-        fn promote<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-        ) -> crate::application::pipeline_inputs::InputUpdateFuture<'a> {
-            Box::pin(async move {
-                Err(
-                    crate::application::pipeline_inputs::PipelineInputStoreError::Internal(
-                        "read-only input store".to_string(),
-                    ),
-                )
-            })
-        }
-    }
-
     fn output(source_pipeline: &str, id: &str, url: &str) -> Output {
         Output {
             id: id.to_string(),
@@ -293,15 +183,15 @@ mod tests {
         }
     }
 
-    async fn service(outputs: Vec<Output>, inputs: Vec<PipelineInput>) -> RecirculationService {
+    async fn service(outputs: Vec<Output>, inputs: &[(&str, &str)]) -> RecirculationService {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
         let mut pipelines = std::collections::BTreeSet::new();
         for output in &outputs {
             pipelines.insert(output.pipeline_id.clone());
         }
-        for input in &inputs {
-            pipelines.insert(input.pipeline_id.clone());
+        for &(pipeline_id, _) in inputs {
+            pipelines.insert(pipeline_id.to_string());
         }
         for pipeline_id in pipelines {
             crate::db::create_pipeline(
@@ -329,19 +219,22 @@ mod tests {
             .await
             .unwrap();
         }
-        let pipeline_service = PipelineService::new(
-            DeadlineDb::api(pool.clone()),
-            crate::application::catalog_auth::CatalogAuth::new(Arc::new(
-                crate::infrastructure::pipeline_input_store::SqliteCatalogSource::new(
-                    crate::db::DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE),
-                ),
-            )),
-        );
-        let pipeline_input_service = PipelineInputService::with_store(
-            Arc::new(ReadOnlyInputStore { inputs }),
-            pipeline_service,
-        );
-        RecirculationService::with_services(DeadlineDb::api(pool), pipeline_input_service)
+        for &(pipeline_id, input_id) in inputs {
+            crate::db::create_pipeline_input(
+                &pool,
+                input_id,
+                pipeline_id,
+                input_id,
+                &format!("sk_{input_id}"),
+                &PipelineInputSource::keyed(),
+            )
+            .await
+            .unwrap();
+        }
+        let db = DeadlineDb::api(pool);
+        let pipelines = PipelineService::new(db.clone(), CatalogAuth::new(db.clone()));
+        let pipeline_inputs = PipelineInputService::new(db.clone(), pipelines);
+        RecirculationService::with_services(db, pipeline_inputs)
     }
 
     #[test]
@@ -434,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn recirculation_service_accepts_valid_candidate() {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
-        let service = service(Vec::new(), vec![input("pipe-b", "input-backup")]).await;
+        let service = service(Vec::new(), &[("pipe-b", "input-backup")]).await;
 
         let result = service.validate_output_candidate("pipe-a", &target).await;
 
@@ -446,7 +339,7 @@ mod tests {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
         let service = service(
             vec![output("pipe-b", "b-to-a", "pipeline://pipe-a/input-backup")],
-            vec![input("pipe-b", "input-backup")],
+            &[("pipe-b", "input-backup")],
         )
         .await;
 
@@ -464,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn recirculation_service_rejects_missing_target_input() {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
-        let service = service(Vec::new(), Vec::new()).await;
+        let service = service(Vec::new(), &[]).await;
 
         let error = service
             .validate_output_candidate("pipe-a", &target)

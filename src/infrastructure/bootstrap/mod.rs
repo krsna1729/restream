@@ -183,12 +183,9 @@ async fn serve(
     let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
-    let pipeline_input_store =
-        crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(api_db.clone());
     let srt_ingest_policy_store = Arc::new(
         match crate::application::srt_ingest::load_policy_store(
             &api_db,
-            &pipeline_input_store,
             config.srt_passphrase.clone(),
             config.srt_pbkeylen,
         )

@@ -13,7 +13,6 @@ use crate::application::services::{
     NotifyService, PipelineService, SettingsService, TeamService,
 };
 use crate::db::DeadlineDb;
-use crate::infrastructure::pipeline_input_store::{SqliteCatalogSource, SqlitePipelineInputStore};
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use restream_engine::recording::RecordingMetadataReporter;
 
@@ -51,7 +50,7 @@ impl SqliteServiceFactory {
     pub fn with_databases(db: DeadlineDb, lifecycle: DeadlineDb) -> Self {
         Self {
             db,
-            catalog_auth: CatalogAuth::new(Arc::new(SqliteCatalogSource::new(lifecycle.clone()))),
+            catalog_auth: CatalogAuth::new(lifecycle.clone()),
             lifecycle,
             recording_metadata: std::sync::OnceLock::new(),
         }
@@ -76,11 +75,7 @@ impl SqliteServiceFactory {
         let recirculation_service =
             RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
         let ingest_service = self.ingest_service();
-        let settings_service = SettingsService::new(
-            self.db.clone(),
-            Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipeline_service.clone(),
-        );
+        let settings_service = SettingsService::new(self.db.clone(), pipeline_service.clone());
 
         AppServices {
             db: self.db.clone(),
@@ -111,10 +106,7 @@ impl SqliteServiceFactory {
     }
 
     pub fn pipeline_input_service(&self, pipelines: PipelineService) -> PipelineInputService {
-        PipelineInputService::with_store(
-            Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipelines,
-        )
+        PipelineInputService::new(self.db.clone(), pipelines)
     }
 
     pub fn ingest_service(&self) -> IngestService {
@@ -122,11 +114,7 @@ impl SqliteServiceFactory {
     }
 
     pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {
-        FileIngestService::new(
-            self.db.clone(),
-            Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipeline_service,
-        )
+        FileIngestService::new(self.db.clone(), pipeline_service)
     }
 
     pub fn media_library_service(

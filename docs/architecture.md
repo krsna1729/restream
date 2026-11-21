@@ -678,16 +678,18 @@ flowchart TD
 | `db` | Schema-aware queries and row mapping | Runtime policy, orchestration |
 | `media` (`restream-engine`) | Protocols, packet transforms, hot-path storage, media lifecycle | API JSON, persistence |
 | `api` | Authentication, request validation, HTTP and SSE responses | Persistence policy, media internals |
-| `infrastructure` | SQLite adapters, service wiring, bootstrap tasks | Domain policy |
+| `infrastructure` | External adapters, service wiring, bootstrap tasks | Domain policy |
 | `restream-agent-contract` | Agent contracts shared by the agent plane and MCP | Transport, persistence, runtime |
 
 Application services hold a `DeadlineDb` and call `crate::db` directly, as
 `AuthService`, `TeamService`, `NotifyService`, `SettingsService`,
 `MediaLibraryService`, `RecirculationService`, `application::outputs`,
-`application::topology`, the pipeline and ingest catalogs, and the meta-backed
-settings modules do. Pipeline and ingest row mapping lives in `db`. Pipeline
-inputs and admission still use the adapters in
-`infrastructure::pipeline_input_store` (backlog Q-118).
+`application::topology`, the pipeline, ingest and input catalogs,
+`CatalogAuth` and the meta-backed settings modules do. Their row mapping lives
+in `db`. A trait remains only where callers must script an external effect,
+such as `NotifyTransport`'s HTTP sends; SQLite timing and failures are tested
+with triggers, held connections, closed pools or test-only observation inside
+the owner.
 
 ### Layering rules
 

@@ -4,15 +4,10 @@
 //! on the application boundary so handlers can work in terms of operator
 //! settings rather than persistence details.
 
-use std::sync::Arc;
-
-use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::save_recording_settings;
 use crate::application::settings::load_settings_snapshot;
-use crate::application::srt_ingest::{
-    list_pipeline_inputs, load_global_srt_ingest_config, srt_ingest_policy_entries,
-};
+use crate::application::srt_ingest::refresh_policy_store;
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
@@ -33,19 +28,13 @@ const SERVER_NAME_META_KEY: &str = "server_name";
 /// meta/config stores plus pipeline and output catalog reads.
 pub struct SettingsService {
     db: DeadlineDb,
-    input_store: Arc<dyn PipelineInputStore>,
     pipeline_service: PipelineService,
 }
 
 impl SettingsService {
-    pub fn new(
-        db: DeadlineDb,
-        input_store: Arc<dyn PipelineInputStore>,
-        pipeline_service: PipelineService,
-    ) -> Self {
+    pub fn new(db: DeadlineDb, pipeline_service: PipelineService) -> Self {
         Self {
             db,
-            input_store,
             pipeline_service,
         }
     }
@@ -158,16 +147,7 @@ impl SettingsService {
         srt_passphrase: Option<String>,
         srt_pbkeylen: i32,
     ) -> ServiceResult<()> {
-        // Rebuild the policy store from persisted global settings plus the
-        // current pipeline catalog so the SRT ingress owner sees one coherent snapshot.
-        let global = load_global_srt_ingest_config(&self.db, srt_passphrase, srt_pbkeylen).await;
-        let pipelines = self.list_pipelines().await?;
-        let inputs = list_pipeline_inputs(self.input_store.as_ref(), &pipelines)
-            .await
-            .map_err(|error| ServiceError::internal(error.to_string()))?;
-        let entries = srt_ingest_policy_entries(&pipelines, &inputs);
-        policy_store.replace(global, &entries);
-        Ok(())
+        refresh_policy_store(policy_store, &self.db, srt_passphrase, srt_pbkeylen).await
     }
 
     /// Loads the per-pipeline recording toggle map used by health and settings
@@ -228,15 +208,7 @@ mod tests {
         .await
         .unwrap();
         let db = DeadlineDb::api(pool.clone());
-        let service = SettingsService::new(
-            db.clone(),
-            Arc::new(
-                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                    db.clone(),
-                ),
-            ),
-            SqliteServiceFactory::new(&pool).pipeline_service(),
-        );
+        let service = SettingsService::new(db, SqliteServiceFactory::new(&pool).pipeline_service());
 
         service.set_server_name("Studio").await.unwrap();
         service.set_ingest_host(" edge.local ").await.unwrap();

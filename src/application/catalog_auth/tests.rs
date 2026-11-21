@@ -4,9 +4,13 @@
 
 use super::*;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
-use restream_domain::domain::pipeline_input::{PipelineInputRole, PullAuth, VariantRule};
-use std::sync::Mutex;
+use restream_domain::domain::pipeline_input::PipelineInputSource;
+use sqlx::SqlitePool;
 use std::sync::atomic::AtomicUsize;
+
+const PIPELINE_ID: &str = "pipeline-1";
+const PRIMARY_ID: &str = "input_primary_pipeline-1";
+const TEST_WAIT: Duration = Duration::from_secs(5);
 
 fn test_security_config() -> IngestSecurityConfig {
     IngestSecurityConfig {
@@ -17,77 +21,78 @@ fn test_security_config() -> IngestSecurityConfig {
     }
 }
 
-fn keyed(stream_key: &str) -> PipelineInput {
-    PipelineInput {
-        id: "input-primary".to_string(),
-        pipeline_id: "pipeline-1".to_string(),
-        label: "Primary".to_string(),
-        stream_key: stream_key.to_string(),
-        role: PipelineInputRole::Primary,
-        enabled: true,
-        selected: true,
-        ..PipelineInput::keyed_default()
-    }
-}
-
-/// A catalog whose loads can fail, or wait for a gate, on demand.
+/// Observes real catalog queries. Holding the result here lets coalescing
+/// tests interleave writes after SQLite has read the old rows.
 #[derive(Default)]
-struct FakeCatalog {
-    inputs: Mutex<Vec<PipelineInput>>,
-    failing: AtomicBool,
-    attempts: AtomicUsize,
+pub(super) struct ReloadProbe {
+    completed: AtomicUsize,
     gate: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
-impl FakeCatalog {
-    fn with(inputs: Vec<PipelineInput>) -> Self {
-        Self {
-            inputs: Mutex::new(inputs),
-            ..Self::default()
+impl ReloadProbe {
+    pub(super) async fn query_completed(&self) {
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            let mut gate = gate.clone();
+            gate.wait_for(|open| *open).await.unwrap();
         }
     }
 
-    fn set(&self, inputs: Vec<PipelineInput>) {
-        *restream_sync::lock::lock(&self.inputs) = inputs;
+    fn completed(&self) -> usize {
+        self.completed.load(Ordering::SeqCst)
     }
 }
 
-impl CatalogAuthSource for FakeCatalog {
-    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
-        Box::pin(async move {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            // Rows are read when the query starts; the gate holds the answer.
-            let inputs = restream_sync::lock::lock(&self.inputs).clone();
-            if let Some(gate) = &self.gate {
-                let mut gate = gate.clone();
-                gate.wait_for(|open| *open).await.unwrap();
-            }
-            if self.failing.load(Ordering::SeqCst) {
-                return Err(sqlx::Error::PoolClosed);
-            }
-            Ok(inputs.into_iter().map(Ok).collect())
-        })
-    }
+async fn wait_for_queries(catalog: &CatalogAuth, count: usize) {
+    tokio::time::timeout(TEST_WAIT, async {
+        while catalog.reload_probe.completed() < count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("catalog attempts the expected loads");
 }
 
-async fn authenticator(
-    inputs: Vec<PipelineInput>,
-) -> (
-    CatalogIngestAuthenticator,
-    Arc<CatalogAuth>,
-    Arc<FakeCatalog>,
-    Arc<IngestSecurityService>,
-) {
-    let source = Arc::new(FakeCatalog::with(inputs));
-    let catalog = CatalogAuth::new(source.clone());
-    catalog.load().await.unwrap();
+async fn seeded_catalog(key: &str) -> (SqlitePool, Arc<CatalogAuth>) {
+    // One connection gives the retry tests deterministic read exhaustion.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+    db::create_pipeline(&pool, PIPELINE_ID, "Pipeline", key, None, None)
+        .await
+        .unwrap();
+    let catalog = CatalogAuth::new(DeadlineDb::new(pool.clone(), Duration::from_millis(100)));
+    (pool, catalog)
+}
+
+async fn rotate_key(pool: &SqlitePool, key: &str) {
+    db::update_pipeline(pool, PIPELINE_ID, "Pipeline", key, None, None)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+fn authenticator(
+    catalog: Arc<CatalogAuth>,
+) -> (CatalogIngestAuthenticator, Arc<IngestSecurityService>) {
     let security = Arc::new(IngestSecurityService::new(test_security_config()));
-    (
-        CatalogIngestAuthenticator::new(catalog.clone(), security.clone()),
-        catalog,
-        source,
-        security,
-    )
+    let auth = CatalogIngestAuthenticator::new(catalog, security.clone());
+    (auth, security)
+}
+
+async fn load_authenticator(
+    catalog: Arc<CatalogAuth>,
+) -> (CatalogIngestAuthenticator, Arc<IngestSecurityService>) {
+    catalog.load().await.unwrap();
+    authenticator(catalog)
+}
+
+async fn live_authenticator() -> (CatalogIngestAuthenticator, Arc<IngestSecurityService>) {
+    let (_, catalog) = seeded_catalog("live").await;
+    load_authenticator(catalog).await
 }
 
 fn admit(
@@ -101,7 +106,7 @@ fn admit(
 
 #[tokio::test]
 async fn rtmp_publish_records_a_failure_for_a_missing_stream_key() {
-    let (auth, _, _, security) = authenticator(vec![keyed("live")]).await;
+    let (auth, security) = live_authenticator().await;
 
     let result = admit(
         &auth,
@@ -117,7 +122,7 @@ async fn rtmp_publish_records_a_failure_for_a_missing_stream_key() {
 
 #[tokio::test]
 async fn rtmp_publish_resolves_the_input_and_keeps_prior_failures() {
-    let (auth, _, _, security) = authenticator(vec![keyed("live")]).await;
+    let (auth, security) = live_authenticator().await;
     let ip = "10.0.0.9";
     assert!(!security.record_failure_for(RateLimitScope::RtmpPublish, ip));
 
@@ -126,8 +131,8 @@ async fn rtmp_publish_resolves_the_input_and_keeps_prior_failures() {
     assert_eq!(
         pipeline,
         AuthenticatedPipeline {
-            id: "pipeline-1".to_string(),
-            input_id: "input-primary".to_string(),
+            id: PIPELINE_ID.to_string(),
+            input_id: PRIMARY_ID.to_string(),
             selected: true,
         }
     );
@@ -143,7 +148,7 @@ async fn rtmp_publish_resolves_the_input_and_keeps_prior_failures() {
 
 #[tokio::test]
 async fn srt_publish_clears_failure_state_after_success() {
-    let (auth, _, _, security) = authenticator(vec![keyed("live")]).await;
+    let (auth, security) = live_authenticator().await;
     let ip = "10.0.0.2";
     assert!(!security.record_failure_for(RateLimitScope::SrtPublish, ip));
     assert!(security.record_failure_for(RateLimitScope::SrtPublish, ip));
@@ -162,15 +167,17 @@ async fn srt_publish_clears_failure_state_after_success() {
 /// still resolves, because the pipeline's media is readable either way.
 #[tokio::test]
 async fn pushes_to_a_pull_input_are_refused_and_reads_resolve() {
-    let pull = PipelineInput {
-        id: "input-pull".to_string(),
-        source_kind: PipelineInputSourceKind::HlsPull,
-        source_url: Some("http://origin.example/master.m3u8".to_string()),
-        variant_rule: VariantRule::HighestBandwidth,
-        source_auth: PullAuth::None,
-        ..keyed("live")
+    let (pool, catalog) = seeded_catalog("live").await;
+    let pull = PipelineInputSource {
+        kind: PipelineInputSourceKind::HlsPull,
+        url: Some("http://origin.example/master.m3u8".to_string()),
+        ..PipelineInputSource::keyed()
     };
-    let (auth, _, _, _) = authenticator(vec![pull]).await;
+    db::update_pipeline_input(&pool, PIPELINE_ID, PRIMARY_ID, "Origin", true, &pull)
+        .await
+        .unwrap()
+        .unwrap();
+    let (auth, _) = load_authenticator(catalog).await;
 
     // A distinct client per mode: a third failure from one address is banned,
     // and the ban would answer instead of the refusal under test.
@@ -189,17 +196,22 @@ async fn pushes_to_a_pull_input_are_refused_and_reads_resolve() {
     }
     for mode in [PipelineAccessMode::SrtRead, PipelineAccessMode::RtmpPlay] {
         let read = admit(&auth, mode, "live", "10.0.0.14").expect("a read resolves");
-        assert_eq!(read.input_id, "input-pull");
+        assert_eq!(read.input_id, PRIMARY_ID);
     }
 }
 
 #[tokio::test]
 async fn a_disabled_input_key_is_refused_like_an_unknown_one() {
-    let disabled = PipelineInput {
-        enabled: false,
-        ..keyed("live")
-    };
-    let (auth, _, _, security) = authenticator(vec![disabled]).await;
+    let (pool, catalog) = seeded_catalog("active-key").await;
+    let source = PipelineInputSource::keyed();
+    db::create_pipeline_input(&pool, "disabled", PIPELINE_ID, "Backup", "live", &source)
+        .await
+        .unwrap();
+    db::update_pipeline_input(&pool, PIPELINE_ID, "disabled", "Backup", false, &source)
+        .await
+        .unwrap()
+        .unwrap();
+    let (auth, security) = load_authenticator(catalog).await;
 
     for mode in [PipelineAccessMode::SrtPublish, PipelineAccessMode::RtmpPlay] {
         assert_eq!(
@@ -212,7 +224,7 @@ async fn a_disabled_input_key_is_refused_like_an_unknown_one() {
 
 #[tokio::test]
 async fn rtmp_play_resolves_without_rate_limit_side_effects() {
-    let (auth, _, _, security) = authenticator(vec![keyed("live")]).await;
+    let (auth, security) = live_authenticator().await;
 
     admit(&auth, PipelineAccessMode::RtmpPlay, "live", "10.0.0.4").unwrap();
     assert_eq!(
@@ -231,7 +243,7 @@ async fn each_publish_mode_counts_failures_under_its_own_scope_and_clears_them()
         (PipelineAccessMode::HlsPublish, "hls-publish", "10.0.0.6"),
         (PipelineAccessMode::MoqPublish, "moq-publish", "10.0.0.7"),
     ] {
-        let (auth, _, _, security) = authenticator(vec![keyed("live")]).await;
+        let (auth, security) = live_authenticator().await;
 
         assert_eq!(
             admit(&auth, mode, "missing", ip),
@@ -253,10 +265,8 @@ async fn each_publish_mode_counts_failures_under_its_own_scope_and_clears_them()
 
 #[tokio::test]
 async fn the_index_refuses_every_key_until_it_is_loaded() {
-    let source = Arc::new(FakeCatalog::with(vec![keyed("live")]));
-    let catalog = CatalogAuth::new(source);
-    let security = Arc::new(IngestSecurityService::new(test_security_config()));
-    let auth = CatalogIngestAuthenticator::new(catalog.clone(), security);
+    let (_, catalog) = seeded_catalog("live").await;
+    let (auth, _) = authenticator(catalog.clone());
 
     assert_eq!(
         admit(&auth, PipelineAccessMode::RtmpPlay, "live", "10.0.0.30"),
@@ -269,50 +279,48 @@ async fn the_index_refuses_every_key_until_it_is_loaded() {
 /// The startup load retries a failing (or timed-out) catalog read with
 /// backoff instead of failing startup, and the index is filled once a read
 /// succeeds.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_failing_startup_load_retries_until_a_load_succeeds() {
-    let source = Arc::new(FakeCatalog::with(vec![keyed("live")]));
-    source.failing.store(true, Ordering::SeqCst);
-    let catalog = CatalogAuth::new(source.clone());
+    let (pool, catalog) = seeded_catalog("live").await;
+    let held = pool.acquire().await.unwrap();
     let load = tokio::spawn({
         let catalog = catalog.clone();
         async move { catalog.load().await }
     });
 
-    let retried = tokio::time::timeout(Duration::from_secs(60), async {
-        while source.attempts.load(Ordering::SeqCst) < 3 && !load.is_finished() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
+    wait_for_queries(&catalog, 3).await;
     assert!(
-        retried.is_ok() && !load.is_finished(),
-        "a failed startup load gave up instead of retrying"
+        !load.is_finished(),
+        "a failing startup load must keep retrying"
     );
-    source.failing.store(false, Ordering::SeqCst);
+    drop(held);
 
-    load.await.unwrap().unwrap();
+    tokio::time::timeout(TEST_WAIT, load)
+        .await
+        .expect("startup load succeeds after the connection returns")
+        .unwrap()
+        .unwrap();
     assert!(catalog.snapshot().get("live").is_some());
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_failing_startup_load_ends_with_its_error_at_shutdown() {
-    let source = Arc::new(FakeCatalog::with(vec![keyed("live")]));
-    source.failing.store(true, Ordering::SeqCst);
-    let catalog = CatalogAuth::new(source);
+    let (pool, catalog) = seeded_catalog("live").await;
+    pool.close().await;
     catalog.shutdown();
 
-    assert!(catalog.load().await.is_err());
+    assert!(matches!(catalog.load().await, Err(sqlx::Error::PoolClosed)));
 }
 
 /// A refresh whose reload fails keeps the previous index in force (every
 /// existing key still connects), and the retry task lands the write once the
 /// database answers again.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_failed_reload_keeps_the_previous_index_until_a_retry_succeeds() {
-    let (auth, catalog, source, _) = authenticator(vec![keyed("old-key")]).await;
-    source.failing.store(true, Ordering::SeqCst);
-    source.set(vec![keyed("new-key")]);
+    let (pool, catalog) = seeded_catalog("old-key").await;
+    let (auth, _) = load_authenticator(catalog.clone()).await;
+    rotate_key(&pool, "new-key").await;
+    let held = pool.acquire().await.unwrap();
 
     catalog.refresh().await;
 
@@ -325,22 +333,23 @@ async fn a_failed_reload_keeps_the_previous_index_until_a_retry_succeeds() {
     );
 
     // Retries back off but keep going while the database still fails.
-    let attempts = source.attempts.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    assert!(source.attempts.load(Ordering::SeqCst) >= attempts + 3);
+    let attempts = catalog.reload_probe.completed();
+    wait_for_queries(&catalog, attempts + 3).await;
     admit(&auth, PipelineAccessMode::RtmpPlay, "old-key", ip).unwrap();
 
-    source.failing.store(false, Ordering::SeqCst);
-    tokio::time::sleep(RETRY_MAX_DELAY * 2).await;
+    drop(held);
+    tokio::time::timeout(TEST_WAIT, async {
+        while catalog.retrying.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the retry task ends once the connection returns");
 
     admit(&auth, PipelineAccessMode::RtmpPlay, "new-key", ip).expect("the retry landed the write");
     assert_eq!(
         admit(&auth, PipelineAccessMode::RtmpPlay, "old-key", ip),
         Err(PipelineAccessError::InvalidStreamKey)
-    );
-    assert!(
-        !catalog.retrying.load(Ordering::SeqCst),
-        "the retry task ended"
     );
 }
 
@@ -349,24 +358,19 @@ async fn a_failed_reload_keeps_the_previous_index_until_a_retry_succeeds() {
 #[tokio::test]
 async fn refreshes_during_a_reload_coalesce_into_one_later_reload() {
     let (open, gate) = tokio::sync::watch::channel(true);
-    let source = Arc::new(FakeCatalog {
-        gate: Some(gate),
-        ..FakeCatalog::with(vec![keyed("first")])
-    });
-    let catalog = CatalogAuth::new(source.clone());
+    let (pool, mut catalog) = seeded_catalog("first").await;
+    Arc::get_mut(&mut catalog).unwrap().reload_probe.gate = Some(gate);
     catalog.load().await.unwrap();
-    let loads_before = source.attempts.load(Ordering::SeqCst);
+    let loads_before = catalog.reload_probe.completed();
 
     open.send(false).unwrap();
     let running = tokio::spawn({
         let catalog = catalog.clone();
         async move { catalog.refresh().await }
     });
-    while source.attempts.load(Ordering::SeqCst) == loads_before {
-        tokio::task::yield_now().await;
-    }
+    wait_for_queries(&catalog, loads_before + 1).await;
     // The running reload has read its rows; this write comes after them.
-    source.set(vec![keyed("second")]);
+    rotate_key(&pool, "second").await;
     let waiting: Vec<_> = (0..8)
         .map(|_| {
             let catalog = catalog.clone();
@@ -374,9 +378,13 @@ async fn refreshes_during_a_reload_coalesce_into_one_later_reload() {
         })
         .collect();
     // Every waiting refresh has counted its write before the gate opens.
-    while catalog.requested.load(Ordering::SeqCst) < 10 {
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(TEST_WAIT, async {
+        while catalog.requested.load(Ordering::SeqCst) < 10 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the waiting refreshes all request a reload");
     open.send(true).unwrap();
     running.await.unwrap();
     for refresh in waiting {
@@ -386,7 +394,7 @@ async fn refreshes_during_a_reload_coalesce_into_one_later_reload() {
     assert!(catalog.snapshot().get("second").is_some());
     assert!(catalog.snapshot().get("first").is_none());
     assert_eq!(
-        source.attempts.load(Ordering::SeqCst) - loads_before,
+        catalog.reload_probe.completed() - loads_before,
         2,
         "one running reload plus one shared by every waiting refresh"
     );

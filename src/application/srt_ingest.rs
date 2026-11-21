@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
+use crate::application::services::{ServiceError, ServiceResult};
 use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{
@@ -52,53 +52,51 @@ pub async fn load_global_srt_ingest_config(
 
 pub async fn load_policy_store(
     db: &DeadlineDb,
-    input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-) -> Result<SrtIngestPolicyStore, PipelineInputStoreError> {
-    let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
-    let pipelines = load_pipelines(db).await?;
-    let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
-    let entries = srt_ingest_policy_entries(&pipelines, &inputs);
+) -> ServiceResult<SrtIngestPolicyStore> {
+    let (global, entries) = load_policy_snapshot(db, srt_passphrase, srt_pbkeylen).await?;
     Ok(SrtIngestPolicyStore::new(global, &entries))
 }
 
-pub async fn refresh_policy_store(
+pub(super) async fn refresh_policy_store(
     policy_store: &SrtIngestPolicyStore,
     db: &DeadlineDb,
-    input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-) -> Result<(), PipelineInputStoreError> {
-    let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
-    let pipelines = load_pipelines(db).await?;
-    let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
-    let entries = srt_ingest_policy_entries(&pipelines, &inputs);
+) -> ServiceResult<()> {
+    let (global, entries) = load_policy_snapshot(db, srt_passphrase, srt_pbkeylen).await?;
     policy_store.replace(global, &entries);
     Ok(())
 }
 
-async fn load_pipelines(db: &DeadlineDb) -> Result<Vec<Pipeline>, PipelineInputStoreError> {
-    db.read(db::list_pipelines)
+async fn load_policy_snapshot(
+    db: &DeadlineDb,
+    srt_passphrase: Option<String>,
+    srt_pbkeylen: i32,
+) -> ServiceResult<(SrtGlobalIngestConfig, Vec<SrtIngestPolicyEntry>)> {
+    let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
+    let pipelines = db
+        .read(db::list_pipelines)
         .await
-        .map(|rows| rows.into_iter().map(Pipeline::from).collect())
-        .map_err(|error| PipelineInputStoreError::Internal(error.to_string()))
-}
-
-pub async fn list_pipeline_inputs(
-    input_store: &dyn PipelineInputStore,
-    pipelines: &[Pipeline],
-) -> Result<Vec<PipelineInput>, PipelineInputStoreError> {
+        .map_err(|error| ServiceError::internal(format!("list pipelines: {error}")))?
+        .into_iter()
+        .map(Pipeline::from)
+        .collect::<Vec<_>>();
     let mut inputs = Vec::new();
-    for pipeline in pipelines {
-        inputs.extend(input_store.list(&pipeline.id).await.map_err(|error| {
-            PipelineInputStoreError::Internal(format!("list pipeline inputs: {error}"))
-        })?);
+    for pipeline in &pipelines {
+        inputs.extend(
+            db.read(|pool| db::with_busy_retry(|| db::list_pipeline_inputs(pool, &pipeline.id)))
+                .await
+                .map_err(|error| {
+                    ServiceError::internal(format!("list pipeline inputs: {error}"))
+                })?,
+        );
     }
-    Ok(inputs)
+    Ok((global, srt_ingest_policy_entries(&pipelines, &inputs)))
 }
 
-pub fn srt_ingest_policy_entries(
+fn srt_ingest_policy_entries(
     pipelines: &[Pipeline],
     inputs: &[PipelineInput],
 ) -> Vec<SrtIngestPolicyEntry> {
@@ -151,14 +149,8 @@ fn srt_global_config_from_appconfig(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::pipeline_inputs::{
-        InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
-        PipelineInputStore, PipelineInputStoreError,
-    };
     use crate::infrastructure::bootstrap::test_support::memory_pool;
-    use restream_domain::domain::pipeline_input::{
-        PipelineInput, PipelineInputRole, PipelineInputSource,
-    };
+    use restream_domain::domain::pipeline_input::PipelineInputRole;
     use restream_domain::domain::srt_ingest::{
         DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
     };
@@ -193,79 +185,6 @@ mod tests {
         .await
         .unwrap();
         db
-    }
-
-    struct FakePipelineInputStore {
-        inputs: Vec<PipelineInput>,
-    }
-
-    impl PipelineInputStore for FakePipelineInputStore {
-        fn get<'a>(&'a self, _pipeline_id: &'a str, _input_id: &'a str) -> InputLookupFuture<'a> {
-            Box::pin(async { Ok(None) })
-        }
-
-        fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> InputLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .inputs
-                    .iter()
-                    .find(|input| input.stream_key == stream_key)
-                    .cloned())
-            })
-        }
-
-        fn list<'a>(&'a self, pipeline_id: &'a str) -> InputListFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .inputs
-                    .iter()
-                    .filter(|input| input.pipeline_id == pipeline_id)
-                    .cloned()
-                    .collect())
-            })
-        }
-
-        fn create<'a>(
-            &'a self,
-            _id: &'a str,
-            _pipeline_id: &'a str,
-            _label: &'a str,
-            _stream_key: &'a str,
-            _source: PipelineInputSource,
-        ) -> InputWriteFuture<'a> {
-            Box::pin(async {
-                Err(PipelineInputStoreError::Internal(
-                    "not implemented".to_string(),
-                ))
-            })
-        }
-
-        fn update<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-            _label: &'a str,
-            _enabled: bool,
-            _source: PipelineInputSource,
-        ) -> InputUpdateFuture<'a> {
-            Box::pin(async { Ok(None) })
-        }
-
-        fn delete<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-        ) -> InputDeleteFuture<'a> {
-            Box::pin(async { Ok(false) })
-        }
-
-        fn promote<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _input_id: &'a str,
-        ) -> InputUpdateFuture<'a> {
-            Box::pin(async { Ok(None) })
-        }
     }
 
     #[tokio::test]
@@ -320,13 +239,7 @@ mod tests {
             "pbkeylen": 24
         }))
         .await;
-        let input_store = FakePipelineInputStore {
-            inputs: vec![pipeline_input("pipeline-1", "stream-one")],
-        };
-
-        let policy_store = load_policy_store(&store, &input_store, None, 16)
-            .await
-            .unwrap();
+        let policy_store = load_policy_store(&store, None, 16).await.unwrap();
 
         assert_eq!(
             policy_store.global_config().mode,
@@ -356,14 +269,9 @@ mod tests {
             "pbkeylen": 32
         }))
         .await;
-        let input_store = FakePipelineInputStore {
-            inputs: vec![pipeline_input("pipeline-1", "stream-one")],
-        };
-        let policy_store = load_policy_store(&initial_store, &input_store, None, 16)
-            .await
-            .unwrap();
+        let policy_store = load_policy_store(&initial_store, None, 16).await.unwrap();
 
-        refresh_policy_store(&policy_store, &updated_store, &input_store, None, 16)
+        refresh_policy_store(&policy_store, &updated_store, None, 16)
             .await
             .unwrap();
 

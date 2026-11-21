@@ -11,9 +11,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use restream::application::catalog_auth::{
-    CatalogAuth, CatalogAuthLoadFuture, CatalogAuthSource, CatalogIngestAuthenticator,
-};
+use restream::application::catalog_auth::{CatalogAuth, CatalogIngestAuthenticator};
+use restream::db::{self, DeadlineDb};
 use restream_core::MediaType;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_engine::engine::MediaEngine;
@@ -25,37 +24,26 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const STREAM_KEY: &str = "hls-key";
 const PIPELINE_ID: &str = "pipe-hls";
-const INPUT_ID: &str = "input-hls";
-
-/// A catalog of one keyed input on [`STREAM_KEY`].
-struct OneKey;
-
-impl CatalogAuthSource for OneKey {
-    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_> {
-        Box::pin(async move {
-            Ok(vec![Ok(
-                restream_domain::domain::pipeline_input::PipelineInput {
-                    id: INPUT_ID.to_string(),
-                    pipeline_id: PIPELINE_ID.to_string(),
-                    stream_key: STREAM_KEY.to_string(),
-                    enabled: true,
-                    selected: true,
-                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
-                },
-            )])
-        })
-    }
-}
 
 struct Server {
     engine: Arc<MediaEngine>,
     address: SocketAddr,
+    input_id: String,
     _ingest: Arc<HlsIngest>,
 }
 
 async fn serve() -> Server {
     let engine = Arc::new(MediaEngine::new());
-    let catalog = CatalogAuth::new(Arc::new(OneKey));
+    let pool = db::create_pool("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+    db::create_pipeline(&pool, PIPELINE_ID, "HLS", STREAM_KEY, None, None)
+        .await
+        .unwrap();
+    let input = db::get_pipeline_input_by_stream_key(&pool, STREAM_KEY)
+        .await
+        .unwrap()
+        .unwrap();
+    let catalog = CatalogAuth::new(DeadlineDb::api(pool));
     catalog.load().await.unwrap();
     let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let ingest = HlsIngest::new(
@@ -81,6 +69,7 @@ async fn serve() -> Server {
     Server {
         engine,
         address,
+        input_id: input.id,
         _ingest: ingest,
     }
 }
@@ -125,7 +114,11 @@ async fn assert_whole_fixture_published(
 ) {
     // Long enough for an 8 s fixture published at media pace.
     tokio::time::timeout(Duration::from_secs(30), async {
-        while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+        while server
+            .engine
+            .input_has_session(PIPELINE_ID, &server.input_id)
+            .await
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -302,44 +295,12 @@ async fn ffmpeg_hls_fmp4_hevc_segments_reach_the_ring() {
 /// video playlist ahead of the master looks like another variant's. Its
 /// first segment stays held until the master selects it, so every frame
 /// reaches the ring, both renditions merged in DTS order.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "reads FFmpeg's stderr on success, which `run_tool` drops; bounded by the timeout below"
-)]
 #[tokio::test]
 async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     let dir =
         std::env::temp_dir().join(format!("restream-hls-renditions-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).unwrap();
-    // FFmpeg runs in `dir`, so its binary and input need absolute paths.
-    let ffmpeg = std::path::absolute(restream_engine::ffmpeg_binary::ffmpeg_bin_path()).unwrap();
-    let fixture = std::path::absolute(Codec::H264.fixture()).unwrap();
-    let output = tokio::process::Command::new(ffmpeg)
-        .current_dir(&dir)
-        // `info` logs every object FFmpeg opens for writing, in its order.
-        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-i"])
-        .arg(fixture)
-        .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
-        .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
-        .args(["-hls_list_size", "0", "-hls_segment_type", "fmp4"])
-        .args([
-            "-var_stream_map",
-            "v:0,agroup:aud a:0,agroup:aud,default:yes",
-        ])
-        .args(["-master_pl_name", "master.m3u8", "stream_%v/index.m3u8"])
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let output = tokio::time::timeout(Duration::from_secs(60), output)
-        .await
-        .expect("ffmpeg finished")
-        .expect("ffmpeg ran");
-    assert!(
-        output.status.success(),
-        "ffmpeg exited with {}",
-        output.status
-    );
-    let log = String::from_utf8(output.stderr).unwrap();
+    let log = generate_separate_renditions(&dir).await;
     let writes: Vec<&str> = log
         .lines()
         .filter_map(|line| {
@@ -381,7 +342,11 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
     std::fs::remove_dir_all(&dir).unwrap();
 
     tokio::time::timeout(Duration::from_secs(30), async {
-        while server.engine.input_has_session(PIPELINE_ID, INPUT_ID).await {
+        while server
+            .engine
+            .input_has_session(PIPELINE_ID, &server.input_id)
+            .await
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -471,6 +436,42 @@ async fn ffmpeg_hls_with_a_separate_audio_rendition_publishes_both() {
         );
         newest = newest.max(packet.dts);
     }
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads FFmpeg's stderr on success, which `run_tool` drops; bounded by the timeout below"
+)]
+async fn generate_separate_renditions(dir: &std::path::Path) -> String {
+    // FFmpeg runs in `dir`, so its binary and input need absolute paths.
+    let ffmpeg = std::path::absolute(restream_engine::ffmpeg_binary::ffmpeg_bin_path()).unwrap();
+    let fixture = std::path::absolute(Codec::H264.fixture()).unwrap();
+    let output = tokio::process::Command::new(ffmpeg)
+        .current_dir(dir)
+        // `info` logs every object FFmpeg opens for writing, in its order.
+        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-i"])
+        .arg(fixture)
+        .args(["-map", "0:v:0", "-map", "0:a:0", "-c", "copy"])
+        .args(["-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "1"])
+        .args(["-hls_list_size", "0", "-hls_segment_type", "fmp4"])
+        .args([
+            "-var_stream_map",
+            "v:0,agroup:aud a:0,agroup:aud,default:yes",
+        ])
+        .args(["-master_pl_name", "master.m3u8", "stream_%v/index.m3u8"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(60), output)
+        .await
+        .expect("ffmpeg finished")
+        .expect("ffmpeg ran");
+    assert!(
+        output.status.success(),
+        "ffmpeg exited with {}",
+        output.status
+    );
+    String::from_utf8(output.stderr).unwrap()
 }
 
 /// What a live `-hls_list_size 3` push uploads for `playlist` once the

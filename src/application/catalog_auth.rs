@@ -21,8 +21,6 @@
 //! change no write reported.
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -36,57 +34,12 @@ use restream_engine::ingest_auth::{
 use restream_engine::security::{IngestSecurityService, RateLimitScope};
 use tracing::{info, warn};
 
-use crate::application::pipeline_inputs::PipelineInputStoreError;
+use crate::db::{self, DeadlineDb, UndecodableInputRow};
 
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
 /// How often production reloads the index whether or not a write asked.
 pub const PERIODIC_RELOAD_INTERVAL: Duration = Duration::from_secs(30);
-
-/// A catalog write task that ended without an answer (it panicked).
-#[derive(Debug)]
-pub struct WriteAborted(String);
-
-impl std::fmt::Display for WriteAborted {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl From<WriteAborted> for sqlx::Error {
-    fn from(error: WriteAborted) -> Self {
-        Self::Io(std::io::Error::other(error.0))
-    }
-}
-
-impl From<WriteAborted> for PipelineInputStoreError {
-    fn from(error: WriteAborted) -> Self {
-        Self::Internal(error.0)
-    }
-}
-
-/// A stored input whose row does not decode (for example a malformed push
-/// credential). Its key stays known, so it is refused without counting a
-/// failure against the client: one broken row must not get the client's
-/// address banned from its healthy keys.
-#[derive(Debug)]
-pub struct UnreadableInput {
-    pub input_id: String,
-    pub stream_key: String,
-    pub enabled: bool,
-    pub error: String,
-}
-
-/// One stored input, decoded or not.
-pub type CatalogRow = Result<PipelineInput, UnreadableInput>;
-
-pub type CatalogAuthLoadFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<CatalogRow>, sqlx::Error>> + Send + 'a>>;
-
-/// Reads every pipeline input, for a full rebuild of the index.
-pub trait CatalogAuthSource: Send + Sync {
-    fn load_inputs(&self) -> CatalogAuthLoadFuture<'_>;
-}
 
 /// What admission needs to know about one enabled input's stream key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +69,7 @@ pub struct CatalogAuthSnapshot {
 }
 
 impl CatalogAuthSnapshot {
-    fn from_rows(rows: Vec<CatalogRow>) -> Self {
+    fn from_rows(rows: Vec<Result<PipelineInput, UndecodableInputRow>>) -> Self {
         let mut keys = HashMap::with_capacity(rows.len());
         for row in rows {
             match row {
@@ -132,7 +85,7 @@ impl CatalogAuthSnapshot {
                 }
                 Err(unreadable) if unreadable.enabled => {
                     warn!(
-                        input_id = %unreadable.input_id,
+                        input_id = %unreadable.id,
                         error = %unreadable.error,
                         "pipeline input row does not decode; its key is refused until the row is fixed",
                     );
@@ -157,7 +110,9 @@ impl CatalogAuthSnapshot {
 /// The process's one admission index and its reload discipline.
 pub struct CatalogAuth {
     snapshot: ArcSwap<CatalogAuthSnapshot>,
-    source: Arc<dyn CatalogAuthSource>,
+    db: DeadlineDb,
+    #[cfg(test)]
+    reload_probe: tests::ReloadProbe,
     /// Held across a reload: one reload in flight at a time.
     reloads: tokio::sync::Mutex<()>,
     /// Reloads asked for so far, one per committed write (and the startup load).
@@ -174,10 +129,12 @@ pub struct CatalogAuth {
 impl CatalogAuth {
     /// An index with no keys, refusing every connect until [`Self::load`]
     /// or a reload fills it.
-    pub fn new(source: Arc<dyn CatalogAuthSource>) -> Arc<Self> {
+    pub fn new(db: DeadlineDb) -> Arc<Self> {
         Arc::new(Self {
             snapshot: ArcSwap::from_pointee(CatalogAuthSnapshot::default()),
-            source,
+            db,
+            #[cfg(test)]
+            reload_probe: tests::ReloadProbe::default(),
             reloads: tokio::sync::Mutex::new(()),
             requested: AtomicU64::new(0),
             covered: AtomicU64::new(0),
@@ -228,13 +185,12 @@ impl CatalogAuth {
     /// retry task owns it). The caller only awaits the task: dropping it (a
     /// disconnected HTTP client) cancels neither half, so a write SQLite
     /// committed always reaches the index.
-    pub async fn commit<T, E>(
+    pub(super) async fn commit<T>(
         self: &Arc<Self>,
-        write: impl Future<Output = Result<T, E>> + Send + 'static,
-    ) -> Result<T, E>
+        write: impl Future<Output = Result<T, sqlx::Error>> + Send + 'static,
+    ) -> Result<T, sqlx::Error>
     where
         T: Send + 'static,
-        E: From<WriteAborted> + Send + 'static,
     {
         let catalog = Arc::clone(self);
         let unit = tokio::spawn(async move {
@@ -245,16 +201,16 @@ impl CatalogAuth {
             answer
         });
         unit.await.unwrap_or_else(|join| {
-            Err(WriteAborted(format!("catalog write task failed: {join}")).into())
+            Err(sqlx::Error::Io(std::io::Error::other(format!(
+                "catalog write task failed: {join}"
+            ))))
         })
     }
 
     /// A reload with no write in front of it, on the same uncancellable path.
     #[cfg(test)]
     pub(crate) async fn refresh(self: &Arc<Self>) {
-        let _ = self
-            .commit(std::future::ready(Ok::<(), WriteAborted>(())))
-            .await;
+        let _ = self.commit(std::future::ready(Ok(()))).await;
     }
 
     /// Reloads every `interval` until [`Self::shutdown`]. A change no write
@@ -306,9 +262,14 @@ impl CatalogAuth {
             return Ok(());
         }
         let target = self.requested.load(Ordering::SeqCst);
-        let rows = self.source.load_inputs().await?;
+        let rows = self
+            .db
+            .read(|pool| db::with_busy_retry(|| db::list_pipeline_inputs_for_admission(pool)))
+            .await;
+        #[cfg(test)]
+        self.reload_probe.query_completed().await;
         self.snapshot
-            .store(Arc::new(CatalogAuthSnapshot::from_rows(rows)));
+            .store(Arc::new(CatalogAuthSnapshot::from_rows(rows?)));
         self.covered.store(target, Ordering::SeqCst);
         Ok(())
     }
