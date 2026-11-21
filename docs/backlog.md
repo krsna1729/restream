@@ -25,6 +25,13 @@ the [assurance roadmap](assurance-roadmap.md).
 ### Q-117 [platform] [sonnet] Drop the vendored hang and moq-msf
 - Goal: `hang` and `moq-msf` come from crates.io again, so Dependabot and
   the advisory checks see their real versions.
+- The `hang` H.264 codec fix is on upstream's release branch
+  ([moq-dev/moq#9256](https://github.com/moq-dev/moq/pull/9256)) but not in
+  `hang` 0.21.24. A Git pin at the backport would also bring a different
+  `moq-net` source from the one Restream patches for Compio. Keep the vendor
+  patch until a compatible release passes the gate below.
+- The 0.5.x catalog bounds patch is open as
+  [moq-dev/moq#9288](https://github.com/moq-dev/moq/pull/9288).
 - Gates, per crate: an upstream release passes the vendored regression
   cases, ported to Restream tests against the public API. Then delete
   `vendor/<crate>` and its `[patch.crates-io]` entries in the root and

@@ -33,6 +33,23 @@ Stop when another split adds wrappers or navigation without clarifying ownership
 Avoid endpoint-local CRUD wrappers, compatibility facades that recreate coupling,
 and hot-path dispatch/channel hops introduced solely for layering.
 
+## Review the policy, not the call count
+
+- Give shared construction policy (trust roots, deadlines, resource limits)
+  one concrete owner. Keep protocol choices and workload settings with their
+  callers. Reuse the owner before adding a crate or a trait. Enforce a raw
+  constructor ban only when bypassing that owner breaks a stated invariant.
+- Trace a forwarding layer through its callers. If it only renames fields or
+  forwards, prefer the existing owner: the SQLite services use `DeadlineDb`,
+  and egress backends submit DNS through the process resolver after admission.
+  A second policy type with its own default can give tests a limit production
+  never uses.
+- Keep a boundary when implementations behave differently or when tests need
+  to control an effect that the real dependency cannot reproduce on demand.
+  `EgressFeed` serves two different ring behaviors; `NotifyTransport` scripts
+  network sends. Use the real SQLite path for persistence failures and races
+  where triggers, held connections or update hooks can reproduce them.
+
 ## File growth
 
 Four gates fail the build; file length is not one of them:

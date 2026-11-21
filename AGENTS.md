@@ -178,7 +178,9 @@ its evidence in the commit message.
 - Squash-and-merge by default: the branch history records how the work converged.
 - Rebase-and-merge when the commits are curated and are the design of the
   change, such as a multi-step architecture or media-pipeline change.
-- A merge commit only when the branch topology itself matters.
+- Use a merge commit when the branch topology matters, such as a stack of
+  dependent PRs. Keep the base branch until the next PR is retargeted. Run
+  the required checks for its new base; a base-only edit may not trigger them.
 - `master` requires the PR CI checks but not an up-to-date branch. Merge a
   green PR without refreshing it; update only on a conflict or an overlapping
   change merged since its run. The `master` push CI is the post-merge check.
