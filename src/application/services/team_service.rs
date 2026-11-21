@@ -6,16 +6,21 @@
 //! on each checked request, so a role change or a disable takes effect at
 //! once.
 
-use std::sync::Arc;
-
-use crate::application::ports::{SessionBinding, StoredUser, TeamStore};
 use crate::application::team::{AuditEntry, Principal, UserRecord, valid_username};
+use crate::db::{DeadlineDb, team_repo};
 use restream_domain::domain::role::Role;
 
 use super::error::{ServiceError, ServiceResult};
 
 pub const BUILTIN_ADMIN_ID: &str = "admin";
 pub const BUILTIN_ADMIN_USERNAME: &str = "admin";
+
+/// A stored member with the password hash login verifies against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredUser {
+    pub user: UserRecord,
+    pub password_hash: String,
+}
 
 fn builtin_admin() -> UserRecord {
     UserRecord {
@@ -28,41 +33,53 @@ fn builtin_admin() -> UserRecord {
     }
 }
 
-fn store_error(
-    context: &str,
-) -> impl Fn(crate::application::ports::TeamStoreError) -> ServiceError + '_ {
+fn store_error<E: std::fmt::Display>(context: &str) -> impl Fn(E) -> ServiceError + '_ {
     move |err| ServiceError::internal(format!("{context}: {err}"))
+}
+
+/// A member row; an unknown stored role fails the read.
+fn stored_user(context: &str, row: team_repo::UserRow) -> ServiceResult<StoredUser> {
+    let (id, username, role, created_at_ms, disabled, password_hash) = row;
+    let role = Role::parse(&role).ok_or_else(|| {
+        ServiceError::internal(format!("{context}: member {id} has unknown role {role:?}"))
+    })?;
+    Ok(StoredUser {
+        user: UserRecord {
+            id,
+            username,
+            role,
+            created_at_ms,
+            disabled,
+            last_active_ms: None,
+        },
+        password_hash,
+    })
 }
 
 #[derive(Clone)]
 pub struct TeamService {
-    store: Arc<dyn TeamStore>,
+    db: DeadlineDb,
 }
 
 impl TeamService {
-    pub fn with_store(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+    pub fn new(db: DeadlineDb) -> Self {
+        Self { db }
     }
 
     /// The member behind a session (by token hash), or `None` when the
     /// session or its member is gone or disabled.
     pub async fn principal(&self, token_hash: &str) -> ServiceResult<Option<Principal>> {
-        let Some(binding) = self
-            .store
-            .session_binding(token_hash)
+        let Some((user_id, view_as)) = self
+            .db
+            .read(|pool| team_repo::session_principal(pool, token_hash))
             .await
             .map_err(store_error("read session"))?
         else {
             return Ok(None);
         };
-        let user = match binding.user_id {
+        let user = match user_id {
             None => builtin_admin(),
-            Some(id) => match self
-                .store
-                .find_user(&id)
-                .await
-                .map_err(store_error("read member"))?
-            {
+            Some(id) => match self.stored_user(&id).await? {
                 Some(stored) if !stored.user.disabled => stored.user,
                 _ => return Ok(None),
             },
@@ -71,7 +88,8 @@ impl TeamService {
             user_id: user.id,
             username: user.username,
             role: user.role,
-            view_as: binding.view_as,
+            // An unknown stored view narrows to nothing rather than failing the session.
+            view_as: view_as.as_deref().and_then(Role::parse),
         }))
     }
 
@@ -79,30 +97,50 @@ impl TeamService {
     /// is not here: its password is the dashboard password.
     pub async fn login_candidate(&self, username: &str) -> ServiceResult<Option<StoredUser>> {
         Ok(self
-            .store
-            .find_user_by_username(username)
+            .db
+            .read(|pool| team_repo::find_user_by_username(pool, username))
             .await
             .map_err(store_error("read member"))?
+            .map(|row| stored_user("read member", row))
+            .transpose()?
             .filter(|stored| !stored.user.disabled))
     }
 
     pub async fn stored_user(&self, id: &str) -> ServiceResult<Option<StoredUser>> {
-        self.store
-            .find_user(id)
+        self.db
+            .read(|pool| team_repo::find_user(pool, id))
             .await
-            .map_err(store_error("read member"))
+            .map_err(store_error("read member"))?
+            .map(|row| stored_user("read member", row))
+            .transpose()
+    }
+
+    /// `false` when the session does not exist.
+    async fn set_session_principal(
+        &self,
+        token_hash: &str,
+        user_id: Option<&str>,
+        view_as: Option<Role>,
+    ) -> ServiceResult<bool> {
+        let (token, user_id) = (token_hash.to_owned(), user_id.map(str::to_owned));
+        self.db
+            .write(move |pool| async move {
+                team_repo::set_session_principal(
+                    &pool,
+                    &token,
+                    user_id.as_deref(),
+                    view_as.map(Role::as_str),
+                )
+                .await
+            })
+            .await
+            .map_err(store_error("bind session"))
     }
 
     /// Binds a fresh session to the member who logged in.
     pub async fn bind_session(&self, token_hash: &str, user_id: Option<&str>) -> ServiceResult<()> {
-        let binding = SessionBinding {
-            user_id: user_id.map(str::to_string),
-            view_as: None,
-        };
-        self.store
-            .bind_session(token_hash, &binding)
-            .await
-            .map_err(store_error("bind session"))?;
+        self.set_session_principal(token_hash, user_id, None)
+            .await?;
         Ok(())
     }
 
@@ -115,15 +153,10 @@ impl TeamService {
         view_as: Option<Role>,
     ) -> ServiceResult<Principal> {
         let view_as = view_as.filter(|view| *view < principal.role);
-        let binding = SessionBinding {
-            user_id: (principal.user_id != BUILTIN_ADMIN_ID).then(|| principal.user_id.clone()),
-            view_as,
-        };
+        let user_id = (principal.user_id != BUILTIN_ADMIN_ID).then_some(principal.user_id.as_str());
         if !self
-            .store
-            .bind_session(token_hash, &binding)
-            .await
-            .map_err(store_error("bind session"))?
+            .set_session_principal(token_hash, user_id, view_as)
+            .await?
         {
             return Err(ServiceError::not_found("session ended"));
         }
@@ -136,16 +169,18 @@ impl TeamService {
     /// The built-in admin first, then the stored members, each with when
     /// they were last active (signed in, or made an audited change).
     pub async fn list_users(&self) -> ServiceResult<Vec<UserRecord>> {
+        let rows = self
+            .db
+            .read(team_repo::list_users)
+            .await
+            .map_err(store_error("list members"))?;
         let mut users = vec![builtin_admin()];
-        users.extend(
-            self.store
-                .list_users()
-                .await
-                .map_err(store_error("list members"))?,
-        );
+        for row in rows {
+            users.push(stored_user("list members", row)?.user);
+        }
         let active: std::collections::HashMap<String, i64> = self
-            .store
-            .last_active()
+            .db
+            .read(|pool| team_repo::last_active(pool, BUILTIN_ADMIN_USERNAME))
             .await
             .map_err(store_error("read last activity"))?
             .into_iter()
@@ -171,12 +206,17 @@ impl TeamService {
                 "The username admin is the built-in admin's.",
             ));
         }
-        if !self
-            .store
-            .insert_user(&user, password_hash)
+        let (id, username, role) = (user.id.clone(), user.username.clone(), user.role);
+        let (created_at_ms, hash) = (user.created_at_ms, password_hash.to_owned());
+        let inserted = self
+            .db
+            .write(move |pool| async move {
+                team_repo::insert_user(&pool, &id, &username, role.as_str(), created_at_ms, &hash)
+                    .await
+            })
             .await
-            .map_err(store_error("create member"))?
-        {
+            .map_err(store_error("create member"))?;
+        if !inserted {
             return Err(ServiceError::conflict(format!(
                 "{} is already a member.",
                 user.username
@@ -199,12 +239,7 @@ impl TeamService {
                 "The built-in admin is always an enabled admin; change its password under Security.",
             ));
         }
-        if !self
-            .store
-            .update_user(id, role, disabled, password_hash)
-            .await
-            .map_err(store_error("update member"))?
-        {
+        if !self.write_user(id, role, disabled, password_hash).await? {
             return Err(ServiceError::not_found(format!("no member {id}")));
         }
         if disabled == Some(true) || password_hash.is_some() {
@@ -224,15 +259,34 @@ impl TeamService {
         password_hash: &str,
         keep: &str,
     ) -> ServiceResult<()> {
-        if !self
-            .store
-            .update_user(id, None, None, Some(password_hash))
-            .await
-            .map_err(store_error("update member"))?
-        {
+        if !self.write_user(id, None, None, Some(password_hash)).await? {
             return Err(ServiceError::not_found(format!("no member {id}")));
         }
         self.end_sessions(id, Some(keep)).await
+    }
+
+    /// `false` when no such member exists.
+    async fn write_user(
+        &self,
+        id: &str,
+        role: Option<Role>,
+        disabled: Option<bool>,
+        password_hash: Option<&str>,
+    ) -> ServiceResult<bool> {
+        let (id, password_hash) = (id.to_owned(), password_hash.map(str::to_owned));
+        self.db
+            .write(move |pool| async move {
+                team_repo::update_user(
+                    &pool,
+                    &id,
+                    role.map(Role::as_str),
+                    disabled,
+                    password_hash.as_deref(),
+                )
+                .await
+            })
+            .await
+            .map_err(store_error("update member"))
     }
 
     pub async fn delete_user(&self, id: &str) -> ServiceResult<()> {
@@ -242,9 +296,10 @@ impl TeamService {
             ));
         }
         self.end_sessions(id, None).await?;
+        let owned_id = id.to_owned();
         if !self
-            .store
-            .delete_user(id)
+            .db
+            .write(move |pool| async move { team_repo::delete_user(&pool, &owned_id).await })
             .await
             .map_err(store_error("delete member"))?
         {
@@ -255,36 +310,66 @@ impl TeamService {
 
     /// Ends a member's sessions except `keep` (a token hash).
     pub async fn end_sessions(&self, user_id: &str, keep: Option<&str>) -> ServiceResult<()> {
-        self.store
-            .delete_user_sessions(user_id, keep)
+        let (user_id, keep) = (user_id.to_owned(), keep.map(str::to_owned));
+        self.db
+            .write(move |pool| async move {
+                team_repo::delete_user_sessions(&pool, &user_id, keep.as_deref()).await
+            })
             .await
             .map_err(store_error("end member sessions"))
     }
 
     pub async fn record(&self, entry: &AuditEntry) -> ServiceResult<()> {
-        self.store
-            .append_audit(entry)
+        let entry = entry.clone();
+        self.db
+            .write(move |pool| async move {
+                team_repo::append_audit(
+                    &pool,
+                    entry.at_ms,
+                    &entry.username,
+                    entry.role.as_str(),
+                    &entry.method,
+                    &entry.path,
+                    entry.status,
+                )
+                .await
+            })
             .await
             .map_err(store_error("append audit"))
     }
 
     pub async fn audit(&self, limit: u32, before: Option<i64>) -> ServiceResult<Vec<AuditEntry>> {
-        self.store
-            .list_audit(limit.clamp(1, 500), before)
+        let limit = i64::from(limit.clamp(1, 500));
+        let rows = self
+            .db
+            .read(|pool| team_repo::list_audit(pool, limit, before))
             .await
-            .map_err(store_error("read audit"))
+            .map_err(store_error("read audit"))?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, at_ms, username, role, method, path, status)| AuditEntry {
+                    id,
+                    at_ms,
+                    username,
+                    role: Role::parse(&role).unwrap_or(Role::Viewer),
+                    method,
+                    path,
+                    status: u16::try_from(status).unwrap_or(0),
+                },
+            )
+            .collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::service_wiring::SqliteServiceFactory;
 
     async fn service() -> (TeamService, sqlx::SqlitePool) {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        (SqliteServiceFactory::new(&pool).team_service(), pool)
+        (TeamService::new(DeadlineDb::api(pool.clone())), pool)
     }
 
     async fn session(pool: &sqlx::SqlitePool, token: &str) {

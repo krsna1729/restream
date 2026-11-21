@@ -4,9 +4,7 @@ use super::*;
 use restream::application::ports::{MetaStoreWriter, MetaWriteFuture};
 use restream::application::services::{AuthService, TeamService};
 use restream::infrastructure::service_wiring::SqliteServiceFactory;
-use restream::infrastructure::sqlite_ports::{
-    SqliteMetaStore, SqliteSessionStore, SqliteTeamStore,
-};
+use restream::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteSessionStore};
 use tokio::sync::oneshot;
 
 const CURRENT_TOKEN: &str = "database-resilience-current";
@@ -130,9 +128,8 @@ async fn unavailable_principal_store_cannot_bypass_role_checks_and_mutate() {
     assert!(state.validate_session(CURRENT_TOKEN).await.unwrap());
     let principal_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&principal_pool).await.unwrap();
-    state.team_service = TeamService::with_store(Arc::new(SqliteTeamStore::new(
-        db::DeadlineDb::new(principal_pool.clone(), READ_DEADLINE),
-    )));
+    state.team_service =
+        TeamService::new(db::DeadlineDb::new(principal_pool.clone(), READ_DEADLINE));
     principal_pool.close().await;
     let app = api::create_router(Arc::new(state));
 
