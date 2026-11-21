@@ -153,7 +153,7 @@ fn spawn_shard(idle: Duration, drain: Duration) -> (EgressShardHandle, TestFeed)
         crate::egress::command::ShardId::new(0),
         config,
         move || {
-            resolve_runtime::resolving_srt_shard_backend(
+            srt_shard_backend(
                 reader,
                 budget(),
                 drain,

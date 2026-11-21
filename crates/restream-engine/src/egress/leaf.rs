@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::egress::command::{FeedId, OutputId};
 use crate::egress::feed::FeedCursor;
-use crate::egress::policy::LeafLimits;
+use crate::egress::policy::LeafPolicy;
 use crate::egress::scheduler::ScheduleState;
 
 // ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ pub struct LeafCommon {
     pub schedule: ScheduleState,
     /// Byte-progress tracking.
     pub progress: ProgressState,
-    /// Strict per-leaf resource ceilings.
-    pub limits: LeafLimits,
+    /// The output's policy; live leaves read its stall ceilings.
+    pub policy: LeafPolicy,
     /// Application bytes currently pending on this leaf (headers + payload
     /// retained but not yet accepted by the transport).
     pub pending_application_bytes: usize,
@@ -312,7 +312,7 @@ impl EgressProgressSink {
 
 impl LeafCommon {
     /// Create a new leaf shell.
-    pub fn new(output_id: OutputId, generation: u64, feed: FeedId, limits: LeafLimits) -> Self {
+    pub fn new(output_id: OutputId, generation: u64, feed: FeedId, policy: LeafPolicy) -> Self {
         Self {
             output_id,
             generation,
@@ -321,7 +321,7 @@ impl LeafCommon {
             cursor_primed: false,
             schedule: ScheduleState::new(),
             progress: ProgressState::new(),
-            limits,
+            policy,
             pending_application_bytes: 0,
             progress_sink: EgressProgressSink::default(),
         }
@@ -348,14 +348,14 @@ impl LeafCommon {
 mod tests {
     use super::*;
     use crate::egress::command::{FeedId, OutputId};
-    use crate::egress::policy::LeafLimits;
+    use crate::egress::policy::LeafPolicy;
 
     fn make_common(id: &str, generation_val: u64) -> LeafCommon {
         LeafCommon::new(
             OutputId::new(id),
             generation_val,
             FeedId::new("f"),
-            LeafLimits::default(),
+            LeafPolicy::default(),
         )
     }
 

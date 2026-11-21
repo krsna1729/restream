@@ -485,14 +485,13 @@ fn shard_connect_advertises_fourcc_list(enhanced_rtmp: bool) -> bool {
             ..RtmpPublishStartup::default()
         },
     );
-    let (_sender, queue) = rtmp_resolve_completion_queue();
     let mut backend = RtmpShardBackend::with_runtime_components(
         CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
         4096,
         crate::egress::tls::rustls_client_config(),
-        queue,
+        None,
         startup_source,
     );
     let output_id = OutputId::new("out-1");
@@ -527,7 +526,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     // `visit_one_ready_leaf`) is enforced by `sweep_stalled_leaves`
     // (mirroring `SrtShardBackend`'s identical mechanism): a leaf with
     // pending bytes and no byte/protocol progress within
-    // `LeafLimits::max_backpressure_duration` gets closed. This test
+    // `LeafPolicy::no_progress_timeout` gets closed. This test
     // drives two real leaves to `Publishing` (real handshake/negotiation
     // against `run_accepting_server_peer` peers), then directly sets each
     // leaf's stall-relevant state (`pending_application_bytes`,
@@ -901,6 +900,7 @@ mod drain;
 mod media_tick;
 mod panic;
 mod reregistration;
+mod resolve;
 mod wake;
 
 #[test]

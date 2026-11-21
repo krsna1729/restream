@@ -349,9 +349,9 @@ so only that output fails.
 The rule is: a slow leaf stops being runnable; it does not add work or
 backlog.
 
-- A leaf retains at most its pending wire state. `LeafLimits`, built from
-  `LeafPolicy::default()`, bounds pending application bytes (256 KiB), feed
-  lag (300 units) and time without progress (15 s).
+- A leaf retains at most its pending wire state; each backend bounds its own
+  send queue. The leaf keeps its output's `LeafPolicy`, whose defaults bound
+  feed lag (300 units) and time without progress (15 s).
 - RTMP and SRT backends run a stall sweep at most once per second.
   `classify_stall` returns `Idle`, `Backpressured` or `Stalled` from pending
   bytes, progress age and lag. The lag ceiling applies to SRT only; RTMP
@@ -427,7 +427,7 @@ test (see [SRT shard capacity](runtime-crossings.md#srt-shard-capacity)).
 | Failure | Blast radius | Mechanism |
 |---|---|---|
 | Engine panic | One output | `catch_unwind` in `visit_leaf`; output closes and retries |
-| Slow or dead destination | One output | Budgets, parking, `LeafLimits`, stall sweep |
+| Slow or dead destination | One output | Budgets, parking, `LeafPolicy` stall ceilings, stall sweep |
 | Stale event after removal | None | `LeafKey` epoch; generation check in `visit_leaf` |
 | Shard panic outside a visit | Outputs on that shard | `EgressShardSnapshot::panicked`; health `Panicked`; critical alert |
 | Native call that blocks | Outputs on that shard | Not contained; other shards and feeds keep running |
@@ -460,10 +460,11 @@ that cannot safely be taken by another thread.
 - Each shard owns one Compio io_uring runtime in `CompioTcpPoller`. Shard
   construction fails if io_uring is unavailable.
 - DNS runs on the process resolver (`crates/restream-engine/src/resolver.rs`),
-  never on the shard thread: `ResolvingRtmpShardBackend` submits each
-  `Add`/`Update` with the output's `resolve_timeout` as its deadline, and the
-  answer (or timeout, or a full resolver queue) fails or completes that
-  output's pending connect on the next media tick.
+  never on the shard thread: the backend submits each admitted `Add`/`Update`
+  with the output's `resolve_timeout` as its deadline
+  (`rtmp_shard_connect.rs`), and the answer (or timeout, or a full resolver
+  queue) fails or completes that output's pending connect on the next media
+  tick.
 - Each peer starts with one non-blocking `connect(2)`. Only `EINPROGRESS`
   sockets are registered with `PollFd`. A rotating scan visits at most half
   of `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` pending connects per poll.

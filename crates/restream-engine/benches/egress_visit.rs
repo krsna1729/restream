@@ -8,7 +8,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use restream_engine::egress::backend::Readiness;
 use restream_engine::egress::command::{FeedId, OutputId};
 use restream_engine::egress::leaf::LeafCommon;
-use restream_engine::egress::policy::{LeafLimits, WorkBudget};
+use restream_engine::egress::policy::{LeafPolicy, WorkBudget};
 use restream_engine::egress::test_driver::{FakeEngine, FakeFeed, FakeTransport};
 use restream_engine::egress::visit::EngineVisit;
 use std::hint::black_box;
@@ -20,7 +20,7 @@ fn bench_visit(c: &mut Criterion) {
         OutputId::new("out"),
         1,
         FeedId::new("feed"),
-        LeafLimits::default(),
+        LeafPolicy::default(),
     );
     let mut engine = FakeEngine::new(Vec::new());
     let mut transport = FakeTransport::default();

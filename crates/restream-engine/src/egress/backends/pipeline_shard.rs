@@ -23,7 +23,7 @@ use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
-use crate::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
+use crate::egress::policy::{WorkBudget, WorkBudgetConfig};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
@@ -179,13 +179,8 @@ where
             self.remove_leaf_key(previous);
         }
         let progress = spec.progress.clone();
-        let common = LeafCommon::new(
-            spec.id,
-            spec.generation,
-            spec.feed,
-            LeafLimits::from_policy(&spec.policy),
-        )
-        .with_progress_sink(spec.progress);
+        let common = LeafCommon::new(spec.id, spec.generation, spec.feed, spec.policy)
+            .with_progress_sink(spec.progress);
         let Some(key) = self.leaves.insert_with(|_| PipelineFabricLeaf {
             common,
             engine: PipelineEngine::default(),

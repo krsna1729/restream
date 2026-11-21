@@ -1,3 +1,12 @@
+//! An RTMP output's connect path: its destination lookup on the process
+//! resolver (`crate::resolver`, deadline `LeafPolicy::resolve_timeout`),
+//! the TCP connect, then a live leaf; and the production backend
+//! constructor that wires the resolver in. Every lookup is answered
+//! (addresses, failure, timeout or a full resolver queue) into the backend's
+//! completion queue, drained on its media tick; a failure fails that output
+//! alone and its egress task retries it. The shard owns no resolver thread,
+//! so its teardown never waits on DNS.
+
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
@@ -52,21 +61,45 @@ where
             spec.progress.mark_terminated_unexpectedly();
             return;
         }
-        let common = LeafCommon::new(
-            spec.id,
-            spec.generation,
-            spec.feed,
-            LeafLimits::from_policy(&spec.policy),
-        )
-        .with_progress_sink(spec.progress.clone());
+        let connect_timeout = spec.policy.connect_timeout;
+        let resolve_deadline = Instant::now() + spec.policy.resolve_timeout;
+        let common = LeafCommon::new(spec.id, spec.generation, spec.feed, spec.policy)
+            .with_progress_sink(spec.progress.clone());
+        self.resolve_destination(&output_id, common.generation, &parts, resolve_deadline);
         self.pending_connects.insert(
             output_id,
             PendingRtmpConnect {
                 common,
                 parts,
-                connect_timeout: spec.policy.connect_timeout,
+                connect_timeout,
             },
         );
+    }
+
+    /// The answer is drained on a later media tick, after the pending
+    /// connect it completes is in place. Never blocks (`Resolver::submit`).
+    fn resolve_destination(
+        &self,
+        output_id: &OutputId,
+        generation: u64,
+        parts: &restream_rtmp::RtmpUrlParts,
+        deadline: Instant,
+    ) {
+        let Some(resolver) = &self.resolver else {
+            return;
+        };
+        let output_id = output_id.clone();
+        let completions = self.resolved_sender.clone();
+        resolver.submit(&parts.host, parts.port, deadline, move |resolution| {
+            // The receiver goes only with the shard, when no answer matters.
+            let _ = completions.send(RtmpResolvedConnect {
+                output_id,
+                generation,
+                peer: resolution.and_then(|addresses| {
+                    addresses.first().copied().ok_or(ResolveError::NoAddress)
+                }),
+            });
+        });
     }
 
     #[cfg(test)]
@@ -322,4 +355,35 @@ where
         }
         self.activate_connected(&output_id, connecting, event.key)
     }
+}
+
+/// Build one RTMP shard backend whose lookups go to `resolver`
+/// (`crate::resolver::shared()` in production).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rtmp_shard_backend<P, S>(
+    poller: P,
+    feed: RingFeed,
+    budget: WorkBudgetConfig,
+    chunk_size: u32,
+    rtmps_client_config: Arc<ClientConfig>,
+    startup_source: S,
+    drain_timeout: Duration,
+    leaf_capacity: usize,
+    resolver: Arc<Resolver>,
+) -> RtmpShardBackend<P, S>
+where
+    P: RtmpReadinessPoller,
+    S: RtmpPublishStartupSource,
+{
+    RtmpShardBackend::with_runtime_components(
+        poller,
+        feed,
+        budget,
+        chunk_size,
+        rtmps_client_config,
+        Some(resolver),
+        startup_source,
+    )
+    .with_leaf_capacity(leaf_capacity)
+    .with_drain_timeout(drain_timeout)
 }

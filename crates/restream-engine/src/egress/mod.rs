@@ -12,7 +12,7 @@
 //!   command.rs      — EgressCommand, OutputSpec, IDs
 //!   feed.rs         — EgressFeed trait, FeedCursor, FeedRead
 //!   scheduler.rs    — ReadyQueue, ScheduleState, round-robin
-//!   policy.rs       — LeafPolicy, WorkBudget, LeafLimits
+//!   policy.rs       — LeafPolicy, classify_stall, WorkBudget
 //!   backend.rs      — ProtocolEngine trait, EngineProgress, Readiness
 //!   backends/       — concrete fabric protocol engines
 //!   leaf.rs         — LeafCommon, ProgressState
@@ -66,7 +66,7 @@ pub use manager::{
     DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerConfig,
     EgressManagerConfigError, EgressManagerDispatchError, ManagerCommandOutcome,
 };
-pub use policy::{LeafLimits, LeafPolicy, WorkBudget};
+pub use policy::{LeafPolicy, WorkBudget};
 pub use shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
     EgressShardGroup, EgressShardGroupError, EgressShardHandle, EgressShardHealth,

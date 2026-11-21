@@ -2,7 +2,7 @@ use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness, WaitC
 use super::command::{FeedId, OutputId};
 use super::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use super::leaf::LeafCommon;
-use super::policy::{LeafLimits, WorkBudget};
+use super::policy::{LeafPolicy, WorkBudget};
 use super::scheduler::VisitDecision;
 use super::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
 use super::visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult, live_start_cursor};
@@ -15,7 +15,7 @@ fn common(generation: u64) -> LeafCommon {
         OutputId::new("out"),
         generation,
         FeedId::new("feed"),
-        LeafLimits::default(),
+        LeafPolicy::default(),
     )
 }
 

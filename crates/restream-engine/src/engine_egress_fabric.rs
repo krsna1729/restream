@@ -235,7 +235,7 @@ impl MediaEngine {
                 // Built on the new shard's own thread, like the initial spawn;
                 // a runtime that cannot be built fails this grow attempt.
                 move || {
-                    crate::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                    crate::egress::backends::srt::srt_shard_backend(
                         feed,
                         budget,
                         drain_timeout,

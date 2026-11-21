@@ -3,11 +3,9 @@ use std::sync::Arc;
 
 use crate::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::egress::backends::pipeline_shard::{PipelineShardBackend, SharedPipelineTargetSource};
-use crate::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
-use crate::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
+use crate::egress::backends::rtmp_shard::{SharedRtmpPublishStartupSource, rtmp_shard_backend};
 use crate::egress::backends::sink_shard::SinkShardBackend;
-use crate::egress::backends::srt::SrtOwnerSettings;
-use crate::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend;
+use crate::egress::backends::srt::{SrtOwnerSettings, srt_shard_backend};
 use crate::egress::backends::tcp::TcpEgressPollError;
 use crate::egress::command::ShardId;
 use crate::egress::journal::{RingFeed, TsFeed};
@@ -41,7 +39,7 @@ where
     EgressShardGroup::try_spawn_with(shard_count, shard_config, |shard_id| {
         let feed = feed_for(shard_id);
         move || {
-            resolving_srt_shard_backend(
+            srt_shard_backend(
                 feed,
                 budget,
                 drain_timeout,
@@ -87,7 +85,7 @@ where
         // so a creation failure surfaces here as `Backend`.
         move || {
             let poller = CompioTcpPoller::new(poller_max_events)?;
-            Ok(resolving_rtmp_shard_backend(
+            Ok(rtmp_shard_backend(
                 poller,
                 feed,
                 budget,

@@ -7,6 +7,6 @@ mod idle_shutdown;
 mod lifecycle_close;
 mod peer_group;
 mod request_deadlines;
-mod resolve_runtime;
+mod resolve;
 mod send_fairness;
 mod support;

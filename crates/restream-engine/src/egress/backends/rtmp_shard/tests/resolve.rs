@@ -1,55 +1,15 @@
+//! The backend's destination lookups on the process resolver: deadlines,
+//! a full resolver queue, teardown with a hung lookup, and the full
+//! `Add` → resolve → publish path.
+
 use super::*;
-use crate::egress::backends::compio_tcp::CompioTcpPoller;
-use crate::egress::backends::rtmp_shard::EmptyRtmpPublishStartupSource;
 use crate::egress::command::ShardId;
-use crate::egress::command::{FeedId, OutputId};
-use crate::egress::journal::FeedEpoch;
-use crate::egress::leaf::EgressProgressSink;
-use crate::egress::metrics::ShardMetrics;
-use crate::egress::policy::{LeafPolicy, WorkBudgetConfig};
-use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::resolver::fake::FakeDns;
-use rml_rtmp::handshake::{
-    Handshake as PeerHandshake, HandshakeProcessResult as PeerResult, PeerType,
-};
-use rml_rtmp::sessions::{
-    ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
-};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream as StdTcpStream};
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-
-fn budget() -> WorkBudgetConfig {
-    WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
-}
-
-fn feed() -> RingFeed {
-    RingFeed::new(
-        Arc::new(restream_sync::RingBuffer::new(4)),
-        Arc::new(FeedEpoch::new()),
-    )
-}
-
-fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
-    OutputSpec {
-        id: OutputId::new(id),
-        generation,
-        feed: FeedId::new("feed"),
-        protocol: ProtocolSpec::Rtmp {
-            url: url.to_string(),
-            tls: false,
-        },
-        policy: LeafPolicy::default(),
-        progress: EgressProgressSink::default(),
-    }
-}
 
 fn backend_on(
     resolver: Arc<Resolver>,
-) -> ResolvingRtmpShardBackendWithPoller<CompioTcpPoller, EmptyRtmpPublishStartupSource> {
-    resolving_rtmp_shard_backend(
+) -> RtmpShardBackend<CompioTcpPoller, EmptyRtmpPublishStartupSource> {
+    rtmp_shard_backend(
         CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
@@ -78,17 +38,14 @@ fn flagged_spec(
 }
 
 fn tick_until(
-    backend: &mut ResolvingRtmpShardBackendWithPoller<
-        CompioTcpPoller,
-        EmptyRtmpPublishStartupSource,
-    >,
+    backend: &mut RtmpShardBackend<CompioTcpPoller, EmptyRtmpPublishStartupSource>,
     within: Duration,
     mut done: impl FnMut(&RtmpShardBackend<CompioTcpPoller, EmptyRtmpPublishStartupSource>) -> bool,
 ) -> bool {
     let deadline = std::time::Instant::now() + within;
     while std::time::Instant::now() < deadline {
         backend.on_media_tick();
-        if done(&backend.backend) {
+        if done(backend) {
             return true;
         }
         thread::sleep(Duration::from_millis(2));
@@ -143,7 +100,7 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
         "{:?}",
         started.elapsed()
     );
-    assert!(backend.backend.has_pending_connect(&hung_id));
+    assert!(backend.has_pending_connect(&hung_id));
 
     assert!(
         tick_until(&mut backend, Duration::from_secs(2), |inner| {
@@ -192,7 +149,7 @@ fn a_full_resolver_queue_fails_the_output_at_once() {
     backend.on_media_tick();
 
     assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
-    assert!(!backend.backend.has_pending_connect(&output_id));
+    assert!(!backend.has_pending_connect(&output_id));
     assert_eq!(dns.resolver.stats().overflows, 1);
 }
 
@@ -225,86 +182,6 @@ fn shard_teardown_never_waits_on_a_hung_lookup() {
         "teardown waited {:?} on DNS",
         started.elapsed()
     );
-}
-
-fn run_accepting_server_peer(mut stream: StdTcpStream, done_tx: std::sync::mpsc::Sender<()>) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-
-    let mut handshake = PeerHandshake::new(PeerType::Server);
-    let mut buf = [0u8; 4096];
-    let remaining;
-    loop {
-        let n = stream.read(&mut buf).expect("server handshake read");
-        assert_ne!(n, 0);
-        match handshake.process_bytes(&buf[..n]).unwrap() {
-            PeerResult::InProgress { response_bytes } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-            }
-            PeerResult::Completed {
-                response_bytes,
-                remaining_bytes,
-            } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-                remaining = remaining_bytes;
-                break;
-            }
-        }
-    }
-
-    let config = ServerSessionConfig::new();
-    let (mut session, initial_results) = ServerSession::new(config).unwrap();
-    for result in initial_results {
-        if let ServerSessionResult::OutboundResponse(packet) = result {
-            stream.write_all(&packet.bytes).unwrap();
-        }
-    }
-
-    let mut pending_input = remaining;
-    loop {
-        if !pending_input.is_empty() {
-            let input = std::mem::take(&mut pending_input);
-            let results = session.handle_input(&input).unwrap();
-            for result in results {
-                match result {
-                    ServerSessionResult::OutboundResponse(packet) => {
-                        stream.write_all(&packet.bytes).unwrap();
-                    }
-                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
-                        request_id,
-                        ..
-                    }) => {
-                        for response in session.accept_request(request_id).unwrap() {
-                            if let ServerSessionResult::OutboundResponse(packet) = response {
-                                stream.write_all(&packet.bytes).unwrap();
-                            }
-                        }
-                    }
-                    ServerSessionResult::RaisedEvent(
-                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
-                    ) => {
-                        for response in session.accept_request(request_id).unwrap() {
-                            if let ServerSessionResult::OutboundResponse(packet) = response {
-                                stream.write_all(&packet.bytes).unwrap();
-                            }
-                        }
-                        let _ = done_tx.send(());
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let n = stream.read(&mut buf).expect("server session read");
-        assert_ne!(n, 0);
-        pending_input = buf[..n].to_vec();
-    }
 }
 
 /// End-to-end proof of the full `Add` → resolve → connect → handshake →
@@ -353,40 +230,4 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
     }
 
     server.join().unwrap();
-}
-
-struct ForwardingProbe;
-
-impl EgressShardBackend for ForwardingProbe {
-    fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
-        EgressShardCommandEffect::Continue
-    }
-
-    fn resync_count(&self) -> u64 {
-        7
-    }
-
-    fn budget_exhaustion_count(&self) -> u64 {
-        11
-    }
-
-    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        metrics.stale_completions = 13;
-    }
-}
-
-#[test]
-fn resolving_rtmp_backend_forwards_metrics() {
-    let (completion_sender, _completion_queue) = rtmp_resolve_completion_queue();
-    let backend = ResolvingRtmpShardBackend::new(
-        ForwardingProbe,
-        crate::resolver::shared(),
-        completion_sender,
-    );
-    let mut metrics = ShardMetrics::new(ShardId::new(0));
-
-    assert_eq!(backend.resync_count(), 7);
-    assert_eq!(backend.budget_exhaustion_count(), 11);
-    backend.observe_metrics(&mut metrics);
-    assert_eq!(metrics.stale_completions, 13);
 }

@@ -18,6 +18,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -29,18 +30,18 @@ use crate::egress::journal::TsFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
-use crate::egress::policy::{LeafLimits, WorkBudgetConfig};
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
 use crate::egress::visit::EngineVisitResult;
-use crate::resolver::ResolveError;
+use crate::resolver::{ResolveError, Resolver};
 use crate::srt::egress_connect::egress_connect_spec;
 use restream_srt::address_family::AddressFamily;
 use restream_srt::egress_connect::SrtFabricEgressConnectSpec;
 use restream_srt::egress_stats::SrtSendBacklog;
 
 pub(crate) mod owner_set;
-pub(crate) mod resolve_runtime;
+mod resolve;
 #[path = "srt_drain.rs"]
 mod srt_drain;
 #[path = "srt_events.rs"]
@@ -49,6 +50,7 @@ mod srt_events;
 mod srt_leaf;
 
 pub(crate) use owner_set::{SRT_OWNER_TX_CAPACITY, SrtCaller, SrtOwnerSettings, SrtOwners};
+pub(crate) use resolve::srt_shard_backend;
 pub(crate) use srt_leaf::SrtFabricLeaf;
 
 /// Blocked (backpressured or connecting) leaves re-examined per ready batch.
@@ -97,28 +99,6 @@ pub(crate) struct SrtResolvedConnect {
     pub(crate) peers: Result<Vec<SocketAddr>, ResolveError>,
 }
 
-#[derive(Debug)]
-pub(crate) struct SrtResolveCompletionQueue {
-    receiver: Receiver<SrtResolvedConnect>,
-}
-
-/// Unbounded so a resolver thread never blocks on, or drops, a shard's
-/// answer: it holds one completion per accepted `Add`/`Update`, each
-/// answered by its deadline and drained every media tick.
-pub(crate) fn srt_resolve_completion_queue()
--> (Sender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
-    let (sender, receiver) = mpsc::channel();
-    (sender, SrtResolveCompletionQueue { receiver })
-}
-
-impl SrtResolveCompletionQueue {
-    pub(crate) fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
-        while let Ok(completion) = self.receiver.try_recv() {
-            resolved.push(completion);
-        }
-    }
-}
-
 /// Where a not-yet-live output is in its connect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingStage {
@@ -146,7 +126,14 @@ struct QueuedRequest {
 }
 
 pub(crate) struct SrtShardBackend {
-    resolve_completions: SrtResolveCompletionQueue,
+    /// Peer lookups go to the process resolver (`resolve.rs`); `None` only in
+    /// tests, which answer through `resolved_sender` by hand.
+    resolver: Option<Arc<Resolver>>,
+    /// Unbounded so a resolver thread never blocks on, or drops, a shard's
+    /// answer: it holds one completion per accepted `Add`/`Update`, each
+    /// answered by its deadline and drained every media tick.
+    resolved_sender: Sender<SrtResolvedConnect>,
+    resolved_receiver: Receiver<SrtResolvedConnect>,
     resolved_connects: Vec<SrtResolvedConnect>,
     feed: TsFeed,
     /// Per-visit limits and window remain valid throughout shard startup;
@@ -198,15 +185,18 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
 }
 
 impl SrtShardBackend {
-    pub(crate) fn with_runtime_components(
+    pub(crate) fn new(
         feed: TsFeed,
         budget: WorkBudgetConfig,
-        resolve_completions: SrtResolveCompletionQueue,
         owners: SrtOwners,
+        resolver: Option<Arc<Resolver>>,
     ) -> Self {
         let capacity = crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY;
+        let (resolved_sender, resolved_receiver) = mpsc::channel();
         let mut backend = Self {
-            resolve_completions,
+            resolver,
+            resolved_sender,
+            resolved_receiver,
             resolved_connects: Vec::with_capacity(1024),
             feed,
             budget_config: budget,
@@ -426,17 +416,13 @@ impl SrtShardBackend {
             spec.progress.mark_terminated_unexpectedly();
             return;
         }
-        let common = LeafCommon::new(
-            spec.id,
-            spec.generation,
-            spec.feed,
-            LeafLimits::from_policy(&spec.policy),
-        )
-        .with_progress_sink(spec.progress.clone());
         let connect_spec = egress_connect_spec(target_url, spec.policy.connect_timeout);
         if connect_spec.peer_hosts().is_empty() {
             return;
         }
+        let resolve_deadline = Instant::now() + spec.policy.resolve_timeout;
+        let common = LeafCommon::new(spec.id, spec.generation, spec.feed, spec.policy)
+            .with_progress_sink(spec.progress.clone());
         // Once per leaf start (the connect spec is built here, not per
         // connect): a URL stored before the API checked `latency`.
         if let Some(latency) = connect_spec.ignored_latency() {
@@ -444,6 +430,18 @@ impl SrtShardBackend {
                 output_id = %output_id,
                 latency,
                 "srt output URL latency is not 20-8000 ms; ignored, retaining the last usable latency or transport default"
+            );
+        }
+        // The answer is drained on a later media tick, after the pending
+        // connect it completes is in place.
+        if let Some(resolver) = &self.resolver {
+            resolve::resolve_peers(
+                resolver,
+                &output_id,
+                common.generation,
+                connect_spec.peer_hosts(),
+                resolve_deadline,
+                &self.resolved_sender,
             );
         }
         // A replaced output's previous pending connect (and any queued Owner
@@ -756,7 +754,7 @@ impl EgressShardBackend for SrtShardBackend {
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = std::mem::take(&mut self.resolved_connects);
         resolved.clear();
-        self.resolve_completions.drain_resolved(&mut resolved);
+        resolved.extend(self.resolved_receiver.try_iter());
         let before = self.output_sockets.len() + self.queued_requests.len();
         for completion in resolved.drain(..) {
             match completion.peers {

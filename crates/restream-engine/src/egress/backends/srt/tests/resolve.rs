@@ -1,9 +1,5 @@
-use super::super::resolve_runtime::{
-    ResolvingSrtShardBackend, ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
-};
 use super::super::*;
 use super::support::*;
-use crate::egress::command::ShardId;
 use crate::egress::shard::EgressShardBackend;
 use crate::resolver::Resolver;
 use crate::resolver::fake::FakeDns;
@@ -12,9 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-fn resolving_backend(resolver: Arc<Resolver>) -> (ResolvingSrtShardBackendDefault, TestFeed) {
+fn resolving_backend(resolver: Arc<Resolver>) -> (SrtShardBackend, TestFeed) {
     let feed = TestFeed::new();
-    let backend = resolving_srt_shard_backend(
+    let backend = srt_shard_backend(
         feed.reader(),
         budget(),
         Duration::from_millis(400),
@@ -27,14 +23,14 @@ fn resolving_backend(resolver: Arc<Resolver>) -> (ResolvingSrtShardBackendDefaul
 }
 
 fn tick_until(
-    backend: &mut ResolvingSrtShardBackendDefault,
+    backend: &mut SrtShardBackend,
     within: Duration,
     mut done: impl FnMut(&SrtShardBackend) -> bool,
 ) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
         backend.on_media_tick();
-        if done(backend.inner_backend()) {
+        if done(backend) {
             return true;
         }
         thread::sleep(Duration::from_millis(2));
@@ -69,7 +65,7 @@ fn resolving_srt_backend_resolves_and_completes_add() {
         inner.output_sockets.contains_key(&OutputId::new("out-a"))
     }));
     assert_eq!(
-        backend.inner_backend().callers.len(),
+        backend.callers.len(),
         1,
         "one logical caller for the whole bond"
     );
@@ -86,7 +82,7 @@ fn resolving_srt_backend_does_not_resolve_a_non_srt_add() {
         EgressShardCommandEffect::Continue
     );
     backend.on_media_tick();
-    assert!(backend.inner_backend().pending_connects.is_empty());
+    assert!(backend.pending_connects.is_empty());
     assert_eq!(dns.calls(), 0);
 }
 
@@ -137,7 +133,7 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
         }),
         "the sibling connected while the hung lookup runs"
     );
-    let inner = backend.inner_backend();
+    let inner = &backend;
     assert!(inner.pending_connects.contains_key(&OutputId::new("hung")));
 
     assert!(
@@ -148,12 +144,7 @@ fn a_black_holed_destination_never_delays_a_sibling_on_the_shard() {
     );
     assert!(hung_failed.load(Ordering::Relaxed));
     assert!(started.elapsed() >= timeout);
-    assert!(
-        !backend
-            .inner_backend()
-            .output_sockets
-            .contains_key(&OutputId::new("hung"))
-    );
+    assert!(!backend.output_sockets.contains_key(&OutputId::new("hung")));
 }
 
 /// A bond fails on its first failing leg: it never waits for a leg whose
@@ -231,7 +222,7 @@ fn every_output_past_the_resolver_queue_gets_a_terminal_state() {
         "four names fit the queue"
     );
     assert_eq!(failed(&flags), 16, "only the refused outputs failed so far");
-    assert_eq!(backend.inner_backend().pending_connects.len(), 5);
+    assert_eq!(backend.pending_connects.len(), 5);
 
     assert!(
         tick_until(&mut backend, Duration::from_secs(3), |inner| {
@@ -240,59 +231,6 @@ fn every_output_past_the_resolver_queue_gets_a_terminal_state() {
         "every output was answered"
     );
     assert!(flags.iter().all(|flag| flag.load(Ordering::Relaxed)));
-    let inner = backend.inner_backend();
+    let inner = &backend;
     assert!(inner.output_sockets.is_empty() && inner.leaves.is_empty());
-}
-
-struct ForwardingProbe;
-
-impl EgressShardBackend for ForwardingProbe {
-    fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
-        EgressShardCommandEffect::Continue
-    }
-
-    fn resync_count(&self) -> u64 {
-        7
-    }
-
-    fn budget_exhaustion_count(&self) -> u64 {
-        11
-    }
-
-    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        metrics.stale_completions = 13;
-    }
-
-    fn wait_idle(
-        &mut self,
-        _commands: &flume::Receiver<EgressCommand>,
-        _max_wait: Duration,
-    ) -> EgressShardIdleWake {
-        EgressShardIdleWake::BackendActivity
-    }
-}
-
-/// The decorator must forward everything the shard reads from a backend,
-/// including the idle wait (the default channel wait would bypass the wrapped
-/// backend's Compio park).
-#[test]
-fn resolving_srt_backend_forwards_metrics_and_the_idle_wait() {
-    let (completion_sender, _completion_queue) = srt_resolve_completion_queue();
-    let mut backend = ResolvingSrtShardBackend::new(
-        ForwardingProbe,
-        crate::resolver::shared(),
-        completion_sender,
-    );
-    let mut metrics = ShardMetrics::new(ShardId::new(0));
-
-    assert_eq!(backend.resync_count(), 7);
-    assert_eq!(backend.budget_exhaustion_count(), 11);
-    backend.observe_metrics(&mut metrics);
-    assert_eq!(metrics.stale_completions, 13);
-
-    let (_tx, rx) = flume::bounded(1);
-    assert!(matches!(
-        backend.wait_idle(&rx, Duration::from_secs(30)),
-        EgressShardIdleWake::BackendActivity
-    ));
 }
