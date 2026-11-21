@@ -38,7 +38,6 @@
   "crates/restream-rtmp/src/flv.rs::parse_flv_audio_meta#0": 36,
   "src/api/agent/operations.rs::verify_operation#0": 24,
   "src/api/hls_ingest.rs::hls_ingest_handler#0": 33,
-  "src/api/media_library.rs::media_upload_handler#0": 28,
   "src/application/runtime_state/mod.rs::project_output#0": 23,
   "src/application/services/agent_service.rs::AgentService::apply_output_mutation#0": 23,
   "src/db/log_repo.rs::list_app_logs#0": 31
