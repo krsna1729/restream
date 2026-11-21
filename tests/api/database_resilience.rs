@@ -2,7 +2,7 @@
 
 use super::*;
 use restream::application::services::TeamService;
-use restream::infrastructure::service_wiring::SqliteServiceFactory;
+use restream::infrastructure::service_wiring::ControlPlane;
 use tokio::sync::oneshot;
 
 const CURRENT_TOKEN: &str = "database-resilience-current";
@@ -29,11 +29,11 @@ async fn fixture() -> (api::AppState, SqlitePool, Arc<TokioRwLock<HashSet<String
     let lifecycle = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&lifecycle).await.unwrap();
     let executor = db::DeadlineDb::new(pool.clone(), READ_DEADLINE);
-    let services = SqliteServiceFactory::with_databases(
+    let services = ControlPlane::new(
         executor,
         db::DeadlineDb::new(lifecycle, db::SHARED_LOOP_DEADLINE),
     )
-    .compose();
+    .services;
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
     for token in [CURRENT_TOKEN, OTHER_TOKEN] {
         let hash = token_hash(token);

@@ -24,7 +24,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
     let (log_broadcast, _) = tokio::sync::broadcast::channel(32);
 
     let state = Arc::new(restream::api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&db).services,
         security,
         ingest_policy_store,
         sessions,
@@ -607,8 +607,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
     let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
     restream::db::setup_database_schema(&db).await.unwrap();
 
-    let services =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose();
+    let services = restream::infrastructure::service_wiring::ControlPlane::on_pool(&db).services;
     let pipeline_service = services.pipeline_service;
 
     let pid = "test-pipe-service";

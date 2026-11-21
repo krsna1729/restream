@@ -1,19 +1,18 @@
 use super::*;
 use crate::infrastructure::bootstrap::test_support::memory_pool;
-use crate::infrastructure::service_wiring::SqliteServiceFactory;
+use crate::infrastructure::service_wiring::ControlPlane;
 use restream_domain::domain::ids::RecordingId;
 
 fn sqlite_pipeline_service(pool: &sqlx::SqlitePool) -> PipelineService {
-    SqliteServiceFactory::new(pool).pipeline_service()
+    ControlPlane::on_pool(pool).services.pipeline_service
 }
 
 fn sqlite_ingest_service(pool: &sqlx::SqlitePool) -> IngestService {
-    SqliteServiceFactory::new(pool).ingest_service()
+    ControlPlane::on_pool(pool).services.ingest_service
 }
 
 fn sqlite_media_library_service(pool: &sqlx::SqlitePool) -> MediaLibraryService {
-    let factory = SqliteServiceFactory::new(pool);
-    factory.media_library_service(factory.pipeline_service(), factory.ingest_service())
+    ControlPlane::on_pool(pool).services.media_library_service
 }
 
 async fn service_with_pipeline() -> MediaLibraryService {

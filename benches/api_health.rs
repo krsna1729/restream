@@ -33,7 +33,7 @@ async fn state_with_outputs(outputs: usize) -> api::AppState {
     }
     let (log_broadcast, _) = broadcast::channel(32);
     api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(restream_engine::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),

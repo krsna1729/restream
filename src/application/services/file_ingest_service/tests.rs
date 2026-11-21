@@ -1,10 +1,13 @@
 use super::*;
-use crate::infrastructure::service_wiring::SqliteServiceFactory;
+use crate::application::catalog_auth::CatalogAuth;
 use sqlx::SqlitePool;
 
 fn service(pool: SqlitePool) -> FileIngestService {
-    let factory = SqliteServiceFactory::new(&pool);
-    factory.file_ingest_service(factory.pipeline_service())
+    let db = DeadlineDb::api(pool);
+    FileIngestService::new(
+        db.clone(),
+        PipelineService::new(db.clone(), CatalogAuth::new(db)),
+    )
 }
 
 fn temp_dir(name: &str) -> PathBuf {

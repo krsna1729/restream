@@ -20,7 +20,7 @@ fn infrastructure_owns_sqlite_service_composition() {
             "infrastructure must not add inherent methods to application-owned {application_service}"
         );
     }
-    assert!(source.contains("pub struct SqliteServiceFactory"));
+    assert!(source.contains("pub struct ControlPlane"));
     assert!(source.contains("use crate::api::AppServices;"));
     assert!(!source.contains("pub struct AppServices"));
     assert!(
@@ -60,11 +60,12 @@ fn api_modules_keep_sqlite_at_the_app_state_root() {
             .unwrap_or_default();
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
         // Concrete App root may hold SqlitePool; handlers must not reach into
-        // infrastructure adapters or the service factory.
-        for forbidden in ["crate::infrastructure::", "SqliteServiceFactory"] {
-            if production_source.contains(forbidden) {
-                offenders.push(format!("{} depends on {forbidden}", path.display()));
-            }
+        // infrastructure adapters or the composition root.
+        if production_source.contains("crate::infrastructure::") {
+            offenders.push(format!(
+                "{} depends on crate::infrastructure::",
+                path.display()
+            ));
         }
         if file_name != "state.rs"
             && (production_source.contains("sqlx::") || production_source.contains("SqlitePool"))

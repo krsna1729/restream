@@ -291,7 +291,6 @@ impl AgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use restream_domain::domain::output_spec::OutputConfig;
     use restream_domain::domain::state::DesiredOutputState;
     use restream_domain::models::JobStatus;
@@ -347,7 +346,7 @@ mod tests {
         let security = IngestSecurityService::new(
             restream_domain::domain::ingest_security::IngestSecurityConfig::default(),
         );
-        let service = SqliteServiceFactory::new(&pool).agent_service();
+        let service = AgentService::new(DeadlineDb::api(pool.clone()));
         let catalog = service.load_context_catalog(&security).await;
 
         assert_eq!(catalog.pipelines.len(), 1);
@@ -378,7 +377,7 @@ mod tests {
         .await
         .unwrap();
 
-        let service = SqliteServiceFactory::new(&pool).agent_service();
+        let service = AgentService::new(DeadlineDb::api(pool.clone()));
         let catalog = service.load_pipeline_output_catalog().await;
 
         assert_eq!(catalog.pipelines.len(), 1);
@@ -411,7 +410,7 @@ mod tests {
             .await
             .unwrap();
 
-        let service = SqliteServiceFactory::new(&pool).agent_service();
+        let service = AgentService::new(DeadlineDb::api(pool.clone()));
         service
             .apply_output_mutation(
                 &crate::application::topology::ReconcileRequests::new(),
@@ -462,8 +461,7 @@ mod tests {
             .await;
         let requests = crate::application::topology::ReconcileRequests::new();
 
-        SqliteServiceFactory::new(&pool)
-            .agent_service()
+        AgentService::new(DeadlineDb::api(pool.clone()))
             .apply_output_mutation(
                 &requests,
                 "pipe-1",

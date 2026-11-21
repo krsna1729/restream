@@ -1,4 +1,4 @@
-//! SQLite-backed application-service composition.
+//! The control plane's composition root.
 
 use std::sync::Arc;
 
@@ -13,120 +13,73 @@ use crate::application::services::{
     NotifyService, PipelineService, SettingsService, TeamService,
 };
 use crate::db::DeadlineDb;
+use crate::infrastructure::notify_transport::HttpNotifyTransport;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use restream_engine::recording::RecordingMetadataReporter;
 
-/// Infrastructure-owned factory for SQLite-backed application services.
+/// The control plane's one service graph, built once from concrete parts.
 ///
-/// Every service it builds shares one ingest admission index, so a catalog
-/// write through any of them refreshes the index the ingest listeners read.
-pub struct SqliteServiceFactory {
-    db: DeadlineDb,
-    lifecycle: DeadlineDb,
-    catalog_auth: Arc<CatalogAuth>,
-    recording_metadata: std::sync::OnceLock<RecordingMetadataReporter>,
+/// Every service runs on the API executor and shares one ingest admission
+/// index, so a catalog write through any of them refreshes the index the
+/// ingest listeners read. Admission reloads and the one recording catalog
+/// writer run on the lifecycle executor (production: the lifecycle pool,
+/// which API load cannot exhaust).
+pub struct ControlPlane {
+    pub services: AppServices,
+    /// Starts empty; startup fills it with [`CatalogAuth::load`] before any
+    /// listener starts.
+    pub catalog_auth: Arc<CatalogAuth>,
+    /// The recording catalog writer the media library and housekeeping
+    /// report to.
+    pub recording_metadata: RecordingMetadataReporter,
 }
 
-impl SqliteServiceFactory {
-    /// The index starts empty; production startup fills it with
-    /// [`CatalogAuth::load`] before any listener starts. Its reloads and the
-    /// recording catalog writer use `db` under the shared-loop deadline.
-    pub fn new(db: &SqlitePool) -> Self {
-        Self::with_lifecycle_db(
-            db,
-            DeadlineDb::new(db.clone(), crate::db::SHARED_LOOP_DEADLINE),
-        )
-    }
-
-    /// As [`Self::new`], with the admission index reloading from and the
-    /// recording catalog writer writing through `lifecycle` (production:
-    /// the lifecycle pool, which API load cannot exhaust).
-    pub fn with_lifecycle_db(db: &SqlitePool, lifecycle: DeadlineDb) -> Self {
-        Self::with_databases(DeadlineDb::api(db.clone()), lifecycle)
-    }
-
-    /// Uses the supplied API executor throughout the service graph while
-    /// keeping admission reloads and recording metadata on `lifecycle`.
-    pub fn with_databases(db: DeadlineDb, lifecycle: DeadlineDb) -> Self {
-        Self {
-            db,
-            catalog_auth: CatalogAuth::new(lifecycle.clone()),
-            lifecycle,
-            recording_metadata: std::sync::OnceLock::new(),
-        }
-    }
-
-    /// The reporter of this factory's one recording catalog writer, started
-    /// on first use.
-    pub fn recording_metadata(&self) -> RecordingMetadataReporter {
-        self.recording_metadata
-            .get_or_init(|| spawn_recording_metadata_reporter(self.lifecycle.clone()))
-            .clone()
-    }
-
-    pub fn catalog_auth(&self) -> Arc<CatalogAuth> {
-        self.catalog_auth.clone()
-    }
-
-    /// Builds the complete service graph used by the API state.
-    pub fn compose(&self) -> AppServices {
-        let pipeline_service = self.pipeline_service();
-        let pipeline_input_service = self.pipeline_input_service(pipeline_service.clone());
-        let recirculation_service =
-            RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
-        let ingest_service = self.ingest_service();
-        let settings_service = SettingsService::new(self.db.clone(), pipeline_service.clone());
-
-        AppServices {
-            db: self.db.clone(),
-            pipeline_input_service,
-            recirculation_service,
-            auth_service: AuthService::new(self.db.clone()),
-            team_service: TeamService::new(self.db.clone()),
-            notify_service: NotifyService::new(
-                self.db.clone(),
-                Arc::new(
-                    crate::infrastructure::notify_transport::HttpNotifyTransport::new(
-                        self.db.clone(),
-                    ),
-                ),
+impl ControlPlane {
+    pub fn new(db: DeadlineDb, lifecycle: DeadlineDb) -> Self {
+        let catalog_auth = CatalogAuth::new(lifecycle.clone());
+        let recording_metadata = spawn_recording_metadata_reporter(lifecycle);
+        let pipeline_service = PipelineService::new(db.clone(), catalog_auth.clone());
+        let pipeline_input_service =
+            PipelineInputService::new(db.clone(), pipeline_service.clone());
+        let ingest_service = IngestService::new(db.clone());
+        let services = AppServices {
+            recirculation_service: RecirculationService::with_services(
+                db.clone(),
+                pipeline_input_service.clone(),
             ),
-            settings_service,
-            file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
-            media_library_service: self
-                .media_library_service(pipeline_service.clone(), ingest_service.clone()),
-            agent_service: self.agent_service(),
+            pipeline_input_service,
+            auth_service: AuthService::new(db.clone()),
+            team_service: TeamService::new(db.clone()),
+            notify_service: NotifyService::new(
+                db.clone(),
+                Arc::new(HttpNotifyTransport::new(db.clone())),
+            ),
+            settings_service: SettingsService::new(db.clone(), pipeline_service.clone()),
+            file_ingest_service: FileIngestService::new(db.clone(), pipeline_service.clone()),
+            media_library_service: MediaLibraryService::new(
+                db.clone(),
+                pipeline_service.clone(),
+                ingest_service.clone(),
+            )
+            .with_recording_metadata(recording_metadata.clone()),
+            agent_service: AgentService::new(db.clone()),
             pipeline_service,
             ingest_service,
+            db,
+        };
+        Self {
+            services,
+            catalog_auth,
+            recording_metadata,
         }
     }
 
-    pub fn pipeline_service(&self) -> PipelineService {
-        PipelineService::new(self.db.clone(), self.catalog_auth.clone())
-    }
-
-    pub fn pipeline_input_service(&self, pipelines: PipelineService) -> PipelineInputService {
-        PipelineInputService::new(self.db.clone(), pipelines)
-    }
-
-    pub fn ingest_service(&self) -> IngestService {
-        IngestService::new(self.db.clone())
-    }
-
-    pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {
-        FileIngestService::new(self.db.clone(), pipeline_service)
-    }
-
-    pub fn media_library_service(
-        &self,
-        pipeline_service: PipelineService,
-        ingest_service: IngestService,
-    ) -> MediaLibraryService {
-        MediaLibraryService::new(self.db.clone(), pipeline_service, ingest_service)
-            .with_recording_metadata(self.recording_metadata())
-    }
-
-    pub fn agent_service(&self) -> AgentService {
-        AgentService::new(self.db.clone())
+    /// Both executors on one pool, the lifecycle side under the shared-loop
+    /// deadline: the single-database graph tests and benches run.
+    pub fn on_pool(pool: &SqlitePool) -> Self {
+        Self::new(
+            DeadlineDb::api(pool.clone()),
+            DeadlineDb::new(pool.clone(), crate::db::SHARED_LOOP_DEADLINE),
+        )
     }
 }

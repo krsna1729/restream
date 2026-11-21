@@ -259,7 +259,7 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
     let (log_broadcast, _) = broadcast::channel(32);
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&auth_pool).services,
         security.clone(),
         ingest_policy_store,
         sessions,
@@ -267,8 +267,8 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
         log_broadcast,
     );
     state.settings_service =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&settings_pool)
-            .compose()
+        restream::infrastructure::service_wiring::ControlPlane::on_pool(&settings_pool)
+            .services
             .settings_service;
     settings_pool.close().await;
     let app = api::create_router(Arc::new(state));
