@@ -12,29 +12,12 @@ pub fn default_transcode_profiles() -> TranscodeProfiles {
     restream_engine::profiles::built_in_defaults()
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn load_transcode_profiles(db: &DeadlineDb) {
     let stored = db
         .read(|pool| crate::db::get_meta(pool, TRANSCODE_PROFILES_META_KEY))
         .await;
     let profiles = match stored {
-        Ok(Some(json_str)) => match serde_json::from_str::<TranscodeProfiles>(&json_str) {
-            Ok(p) if !p.is_empty() => {
-                info!(count = p.len(), "loaded profiles from meta store");
-                p
-            }
-            Ok(_) => {
-                warn!("meta store has empty profiles, using defaults");
-                default_transcode_profiles()
-            }
-            Err(error) => {
-                warn!(err = %error, "failed to parse profiles, using defaults");
-                default_transcode_profiles()
-            }
-        },
+        Ok(Some(json_str)) => parse_stored_profiles(&json_str),
         Ok(None) => {
             info!("no persisted profiles found, using built-in defaults");
             default_transcode_profiles()
@@ -46,6 +29,25 @@ pub async fn load_transcode_profiles(db: &DeadlineDb) {
     };
 
     restream_engine::profiles::replace_runtime_profiles(&profiles).await;
+}
+
+/// The persisted profile set, or the built-in defaults when it is empty or
+/// does not parse.
+fn parse_stored_profiles(json_str: &str) -> TranscodeProfiles {
+    match serde_json::from_str::<TranscodeProfiles>(json_str) {
+        Ok(p) if !p.is_empty() => {
+            info!(count = p.len(), "loaded profiles from meta store");
+            p
+        }
+        Ok(_) => {
+            warn!("meta store has empty profiles, using defaults");
+            default_transcode_profiles()
+        }
+        Err(error) => {
+            warn!(err = %error, "failed to parse profiles, using defaults");
+            default_transcode_profiles()
+        }
+    }
 }
 
 pub async fn save_transcode_profiles(
