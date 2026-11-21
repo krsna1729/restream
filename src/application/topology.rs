@@ -240,10 +240,6 @@ pub async fn converge_ingest_key_state(
 /// This runs before [`converge_topology`] so a deleted pipeline's pull tasks
 /// stop before its runtime is torn down, and a pull task can never recreate
 /// the ring of a pipeline that is going away.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn converge_pull_inputs(
     db: &DeadlineDb,
     ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
@@ -260,11 +256,25 @@ pub async fn converge_pull_inputs(
         .filter(|input| input.enabled && input.source_url.is_some())
         .map(|input| input.id.as_str())
         .collect::<HashSet<_>>();
+    stop_stale_pulls(ingest, &wanted).await;
 
-    // Cancel every stale pull before awaiting any of them: the joins run
-    // together, so one stalled origin cannot hold this pass — and with it every
-    // other pipeline's topology convergence, which runs after — behind each
-    // join in turn.
+    let mut started = Vec::new();
+    for input in pulls
+        .iter()
+        .filter(|input| wanted.contains(input.id.as_str()))
+    {
+        if start_pull(ingest, input).await {
+            started.push(input.id.clone());
+        }
+    }
+    Some(started)
+}
+
+/// Cancels every running pull not wanted, before awaiting any of them: the
+/// joins run together, so one stalled origin cannot hold this pass — and
+/// with it every other pipeline's topology convergence, which runs after —
+/// behind each join in turn.
+async fn stop_stale_pulls(ingest: &restream_engine::hls_ingest::HlsIngest, wanted: &HashSet<&str>) {
     let stale: Vec<String> = ingest
         .pull_input_ids()
         .into_iter()
@@ -273,38 +283,37 @@ pub async fn converge_pull_inputs(
     for input_id in ingest.cancel_pulls(&stale).await {
         info!(input_id = %input_id, "HLS pull stopped");
     }
+}
 
-    let mut started = Vec::new();
-    for input in pulls
-        .iter()
-        .filter(|input| wanted.contains(input.id.as_str()))
-    {
-        // Validation requires a URL for a pull input; a row without one is
-        // left alone rather than pulled from nowhere.
-        let Some(url) = input.source_url.clone() else {
-            continue;
-        };
-        let did_start = ingest
-            .ensure_pull(
-                restream_engine::hls_pull::PullIdentity {
-                    pipeline_id: input.pipeline_id.clone(),
-                    input_id: input.id.clone(),
-                    stream_key: input.stream_key.clone(),
-                    selected: input.selected,
-                },
-                restream_engine::hls_pull::PullSource {
-                    url,
-                    variant: input.variant_rule,
-                    auth: input.source_auth.clone(),
-                },
-            )
-            .await;
-        if did_start {
-            info!(input_id = %input.id, pipeline_id = %input.pipeline_id, "HLS pull started");
-            started.push(input.id.clone());
-        }
+/// Ensures one input's pull runs; true when this call started it.
+async fn start_pull(
+    ingest: &Arc<restream_engine::hls_ingest::HlsIngest>,
+    input: &restream_domain::domain::pipeline_input::PipelineInput,
+) -> bool {
+    // Validation requires a URL for a pull input; a row without one is left
+    // alone rather than pulled from nowhere.
+    let Some(url) = input.source_url.clone() else {
+        return false;
+    };
+    let did_start = ingest
+        .ensure_pull(
+            restream_engine::hls_pull::PullIdentity {
+                pipeline_id: input.pipeline_id.clone(),
+                input_id: input.id.clone(),
+                stream_key: input.stream_key.clone(),
+                selected: input.selected,
+            },
+            restream_engine::hls_pull::PullSource {
+                url,
+                variant: input.variant_rule,
+                auth: input.source_auth.clone(),
+            },
+        )
+        .await;
+    if did_start {
+        info!(input_id = %input.id, pipeline_id = %input.pipeline_id, "HLS pull started");
     }
-    Some(started)
+    did_start
 }
 
 /// Converge SRT caller inputs with their rows: the SRT server dials every
