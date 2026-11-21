@@ -97,44 +97,133 @@ fn external_output_stream_idx(
 ///
 /// Run an external FFmpeg stage using the shared input pump and output
 /// normalizer. This is the real `FfmpegStageBackend` implementation.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(crate) async fn run_external_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,
     output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
 ) -> Result<(), BackendError> {
-    let pipeline_id = ctx.pipeline_id.clone();
-    let stage_key = ctx.stage_key.clone();
-    let encoding = stage_key.kind.to_string();
-    let lifecycle = ctx.lifecycle.clone();
-    let _lifecycle_guard = StageLifecycleGuard::new(lifecycle.clone());
-    let include_audio = plan.include_audio;
-    let input_codec = plan.input.codec_hint.as_str();
-    let output_codec = plan.output_codec.as_str();
-    let input_codec_hint = input_pump.codec_hint();
-    let probe_codec = match input_codec_hint.as_str() {
-        "" => input_codec,
-        hint => hint,
+    let pipeline_id = ctx.pipeline_id.as_str();
+    let encoding = ctx.stage_key.kind.to_string();
+    let _lifecycle_guard = StageLifecycleGuard::new(ctx.lifecycle.clone());
+
+    let Some(_ffmpeg_permit) = acquire_ffmpeg_capacity(&ctx).await? else {
+        return Ok(());
     };
 
-    lifecycle.transition(StagePhase::WaitingForCapacity {
+    let args = stage_ffmpeg_args(&plan, &encoding, &input_pump.codec_hint());
+    info!(?args, "FFMPEG ARGS");
+    let correlation_id = crate::correlation_id::next_correlation_id("stage");
+    let ids = StageIds {
+        correlation_id: &correlation_id,
+        pipeline_id,
+        encoding: &encoding,
+    };
+    ids.log_start(plan.include_audio);
+
+    let FfmpegChild {
+        mut child,
+        stdin,
+        stdout,
+        stderr,
+    } = spawn_ffmpeg(&args, &ctx, &ids).await?;
+
+    let pipe_metrics = Arc::new(PipeMetrics::default());
+    ctx.engine
+        .register_pipe_metrics(ctx.stage_key.clone(), pipe_metrics.clone())
+        .await;
+    spawn_external_stderr_logger(
+        stderr,
+        format!("{}:{}", pipeline_id, encoding),
+        correlation_id.clone(),
+        pipeline_id.to_string(),
+        encoding.clone(),
+    );
+
+    let (io_threads, input_result, cancelled) = run_ffmpeg_io(
+        stdin,
+        stdout,
+        input_pump,
+        output_normalizer,
+        pipe_metrics,
+        &ctx.cancel,
+    )
+    .await;
+    if let Err(e) = input_result {
+        ids.log_input_failure(&e);
+    }
+
+    reap_external_child(&mut child, cancelled, io_threads).await;
+    // A cancelled entry is never reused; the consumers' lease drops remove
+    // it, and only if no newer stage took its key.
+    ctx.cancel.cancel();
+    emit_stage_stopped(&ctx, &ids);
+
+    ids.log_exit();
+    Ok(())
+}
+
+/// The stage's names, for its logs and events.
+struct StageIds<'a> {
+    correlation_id: &'a str,
+    pipeline_id: &'a str,
+    encoding: &'a str,
+}
+
+impl StageIds<'_> {
+    fn log_start(&self, include_audio: bool) {
+        info!(
+            correlation_id = %self.correlation_id,
+            pipeline_id = %self.pipeline_id,
+            stage_encoding = %self.encoding,
+            stage_backend = "external_ffmpeg",
+            include_audio,
+            "[ext-transcoder] stage start  pipeline={} encoding={}",
+            self.pipeline_id,
+            self.encoding
+        );
+    }
+
+    fn log_input_failure(&self, error: &str) {
+        error!(
+            correlation_id=%self.correlation_id,
+            pipeline_id=%self.pipeline_id,
+            stage_encoding=%self.encoding,
+            "[ext-transcoder] input pump failed ({}:{}): {}",
+            self.pipeline_id,
+            self.encoding,
+            error
+        );
+    }
+
+    fn log_exit(&self) {
+        info!(
+            correlation_id = %self.correlation_id,
+            pipeline_id = %self.pipeline_id,
+            stage_encoding = %self.encoding,
+            stage_backend = "external_ffmpeg",
+            "[ext-transcoder] stage exit   pipeline={} encoding={}",
+            self.pipeline_id,
+            self.encoding
+        );
+    }
+}
+
+/// Waits for an external FFmpeg slot. `None` when the stage is cancelled
+/// while waiting.
+async fn acquire_ffmpeg_capacity(
+    ctx: &StageRunContext,
+) -> Result<Option<tokio::sync::SemaphorePermit<'_>>, BackendError> {
+    ctx.lifecycle.transition(StagePhase::WaitingForCapacity {
         backend: StageBackendKind::ExternalFfmpeg,
     });
-    let _ffmpeg_permit = tokio::select! {
+    let permit = tokio::select! {
         permit = ctx.engine.runtime.external_ffmpeg_semaphore.acquire() => match permit {
             Ok(p) => p,
             Err(e) => {
                 error!(
-                    pipeline_id = %pipeline_id,
-                    stage = %stage_key,
+                    pipeline_id = %ctx.pipeline_id,
+                    stage = %ctx.stage_key,
                     "external ffmpeg semaphore closed: {e}"
                 );
                 return Err(BackendError(e.to_string()));
@@ -142,18 +231,26 @@ pub(crate) async fn run_external_ffmpeg_backend(
         },
         _ = ctx.cancel.cancelled() => {
             info!(
-                pipeline_id = %pipeline_id,
-                stage = %stage_key,
+                pipeline_id = %ctx.pipeline_id,
+                stage = %ctx.stage_key,
                 "external ffmpeg wait cancelled"
             );
-            return Ok(());
+            return Ok(None);
         }
     };
-    lifecycle.transition(StagePhase::CapacityAcquired {
+    ctx.lifecycle.transition(StagePhase::CapacityAcquired {
         backend: StageBackendKind::ExternalFfmpeg,
     });
+    Ok(Some(permit))
+}
 
-    let ffmpeg_preset = external_stage_arg_preset(&plan, &encoding);
+/// The stage's FFmpeg arguments. The input ring's codec hint wins over the
+/// plan's input codec.
+fn stage_ffmpeg_args(plan: &FfmpegStagePlan, encoding: &str, codec_hint: &str) -> Vec<String> {
+    let probe_codec = match codec_hint {
+        "" => plan.input.codec_hint.as_str(),
+        hint => hint,
+    };
     let observed_bitrate_bps = plan
         .input
         .video_meta
@@ -161,38 +258,40 @@ pub(crate) async fn run_external_ffmpeg_backend(
         .and_then(|video| video.bw)
         .filter(|bitrate| bitrate.is_finite() && *bitrate > 0.0)
         .map(|bitrate| bitrate.round() as u64);
-    let args = build_stage_ffmpeg_args_for_observed_input_streams(
-        &ffmpeg_preset,
-        output_codec,
+    build_stage_ffmpeg_args_for_observed_input_streams(
+        &external_stage_arg_preset(plan, encoding),
+        plan.output_codec.as_str(),
         probe_codec,
-        include_audio,
+        plan.include_audio,
         plan.input.audio_tracks.len(),
         observed_bitrate_bps,
-    );
-    info!(?args, "FFMPEG ARGS");
-    let correlation_id = crate::correlation_id::next_correlation_id("stage");
+    )
+}
 
-    info!(
-        correlation_id = %correlation_id,
-        pipeline_id = %pipeline_id,
-        stage_encoding = %encoding,
-        stage_backend = "external_ffmpeg",
-        include_audio,
-        "[ext-transcoder] stage start  pipeline={} encoding={}",
-        pipeline_id,
-        encoding
-    );
+/// A spawned FFmpeg child with its three pipes.
+struct FfmpegChild {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+}
 
-    let ffmpeg_bin = crate::ffmpeg_binary::ffmpeg_bin_path();
-    let mut child = match Command::new(ffmpeg_bin)
-        .args(&args)
+/// Spawns FFmpeg with piped stdio. A spawn failure or a missing stdin or
+/// stdout pipe emits `StageStopped`; a child missing any pipe is reaped.
+async fn spawn_ffmpeg(
+    args: &[String],
+    ctx: &StageRunContext,
+    ids: &StageIds<'_>,
+) -> Result<FfmpegChild, BackendError> {
+    let mut child = match Command::new(crate::ffmpeg_binary::ffmpeg_bin_path())
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
     {
         Ok(c) => {
-            lifecycle.transition(StagePhase::BackendSpawned {
+            ctx.lifecycle.transition(StagePhase::BackendSpawned {
                 backend: StageBackendKind::ExternalFfmpeg,
                 pid: c.id(),
             });
@@ -200,95 +299,76 @@ pub(crate) async fn run_external_ffmpeg_backend(
         }
         Err(e) => {
             error!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
+                correlation_id = %ids.correlation_id,
+                pipeline_id = %ids.pipeline_id,
+                stage_encoding = %ids.encoding,
                 stage_backend = "external_ffmpeg",
                 "[ext-transcoder] failed to spawn ffmpeg ({}:{}): {}",
-                pipeline_id,
-                encoding,
+                ids.pipeline_id,
+                ids.encoding,
                 e
             );
-            ctx.engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
+            emit_stage_stopped(ctx, ids);
             return Err(BackendError(e.to_string()));
         }
     };
-
-    let stdin = match child.stdin.take() {
-        Some(s) => s,
-        None => {
-            error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stdin unavailable");
+    match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+        (Some(stdin), Some(stdout), Some(stderr)) => Ok(FfmpegChild {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        }),
+        (stdin, stdout, _) => {
+            let (missing, stage_stopped) = if stdin.is_none() {
+                ("stdin", true)
+            } else if stdout.is_none() {
+                ("stdout", true)
+            } else {
+                ("stderr", false)
+            };
+            error!(
+                correlation_id=%ids.correlation_id,
+                pipeline_id=%ids.pipeline_id,
+                stage_encoding=%ids.encoding,
+                "[ext-transcoder] ffmpeg {missing} unavailable"
+            );
             crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
-            ctx.engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            return Err(BackendError("stdin unavailable".into()));
+            if stage_stopped {
+                emit_stage_stopped(ctx, ids);
+            }
+            Err(BackendError(format!("{missing} unavailable")))
         }
-    };
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stdout unavailable");
-            crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
-            ctx.engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            return Err(BackendError("stdout unavailable".into()));
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => {
-            error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stderr unavailable");
-            crate::child_process::reap(&mut child, std::time::Duration::ZERO).await;
-            return Err(BackendError("stderr unavailable".into()));
-        }
-    };
+    }
+}
 
-    let pipe_metrics = Arc::new(PipeMetrics::default());
-    ctx.engine
-        .register_pipe_metrics(stage_key.clone(), pipe_metrics.clone())
-        .await;
-
-    // stderr logger
-    spawn_external_stderr_logger(
-        stderr,
-        format!("{}:{}", pipeline_id, encoding),
-        correlation_id.clone(),
-        pipeline_id.clone(),
-        encoding.clone(),
-    );
-
-    // FFmpeg I/O runs on dedicated threads, not Tokio: one pulls the
-    // source ring and writes stdin, one demuxes stdout into the output ring.
+/// Runs FFmpeg's I/O on dedicated threads, not Tokio: one demuxes stdout
+/// into the output ring, one pulls the source ring and writes stdin. Waits
+/// for the writer to finish or the stage to be cancelled; returns the
+/// threads, the writer's result and whether the stage was cancelled (a
+/// failed thread start counts as cancelled).
+async fn run_ffmpeg_io(
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    input_pump: StageInputPump,
+    output_normalizer: StageOutputNormalizer,
+    pipe_metrics: Arc<PipeMetrics>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> (Vec<std::thread::JoinHandle<()>>, Result<(), String>, bool) {
     let (input_done_tx, mut input_done_rx) = tokio::sync::oneshot::channel();
     let mut io_threads = Vec::with_capacity(2);
     let io_started = spawn_external_stdout_reader(
         stdout,
         output_normalizer,
         pipe_metrics.clone(),
-        ctx.cancel.clone(),
+        cancel.clone(),
     )
     .and_then(|reader| {
         io_threads.push(reader);
         spawn_external_stdin_writer(
             stdin,
-            input_pump.into_queue_refill(ctx.cancel.clone()),
-            pipe_metrics.clone(),
+            input_pump.into_queue_refill(cancel.clone()),
+            pipe_metrics,
             input_done_tx,
         )
     })
@@ -307,43 +387,20 @@ pub(crate) async fn run_external_ffmpeg_backend(
                 result.unwrap_or_else(|_| Err("stdin writer exited without a result".to_string())),
                 false,
             ),
-            _ = ctx.cancel.cancelled() => (Ok(()), true),
+            _ = cancel.cancelled() => (Ok(()), true),
         },
     };
-    if let Err(e) = input_result {
-        error!(
-            correlation_id=%correlation_id,
-            pipeline_id=%pipeline_id,
-            stage_encoding=%encoding,
-            "[ext-transcoder] input pump failed ({}:{}): {}",
-            pipeline_id,
-            encoding,
-            e
-        );
-    }
+    (io_threads, input_result, cancelled)
+}
 
-    reap_external_child(&mut child, cancelled, io_threads).await;
-    // A cancelled entry is never reused; the consumers' lease drops remove
-    // it, and only if no newer stage took its key.
-    ctx.cancel.cancel();
+fn emit_stage_stopped(ctx: &StageRunContext, ids: &StageIds<'_>) {
     ctx.engine
         .runtime
         .event_log
         .emit(crate::events::EventKind::StageStopped {
-            pipeline_id: pipeline_id.clone(),
-            encoding: encoding.clone(),
+            pipeline_id: ids.pipeline_id.to_string(),
+            encoding: ids.encoding.to_string(),
         });
-
-    info!(
-        correlation_id = %correlation_id,
-        pipeline_id = %pipeline_id,
-        stage_encoding = %encoding,
-        stage_backend = "external_ffmpeg",
-        "[ext-transcoder] stage exit   pipeline={} encoding={}",
-        pipeline_id,
-        encoding
-    );
-    Ok(())
 }
 
 fn external_stage_arg_preset(plan: &FfmpegStagePlan, fallback: &str) -> String {
