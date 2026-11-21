@@ -56,19 +56,22 @@ pub async fn append_app_log_batch_returning(
     .await
 }
 
-/// General query for `/api/v1/logs` — supports level, target, scope, pipeline_id,
-/// event_class, prefix (message LIKE), time range, limit, order.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
-pub async fn list_app_logs(
-    pool: &SqlitePool,
-    filters: &crate::logging::types::AppLogFilters,
-) -> Result<Vec<crate::logging::types::AppLogRow>, sqlx::Error> {
-    let mut clauses: Vec<String> = vec![];
+/// One bound value of an app-log filter.
+enum LogParam<'a> {
+    Text(&'a str),
+    Owned(String),
+    Id(i64),
+}
 
-    let levels: &[&str] = match filters.level.as_deref().unwrap_or("info") {
+/// The `WHERE` conditions for `filters`, each pushed with the values its
+/// placeholders bind, so the two cannot fall out of order.
+fn app_log_conditions(
+    filters: &crate::logging::types::AppLogFilters,
+) -> (Vec<String>, Vec<LogParam<'_>>) {
+    let mut clauses: Vec<String> = vec![];
+    let mut params = vec![];
+
+    let levels: &[&'static str] = match filters.level.as_deref().unwrap_or("info") {
         "error" => &["ERROR"],
         "warn" => &["ERROR", "WARN"],
         "debug" => &["ERROR", "WARN", "INFO", "DEBUG"],
@@ -76,54 +79,63 @@ pub async fn list_app_logs(
     };
     let placeholders = levels.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     clauses.push(format!("level IN ({})", placeholders));
+    params.extend(levels.iter().map(|level| LogParam::Text(level)));
 
-    if filters.target.is_some() {
+    if let Some(target) = &filters.target {
         clauses.push("target LIKE ?".to_string());
+        params.push(LogParam::Owned(format!("{target}%")));
     }
-    if filters.after_id.is_some() {
+    if let Some(after_id) = filters.after_id {
         clauses.push("id > ?".to_string());
+        params.push(LogParam::Id(after_id));
     }
-    match filters.scope.as_deref() {
-        Some("restream") => {
-            clauses.push("pipeline_id IS NULL".to_string());
-            clauses.push("output_id IS NULL".to_string());
+    clauses.extend(scope_conditions(filters.scope.as_deref()).map(str::to_string));
+    for (column, value) in [
+        ("pipeline_id = ?", &filters.pipeline_id),
+        ("output_id = ?", &filters.output_id),
+        ("event_class = ?", &filters.event_class),
+        ("ts >= ?", &filters.since),
+        ("ts < ?", &filters.until),
+    ] {
+        if let Some(value) = value {
+            clauses.push(column.to_string());
+            params.push(LogParam::Text(value));
         }
-        Some("pipeline") => {
-            clauses.push("pipeline_id IS NOT NULL".to_string());
-            clauses.push("output_id IS NULL".to_string());
-        }
-        Some("output") => {
-            clauses.push("output_id IS NOT NULL".to_string());
-        }
-        _ => {}
-    }
-    if filters.pipeline_id.is_some() {
-        clauses.push("pipeline_id = ?".to_string());
-    }
-    if filters.output_id.is_some() {
-        clauses.push("output_id = ?".to_string());
-    }
-    if filters.event_class.is_some() {
-        clauses.push("event_class = ?".to_string());
-    }
-    if filters.since.is_some() {
-        clauses.push("ts >= ?".to_string());
-    }
-    if filters.until.is_some() {
-        clauses.push("ts < ?".to_string());
     }
 
-    if let Some(ref prefix) = filters.prefix {
+    if let Some(prefix) = &filters.prefix {
         let parts: Vec<_> = prefix
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
         if !parts.is_empty() {
-            let px: Vec<_> = parts.iter().map(|_| "message LIKE ?".to_string()).collect();
+            let px: Vec<_> = parts.iter().map(|_| "message LIKE ?").collect();
             clauses.push(format!("({})", px.join(" OR ")));
+            params.extend(parts.iter().map(|part| LogParam::Owned(format!("{part}%"))));
         }
     }
+    (clauses, params)
+}
+
+/// The row-origin conditions a `scope` filter adds; none bind a value.
+fn scope_conditions(scope: Option<&str>) -> impl Iterator<Item = &'static str> {
+    let conditions: &[&str] = match scope {
+        Some("restream") => &["pipeline_id IS NULL", "output_id IS NULL"],
+        Some("pipeline") => &["pipeline_id IS NOT NULL", "output_id IS NULL"],
+        Some("output") => &["output_id IS NOT NULL"],
+        _ => &[],
+    };
+    conditions.iter().copied()
+}
+
+/// General query for `/api/v1/logs` — supports level, target, scope, pipeline_id,
+/// event_class, prefix (message LIKE), time range, limit, order.
+pub async fn list_app_logs(
+    pool: &SqlitePool,
+    filters: &crate::logging::types::AppLogFilters,
+) -> Result<Vec<crate::logging::types::AppLogRow>, sqlx::Error> {
+    let (clauses, params) = app_log_conditions(filters);
 
     let order = if filters.order.as_deref() == Some("asc") {
         "ASC"
@@ -150,36 +162,13 @@ pub async fn list_app_logs(
     );
 
     let mut q = sqlx::query_as::<_, crate::logging::types::AppLogRow>(AssertSqlSafe(sql));
-    for l in levels {
-        q = q.bind(l);
+    for param in params {
+        q = match param {
+            LogParam::Text(value) => q.bind(value),
+            LogParam::Owned(value) => q.bind(value),
+            LogParam::Id(value) => q.bind(value),
+        };
     }
-    if let Some(ref t) = filters.target {
-        q = q.bind(format!("{}%", t));
-    }
-    if let Some(after_id) = filters.after_id {
-        q = q.bind(after_id);
-    }
-    if let Some(ref p) = filters.pipeline_id {
-        q = q.bind(p);
-    }
-    if let Some(ref o) = filters.output_id {
-        q = q.bind(o);
-    }
-    if let Some(ref ec) = filters.event_class {
-        q = q.bind(ec);
-    }
-    if let Some(ref s) = filters.since {
-        q = q.bind(s);
-    }
-    if let Some(ref u) = filters.until {
-        q = q.bind(u);
-    }
-    if let Some(ref prefix) = filters.prefix {
-        for p in prefix.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            q = q.bind(format!("{}%", p));
-        }
-    }
-
     q.fetch_all(pool).await
 }
 
