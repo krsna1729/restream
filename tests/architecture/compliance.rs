@@ -384,28 +384,6 @@ fn db_production_layer_stays_independent_of_application() {
 }
 
 #[test]
-fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
-    let ports = include_str!("../../src/application/ports.rs");
-    for forbidden in ["sqlx", "Sqlite", "crate::db"] {
-        assert!(
-            !ports.contains(forbidden),
-            "application ports should not expose concrete persistence detail {forbidden}"
-        );
-    }
-
-    let infrastructure_mod = include_str!("../../src/infrastructure/mod.rs");
-    assert!(infrastructure_mod.contains("pub mod sqlite_ports;"));
-    assert!(infrastructure_mod.contains("pub mod recording_metadata;"));
-
-    let sqlite_ports = include_str!("../../src/infrastructure/sqlite_ports.rs");
-    assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
-    assert!(
-        !sqlite_ports.contains("SqliteOutputStore"),
-        "OutputStore lattice collapsed to application::outputs + AppState.db (#149 B)"
-    );
-}
-
-#[test]
 fn application_production_code_does_not_depend_on_axum() {
     let application_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/application");
     let mut offenders = Vec::new();

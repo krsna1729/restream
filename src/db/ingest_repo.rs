@@ -1,3 +1,4 @@
+use restream_domain::models::Ingest;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -13,6 +14,25 @@ pub struct IngestRecord {
     /// The ordered files of a playlist (JSON array), first = `filename`;
     /// `None` for a single file.
     pub playlist: Option<String>,
+}
+
+impl From<IngestRecord> for Ingest {
+    fn from(record: IngestRecord) -> Self {
+        Self {
+            id: record.id,
+            filename: record.filename,
+            stream_key: record.stream_key,
+            loop_flag: record.loop_flag,
+            start_time: record.start_time,
+            live_optimized: record.live_optimized,
+            target_gop_seconds: record.target_gop_seconds,
+            playlist: record
+                .playlist
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -121,31 +141,6 @@ pub async fn update_ingest(
     .bind(id)
     .execute(pool)
     .await?;
-
-    if result.rows_affected() > 0 {
-        get_ingest(pool, id).await
-    } else {
-        Ok(None)
-    }
-}
-
-/// Updates only `filename`, leaving `stream_key`, `loop_flag`, `start_time`,
-/// `live_optimized`, and `target_gop_seconds` untouched. Callers that only
-/// intend to rename an ingest's backing file must use this instead of
-/// `update_ingest`: that function requires the full row and overwrites every
-/// column from whatever `Ingest` snapshot the caller passes in, silently
-/// reverting any of those fields if they were changed by a concurrent
-/// request after the snapshot was taken.
-pub async fn update_ingest_filename(
-    pool: &SqlitePool,
-    id: &str,
-    filename: &str,
-) -> Result<Option<IngestRecord>, sqlx::Error> {
-    let result = sqlx::query("UPDATE ingests SET filename = ? WHERE id = ?")
-        .bind(filename)
-        .bind(id)
-        .execute(pool)
-        .await?;
 
     if result.rows_affected() > 0 {
         get_ingest(pool, id).await

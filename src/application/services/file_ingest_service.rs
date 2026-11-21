@@ -13,7 +13,7 @@ use crate::application::ingest::{
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
-use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
+use crate::db::{self, DeadlineDb};
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
 use restream_engine::external_file_ingest::{
@@ -53,27 +53,19 @@ pub enum FileIngestStartError {
 /// Application service that coordinates file-ingest persistence with runtime
 /// media-engine state so stored config and active ingest processes stay aligned.
 pub struct FileIngestService {
-    ingest_lookup: Arc<dyn IngestLookup>,
-    ingest_writer: Arc<dyn IngestWriter>,
-    pipeline_store: Arc<dyn PipelineStore>,
+    db: DeadlineDb,
     pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
     pipeline_service: PipelineService,
 }
 
 impl FileIngestService {
-    /// Builds the service from the lookup/write ports and pipeline catalog it
-    /// needs to coordinate file-ingest state.
-    pub fn with_ports(
-        ingest_lookup: Arc<dyn IngestLookup>,
-        ingest_writer: Arc<dyn IngestWriter>,
-        pipeline_store: Arc<dyn PipelineStore>,
+    pub fn new(
+        db: DeadlineDb,
         pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
         pipeline_service: PipelineService,
     ) -> Self {
         Self {
-            ingest_lookup,
-            ingest_writer,
-            pipeline_store,
+            db,
             pipeline_input_lookup,
             pipeline_service,
         }
@@ -129,7 +121,7 @@ impl FileIngestService {
         engine: &Arc<MediaEngine>,
         pipeline: &Pipeline,
     ) -> ServiceResult<PipelineFileIngestState> {
-        load_pipeline_file_ingest_state(self.ingest_lookup.as_ref(), engine, pipeline)
+        load_pipeline_file_ingest_state(&self.db, engine, pipeline)
             .await
             .map_err(|_| ServiceError::internal("load pipeline file ingest state"))
     }
@@ -137,11 +129,12 @@ impl FileIngestService {
     /// Looks up one ingest record and normalizes a missing row into the API
     /// layer's stable not-found error.
     async fn get_ingest_or_not_found(&self, id: &str) -> ServiceResult<Ingest> {
-        self.ingest_lookup
-            .get_ingest(id)
+        self.db
+            .read(|pool| db::get_ingest(pool, id))
             .await
             .map_err(|err| ServiceError::internal(format!("get ingest: {err}")))?
             .ok_or_else(|| ServiceError::not_found("Ingest not found"))
+            .map(Ingest::from)
     }
 
     /// Clears any runtime markers and persisted runtime-derived state that are
@@ -152,14 +145,9 @@ impl FileIngestService {
         stream_key: &str,
         error_context: &'static str,
     ) -> ServiceResult<()> {
-        clear_stream_key_file_ingests(
-            self.pipeline_store.as_ref(),
-            self.ingest_lookup.as_ref(),
-            engine,
-            stream_key,
-        )
-        .await
-        .map_err(|err| ServiceError::internal(format!("{error_context}: {err:?}")))
+        clear_stream_key_file_ingests(&self.db, engine, stream_key)
+            .await
+            .map_err(|err| ServiceError::internal(format!("{error_context}: {err:?}")))
     }
 
     /// Deletes one stored ingest after clearing any runtime state tied to its
@@ -176,9 +164,10 @@ impl FileIngestService {
 
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
+        let id = id.to_owned();
         let deleted = self
-            .ingest_writer
-            .delete_ingest(id)
+            .db
+            .write(move |pool| async move { db::delete_ingest(&pool, &id).await })
             .await
             .map_err(|err| ServiceError::internal(format!("delete ingest: {err}")))?;
         if deleted {
@@ -218,13 +207,7 @@ impl FileIngestService {
         media_dir: &Path,
         id: &str,
     ) -> Result<Ingest, FileIngestStartError> {
-        let resolved = match resolve_file_ingest_context(
-            self.ingest_lookup.as_ref(),
-            self.pipeline_store.as_ref(),
-            id,
-        )
-        .await
-        {
+        let resolved = match resolve_file_ingest_context(&self.db, id).await {
             Ok(Some(context)) => context,
             Ok(None) => return Err(FileIngestStartError::NotFound),
             Err(ResolveFileIngestError::MissingPipelineForStreamKey(_)) => {
@@ -320,11 +303,9 @@ impl FileIngestService {
             match payload {
                 Some(input) => {
                     persist_pipeline_file_ingest(
-                        self.ingest_lookup.as_ref(),
-                        self.ingest_writer.as_ref(),
-                        self.pipeline_store.as_ref(),
+                        &self.db,
                         pipeline,
-                        &FileIngestConfig {
+                        FileIngestConfig {
                             filename: input.filename,
                             playlist: input.playlist,
                             loop_flag: input.loop_flag,
@@ -361,14 +342,9 @@ impl FileIngestService {
                     )
                     .await?;
 
-                    remove_pipeline_file_ingest(
-                        self.ingest_lookup.as_ref(),
-                        self.ingest_writer.as_ref(),
-                        self.pipeline_store.as_ref(),
-                        pipeline,
-                    )
-                    .await
-                    .map_err(|_| ServiceError::internal("remove pipeline file ingest"))?;
+                    remove_pipeline_file_ingest(&self.db, pipeline)
+                        .await
+                        .map_err(|_| ServiceError::internal("remove pipeline file ingest"))?;
                 }
             }
         }

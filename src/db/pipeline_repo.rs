@@ -1,3 +1,4 @@
+use restream_domain::models::Pipeline;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -7,6 +8,18 @@ pub struct PipelineRecord {
     pub stream_key: String,
     pub input_source: Option<String>,
     pub srt_ingest_policy: Option<String>,
+}
+
+impl From<PipelineRecord> for Pipeline {
+    fn from(record: PipelineRecord) -> Self {
+        Self {
+            id: record.id,
+            name: record.name,
+            stream_key: record.stream_key,
+            input_source: record.input_source,
+            srt_ingest_policy: record.srt_ingest_policy,
+        }
+    }
 }
 
 pub async fn create_pipeline(

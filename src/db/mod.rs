@@ -27,7 +27,7 @@ pub use deadline::{
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
     list_ingests_for_filename, list_ingests_for_stream_key, rename_ingest_file,
-    set_ingest_playlist, update_ingest, update_ingest_filename,
+    set_ingest_playlist, update_ingest,
 };
 pub use job_repo::{
     JobRecord, JobStatusRecord, cleanup_old_jobs, create_job, get_job, get_running_job_for,

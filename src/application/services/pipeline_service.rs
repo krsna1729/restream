@@ -1,23 +1,14 @@
-//! Application service wrapper for pipeline catalog and mutation operations.
-//!
-//! This module keeps pipeline persistence details behind the `PipelineStore`
-//! port so higher layers can work in terms of pipeline records, stream-key
-//! lookup, and input-source updates without depending on storage specifics.
+//! Pipeline catalog reads and admission-aware mutations.
 
 use std::sync::Arc;
 
 use crate::application::catalog_auth::CatalogAuth;
-use crate::application::ports::PipelineStore;
+use crate::db::{self, DeadlineDb};
 use restream_domain::models::Pipeline;
 
 use super::error::{ServiceError, ServiceResult};
 
 /// Application service for pipeline CRUD and read operations.
-///
-/// Depends on `PipelineStore` — a port trait — rather than `SqlitePool`
-/// directly. Infrastructure wiring provides the default SQLite constructor;
-/// tests can inject any implementation.
-///
 /// Each write runs with a reload of the ingest admission index as one task
 /// ([`CatalogAuth::commit`]) and returns after the reload, so the next
 /// connect sees it. If that reload fails, the write still returns its own
@@ -25,18 +16,13 @@ use super::error::{ServiceError, ServiceResult};
 /// periodic reload succeeds.
 #[derive(Clone)]
 pub struct PipelineService {
-    store: Arc<dyn PipelineStore>,
+    db: DeadlineDb,
     catalog_auth: Arc<CatalogAuth>,
 }
 
 impl PipelineService {
-    /// Create a service backed by any `PipelineStore` implementation, writing
-    /// through to the process's admission index.
-    pub fn with_store(store: Arc<dyn PipelineStore>, catalog_auth: Arc<CatalogAuth>) -> Self {
-        Self {
-            store,
-            catalog_auth,
-        }
+    pub fn new(db: DeadlineDb, catalog_auth: Arc<CatalogAuth>) -> Self {
+        Self { db, catalog_auth }
     }
 
     /// The admission index every catalog write commits through.
@@ -53,28 +39,31 @@ impl PipelineService {
     /// Lists every persisted pipeline record without applying transport-level
     /// filtering or shaping.
     pub async fn list_pipelines(&self) -> ServiceResult<Vec<Pipeline>> {
-        self.store
-            .list_pipelines()
+        self.db
+            .read(db::list_pipelines)
             .await
+            .map(|rows| rows.into_iter().map(Pipeline::from).collect())
             .map_err(|e| ServiceError::internal(format!("list pipelines: {e}")))
     }
 
     /// Resolves one pipeline by ID and upgrades missing-store results into the
     /// service layer's stable not-found error.
     pub async fn get_by_id(&self, id: &str) -> ServiceResult<Pipeline> {
-        self.store
-            .get_pipeline(id)
+        self.db
+            .read(|pool| db::get_pipeline(pool, id))
             .await
             .map_err(|e| ServiceError::internal(format!("get pipeline: {e}")))?
             .ok_or_else(|| Self::pipeline_not_found(id))
+            .map(Pipeline::from)
     }
 
     /// Looks up a pipeline by publish stream key for ingest routing and other
     /// catalog lookups that start from transport credentials.
     pub async fn get_by_stream_key(&self, stream_key: &str) -> ServiceResult<Option<Pipeline>> {
-        self.store
-            .get_pipeline_by_stream_key(stream_key)
+        self.db
+            .read(|pool| db::get_pipeline_by_stream_key(pool, stream_key))
             .await
+            .map(|row| row.map(Pipeline::from))
             .map_err(|e| ServiceError::internal(format!("get pipeline by stream key: {e}")))
     }
 
@@ -88,14 +77,15 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        let store = self.store.clone();
+        let db = self.db.clone();
         let (id, name, stream_key) = (id.to_owned(), name.to_owned(), stream_key.to_owned());
         let input_source = input_source.map(str::to_owned);
         let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
         self.catalog_auth
             .commit(async move {
-                store
-                    .create_pipeline(
+                db.write(move |pool| async move {
+                    db::create_pipeline(
+                        &pool,
                         &id,
                         &name,
                         &stream_key,
@@ -103,8 +93,11 @@ impl PipelineService {
                         srt_ingest_policy.as_deref(),
                     )
                     .await
+                })
+                .await
             })
             .await
+            .map(Pipeline::from)
             .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))
     }
 
@@ -118,15 +111,16 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ServiceResult<Pipeline> {
-        let store = self.store.clone();
+        let db = self.db.clone();
         let owned = (id.to_owned(), name.to_owned(), stream_key.to_owned());
         let input_source = input_source.map(str::to_owned);
         let srt_ingest_policy = srt_ingest_policy.map(str::to_owned);
         self.catalog_auth
             .commit(async move {
-                let (id, name, stream_key) = owned;
-                store
-                    .update_pipeline(
+                db.write(move |pool| async move {
+                    let (id, name, stream_key) = owned;
+                    db::update_pipeline(
+                        &pool,
                         &id,
                         &name,
                         &stream_key,
@@ -134,18 +128,24 @@ impl PipelineService {
                         srt_ingest_policy.as_deref(),
                     )
                     .await
+                })
+                .await
             })
             .await
             .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?
             .ok_or_else(|| Self::pipeline_not_found(id))
+            .map(Pipeline::from)
     }
 
     /// Deletes one pipeline record from the persisted catalog.
     pub async fn delete_pipeline(&self, id: &str) -> ServiceResult<bool> {
-        let store = self.store.clone();
+        let db = self.db.clone();
         let id = id.to_owned();
         self.catalog_auth
-            .commit(async move { store.delete_pipeline(&id).await })
+            .commit(async move {
+                db.write(move |pool| async move { db::delete_pipeline(&pool, &id).await })
+                    .await
+            })
             .await
             .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))
     }
@@ -158,7 +158,7 @@ impl PipelineService {
 
     /// Return the configured ingest host, or the default.
     pub async fn get_ingest_host(&self) -> String {
-        ingest_host_or_default(self.store.get_ingest_host().await.ok().flatten())
+        ingest_host_or_default(self.db.read(db::get_ingest_host).await.ok().flatten())
     }
 }
 

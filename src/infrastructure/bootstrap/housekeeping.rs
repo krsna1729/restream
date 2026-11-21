@@ -14,7 +14,6 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::application::ports::PipelineStore;
 use crate::application::reconcile::{HousekeepingSwitches, build_recording_reconcile_plan};
 use crate::config::AppConfig;
 use crate::db::DeadlineDb;
@@ -31,8 +30,6 @@ pub(super) struct Housekeeping {
     config: Arc<AppConfig>,
     db: DeadlineDb,
     engine: Arc<MediaEngine>,
-    /// Lists pipelines on the lifecycle pool, bounded by `db`'s deadline.
-    pipeline_catalog: Arc<dyn PipelineStore>,
     sessions: Arc<RwLock<HashSet<String>>>,
     recording_metadata: RecordingMetadataReporter,
 }
@@ -42,7 +39,6 @@ impl Housekeeping {
         config: Arc<AppConfig>,
         db: DeadlineDb,
         engine: Arc<MediaEngine>,
-        pipeline_catalog: Arc<dyn PipelineStore>,
         sessions: Arc<RwLock<HashSet<String>>>,
         recording_metadata: RecordingMetadataReporter,
     ) -> Self {
@@ -50,7 +46,6 @@ impl Housekeeping {
             config,
             db,
             engine,
-            pipeline_catalog,
             sessions,
             recording_metadata,
         }
@@ -58,6 +53,14 @@ impl Housekeeping {
 
     /// Ticks every reconciler interval until `shutdown`.
     pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
+        self.run_ticks(shutdown, |tick, prune_every| self.tick(tick, prune_every))
+            .await;
+    }
+
+    async fn run_ticks<F>(&self, shutdown: CancellationToken, mut work: impl FnMut(u64, u64) -> F)
+    where
+        F: Future<Output = ()>,
+    {
         let tuning = self.config.tuning;
         let mut ticks = tokio::time::interval(Duration::from_millis(tuning.reconciler_interval_ms));
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -69,13 +72,8 @@ impl Housekeeping {
                 _ = ticks.tick() => {}
             }
             tick += 1;
-            self.contained_tick(tick, prune_every).await;
+            contained("housekeeping", work(tick, prune_every)).await;
         }
-    }
-
-    /// One tick behind the panic boundary: the next tick runs on time.
-    async fn contained_tick(&self, tick: u64, prune_every: u64) -> bool {
-        contained("housekeeping", self.tick(tick, prune_every)).await
     }
 
     async fn tick(&self, tick: u64, prune_every: u64) {
@@ -105,8 +103,8 @@ impl Housekeeping {
     /// The pipelines and their switches, or `None` (recordings and stream
     /// checks keep their state this tick) when either read fails.
     async fn read_switches(&self, tick: u64) -> Option<(Vec<Pipeline>, HousekeepingSwitches)> {
-        let pipelines = match self.db.bound(self.pipeline_catalog.list_pipelines()).await {
-            Ok(pipelines) => pipelines,
+        let pipelines = match self.db.read(crate::db::list_pipelines).await {
+            Ok(rows) => rows.into_iter().map(Pipeline::from).collect(),
             Err(error) => {
                 warn!(tick, err = %error, "pipeline catalog error while reconciling recordings");
                 return None;

@@ -4,8 +4,7 @@
 use std::collections::HashMap;
 
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
-use crate::application::ports::{PipelineStore, PipelineStoreError};
-use crate::db::DeadlineDb;
+use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{
     SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
@@ -53,13 +52,12 @@ pub async fn load_global_srt_ingest_config(
 
 pub async fn load_policy_store(
     db: &DeadlineDb,
-    pipeline_catalog: &dyn PipelineStore,
     input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-) -> Result<SrtIngestPolicyStore, PipelineStoreError> {
+) -> Result<SrtIngestPolicyStore, PipelineInputStoreError> {
     let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
-    let pipelines = pipeline_catalog.list_pipelines().await?;
+    let pipelines = load_pipelines(db).await?;
     let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
     let entries = srt_ingest_policy_entries(&pipelines, &inputs);
     Ok(SrtIngestPolicyStore::new(global, &entries))
@@ -68,31 +66,34 @@ pub async fn load_policy_store(
 pub async fn refresh_policy_store(
     policy_store: &SrtIngestPolicyStore,
     db: &DeadlineDb,
-    pipeline_catalog: &dyn PipelineStore,
     input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-) -> Result<(), PipelineStoreError> {
+) -> Result<(), PipelineInputStoreError> {
     let global = load_global_srt_ingest_config(db, srt_passphrase, srt_pbkeylen).await;
-    let pipelines = pipeline_catalog.list_pipelines().await?;
+    let pipelines = load_pipelines(db).await?;
     let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
     let entries = srt_ingest_policy_entries(&pipelines, &inputs);
     policy_store.replace(global, &entries);
     Ok(())
 }
 
+async fn load_pipelines(db: &DeadlineDb) -> Result<Vec<Pipeline>, PipelineInputStoreError> {
+    db.read(db::list_pipelines)
+        .await
+        .map(|rows| rows.into_iter().map(Pipeline::from).collect())
+        .map_err(|error| PipelineInputStoreError::Internal(error.to_string()))
+}
+
 pub async fn list_pipeline_inputs(
     input_store: &dyn PipelineInputStore,
     pipelines: &[Pipeline],
-) -> Result<Vec<PipelineInput>, PipelineStoreError> {
+) -> Result<Vec<PipelineInput>, PipelineInputStoreError> {
     let mut inputs = Vec::new();
     for pipeline in pipelines {
-        inputs.extend(
-            input_store
-                .list(&pipeline.id)
-                .await
-                .map_err(map_input_store_error)?,
-        );
+        inputs.extend(input_store.list(&pipeline.id).await.map_err(|error| {
+            PipelineInputStoreError::Internal(format!("list pipeline inputs: {error}"))
+        })?);
     }
     Ok(inputs)
 }
@@ -131,10 +132,6 @@ pub fn srt_ingest_policy_entries(
         .collect()
 }
 
-fn map_input_store_error(error: PipelineInputStoreError) -> PipelineStoreError {
-    PipelineStoreError::new(format!("list pipeline inputs: {error}"))
-}
-
 fn srt_global_config_from_appconfig(
     passphrase: Option<String>,
     pbkeylen: i32,
@@ -158,7 +155,6 @@ mod tests {
         InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
         PipelineInputStore, PipelineInputStoreError,
     };
-    use crate::application::ports::{PipelineListFuture, PipelineStore};
     use crate::infrastructure::bootstrap::test_support::memory_pool;
     use restream_domain::domain::pipeline_input::{
         PipelineInput, PipelineInputRole, PipelineInputSource,
@@ -179,8 +175,24 @@ mod tests {
         DeadlineDb::api(pool)
     }
 
-    struct FakePipelineStore {
-        pipelines: Vec<Pipeline>,
+    async fn policy_db(value: serde_json::Value) -> DeadlineDb {
+        let db = meta_db(Some(value)).await;
+        db.write(|pool| async move {
+            let policy =
+                serialize_persisted_srt_ingest_policy(&SrtPipelineIngestConfig::default()).unwrap();
+            db::create_pipeline(
+                &pool,
+                "pipeline-1",
+                "Pipeline One",
+                "stream-one",
+                None,
+                Some(&policy),
+            )
+            .await
+        })
+        .await
+        .unwrap();
+        db
     }
 
     struct FakePipelineInputStore {
@@ -256,91 +268,6 @@ mod tests {
         }
     }
 
-    impl PipelineStore for FakePipelineStore {
-        fn get_pipeline_by_stream_key<'a>(
-            &'a self,
-            stream_key: &'a str,
-        ) -> crate::application::ports::PipelineLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .pipelines
-                    .iter()
-                    .find(|pipeline| pipeline.stream_key == stream_key)
-                    .cloned())
-            })
-        }
-
-        fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-            Box::pin(async move { Ok(self.pipelines.clone()) })
-        }
-
-        fn get_pipeline<'a>(
-            &'a self,
-            id: &'a str,
-        ) -> crate::application::ports::PipelineLookupFuture<'a> {
-            Box::pin(async move { Ok(self.pipelines.iter().find(|p| p.id == id).cloned()) })
-        }
-
-        fn create_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> crate::application::ports::PipelineCreateFuture<'a> {
-            Box::pin(async move {
-                Err(crate::application::ports::PipelineStoreError::new(
-                    "not implemented",
-                ))
-            })
-        }
-
-        fn update_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-            Box::pin(async move {
-                Err(crate::application::ports::PipelineStoreError::new(
-                    "not implemented",
-                ))
-            })
-        }
-
-        fn delete_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-        ) -> crate::application::ports::PipelineDeleteFuture<'a> {
-            Box::pin(async move {
-                Err(crate::application::ports::PipelineStoreError::new(
-                    "not implemented",
-                ))
-            })
-        }
-
-        fn get_ingest_host<'a>(
-            &'a self,
-        ) -> crate::application::ports::PipelineIngestHostFuture<'a> {
-            Box::pin(async move { Ok(None) })
-        }
-
-        fn update_pipeline_input_source<'a>(
-            &'a self,
-            pipeline: &'a Pipeline,
-            input_source: Option<&'a str>,
-        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
-            Box::pin(async move {
-                let mut updated = pipeline.clone();
-                updated.input_source = input_source.map(ToOwned::to_owned);
-                Ok(Some(updated))
-            })
-        }
-    }
-
     #[tokio::test]
     async fn global_srt_ingest_config_loads_from_meta_store() {
         let store = meta_db(Some(serde_json::json!({
@@ -387,32 +314,17 @@ mod tests {
 
     #[tokio::test]
     async fn load_policy_store_builds_store_from_meta_and_catalog() {
-        let store = meta_db(Some(serde_json::json!({
+        let store = policy_db(serde_json::json!({
             "mode": "encrypted",
             "passphrase": "global-pass-123",
             "pbkeylen": 24
-        })))
+        }))
         .await;
-        let catalog = FakePipelineStore {
-            pipelines: vec![Pipeline {
-                id: "pipeline-1".to_string(),
-                name: "Pipeline One".to_string(),
-                stream_key: "stream-one".to_string(),
-                input_source: None,
-                srt_ingest_policy: Some(
-                    serialize_persisted_srt_ingest_policy(
-                        &restream_domain::domain::srt_ingest::SrtPipelineIngestConfig::default(),
-                    )
-                    .unwrap(),
-                ),
-            }],
-        };
-
         let input_store = FakePipelineInputStore {
             inputs: vec![pipeline_input("pipeline-1", "stream-one")],
         };
 
-        let policy_store = load_policy_store(&store, &catalog, &input_store, None, 16)
+        let policy_store = load_policy_store(&store, &input_store, None, 16)
             .await
             .unwrap();
 
@@ -434,47 +346,26 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_policy_store_replaces_existing_policies() {
-        let initial_store = meta_db(Some(serde_json::json!({
+        let initial_store = policy_db(serde_json::json!({
             "mode": "plaintext"
-        })))
+        }))
         .await;
-        let updated_store = meta_db(Some(serde_json::json!({
+        let updated_store = policy_db(serde_json::json!({
             "mode": "encrypted",
             "passphrase": "updated-pass-123",
             "pbkeylen": 32
-        })))
+        }))
         .await;
-        let catalog = FakePipelineStore {
-            pipelines: vec![Pipeline {
-                id: "pipeline-1".to_string(),
-                name: "Pipeline One".to_string(),
-                stream_key: "stream-one".to_string(),
-                input_source: None,
-                srt_ingest_policy: Some(
-                    serialize_persisted_srt_ingest_policy(
-                        &restream_domain::domain::srt_ingest::SrtPipelineIngestConfig::default(),
-                    )
-                    .unwrap(),
-                ),
-            }],
-        };
         let input_store = FakePipelineInputStore {
             inputs: vec![pipeline_input("pipeline-1", "stream-one")],
         };
-        let policy_store = load_policy_store(&initial_store, &catalog, &input_store, None, 16)
+        let policy_store = load_policy_store(&initial_store, &input_store, None, 16)
             .await
             .unwrap();
 
-        refresh_policy_store(
-            &policy_store,
-            &updated_store,
-            &catalog,
-            &input_store,
-            None,
-            16,
-        )
-        .await
-        .unwrap();
+        refresh_policy_store(&policy_store, &updated_store, &input_store, None, 16)
+            .await
+            .unwrap();
 
         assert_eq!(
             policy_store.global_config().mode,

@@ -39,20 +39,13 @@ fn infrastructure_owns_sqlite_service_composition() {
             return;
         }
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
-        // Collapsed #149 slices may hold SqlitePool; still forbid infrastructure adapters.
-        for forbidden in [
-            "crate::infrastructure::sqlite_ports",
-            "SqlitePipelineStore",
-            "SqliteIngestLookup",
-        ] {
-            if production_source.contains(forbidden) {
-                storage_coupled_services.push(format!("{} uses {forbidden}", path.display()));
-            }
+        if production_source.contains("crate::infrastructure::") {
+            storage_coupled_services.push(path.display().to_string());
         }
     });
     assert!(
         storage_coupled_services.is_empty(),
-        "application services must not import SQLite adapters: {storage_coupled_services:?}"
+        "application services must not depend on infrastructure composition: {storage_coupled_services:?}"
     );
 }
 

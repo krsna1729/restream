@@ -32,6 +32,7 @@ impl Drop for TempDir {
 
 pub(super) struct Catalog {
     pub(super) pool: sqlx::SqlitePool,
+    pub(super) lifecycle: sqlx::SqlitePool,
     pub(super) pipelines: PipelineService,
     inputs: PipelineInputService,
     pub(super) catalog: Arc<CatalogAuth>,
@@ -57,7 +58,11 @@ impl Catalog {
         let url = format!("sqlite://{}", dir.0.join("db.sqlite").display());
         let pool = crate::db::create_pool(&url).await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        let factory = SqliteServiceFactory::new(&pool);
+        let lifecycle = crate::db::create_lifecycle_pool(&url).await.unwrap();
+        let factory = SqliteServiceFactory::with_lifecycle_db(
+            &pool,
+            crate::db::DeadlineDb::new(lifecycle.clone(), crate::db::SHARED_LOOP_DEADLINE),
+        );
         let catalog = factory.catalog_auth();
         catalog.load().await.unwrap();
         let pipelines = factory.pipeline_service();
@@ -72,6 +77,7 @@ impl Catalog {
         let auth = CatalogIngestAuthenticator::new(catalog.clone(), security.clone());
         Self {
             pool,
+            lifecycle,
             pipelines,
             inputs,
             catalog,
@@ -319,6 +325,9 @@ async fn every_access_mode_authenticates_while_the_database_pool_is_exhausted() 
     let mut held = Vec::new();
     for _ in 0..c.pool.options().get_max_connections() {
         held.push(c.pool.acquire().await.unwrap());
+    }
+    for _ in 0..c.lifecycle.options().get_max_connections() {
+        held.push(c.lifecycle.acquire().await.unwrap());
     }
     assert!(
         tokio::time::timeout(Duration::from_millis(50), c.pool.acquire())

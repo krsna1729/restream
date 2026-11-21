@@ -37,7 +37,6 @@ use restream_engine::security::{IngestSecurityService, RateLimitScope};
 use tracing::{info, warn};
 
 use crate::application::pipeline_inputs::PipelineInputStoreError;
-use crate::application::ports::PipelineStoreError;
 
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -54,9 +53,9 @@ impl std::fmt::Display for WriteAborted {
     }
 }
 
-impl From<WriteAborted> for PipelineStoreError {
+impl From<WriteAborted> for sqlx::Error {
     fn from(error: WriteAborted) -> Self {
-        Self::new(error.0)
+        Self::Io(std::io::Error::other(error.0))
     }
 }
 
@@ -82,7 +81,7 @@ pub struct UnreadableInput {
 pub type CatalogRow = Result<PipelineInput, UnreadableInput>;
 
 pub type CatalogAuthLoadFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<CatalogRow>, PipelineStoreError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<Vec<CatalogRow>, sqlx::Error>> + Send + 'a>>;
 
 /// Reads every pipeline input, for a full rebuild of the index.
 pub trait CatalogAuthSource: Send + Sync {
@@ -197,7 +196,7 @@ impl CatalogAuth {
     /// admit against an empty index, and one slow read at boot (a cold disk,
     /// an outside tool holding the lock) must not exit the process. Ends
     /// with the last error only at [`Self::shutdown`].
-    pub async fn load(&self) -> Result<(), PipelineStoreError> {
+    pub async fn load(&self) -> Result<(), sqlx::Error> {
         let mut delay = RETRY_INITIAL_DELAY;
         loop {
             let ticket = self.request();
@@ -301,7 +300,7 @@ impl CatalogAuth {
         clippy::await_holding_invalid_type,
         reason = "`reloads` serializes reloads across the inputs query by design; only the reload path takes it, connects read the snapshot"
     )]
-    async fn reload(&self, ticket: u64) -> Result<(), PipelineStoreError> {
+    async fn reload(&self, ticket: u64) -> Result<(), sqlx::Error> {
         let _one_at_a_time = self.reloads.lock().await;
         if self.covered.load(Ordering::SeqCst) >= ticket {
             return Ok(());

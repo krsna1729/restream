@@ -2,17 +2,14 @@
 //! file-ingest context. Connect-time admission lives in
 //! [`crate::application::catalog_auth`].
 
-use crate::application::ports::{
-    IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
-    PipelineStoreError,
-};
+use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
 use std::{future::Future, pin::Pin};
 
 pub type PipelineInputLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<PipelineInput>, PipelineStoreError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<Option<PipelineInput>, sqlx::Error>> + Send + 'a>>;
 
 pub trait PipelineInputLookup: Send + Sync {
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a>;
@@ -34,14 +31,14 @@ pub struct PipelineFileIngestState {
 
 #[derive(Debug)]
 pub enum ClearFileIngestsError {
-    PipelineStore(PipelineStoreError),
-    IngestLookup(IngestLookupError),
+    PipelineStore(sqlx::Error),
+    IngestLookup(sqlx::Error),
 }
 
 #[derive(Debug)]
 pub enum ResolveFileIngestError {
-    IngestLookup(IngestLookupError),
-    PipelineStore(PipelineStoreError),
+    IngestLookup(sqlx::Error),
+    PipelineStore(sqlx::Error),
     MissingPipelineForStreamKey(String),
 }
 
@@ -58,43 +55,46 @@ pub struct FileIngestConfig {
 
 #[derive(Debug)]
 pub enum PersistFileIngestError {
-    IngestLookup(IngestLookupError),
-    IngestWrite(IngestWriteError),
-    PipelineStore(PipelineStoreError),
+    IngestLookup(sqlx::Error),
+    IngestWrite(sqlx::Error),
+    PipelineStore(sqlx::Error),
 }
 
 pub async fn resolve_file_ingest_context(
-    ingest_lookup: &dyn IngestLookup,
-    pipeline_lookup: &dyn PipelineStore,
+    db: &DeadlineDb,
     ingest_id: &str,
 ) -> Result<Option<FileIngestContext>, ResolveFileIngestError> {
-    let Some(ingest) = ingest_lookup
-        .get_ingest(ingest_id)
+    let Some(ingest) = db
+        .read(|pool| db::get_ingest(pool, ingest_id))
         .await
         .map_err(ResolveFileIngestError::IngestLookup)?
     else {
         return Ok(None);
     };
 
-    let pipeline = pipeline_lookup
-        .get_pipeline_by_stream_key(&ingest.stream_key)
+    let pipeline = db
+        .read(|pool| db::get_pipeline_by_stream_key(pool, &ingest.stream_key))
         .await
         .map_err(ResolveFileIngestError::PipelineStore)?
         .ok_or_else(|| {
             ResolveFileIngestError::MissingPipelineForStreamKey(ingest.stream_key.clone())
         })?;
 
-    Ok(Some(FileIngestContext { ingest, pipeline }))
+    Ok(Some(FileIngestContext {
+        ingest: ingest.into(),
+        pipeline: pipeline.into(),
+    }))
 }
 
 pub async fn load_pipeline_file_ingest_state(
-    ingest_lookup: &dyn IngestLookup,
+    db: &DeadlineDb,
     engine: &MediaEngine,
     pipeline: &Pipeline,
-) -> Result<PipelineFileIngestState, IngestLookupError> {
-    let ingest = ingest_lookup
-        .get_ingest_by_stream_key(&pipeline.stream_key)
-        .await?;
+) -> Result<PipelineFileIngestState, sqlx::Error> {
+    let ingest = db
+        .read(|pool| db::get_ingest_by_stream_key(pool, &pipeline.stream_key))
+        .await?
+        .map(Ingest::from);
     let running = match ingest.as_ref() {
         Some(ingest) => engine.is_file_ingest_running(&ingest.id).await,
         None => false,
@@ -115,21 +115,20 @@ pub async fn load_pipeline_file_ingest_state(
 /// sessions now (a restart right after must not find them held); live
 /// publishers of the same pipeline keep their sessions.
 pub async fn clear_stream_key_file_ingests(
-    pipeline_lookup: &dyn PipelineStore,
-    ingest_lookup: &dyn IngestLookup,
+    db: &DeadlineDb,
     engine: &MediaEngine,
     stream_key: &str,
 ) -> Result<(), ClearFileIngestsError> {
-    if let Some(pipeline) = pipeline_lookup
-        .get_pipeline_by_stream_key(stream_key)
+    if let Some(pipeline) = db
+        .read(|pool| db::get_pipeline_by_stream_key(pool, stream_key))
         .await
         .map_err(ClearFileIngestsError::PipelineStore)?
     {
         engine.unregister_file_ingest(&pipeline.id).await;
     }
 
-    let ingests = ingest_lookup
-        .list_ingests_for_stream_key(stream_key)
+    let ingests = db
+        .read(|pool| db::list_ingests_for_stream_key(pool, stream_key))
         .await
         .map_err(ClearFileIngestsError::IngestLookup)?;
     for ingest in ingests {
@@ -141,93 +140,110 @@ pub async fn clear_stream_key_file_ingests(
 }
 
 pub async fn persist_pipeline_file_ingest(
-    ingest_lookup: &dyn IngestLookup,
-    ingest_writer: &dyn IngestWriter,
-    pipeline_store: &dyn PipelineStore,
+    db: &DeadlineDb,
     pipeline: &Pipeline,
-    config: &FileIngestConfig,
+    config: FileIngestConfig,
     id_factory: impl FnOnce() -> String,
 ) -> Result<Ingest, PersistFileIngestError> {
-    let existing = ingest_lookup
-        .get_ingest_by_stream_key(&pipeline.stream_key)
+    let existing = db
+        .read(|pool| db::get_ingest_by_stream_key(pool, &pipeline.stream_key))
         .await
         .map_err(PersistFileIngestError::IngestLookup)?;
 
-    let saved = match existing {
-        Some(ingest) => ingest_writer
-            .update_ingest(
-                &ingest.id,
-                &config.filename,
-                &pipeline.stream_key,
-                config.loop_flag,
-                &config.start_time,
-                config.live_optimized,
-                config.target_gop_seconds,
-            )
-            .await
-            .map_err(PersistFileIngestError::IngestWrite)?
-            .ok_or_else(|| {
-                PersistFileIngestError::IngestWrite(IngestWriteError::new("ingest not found"))
-            })?,
-        None => ingest_writer
-            .create_ingest(
-                &id_factory(),
-                &config.filename,
-                &pipeline.stream_key,
-                config.loop_flag,
-                &config.start_time,
-                config.live_optimized,
-                config.target_gop_seconds,
-            )
-            .await
-            .map_err(PersistFileIngestError::IngestWrite)?,
-    };
+    let FileIngestConfig {
+        filename,
+        playlist,
+        loop_flag,
+        start_time,
+        live_optimized,
+        target_gop_seconds,
+    } = config;
+    let input_source = format!("file:{filename}");
+    let stream_key = pipeline.stream_key.clone();
+    let update = existing.is_some();
+    let id = existing.map_or_else(id_factory, |ingest| ingest.id);
+    let saved = db
+        .write(move |pool| async move {
+            if update {
+                db::update_ingest(
+                    &pool,
+                    &id,
+                    &filename,
+                    &stream_key,
+                    loop_flag,
+                    &start_time,
+                    live_optimized,
+                    target_gop_seconds,
+                )
+                .await?
+                .ok_or(sqlx::Error::RowNotFound)
+            } else {
+                db::create_ingest(
+                    &pool,
+                    &id,
+                    &filename,
+                    &stream_key,
+                    loop_flag,
+                    &start_time,
+                    live_optimized,
+                    target_gop_seconds,
+                )
+                .await
+            }
+        })
+        .await
+        .map_err(PersistFileIngestError::IngestWrite)?;
 
     // A playlist of one file is that file.
-    let playlist: &[String] = if config.playlist.len() > 1 {
-        &config.playlist
-    } else {
-        &[]
-    };
-    let saved = ingest_writer
-        .set_ingest_playlist(&saved.id, playlist)
+    let playlist = (playlist.len() > 1)
+        .then(|| serde_json::to_string(&playlist))
+        .transpose()
+        .map_err(|error| PersistFileIngestError::IngestWrite(sqlx::Error::Encode(error.into())))?;
+    let id = saved.id.clone();
+    let saved =
+        db.write(move |pool| async move {
+            db::set_ingest_playlist(&pool, &id, playlist.as_deref()).await
+        })
         .await
         .map_err(PersistFileIngestError::IngestWrite)?
         .unwrap_or(saved);
 
-    let ingests = ingest_lookup
-        .list_ingests_for_stream_key(&pipeline.stream_key)
+    let ingests = db
+        .read(|pool| db::list_ingests_for_stream_key(pool, &pipeline.stream_key))
         .await
         .map_err(PersistFileIngestError::IngestLookup)?;
     for ingest in ingests.into_iter().filter(|ingest| ingest.id != saved.id) {
-        let _ = ingest_writer.delete_ingest(&ingest.id).await;
+        let _ = db
+            .write(move |pool| async move { db::delete_ingest(&pool, &ingest.id).await })
+            .await;
     }
 
-    let input_source = format!("file:{}", config.filename);
-    pipeline_store
-        .update_pipeline_input_source(pipeline, Some(&input_source))
-        .await
-        .map_err(PersistFileIngestError::PipelineStore)?;
+    let id = pipeline.id.clone();
+    db.write(move |pool| async move {
+        db::update_pipeline_input_source(&pool, &id, Some(&input_source)).await
+    })
+    .await
+    .map_err(PersistFileIngestError::PipelineStore)?;
 
-    Ok(saved)
+    Ok(saved.into())
 }
 
 pub async fn remove_pipeline_file_ingest(
-    ingest_lookup: &dyn IngestLookup,
-    ingest_writer: &dyn IngestWriter,
-    pipeline_store: &dyn PipelineStore,
+    db: &DeadlineDb,
     pipeline: &Pipeline,
 ) -> Result<(), PersistFileIngestError> {
-    let ingests = ingest_lookup
-        .list_ingests_for_stream_key(&pipeline.stream_key)
+    let ingests = db
+        .read(|pool| db::list_ingests_for_stream_key(pool, &pipeline.stream_key))
         .await
         .map_err(PersistFileIngestError::IngestLookup)?;
     for ingest in ingests {
-        let _ = ingest_writer.delete_ingest(&ingest.id).await;
+        let _ = db
+            .write(move |pool| async move { db::delete_ingest(&pool, &ingest.id).await })
+            .await;
     }
 
-    pipeline_store
-        .update_pipeline_input_source(pipeline, None)
+    let id = pipeline.id.clone();
+    db.write(move |pool| async move { db::update_pipeline_input_source(&pool, &id, None).await })
         .await
         .map_err(PersistFileIngestError::PipelineStore)?;
 

@@ -1,25 +1,6 @@
 use super::*;
-use crate::application::ports::{
-    IngestCatalogFuture, IngestDeleteFuture, IngestLookupError, IngestLookupFuture,
-    IngestUpdateFuture, IngestWriteError, IngestWriteFuture, PipelineCreateFuture,
-    PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture, PipelineLookupFuture,
-    PipelineStoreError, PipelineUpdateFuture,
-};
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use sqlx::SqlitePool;
-
-fn ingest_with(live_optimized: bool) -> Ingest {
-    Ingest {
-        id: "ing-1".to_string(),
-        filename: "clip.mp4".to_string(),
-        stream_key: "stream-key".to_string(),
-        loop_flag: true,
-        start_time: "00:00:05".to_string(),
-        live_optimized,
-        target_gop_seconds: 4,
-        playlist: Vec::new(),
-    }
-}
 
 fn service(pool: SqlitePool) -> FileIngestService {
     let factory = SqliteServiceFactory::new(&pool);
@@ -55,212 +36,39 @@ async fn setup_ingest(pool: &SqlitePool, ingest_id: &str) {
     .unwrap();
 }
 
-struct PersistFailingLookup {
-    ingest: Ingest,
+async fn fail_persist(pool: &SqlitePool, trigger_sql: &'static str) {
+    sqlx::query(trigger_sql).execute(pool).await.unwrap();
 }
 
-impl IngestLookup for PersistFailingLookup {
-    fn get_ingest<'a>(&'a self, _id: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move { Ok(Some(self.ingest.clone())) })
-    }
-
-    fn get_ingest_by_stream_key<'a>(&'a self, _stream_key: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move { Err(IngestLookupError::new("lookup failed during persist")) })
-    }
-
-    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
-        Box::pin(async move { Ok(vec![self.ingest.clone()]) })
-    }
-
-    fn list_ingests_for_filename<'a>(&'a self, _filename: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move { Ok(vec![self.ingest.clone()]) })
-    }
-
-    fn list_ingests_for_stream_key<'a>(&'a self, _stream_key: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move { Ok(vec![self.ingest.clone()]) })
-    }
-}
-
-struct NoopIngestWriter;
-
-impl IngestWriter for NoopIngestWriter {
-    fn create_ingest<'a>(
-        &'a self,
-        _id: &'a str,
-        _filename: &'a str,
-        _stream_key: &'a str,
-        _loop_flag: bool,
-        _start_time: &'a str,
-        _live_optimized: bool,
-        _target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a> {
-        Box::pin(async move { Err(IngestWriteError::new("unexpected create")) })
-    }
-
-    fn update_ingest<'a>(
-        &'a self,
-        _id: &'a str,
-        _filename: &'a str,
-        _stream_key: &'a str,
-        _loop_flag: bool,
-        _start_time: &'a str,
-        _live_optimized: bool,
-        _target_gop_seconds: u32,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
-    }
-
-    fn update_ingest_filename<'a>(
-        &'a self,
-        _id: &'a str,
-        _filename: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
-    }
-
-    fn set_ingest_playlist<'a>(
-        &'a self,
-        _id: &'a str,
-        _playlist: &'a [String],
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn rename_ingest_file<'a>(
-        &'a self,
-        _id: &'a str,
-        _from: &'a str,
-        _to: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
-        Box::pin(async move { Ok(false) })
-    }
-}
-
-struct StaticPipelineStore {
-    pipeline: Pipeline,
-}
-
-impl PipelineStore for StaticPipelineStore {
-    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
-        Box::pin(async move { Ok((self.pipeline.id == id).then(|| self.pipeline.clone())) })
-    }
-
-    fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
-        Box::pin(async move {
-            Ok((self.pipeline.stream_key == stream_key).then(|| self.pipeline.clone()))
-        })
-    }
-
-    fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-        Box::pin(async move { Ok(vec![self.pipeline.clone()]) })
-    }
-
-    fn create_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn update_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn delete_pipeline<'a>(&'a self, _id: &'a str) -> PipelineDeleteFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-        Box::pin(async move { Ok(None) })
-    }
-
-    fn update_pipeline_input_source<'a>(
-        &'a self,
-        pipeline: &'a Pipeline,
-        input_source: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        Box::pin(async move {
-            let mut updated = pipeline.clone();
-            updated.input_source = input_source.map(ToOwned::to_owned);
-            Ok(Some(updated))
-        })
-    }
-}
-
-impl PipelineInputLookup for StaticPipelineStore {
-    fn get_by_stream_key<'a>(
-        &'a self,
-        stream_key: &'a str,
-    ) -> crate::application::ingest::PipelineInputLookupFuture<'a> {
-        Box::pin(async move {
-            Ok((self.pipeline.stream_key == stream_key).then(|| {
-                restream_domain::domain::pipeline_input::PipelineInput {
-                    id: "input-primary".to_string(),
-                    pipeline_id: self.pipeline.id.clone(),
-                    label: "Primary".to_string(),
-                    stream_key: stream_key.to_string(),
-                    role: restream_domain::domain::pipeline_input::PipelineInputRole::Primary,
-                    enabled: true,
-                    selected: true,
-                    ..restream_domain::domain::pipeline_input::PipelineInput::keyed_default()
-                }
-            }))
-        })
-    }
+fn replacement_payload() -> Option<Option<FileIngestConfigInput>> {
+    Some(Some(FileIngestConfigInput {
+        filename: "replacement.mp4".to_string(),
+        loop_flag: false,
+        start_time: String::new(),
+        live_optimized: false,
+        target_gop_seconds: 2,
+        playlist: Vec::new(),
+    }))
 }
 
 #[tokio::test]
 async fn apply_file_ingest_payload_surfaces_persist_failure() {
-    let pipeline = Pipeline {
-        id: "pipe-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest = ingest_with(false);
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    let pipeline_store = Arc::new(StaticPipelineStore {
-        pipeline: pipeline.clone(),
-    });
-    let service = FileIngestService::with_ports(
-        Arc::new(PersistFailingLookup { ingest }),
-        Arc::new(NoopIngestWriter),
-        pipeline_store.clone(),
-        pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
-    );
+    let pool = crate::infrastructure::bootstrap::test_support::memory_pool().await;
+    let pipeline = db::create_pipeline(&pool, "pipe-1", "Pipeline", "stream-key", None, None)
+        .await
+        .unwrap()
+        .into();
+    fail_persist(
+        &pool,
+        "CREATE TRIGGER fail_ingest_insert BEFORE INSERT ON ingests
+         BEGIN SELECT RAISE(ABORT, 'injected ingest insert failure'); END",
+    )
+    .await;
+    let service = service(pool.clone());
     let engine = Arc::new(MediaEngine::new());
 
     let err = service
-        .apply_file_ingest_payload(
-            &engine,
-            &pipeline,
-            None,
-            Some(Some(FileIngestConfigInput {
-                filename: "replacement.mp4".to_string(),
-                loop_flag: false,
-                start_time: String::new(),
-                live_optimized: false,
-                target_gop_seconds: 2,
-                playlist: Vec::new(),
-            })),
-        )
+        .apply_file_ingest_payload(&engine, &pipeline, None, replacement_payload())
         .await
         .unwrap_err();
 
@@ -268,52 +76,30 @@ async fn apply_file_ingest_payload_surfaces_persist_failure() {
         err,
         ServiceError::Internal(message) if message == "persist pipeline file ingest"
     ));
+    assert!(db::list_ingests(&pool).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
-    let pipeline = Pipeline {
-        id: "pipe-1".to_string(),
-        name: "Pipeline".to_string(),
-        stream_key: "stream-key".to_string(),
-        input_source: None,
-        srt_ingest_policy: None,
-    };
-    let ingest = ingest_with(false);
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
-    let pipeline_store = Arc::new(StaticPipelineStore {
-        pipeline: pipeline.clone(),
-    });
-    let service = FileIngestService::with_ports(
-        Arc::new(PersistFailingLookup {
-            ingest: ingest.clone(),
-        }),
-        Arc::new(NoopIngestWriter),
-        pipeline_store.clone(),
-        pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
-    );
+    setup_ingest(&pool, "ing-1").await;
+    fail_persist(
+        &pool,
+        "CREATE TRIGGER fail_ingest_update BEFORE UPDATE ON ingests
+         BEGIN SELECT RAISE(ABORT, 'injected ingest update failure'); END",
+    )
+    .await;
+    let service = service(pool.clone());
+    let pipeline = service.get_pipeline("pipe-1").await.unwrap();
     let engine = Arc::new(MediaEngine::new());
     let _registration = engine
         .try_register_ingest(&pipeline.id, &pipeline.stream_key, "file")
         .await
         .expect("pipeline should register");
-    engine.mark_file_ingest_running(&ingest.id).await;
+    engine.mark_file_ingest_running("ing-1").await;
 
     let err = service
-        .apply_file_ingest_payload(
-            &engine,
-            &pipeline,
-            None,
-            Some(Some(FileIngestConfigInput {
-                filename: "replacement.mp4".to_string(),
-                loop_flag: false,
-                start_time: String::new(),
-                live_optimized: false,
-                target_gop_seconds: 2,
-                playlist: Vec::new(),
-            })),
-        )
+        .apply_file_ingest_payload(&engine, &pipeline, None, replacement_payload())
         .await
         .unwrap_err();
 
@@ -322,7 +108,15 @@ async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
         ServiceError::Internal(message) if message == "persist pipeline file ingest"
     ));
     assert!(engine.has_active_ingest(&pipeline.id).await);
-    assert!(engine.is_file_ingest_running(&ingest.id).await);
+    assert!(engine.is_file_ingest_running("ing-1").await);
+    assert_eq!(
+        db::get_ingest(&pool, "ing-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .filename,
+        "clip.mp4"
+    );
 }
 
 #[test]
