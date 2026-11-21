@@ -392,10 +392,6 @@ pub(crate) async fn health_snapshot(
     )
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) async fn health_snapshot_view(
     engine: &MediaEngine,
     config: &AppConfig,
@@ -422,54 +418,21 @@ pub(crate) async fn health_snapshot_view(
         .iter()
         .map(|(pipeline_id, token)| (pipeline_id.clone(), !token.is_cancelled()))
         .collect();
-    let reader_metrics_by_pipeline: HashMap<String, (usize, Vec<serde_json::Value>)> = engine
-        .ingests
-        .pipelines
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, rb)| {
-            let reader_snapshots = rb.reader_snapshots();
-            let readers_count = reader_snapshots.len();
-            let reader_metrics = reader_snapshots
-                .iter()
-                .map(api_view_models::reader_snapshot_json)
-                .collect();
-            (pipeline_id.clone(), (readers_count, reader_metrics))
-        })
-        .collect();
+    let reader_metrics_by_pipeline = reader_metrics_by_pipeline(engine).await;
     let active_ingest_ids: HashSet<String> =
         engine.ingests.active.read().await.keys().cloned().collect();
 
-    let (total_bytes_by_pipeline, mut outputs_by_pipeline, blocked_requests) = {
-        let egresses = engine.egresses.active.read().await;
-        let mut totals: HashMap<String, u64> = HashMap::new();
-        let mut outputs: HashMap<String, BTreeMap<String, api_view_models::OutputHealthView>> =
-            HashMap::new();
-        let mut blocked_requests = Vec::new();
-
-        for (output_id, egress) in egresses.iter() {
-            let pipeline_id = egress.pipeline_id.clone();
-            let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
-            *totals.entry(pipeline_id.clone()).or_default() += bytes_sent;
-
-            let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
-            let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
-            let mut view = api_view_models::egress_runtime_view(egress, false, has_ingest, None);
-            view.apply_recent_instability(recent_egresses.get(output_id));
-            view.apply_retry_state(retry_egresses.get(output_id));
-            let view = view.with_totals(bytes_sent, bitrate_kbps, &egress.started_at);
-            if let Some(key) = egress.terminal_stage_key.clone() {
-                blocked_requests.push((pipeline_id.clone(), output_id.to_string(), key));
-            }
-            outputs.entry(pipeline_id).or_default().insert(
-                output_id.to_string(),
-                api_view_models::OutputHealthView::Active(view),
-            );
-        }
-
-        (totals, outputs, blocked_requests)
-    };
+    let ActiveEgressViews {
+        total_bytes_by_pipeline,
+        mut outputs_by_pipeline,
+        blocked_requests,
+    } = active_egress_views(
+        engine,
+        &active_ingest_ids,
+        &recent_egresses,
+        &retry_egresses,
+    )
+    .await;
 
     let active_inputs: HashMap<String, serde_json::Value> = {
         let ingests = engine.ingests.active.read().await;
@@ -524,21 +487,7 @@ pub(crate) async fn health_snapshot_view(
         });
 
         let mut outputs = outputs_by_pipeline.remove(pipeline_id).unwrap_or_default();
-        for (output_id, outcome) in recent_egresses.iter() {
-            if outcome.pipeline_id == *pipeline_id && !outputs.contains_key(output_id) {
-                let mut view = api_view_models::recent_egress_runtime_view(outcome, false);
-                view.apply_recent_instability(Some(outcome));
-                view.apply_retry_state(retry_egresses.get(output_id));
-                outputs.insert(
-                    output_id.to_string(),
-                    api_view_models::OutputHealthView::Recent(view.with_totals(
-                        outcome.bytes_sent,
-                        None,
-                        &outcome.started_at,
-                    )),
-                );
-            }
-        }
+        add_recent_egress_views(&mut outputs, pipeline_id, &recent_egresses, &retry_egresses);
 
         let rec_enabled = recording_enabled.get(pipeline_id).copied().unwrap_or(false);
         let rec_active = rec_active_by_pipeline
@@ -569,47 +518,8 @@ pub(crate) async fn health_snapshot_view(
         );
     }
 
-    for (pipeline_id, output_id, key) in blocked_requests {
-        let Some(blocked_by) = engine.egress_blocked_by_stage_snapshot(&key).await else {
-            continue;
-        };
-        if let Some(api_view_models::OutputHealthView::Active(view)) = pipelines
-            .get_mut(&pipeline_id)
-            .and_then(|pipeline| pipeline.outputs.get_mut(&output_id))
-        {
-            view.blocked_by = Some(super::stage_projection::stage_runtime_snapshot_json(
-                &blocked_by,
-            ));
-        }
-    }
-
-    let ingress_owner = engine.runtime.listener_stats.ingress_owner.snapshot();
-    let bonding_available = engine
-        .runtime
-        .listener_stats
-        .bonding_available
-        .load(Ordering::Relaxed);
-    let rtmp_accept_errors = engine
-        .runtime
-        .rtmp_listener_stats
-        .rtmp_accept_errors
-        .load(Ordering::Relaxed);
-    let rtmp_fd_exhaustion_errors = engine
-        .runtime
-        .rtmp_listener_stats
-        .rtmp_fd_exhaustion_errors
-        .load(Ordering::Relaxed);
-
-    let mut stages_json = serde_json::Map::new();
-    for pipeline_id in pipeline_ids {
-        for snap in engine.pipeline_stage_runtime_snapshots(pipeline_id).await {
-            let key_str = snap.key.to_string();
-            stages_json.insert(
-                key_str,
-                super::stage_projection::stage_runtime_snapshot_json(&snap),
-            );
-        }
-    }
+    apply_blocked_by(engine, &mut pipelines, blocked_requests).await;
+    let stages_json = stage_snapshots_json(engine, pipeline_ids).await;
 
     let host_settings = sample_host_settings();
     let nofile = nofile_limit_json(config.tuning.nofile_limit, host_settings.nofile);
@@ -627,56 +537,193 @@ pub(crate) async fn health_snapshot_view(
         stages: stages_json,
         runtime_limits: RuntimeLimitsHealthJson { nofile },
         host_settings: host_settings_rows,
-        rtmp_listener: RtmpListenerHealthJson {
-            accept_errors: rtmp_accept_errors,
-            fd_exhaustion_errors: rtmp_fd_exhaustion_errors,
-            restarts: engine
-                .runtime
-                .rtmp_listener_stats
-                .restarts
-                .load(Ordering::Relaxed),
-            ingress_owners: engine
-                .runtime
-                .rtmp_listener_stats
-                .owners
-                .load(Ordering::Relaxed),
-        },
-        srt_listener: SrtListenerHealthJson {
-            bonding_available,
-            restarts: engine
-                .runtime
-                .listener_stats
-                .restarts
-                .load(Ordering::Relaxed),
-            ingress_owner,
-        },
+        rtmp_listener: rtmp_listener_health(engine),
+        srt_listener: srt_listener_health(engine),
         moq_listener: MoqListenerHealthJson {
             restarts: engine.runtime.moq_listener_restarts.load(Ordering::Relaxed),
         },
         egress_fabric_shards,
         contained_panics: restream_engine::panic_boundary::contained_panics(),
-        name_resolver: {
-            let stats = restream_engine::resolver::stats();
-            NameResolverHealthJson {
-                lookups: stats.lookups,
-                timeouts: stats.timeouts,
-                overflows: stats.overflows,
-                threads: stats.threads,
-                hung_threads: stats.hung_threads,
-                cap_reached: stats.cap_reached,
-            }
-        },
-        logging: {
-            let dropped = crate::logging::dropped_lines();
-            LoggingHealthJson {
-                console_dropped: dropped.console,
-                file_dropped: dropped.file,
-                history_dropped: dropped.history,
-            }
-        },
+        name_resolver: name_resolver_health(),
+        logging: logging_health(),
         tuning: TuningHealthJson {
             output_max_retries: config.tuning.output_max_retries,
         },
+    }
+}
+
+/// Each pipeline ring's reader count and per-reader metrics.
+async fn reader_metrics_by_pipeline(
+    engine: &MediaEngine,
+) -> HashMap<String, (usize, Vec<serde_json::Value>)> {
+    engine
+        .ingests
+        .pipelines
+        .read()
+        .await
+        .iter()
+        .map(|(pipeline_id, rb)| {
+            let reader_snapshots = rb.reader_snapshots();
+            let readers_count = reader_snapshots.len();
+            let reader_metrics = reader_snapshots
+                .iter()
+                .map(api_view_models::reader_snapshot_json)
+                .collect();
+            (pipeline_id.clone(), (readers_count, reader_metrics))
+        })
+        .collect()
+}
+
+/// The active egresses' views by pipeline, each pipeline's bytes sent, and
+/// the outputs whose terminal stage may block them.
+struct ActiveEgressViews {
+    total_bytes_by_pipeline: HashMap<String, u64>,
+    outputs_by_pipeline: HashMap<String, BTreeMap<String, api_view_models::OutputHealthView>>,
+    blocked_requests: Vec<(String, String, restream_domain::domain::stage::StageKey)>,
+}
+
+async fn active_egress_views(
+    engine: &MediaEngine,
+    active_ingest_ids: &HashSet<String>,
+    recent_egresses: &HashMap<String, restream_engine::engine::RecentEgressOutcome>,
+    retry_egresses: &HashMap<String, restream_engine::engine::EgressRetryState>,
+) -> ActiveEgressViews {
+    let egresses = engine.egresses.active.read().await;
+    let mut views = ActiveEgressViews {
+        total_bytes_by_pipeline: HashMap::new(),
+        outputs_by_pipeline: HashMap::new(),
+        blocked_requests: Vec::new(),
+    };
+    for (output_id, egress) in egresses.iter() {
+        let pipeline_id = egress.pipeline_id.clone();
+        let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
+        *views
+            .total_bytes_by_pipeline
+            .entry(pipeline_id.clone())
+            .or_default() += bytes_sent;
+
+        let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
+        let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
+        let mut view = api_view_models::egress_runtime_view(egress, false, has_ingest, None);
+        view.apply_recent_instability(recent_egresses.get(output_id));
+        view.apply_retry_state(retry_egresses.get(output_id));
+        let view = view.with_totals(bytes_sent, bitrate_kbps, &egress.started_at);
+        if let Some(key) = egress.terminal_stage_key.clone() {
+            views
+                .blocked_requests
+                .push((pipeline_id.clone(), output_id.to_string(), key));
+        }
+        views
+            .outputs_by_pipeline
+            .entry(pipeline_id)
+            .or_default()
+            .insert(
+                output_id.to_string(),
+                api_view_models::OutputHealthView::Active(view),
+            );
+    }
+    views
+}
+
+/// Adds the pipeline's recently ended outputs that no active egress shows.
+fn add_recent_egress_views(
+    outputs: &mut BTreeMap<String, api_view_models::OutputHealthView>,
+    pipeline_id: &str,
+    recent_egresses: &HashMap<String, restream_engine::engine::RecentEgressOutcome>,
+    retry_egresses: &HashMap<String, restream_engine::engine::EgressRetryState>,
+) {
+    for (output_id, outcome) in recent_egresses {
+        if outcome.pipeline_id == pipeline_id && !outputs.contains_key(output_id) {
+            let mut view = api_view_models::recent_egress_runtime_view(outcome, false);
+            view.apply_recent_instability(Some(outcome));
+            view.apply_retry_state(retry_egresses.get(output_id));
+            outputs.insert(
+                output_id.to_string(),
+                api_view_models::OutputHealthView::Recent(view.with_totals(
+                    outcome.bytes_sent,
+                    None,
+                    &outcome.started_at,
+                )),
+            );
+        }
+    }
+}
+
+/// Marks each active output whose terminal stage is not producing with the
+/// stage that blocks it.
+async fn apply_blocked_by(
+    engine: &MediaEngine,
+    pipelines: &mut BTreeMap<String, api_view_models::PipelineHealthView>,
+    blocked_requests: Vec<(String, String, restream_domain::domain::stage::StageKey)>,
+) {
+    for (pipeline_id, output_id, key) in blocked_requests {
+        let Some(blocked_by) = engine.egress_blocked_by_stage_snapshot(&key).await else {
+            continue;
+        };
+        if let Some(api_view_models::OutputHealthView::Active(view)) = pipelines
+            .get_mut(&pipeline_id)
+            .and_then(|pipeline| pipeline.outputs.get_mut(&output_id))
+        {
+            view.blocked_by = Some(super::stage_projection::stage_runtime_snapshot_json(
+                &blocked_by,
+            ));
+        }
+    }
+}
+
+async fn stage_snapshots_json(
+    engine: &MediaEngine,
+    pipeline_ids: &[String],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut stages_json = serde_json::Map::new();
+    for pipeline_id in pipeline_ids {
+        for snap in engine.pipeline_stage_runtime_snapshots(pipeline_id).await {
+            stages_json.insert(
+                snap.key.to_string(),
+                super::stage_projection::stage_runtime_snapshot_json(&snap),
+            );
+        }
+    }
+    stages_json
+}
+
+fn rtmp_listener_health(engine: &MediaEngine) -> RtmpListenerHealthJson {
+    let stats = &engine.runtime.rtmp_listener_stats;
+    RtmpListenerHealthJson {
+        accept_errors: stats.rtmp_accept_errors.load(Ordering::Relaxed),
+        fd_exhaustion_errors: stats.rtmp_fd_exhaustion_errors.load(Ordering::Relaxed),
+        restarts: stats.restarts.load(Ordering::Relaxed),
+        ingress_owners: stats.owners.load(Ordering::Relaxed),
+    }
+}
+
+fn srt_listener_health(engine: &MediaEngine) -> SrtListenerHealthJson {
+    let stats = &engine.runtime.listener_stats;
+    SrtListenerHealthJson {
+        bonding_available: stats.bonding_available.load(Ordering::Relaxed),
+        restarts: stats.restarts.load(Ordering::Relaxed),
+        ingress_owner: stats.ingress_owner.snapshot(),
+    }
+}
+
+fn name_resolver_health() -> NameResolverHealthJson {
+    let stats = restream_engine::resolver::stats();
+    NameResolverHealthJson {
+        lookups: stats.lookups,
+        timeouts: stats.timeouts,
+        overflows: stats.overflows,
+        threads: stats.threads,
+        hung_threads: stats.hung_threads,
+        cap_reached: stats.cap_reached,
+    }
+}
+
+fn logging_health() -> LoggingHealthJson {
+    let dropped = crate::logging::dropped_lines();
+    LoggingHealthJson {
+        console_dropped: dropped.console,
+        file_dropped: dropped.file,
+        history_dropped: dropped.history,
     }
 }
 
