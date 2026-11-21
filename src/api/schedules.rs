@@ -154,10 +154,6 @@ async fn audit_run(state: &AppState, schedule: &Schedule, ok: bool) {
 }
 
 /// Runs, records and audits one occurrence.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_occurrence(
     state: Arc<AppState>,
     db: DeadlineDb,
@@ -173,34 +169,53 @@ async fn run_occurrence(
         warn!(schedule = %schedule.id, err = %error, "could not record a schedule run; retried next tick");
         return;
     }
-    // A panicking action is this occurrence's failure, recorded as one.
-    let action = std::panic::AssertUnwindSafe(execute(&state, &schedule))
+    let outcome = run_action(&state, &db, &schedule, occurrence_ms, action_deadline).await;
+    record_outcome(&db, &schedule, occurrence_ms, &outcome).await;
+    audit_run(&state, &schedule, outcome.is_ok()).await;
+}
+
+/// Logs the action's result and records it on the occurrence's row.
+async fn record_outcome(
+    db: &DeadlineDb,
+    schedule: &Schedule,
+    occurrence_ms: i64,
+    outcome: &Result<String, String>,
+) {
+    let result = match outcome {
+        Ok(summary) => format!("ok: {summary}"),
+        Err(error) => format!("failed: {error}"),
+    };
+    info!(schedule = %schedule.id, name = %schedule.name, result = %result, "scheduled event ran");
+    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, result).await {
+        warn!(err = %error, "failed to record a schedule run");
+    }
+}
+
+/// Runs the action to its end. A panic is the occurrence's failure; an
+/// action still running at the deadline is recorded as slow and awaited.
+async fn run_action(
+    state: &AppState,
+    db: &DeadlineDb,
+    schedule: &Schedule,
+    occurrence_ms: i64,
+    action_deadline: Duration,
+) -> Result<String, String> {
+    let action = std::panic::AssertUnwindSafe(execute(state, schedule))
         .catch_unwind()
         .map(|outcome| outcome.unwrap_or_else(|_| Err("the action panicked".to_string())));
     tokio::pin!(action);
-    let outcome = match tokio::time::timeout(action_deadline, &mut action).await {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            let note = format!(
-                "running: not finished after {} s",
-                action_deadline.as_secs()
-            );
-            warn!(schedule = %schedule.id, name = %schedule.name, "{note}");
-            if let Err(error) = record_run(&db, &schedule.id, occurrence_ms, note).await {
-                warn!(err = %error, "failed to record a slow schedule run");
-            }
-            action.await
-        }
-    };
-    let (ok, result) = match &outcome {
-        Ok(summary) => (true, format!("ok: {summary}")),
-        Err(error) => (false, format!("failed: {error}")),
-    };
-    info!(schedule = %schedule.id, name = %schedule.name, result = %result, "scheduled event ran");
-    if let Err(error) = record_run(&db, &schedule.id, occurrence_ms, result).await {
-        warn!(err = %error, "failed to record a schedule run");
+    if let Ok(outcome) = tokio::time::timeout(action_deadline, &mut action).await {
+        return outcome;
     }
-    audit_run(&state, &schedule, ok).await;
+    let note = format!(
+        "running: not finished after {} s",
+        action_deadline.as_secs()
+    );
+    warn!(schedule = %schedule.id, name = %schedule.name, "{note}");
+    if let Err(error) = record_run(db, &schedule.id, occurrence_ms, note).await {
+        warn!(err = %error, "failed to record a slow schedule run");
+    }
+    action.await
 }
 
 /// Records that an occurrence was missed by more than the grace.
