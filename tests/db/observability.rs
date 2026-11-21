@@ -120,6 +120,104 @@ async fn app_logs_can_be_queried_by_output_scope() {
     );
 }
 
+/// Every filter at once: each placeholder must receive its own value, so a
+/// value bound to the wrong condition returns the wrong rows.
+#[tokio::test]
+async fn app_logs_apply_every_filter_together() {
+    let pool = test_pool().await;
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
+        .await
+        .unwrap();
+    db::create_output(
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        DesiredOutputState::Stopped,
+        &OutputConfig::default(),
+    )
+    .await
+    .unwrap();
+    let entry = |ts, class, message| {
+        app_log_entry(ts, Some("p1"), Some("o1"), None, Some(class), message, None)
+    };
+    db::append_app_log_batch(
+        &pool,
+        &[
+            entry(
+                "2024-01-01T00:01:00Z",
+                "lifecycle",
+                "[lifecycle] before cursor",
+            ),
+            entry("2024-01-01T00:01:00Z", "lifecycle", "[lifecycle] match"),
+            entry("2024-01-01T00:01:00Z", "metrics", "[lifecycle] other class"),
+            entry("2024-01-01T00:01:00Z", "lifecycle", "other prefix"),
+            entry(
+                "2024-01-01T00:05:00Z",
+                "lifecycle",
+                "[lifecycle] after until",
+            ),
+            entry(
+                "2023-12-31T23:59:00Z",
+                "lifecycle",
+                "[lifecycle] before since",
+            ),
+            entry(
+                "2024-01-01T00:02:00Z",
+                "lifecycle",
+                "[restart] second prefix",
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+    let first_id = db::list_app_logs(
+        &pool,
+        // A cursor read orders by id: the first row inserted.
+        &AppLogFilters {
+            after_id: Some(0),
+            level: None,
+            since: None,
+            until: None,
+            target: None,
+            scope: None,
+            pipeline_id: None,
+            output_id: None,
+            event_class: None,
+            prefix: None,
+            limit: Some(1),
+            order: None,
+        },
+    )
+    .await
+    .unwrap()[0]
+        .id;
+
+    let logs = db::list_app_logs(
+        &pool,
+        &AppLogFilters {
+            after_id: Some(first_id),
+            level: Some("info".to_string()),
+            since: Some("2024-01-01T00:00:00Z".to_string()),
+            until: Some("2024-01-01T00:03:00Z".to_string()),
+            target: Some("restream::".to_string()),
+            scope: Some("output".to_string()),
+            pipeline_id: Some("p1".to_string()),
+            output_id: Some("o1".to_string()),
+            event_class: Some("lifecycle".to_string()),
+            prefix: Some("[lifecycle], [restart]".to_string()),
+            limit: Some(10),
+            order: None,
+        },
+    )
+    .await
+    .unwrap();
+    let messages: Vec<_> = logs.iter().map(|log| log.message.as_str()).collect();
+    assert_eq!(messages, ["[lifecycle] match", "[restart] second prefix"]);
+}
+
 #[tokio::test]
 async fn filtered_app_logs_honor_prefix_and_event_class_filters() {
     let pool = test_pool().await;
