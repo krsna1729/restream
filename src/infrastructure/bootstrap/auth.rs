@@ -12,10 +12,6 @@ use crate::application::services::AuthService;
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
 const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) async fn initialize_auth_with_bootstrap_file(
     auth_service: &AuthService,
     sessions: &RwLock<HashSet<String>>,
@@ -23,39 +19,61 @@ pub(super) async fn initialize_auth_with_bootstrap_file(
     initial_admin_password: Option<&str>,
 ) -> Result<(), String> {
     if matches!(auth_service.get_password_hash().await, Ok(None)) {
-        let (password, generated) =
-            select_initial_admin_password(initial_admin_password.map(str::to_string));
-        let admin_hash = hash_password(&password);
-        if let Err(error) = auth_service.ensure_password_hash(&admin_hash).await {
-            return Err(format!("failed to initialize dashboard password: {error}"));
-        }
-        if generated {
-            if let Some(path) = bootstrap_password_file {
-                write_bootstrap_password_file(path, &password)
-                    .map_err(|error| format!("failed to write bootstrap password: {error}"))?;
-                info!(
-                    path = %path.display(),
-                    "generated initial dashboard password; read it from this local file"
-                );
-            } else {
-                info!(
-                    password = %password,
-                    "generated initial dashboard password"
-                );
-            }
-            let _ = auth_service
-                .set_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, BOOTSTRAP_PROMPT_PENDING)
-                .await;
-        } else {
-            let _ = auth_service
-                .set_meta(
-                    BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
-                    BOOTSTRAP_PROMPT_DISMISSED,
-                )
-                .await;
-        }
+        set_initial_admin_password(
+            auth_service,
+            bootstrap_password_file,
+            initial_admin_password,
+        )
+        .await?;
     }
+    restore_sessions(auth_service, sessions).await;
+    Ok(())
+}
 
+/// Stores the first admin password: the configured one, or a generated one
+/// written to `bootstrap_password_file` (or logged) and flagged for the
+/// dashboard's change prompt.
+async fn set_initial_admin_password(
+    auth_service: &AuthService,
+    bootstrap_password_file: Option<&Path>,
+    initial_admin_password: Option<&str>,
+) -> Result<(), String> {
+    let (password, generated) =
+        select_initial_admin_password(initial_admin_password.map(str::to_string));
+    let admin_hash = hash_password(&password);
+    if let Err(error) = auth_service.ensure_password_hash(&admin_hash).await {
+        return Err(format!("failed to initialize dashboard password: {error}"));
+    }
+    if !generated {
+        let _ = auth_service
+            .set_meta(
+                BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+                BOOTSTRAP_PROMPT_DISMISSED,
+            )
+            .await;
+        return Ok(());
+    }
+    if let Some(path) = bootstrap_password_file {
+        write_bootstrap_password_file(path, &password)
+            .map_err(|error| format!("failed to write bootstrap password: {error}"))?;
+        info!(
+            path = %path.display(),
+            "generated initial dashboard password; read it from this local file"
+        );
+    } else {
+        info!(
+            password = %password,
+            "generated initial dashboard password"
+        );
+    }
+    let _ = auth_service
+        .set_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, BOOTSTRAP_PROMPT_PENDING)
+        .await;
+    Ok(())
+}
+
+/// Prunes expired sessions, then loads the live ones into the in-memory set.
+async fn restore_sessions(auth_service: &AuthService, sessions: &RwLock<HashSet<String>>) {
     let _ = auth_service
         .prune_expired_sessions(SESSION_MAX_AGE_SECONDS * 1000)
         .await;
@@ -68,7 +86,6 @@ pub(super) async fn initialize_auth_with_bootstrap_file(
             warn!(err = %error, "Failed to load active sessions from SQLite");
         }
     }
-    Ok(())
 }
 
 pub async fn initialize_auth_for_test(

@@ -124,25 +124,10 @@ impl Reconciler {
     /// Each step reads its own rows under the deadline. A step that cannot
     /// read skips its convergence and the pass is retried after the gap;
     /// the other steps still run.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn output_pass(&self, interval: Duration) {
         let mut converged =
             apply_requested_selections(&self.db, &self.engine, &self.requests).await;
-        let outputs = match self.db.read(crate::db::list_outputs).await {
-            Ok(records) => Some(
-                records
-                    .into_iter()
-                    .map(crate::application::outputs::from_record)
-                    .collect::<Vec<_>>(),
-            ),
-            Err(error) => {
-                warn!(err = %error, "DB error reading outputs; output pass retried");
-                None
-            }
-        };
+        let outputs = self.read_outputs().await;
 
         converged &= converge_pull_inputs(&self.db, &self.hls_ingest)
             .await
@@ -150,14 +135,7 @@ impl Reconciler {
         converged &= converge_srt_call_inputs(&self.db, &self.engine)
             .await
             .is_some();
-        match converge_ingest_key_state(&self.db, &self.hls_ingest).await {
-            Some(released) => {
-                for input_id in released {
-                    info!(input_id = %input_id, "ingest key state released for a deleted input");
-                }
-            }
-            None => converged = false,
-        }
+        converged &= self.converge_ingest_keys().await;
         match outputs {
             Some(outputs) => {
                 converged &= converge_topology(&self.db, &self.engine, &outputs).await;
@@ -170,6 +148,32 @@ impl Reconciler {
         if !converged {
             self.requests.wake_at(Instant::now() + interval);
         }
+    }
+
+    async fn read_outputs(&self) -> Option<Vec<restream_domain::models::Output>> {
+        match self.db.read(crate::db::list_outputs).await {
+            Ok(records) => Some(
+                records
+                    .into_iter()
+                    .map(crate::application::outputs::from_record)
+                    .collect(),
+            ),
+            Err(error) => {
+                warn!(err = %error, "DB error reading outputs; output pass retried");
+                None
+            }
+        }
+    }
+
+    /// Releases ingest key state for deleted inputs; false when it could not read.
+    async fn converge_ingest_keys(&self) -> bool {
+        let Some(released) = converge_ingest_key_state(&self.db, &self.hls_ingest).await else {
+            return false;
+        };
+        for input_id in released {
+            info!(input_id = %input_id, "ingest key state released for a deleted input");
+        }
+        true
     }
 }
 
