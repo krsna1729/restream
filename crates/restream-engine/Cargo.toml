@@ -164,6 +164,10 @@ name = "input_gate"
 harness = false
 
 [[bench]]
+name = "shared_ts_mux"
+harness = false
+
+[[bench]]
 name = "egress_visit"
 harness = false
 required-features = ["egress-test-driver"]
