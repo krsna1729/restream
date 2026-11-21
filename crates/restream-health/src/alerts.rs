@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+mod input;
 mod output;
 mod tracker;
 
@@ -257,32 +258,44 @@ pub fn anomaly_alerts(
 
 /// Derive alerts from a `health_snapshot()` JSON value.
 /// Returns alerts sorted Critical-first, then Warning, then by pipeline id.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
     let generated_at = snapshot
         .get("generatedAt")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
+        .unwrap_or("");
     let output_max_retries = snapshot["tuning"]["outputMaxRetries"]
         .as_u64()
         .unwrap_or(10);
-
-    let mut alerts: Vec<Alert> = Vec::new();
+    let mut alerts = Vec::new();
     let shards = output::shard_health_map(snapshot);
     // Outputs whose diagnosis is their shard, per (feed, shard index).
-    let mut shard_affected: HashMap<(String, u64), u64> = HashMap::new();
+    let mut shard_affected = HashMap::new();
 
-    // ── Engine-level checks ───────────────────────────────────────────────────
+    push_engine_alerts(snapshot, generated_at, &mut alerts);
+    if let Some(pipelines) = snapshot.get("pipelines").and_then(|v| v.as_object()) {
+        for (pipeline_id, pipeline) in pipelines {
+            let input = &pipeline["input"];
+            let input_status = input.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            input::push_alerts(pipeline_id, input, input_status, generated_at, &mut alerts);
+            // Per-output: one diagnosis each (see `output`).
+            output::push_output_alerts(
+                pipeline_id,
+                pipeline,
+                input_status == "on",
+                &shards,
+                output_max_retries,
+                generated_at,
+                &mut shard_affected,
+                &mut alerts,
+            );
+        }
+    }
+    push_stage_alerts(snapshot, generated_at, &mut alerts);
+    push_shard_alerts(snapshot, &shard_affected, generated_at, &mut alerts);
+    sorted(alerts)
+}
 
+fn push_engine_alerts(snapshot: &serde_json::Value, generated_at: &str, alerts: &mut Vec<Alert>) {
     let nofile = &snapshot["runtimeLimits"]["nofile"];
     if nofile
         .get("satisfied")
@@ -310,7 +323,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             "The process cannot open enough sockets/files for high fanout workloads.",
             evidence,
             "Run the documented host bootstrap/configuration and restart Restream with the requested nofile limit available.",
-            &generated_at,
+            generated_at,
         ));
     }
 
@@ -335,373 +348,149 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 Evidence::measured(format!("acceptErrors = {}", accept_errors)),
             ],
             "Raise the process/host nofile limit, reduce concurrent connections, and restart affected publishers.",
-            &generated_at,
+            generated_at,
         ));
     }
+}
 
-    // ── Per-pipeline checks ───────────────────────────────────────────────────
+fn push_stage_alerts(snapshot: &serde_json::Value, generated_at: &str, alerts: &mut Vec<Alert>) {
+    let Some(stages) = snapshot.get("stages").and_then(|v| v.as_object()) else {
+        return;
+    };
+    for (stage_key, stage_info) in stages {
+        let Some((pipeline_id, stage_kind)) = stage_key.split_once(':') else {
+            continue;
+        };
+        let phase_name = stage_phase_name(stage_info);
 
-    if let Some(pipelines) = snapshot.get("pipelines").and_then(|v| v.as_object()) {
-        for (pipeline_id, pipeline) in pipelines {
-            let input = &pipeline["input"];
+        if phase_name == "failed" {
+            let last_error = stage_info
+                .get("lastError")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            alerts.push(Alert {
+                pipeline_id: Some(pipeline_id.to_string()),
+                stage_id: Some(stage_kind.to_string()),
+                ..Alert::new(
+                    format!("pipeline:{}:stage:{}:failed", pipeline_id, stage_kind),
+                    Severity::Warning,
+                    Scope::Stage,
+                    format!("Stage '{}' has failed", stage_kind),
+                    format!("The processing stage failed with error: {}.", last_error),
+                    vec![
+                        Evidence::measured("phase = failed"),
+                        Evidence::measured(format!("lastError = {}", last_error)),
+                    ],
+                    "Check the transcoder logs, resource limits, and media source compatibility.",
+                    generated_at,
+                )
+            });
+        }
 
-            // No publisher
-            let input_status = input.get("status").and_then(|v| v.as_str()).unwrap_or("");
-            if input_status == "off" {
-                alerts.push(Alert {
-                    pipeline_id: Some(pipeline_id.clone()),
-                    ..Alert::new(
-                        format!("pipeline:{}:no_publisher", pipeline_id),
-                        Severity::Critical,
-                        Scope::Pipeline,
-                        "No active publisher",
-                        "The pipeline is configured but not receiving a stream.",
-                        vec![Evidence::measured("input.status = off")],
-                        "Start the publisher or check the stream key and connection.",
-                        &generated_at,
-                    )
-                });
-            }
+        let packets_in = stage_info
+            .get("packetsIn")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let packets_out = stage_info
+            .get("packetsOut")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let bytes_in = stage_info
+            .get("bytesIn")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let bytes_out = stage_info
+            .get("bytesOut")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if phase_name == "runningNoOutputYet"
+            && (packets_in > 0 || bytes_in > 0)
+            && packets_out == 0
+            && bytes_out == 0
+        {
+            alerts.push(Alert {
+                pipeline_id: Some(pipeline_id.to_string()),
+                stage_id: Some(stage_kind.to_string()),
+                ..Alert::new(
+                    format!("pipeline:{}:stage:{}:no_output", pipeline_id, stage_kind),
+                    Severity::Warning,
+                    Scope::Stage,
+                    format!(
+                        "Stage '{}' is receiving input but has no output",
+                        stage_kind
+                    ),
+                    "The stage backend has accepted input but has not produced any packets.",
+                    vec![
+                        Evidence::measured(format!("phase = {}", phase_name)),
+                        Evidence::measured(format!("packetsIn = {}", packets_in)),
+                        Evidence::measured(format!("packetsOut = {}", packets_out)),
+                        Evidence::measured(format!("bytesIn = {}", bytes_in)),
+                        Evidence::measured(format!("bytesOut = {}", bytes_out)),
+                    ],
+                    "Check backend stderr, codec compatibility, and downstream stage readiness.",
+                    generated_at,
+                )
+            });
+        }
 
-            let srt_recv_buffer = input
-                .get("publisher")
-                .and_then(|publisher| publisher.get("quality"))
-                .and_then(srt_recv_buffer_occupancy);
-            if let Some((recv_packets, capacity_packets, pct)) = srt_recv_buffer
-                && pct >= SRT_RECV_BUFFER_WARN_PCT
-            {
-                let critical = pct >= SRT_RECV_BUFFER_CRITICAL_PCT;
-                let severity = if critical {
-                    Severity::Critical
-                } else {
-                    Severity::Warning
-                };
-                let title = if critical {
-                    "SRT publisher ingest is not being drained"
-                } else {
-                    "SRT publisher ingest receive buffer is filling"
-                };
-                alerts.push(Alert {
-                    pipeline_id: Some(pipeline_id.clone()),
-                    ..Alert::new(
-                        format!("pipeline:{}:input:srt_recv_buffer_saturated", pipeline_id),
-                        severity,
-                        Scope::Pipeline,
-                        title,
-                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall. The kernel UDP queue may still look empty: the packets have already entered the srt-rs Owner.",
-                        vec![
-                            Evidence::measured(format!(
-                                "srtRecvBufPackets = {} / {} ({:.0}%)",
-                                recv_packets, capacity_packets, pct
-                            )),
-                        ],
-                        "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
-                        &generated_at,
-                    )
-                });
-            }
+        if phase_name == "waitingForKeyframe"
+            && (stage_kind.starts_with("preview:") || stage_kind == "hls")
+        {
+            alerts.push(Alert {
+                pipeline_id: Some(pipeline_id.to_string()),
+                stage_id: Some(stage_kind.to_string()),
+                ..Alert::new(
+                    format!(
+                        "pipeline:{}:stage:{}:waiting_for_keyframe",
+                        pipeline_id, stage_kind
+                    ),
+                    Severity::Warning,
+                    Scope::Stage,
+                    format!("Preview stage '{}' is waiting for a keyframe", stage_kind),
+                    "HLS/preview output cannot start until the source produces a video keyframe.",
+                    vec![Evidence::measured(format!("phase = {}", phase_name))],
+                    "Shorten the source GOP/keyframe interval or wait for the next keyframe.",
+                    generated_at,
+                )
+            });
+        }
 
-            // Picture and sound checks, where they run.
-            if let Some(qa) = input.get("qa") {
-                let held = |key: &str| qa.get(key).and_then(|v| v.as_u64());
-                if let Some(ms) = held("blackForMs")
-                    && ms >= BLACK_ALERT_MS
-                {
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.clone()),
-                        ..Alert::new(
-                            format!("pipeline:{}:input:picture_black", pipeline_id),
-                            Severity::Critical,
-                            Scope::Pipeline,
-                            "Picture is black",
-                            "The source is connected and sending, but its picture is black, so every destination shows black.",
-                            vec![Evidence::measured(format!("black for {} s", ms / 1000))],
-                            "Check the encoder's scene, camera or capture input; the stream itself is fine.",
-                            &generated_at,
-                        )
-                    });
-                } else if let Some(ms) = held("stillForMs")
-                    && ms >= STILL_ALERT_MS
-                {
-                    let slate = qa.get("stillIsSlate").and_then(|v| v.as_bool()) == Some(true);
-                    let (id, title, summary, fix) = if slate {
-                        (
-                            "picture_slate",
-                            "A slate is on air",
-                            "The picture has stayed the same and looks drawn (bars, a card or a still graphic): viewers see a slate, not the program.",
-                            "If the slate is not planned, switch the encoder back to the program scene.",
-                        )
-                    } else {
-                        (
-                            "picture_frozen",
-                            "Picture is frozen",
-                            "The source keeps sending, but the camera picture has stayed exactly the same. A frozen camera or a stuck capture looks like this.",
-                            "Restart the camera or capture source on the encoder.",
-                        )
-                    };
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.clone()),
-                        ..Alert::new(
-                            format!("pipeline:{}:input:{}", pipeline_id, id),
-                            Severity::Warning,
-                            Scope::Pipeline,
-                            title,
-                            summary,
-                            vec![Evidence::measured(format!("unchanged for {} s", ms / 1000))],
-                            fix,
-                            &generated_at,
-                        )
-                    });
-                }
-                if let Some(ms) = held("silentForMs")
-                    && ms >= SILENT_ALERT_MS
-                {
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.clone()),
-                        ..Alert::new(
-                            format!("pipeline:{}:input:audio_silent", pipeline_id),
-                            Severity::Warning,
-                            Scope::Pipeline,
-                            "Sound is silent",
-                            "The source's first audio track has carried no sound.",
-                            vec![Evidence::measured(format!("silent for {} s", ms / 1000))],
-                            "Check the encoder's audio input and mixer, and that the right track is first.",
-                            &generated_at,
-                        )
-                    });
-                }
-                for silent in qa
-                    .get("silentTracks")
-                    .and_then(|v| v.as_array())
-                    .into_iter()
-                    .flatten()
-                {
-                    let (Some(track), Some(ms)) = (
-                        silent.get("track").and_then(|v| v.as_u64()),
-                        silent.get("silentForMs").and_then(|v| v.as_u64()),
-                    ) else {
-                        continue;
-                    };
-                    if ms < SILENT_ALERT_MS {
-                        continue;
-                    }
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.clone()),
-                        ..Alert::new(
-                            format!("pipeline:{}:input:audio_silent:track{}", pipeline_id, track + 1),
-                            Severity::Warning,
-                            Scope::Pipeline,
-                            format!("Audio track {} is silent", track + 1),
-                            format!("The source's audio track {} has carried no sound.", track + 1),
-                            vec![Evidence::measured(format!("silent for {} s", ms / 1000))],
-                            "Check that the encoder routes a source to this track, or drop the track if it is not meant to carry sound.",
-                            &generated_at,
-                        )
-                    });
-                }
-            }
+        let capacity_wait_ms = stage_info
+            .get("capacityWaitMs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
 
-            // Per-reader: lag and overflow
-            if let Some(readers) = input.get("readerMetrics").and_then(|v| v.as_array()) {
-                for reader in readers {
-                    let name = reader
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-
-                    let lag = reader.get("lagSlots").and_then(|v| v.as_u64()).unwrap_or(0);
-                    if lag > LAG_SLOTS_WARN {
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: Some(name.to_string()),
-                            ..Alert::new(
-                                format!("pipeline:{}:stage:{}:lag", pipeline_id, name),
-                                Severity::Warning,
-                                Scope::Stage,
-                                format!("Stage '{}' is lagging behind the ring buffer", name),
-                                "The consumer is reading slower than the producer is writing.",
-                                vec![
-                                    Evidence::measured(format!(
-                                    "lagSlots = {} (threshold {})",
-                                    lag, LAG_SLOTS_WARN
-                                )),
-                                ],
-                                "Check downstream network/encoder throughput or reduce output bitrate.",
-                                &generated_at,
-                            )
-                        });
-                    }
-
-                    let overflows = reader
-                        .get("overflowCount")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    if overflows > 0 {
-                        alerts.push(Alert {
-                            pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: Some(name.to_string()),
-                            ..Alert::new(
-                                format!("pipeline:{}:stage:{}:overflow", pipeline_id, name),
-                                Severity::Warning,
-                                Scope::Stage,
-                                format!(
-                                    "Stage '{}' has overflowed the ring buffer {} time(s)",
-                                    name, overflows
-                                ),
-                                "The ring buffer was full when this reader tried to consume packets; \
-                                    some packets were skipped.",
-                                vec![Evidence::measured(format!("overflowCount = {}", overflows))],
-                                "Reduce output count or increase processing throughput.",
-                                &generated_at,
-                            )
-                        });
-                    }
-                }
-            }
-
-            // Per-output: one diagnosis each (see `output`).
-            output::push_output_alerts(
-                pipeline_id,
-                pipeline,
-                input_status == "on",
-                &shards,
-                output_max_retries,
-                &generated_at,
-                &mut shard_affected,
-                &mut alerts,
-            );
+        if phase_name == "waitingForCapacity" || capacity_wait_ms >= CAPACITY_WAIT_WARN_MS {
+            alerts.push(Alert {
+                pipeline_id: Some(pipeline_id.to_string()),
+                stage_id: Some(stage_kind.to_string()),
+                ..Alert::new(
+                    format!("pipeline:{}:stage:{}:capacity_exhausted", pipeline_id, stage_kind),
+                    Severity::Warning,
+                    Scope::Stage,
+                    format!("Transcoding capacity exhausted for stage '{}'", stage_kind),
+                    "The stage is waiting for transcoding capacity/permits to become available.",
+                    vec![
+                        Evidence::measured(format!("phase = {}", phase_name)),
+                        Evidence::measured(format!(
+                            "capacityWaitMs = {} ms (threshold {})",
+                            capacity_wait_ms, CAPACITY_WAIT_WARN_MS
+                        )),
+                    ],
+                    "Increase RESTREAM_EXTERNAL_FFMPEG_PERMITS, reduce pipeline count, or lower encoding presets.",
+                    generated_at,
+                )
+            });
         }
     }
+}
 
-    // ── Per-stage checks ──────────────────────────────────────────────────────
-
-    if let Some(stages) = snapshot.get("stages").and_then(|v| v.as_object()) {
-        for (stage_key, stage_info) in stages {
-            if let Some((pipeline_id, stage_kind)) = stage_key.split_once(':') {
-                let phase_name = stage_phase_name(stage_info);
-
-                if phase_name == "failed" {
-                    let last_error = stage_info
-                        .get("lastError")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error");
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.to_string()),
-                        stage_id: Some(stage_kind.to_string()),
-                        ..Alert::new(
-                            format!("pipeline:{}:stage:{}:failed", pipeline_id, stage_kind),
-                            Severity::Warning,
-                            Scope::Stage,
-                            format!("Stage '{}' has failed", stage_kind),
-                            format!("The processing stage failed with error: {}.", last_error),
-                            vec![
-                                Evidence::measured("phase = failed"),
-                                Evidence::measured(format!("lastError = {}", last_error)),
-                            ],
-                            "Check the transcoder logs, resource limits, and media source compatibility.",
-                            &generated_at,
-                        )
-                    });
-                }
-
-                let packets_in = stage_info
-                    .get("packetsIn")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let packets_out = stage_info
-                    .get("packetsOut")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let bytes_in = stage_info
-                    .get("bytesIn")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let bytes_out = stage_info
-                    .get("bytesOut")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                if phase_name == "runningNoOutputYet"
-                    && (packets_in > 0 || bytes_in > 0)
-                    && packets_out == 0
-                    && bytes_out == 0
-                {
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.to_string()),
-                        stage_id: Some(stage_kind.to_string()),
-                        ..Alert::new(
-                            format!("pipeline:{}:stage:{}:no_output", pipeline_id, stage_kind),
-                            Severity::Warning,
-                            Scope::Stage,
-                            format!("Stage '{}' is receiving input but has no output", stage_kind),
-                            "The stage backend has accepted input but has not produced any packets.",
-                            vec![
-                                Evidence::measured(format!("phase = {}", phase_name)),
-                                Evidence::measured(format!("packetsIn = {}", packets_in)),
-                                Evidence::measured(format!("packetsOut = {}", packets_out)),
-                                Evidence::measured(format!("bytesIn = {}", bytes_in)),
-                                Evidence::measured(format!("bytesOut = {}", bytes_out)),
-                            ],
-                            "Check backend stderr, codec compatibility, and downstream stage readiness.",
-                            &generated_at,
-                        )
-                    });
-                }
-
-                if phase_name == "waitingForKeyframe"
-                    && (stage_kind.starts_with("preview:") || stage_kind == "hls")
-                {
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.to_string()),
-                        stage_id: Some(stage_kind.to_string()),
-                        ..Alert::new(
-                            format!(
-                                "pipeline:{}:stage:{}:waiting_for_keyframe",
-                                pipeline_id, stage_kind
-                            ),
-                            Severity::Warning,
-                            Scope::Stage,
-                            format!("Preview stage '{}' is waiting for a keyframe", stage_kind),
-                            "HLS/preview output cannot start until the source produces a video keyframe.",
-                            vec![Evidence::measured(format!("phase = {}", phase_name))],
-                            "Shorten the source GOP/keyframe interval or wait for the next keyframe.",
-                            &generated_at,
-                        )
-                    });
-                }
-
-                let capacity_wait_ms = stage_info
-                    .get("capacityWaitMs")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-
-                if phase_name == "waitingForCapacity" || capacity_wait_ms >= CAPACITY_WAIT_WARN_MS {
-                    alerts.push(Alert {
-                        pipeline_id: Some(pipeline_id.to_string()),
-                        stage_id: Some(stage_kind.to_string()),
-                        ..Alert::new(
-                            format!("pipeline:{}:stage:{}:capacity_exhausted", pipeline_id, stage_kind),
-                            Severity::Warning,
-                            Scope::Stage,
-                            format!("Transcoding capacity exhausted for stage '{}'", stage_kind),
-                            "The stage is waiting for transcoding capacity/permits to become available.",
-                            vec![
-                                Evidence::measured(format!("phase = {}", phase_name)),
-                                Evidence::measured(format!(
-                                    "capacityWaitMs = {} ms (threshold {})",
-                                    capacity_wait_ms, CAPACITY_WAIT_WARN_MS
-                                )),
-                            ],
-                            "Increase RESTREAM_EXTERNAL_FFMPEG_PERMITS, reduce pipeline count, or lower encoding presets.",
-                            &generated_at,
-                        )
-                    });
-                }
-            }
-        }
-    }
-
-    // ── Egress fabric shard checks ──────────────────────────────────────────
-
+fn push_shard_alerts(
+    snapshot: &serde_json::Value,
+    shard_affected: &HashMap<(String, u64), u64>,
+    generated_at: &str,
+    alerts: &mut Vec<Alert>,
+) {
     for shard in snapshot["egressFabricShards"]
         .as_array()
         .into_iter()
@@ -735,7 +524,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         "state = panicked ({shard_label})"
                     ))],
                     "Check logs for the panic message and stack trace at the time this shard stopped; a shard that keeps panicking points at a backend bug, not the destinations.",
-                    &generated_at,
+                    generated_at,
                 );
                 alert.evidence.extend(affected_evidence);
                 alerts.push(alert);
@@ -756,7 +545,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     "The shard has produced no media ticks for longer than the stall threshold; every output assigned to it may be stuck.",
                     evidence,
                     "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.",
-                    &generated_at,
+                    generated_at,
                 );
                 alert.evidence.extend(affected_evidence);
                 alerts.push(alert);
@@ -775,7 +564,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         Evidence::derived(format!("affectedOutputs = {affected}")),
                     ],
                     "Check the logs for why the shard stopped; restart the affected outputs.",
-                    &generated_at,
+                    generated_at,
                 ));
             }
             _ => {}
@@ -804,7 +593,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     )),
                     ],
                     "Reduce the rate of output add/remove/update churn against this shard, or raise RESTREAM_EGRESS_COMMAND_CAPACITY.",
-                    &generated_at,
+                    generated_at,
                 ));
             }
         }
@@ -826,12 +615,10 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 )),
                 ],
                 "Check pipeline ring buffer capacity and downstream network bandwidth.",
-                &generated_at,
+                generated_at,
             ));
         }
     }
-
-    sorted(alerts)
 }
 
 fn stage_phase_name(stage_info: &serde_json::Value) -> &str {
@@ -863,19 +650,6 @@ fn blocked_output_action(phase: &str) -> &'static str {
         }
         _ => "Inspect the upstream stage lifecycle and dependency chain for the blocked output.",
     }
-}
-
-fn srt_recv_buffer_occupancy(quality: &serde_json::Value) -> Option<(u64, u64, f64)> {
-    let buffered = quality.get("srtRecvBufPackets")?.as_u64()?;
-    let capacity = quality.get("srtRecvBufCapacityPackets")?.as_u64()?;
-    if capacity == 0 {
-        return None;
-    }
-    Some((
-        buffered,
-        capacity,
-        buffered as f64 / capacity as f64 * 100.0,
-    ))
 }
 
 fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {
