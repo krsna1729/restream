@@ -59,7 +59,7 @@ its own, for example `cargo xtask clippy-lib` or `cargo xtask docs-audit`.
 |---|---|---|
 | `format` (Source formatting and TS types) | `cargo xtask format`: `cargo fmt --all --check`, `npx tsc -p tsconfig.json --noEmit` | every run |
 | `lint` (Rust lint) | `cargo xtask lint`: `cargo clippy` for the lib, all targets, and the MCP features; the MCP feature `cargo check` matrix; agent tests with and without the agent plane | every run |
-| `architecture-guardrails` (Source architecture audit) | `cargo xtask architecture`: `source-audit`, `docs-audit`, `frontend-style` | every run |
+| `architecture-guardrails` (Source architecture audit) | `cargo xtask architecture`: `source-audit`, `docs-audit`, `frontend-style`, `reportcard` (cyclomatic ratchet; report in `target/reportcard/`) | every run |
 | `test` (Rust unit hygiene and fixtures) | `cargo xtask unit`: `test-hygiene` (runs `cargo test --workspace`, then scans for noise), `fixture-discipline` | every run |
 | `coverage` (Workspace coverage report) | `cargo llvm-cov --workspace`; uploads to Codecov; never fails on a percentage | after `test` |
 | `api-contract` (API contract smoke) | `cargo xtask api-contract` | every run |

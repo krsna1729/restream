@@ -35,7 +35,7 @@ and hot-path dispatch/channel hops introduced solely for layering.
 
 ## File growth
 
-Three gates fail the build; file length is not one of them:
+Four gates fail the build; file length is not one of them:
 
 - clippy `too_many_lines` fails a function over 150 code lines, and clippy
   `cognitive_complexity` one over 25 (thresholds in `clippy.toml`; the
@@ -45,6 +45,14 @@ Three gates fail the build; file length is not one of them:
 - `cargo xtask source-audit` fails on an orphaned `.rs` file, one no crate
   root reaches through `mod`, `#[path]` or `include!`, because it is never
   compiled.
+- `cargo xtask reportcard` fails a function over cyclomatic complexity 20
+  (`[workspace.metadata.reportcard]` in `Cargo.toml`, measured by
+  `rust-code-analysis-cli` 0.0.25 over `src/` and `crates/restream-*/src/`).
+  Functions that predate the limit are recorded at their current value in
+  `crates/xtask/reportcard-baseline.json`; one that grows, or shrinks without
+  its entry being lowered, fails, as does an entry whose function is gone or
+  back within the limit. `cargo xtask reportcard --update-baseline` only
+  removes and lowers entries: split a new offender, never record it.
 
 The audit also reports production code lines per crate and lists files of 800+
 raw lines. That list is an ownership review trigger, not proof that a file
