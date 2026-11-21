@@ -408,6 +408,10 @@ fn build_listener_plan(port: u16, udp_buffer: usize) -> Result<OwnerListenerPlan
     Ok(plan)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 fn sink_thread(
     port: u16,
     plan: OwnerListenerPlan,

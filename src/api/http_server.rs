@@ -92,6 +92,10 @@ impl ServeOptions {
 /// drain. Accept errors that concern one connection are skipped; others
 /// (descriptor exhaustion) are logged and retried after a second, as
 /// `axum::serve` does.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn serve(listener: TcpListener, app: Router, options: ServeOptions) {
     let max_connections = options.max_connections.clamp(1, Semaphore::MAX_PERMITS);
     let permits = Arc::new(Semaphore::new(max_connections));

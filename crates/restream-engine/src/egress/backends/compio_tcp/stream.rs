@@ -742,6 +742,10 @@ async fn receive_before_ktls(
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn receive_ancillary_worker(
     stream: Rc<compio::net::TcpStream>,
     buffers: SharedIoBuffers,

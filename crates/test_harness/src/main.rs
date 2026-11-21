@@ -236,6 +236,10 @@ fn ensure_loopback() {
         .status();
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let command = raw.first().cloned().unwrap_or_else(|| "suite".to_string());

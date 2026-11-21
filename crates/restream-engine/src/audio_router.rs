@@ -14,6 +14,10 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFol
 /// `SelectTracks` filters and reindexes reference-counted packets in a tight
 /// async loop. `Remap` and `Downmix` require DSP and run on the external FFmpeg
 /// backend.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn start_audio_router(
     pipeline_id: String,
     routing: AudioRouting,

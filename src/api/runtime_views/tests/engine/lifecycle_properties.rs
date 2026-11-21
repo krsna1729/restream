@@ -327,6 +327,10 @@ fn ingest_lifecycle_action_strategy() -> impl Strategy<Value = IngestLifecycleAc
     ]
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 fn assert_egress_lifecycle_invariants(
     model: &EgressLifecycleModel,
     status: Option<&serde_json::Value>,
@@ -433,6 +437,10 @@ fn assert_egress_lifecycle_invariants(
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 fn assert_ingest_lifecycle_invariants(
     model: &IngestLifecycleModel,
     plain_input: &serde_json::Value,

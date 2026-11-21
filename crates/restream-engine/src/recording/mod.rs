@@ -158,6 +158,10 @@ fn build_recording_remux_args(
     ]
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn remux_recording_to_mp4(
     recording_id: String,
     ts_path: PathBuf,
@@ -464,6 +468,10 @@ async fn feed_recording(
 #[expect(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
 )]
 pub async fn start_recording(
     start: RecordingStart,

@@ -53,6 +53,10 @@ pub async fn start_rtmp_server_on(
     .await;
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn start_rtmp_server_on_with_shutdown(
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
@@ -355,6 +359,10 @@ fn rtmp_io_uring_entries(connection_limit: usize) -> u32 {
         .clamp(64, MAX_IO_URING_ENTRIES as usize) as u32
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_compio_owner(
     listener: compio::net::TcpListener,
     control_tx: mpsc::Sender<ControlSession>,

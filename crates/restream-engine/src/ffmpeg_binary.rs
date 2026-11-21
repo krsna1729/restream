@@ -74,6 +74,10 @@ pub fn init(configured: Option<String>) {
 
 /// The resolved FFmpeg executable. Falls back to the bare name `ffmpeg` when
 /// nothing was found, so a spawn fails with a clear "not found" error.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub fn ffmpeg_bin_path() -> &'static Path {
     FFMPEG_BIN_PATH.get_or_init(|| {
         let configured = CONFIGURED_FFMPEG_PATH

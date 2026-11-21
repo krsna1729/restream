@@ -271,6 +271,10 @@ async fn drain_reader_until_quiet(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_matrix_iteration(
     source_ring: &Arc<RingBuffer>,
     target_ring: &Arc<RingBuffer>,

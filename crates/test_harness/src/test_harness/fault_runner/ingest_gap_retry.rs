@@ -10,6 +10,10 @@ use super::super::*;
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn egress_retry_survives_ingest_gap(
     api: &mut RampApi,
     ports: &TestPorts,

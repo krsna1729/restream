@@ -69,6 +69,10 @@ fn router_routes_have_explicit_auth_classification() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 fn release_policy_metadata_is_declared_and_enforced() {
     let cargo_toml = include_str!("../../Cargo.toml");
     assert!(cargo_toml.contains("rust-version = \"1.96\""));

@@ -71,6 +71,10 @@ pub(super) struct Followed {
 impl PullState {
     /// Apply a fetched media playlist: dispatch its rewritten text, then fetch
     /// and hand over its new segments in order.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     pub(super) async fn follow_media(
         &mut self,
         follow: &mut Follow,

@@ -228,6 +228,10 @@ struct MsrPhaseResult {
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_msr_phase(
     env: ResourceSweepEnv,
     protocol_mix: MsrProtocolMix,

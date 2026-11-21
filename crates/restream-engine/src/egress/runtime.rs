@@ -276,6 +276,10 @@ impl EgressFabricRuntime {
     ///
     /// Returns the shard ids touched (replaced, grown or shut down) on
     /// success, for logging.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     pub fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,

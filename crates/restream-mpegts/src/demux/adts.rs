@@ -55,6 +55,10 @@ impl AdtsFraming {
     /// timestamp belongs to the first frame that starts in the PES, and each
     /// frame after steps by 1024 samples. A frame cut at the PES end is kept
     /// and completed by the next PES.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     pub(super) fn frame(
         &mut self,
         payload: Bytes,

@@ -146,6 +146,10 @@ fn parse_hls_playlist_snapshot(body: &str) -> HlsPlaylistSnapshot {
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_file_live_edge_case(
     api: &mut RampApi,
     ports: &TestPorts,

@@ -13,6 +13,10 @@ use crate::infrastructure::service_wiring::SqliteServiceFactory;
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
 const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn initialize_auth_with_bootstrap_file(
     auth_service: &AuthService,
     sessions: &RwLock<HashSet<String>>,

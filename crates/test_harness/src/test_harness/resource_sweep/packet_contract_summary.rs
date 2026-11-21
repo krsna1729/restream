@@ -21,6 +21,10 @@ use super::packet_contract_verdict::{
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) fn rung_summary(
     scenario: &str,
     outputs: u64,

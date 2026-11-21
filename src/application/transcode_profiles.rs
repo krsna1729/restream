@@ -12,6 +12,10 @@ pub fn default_transcode_profiles() -> TranscodeProfiles {
     restream_engine::profiles::built_in_defaults()
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
     let profiles = match meta_store.get_meta(TRANSCODE_PROFILES_META_KEY).await {
         Ok(Some(json_str)) => match serde_json::from_str::<TranscodeProfiles>(&json_str) {

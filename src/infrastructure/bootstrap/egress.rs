@@ -202,6 +202,10 @@ impl EgressReconciler {
 
     /// Plans one output: starts, stops or retries it. Returns how long until
     /// it should be planned again, when that is a deadline of its own.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     async fn reconcile_output(&self, output: &Output) -> Option<Duration> {
         let engine = &self.starter.engine;
         let tuning = self.starter.tuning;
@@ -428,6 +432,10 @@ impl EgressStarter {
     #[expect(
         clippy::too_many_lines,
         reason = "predates the function-size limit (#147); split it before growing it"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
     )]
     async fn start(self, output: Output) {
         let output = &output;

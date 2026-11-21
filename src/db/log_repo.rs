@@ -58,6 +58,10 @@ pub async fn append_app_log_batch_returning(
 
 /// General query for `/api/v1/logs` — supports level, target, scope, pipeline_id,
 /// event_class, prefix (message LIKE), time range, limit, order.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub async fn list_app_logs(
     pool: &SqlitePool,
     filters: &crate::logging::types::AppLogFilters,

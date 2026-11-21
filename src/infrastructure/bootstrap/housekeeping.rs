@@ -145,6 +145,10 @@ impl Housekeeping {
         .await;
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     async fn prune_sessions_and_logs(&self) {
         if let Err(error) = self
             .db

@@ -169,6 +169,10 @@ pub(super) enum PublishAuthorization {
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn run_rtmp_control_session(
     mut commands: mpsc::Receiver<RtmpControlCommand>,
     shutdown: CancellationToken,
@@ -385,6 +389,10 @@ struct PublishContext<'a> {
     stream_key: &'a str,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn authorize_publish(
     pipeline_access: &dyn PipelineAccessAuthenticator,
     security: &IngestSecurityService,
@@ -616,6 +624,10 @@ fn set_tcp_socket_buffers(socket: std::os::fd::BorrowedFd<'_>, size: usize) {
 #[expect(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
 )]
 pub(super) async fn handle_rtmp_client(
     stream: compio::net::TcpStream,

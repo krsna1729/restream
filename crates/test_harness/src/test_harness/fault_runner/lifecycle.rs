@@ -124,6 +124,10 @@ async fn wait_for_recording_file(media_root: &Path, pipeline_name: &str) -> bool
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(crate) async fn run_ingest_lifecycle_case(
     api: &RampApi,
     ports: &TestPorts,

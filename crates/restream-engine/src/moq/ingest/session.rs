@@ -497,6 +497,10 @@ impl CatalogReader {
 /// The next catalog version. Updates only add tracks, so one that ends,
 /// fails or panics stops the following and leaves the media running; with
 /// nothing to follow this never resolves.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn catalog_update(reader: &mut Option<CatalogReader>) -> hang::Catalog {
     while let Some(current) = reader.as_mut() {
         match AssertUnwindSafe(current.next()).catch_unwind().await {

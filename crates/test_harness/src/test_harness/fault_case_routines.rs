@@ -186,6 +186,10 @@ pub(super) async fn run_retry_budget_case(
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn run_recovery_transient_case(
     api: &RampApi,
     ports: &TestPorts,

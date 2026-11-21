@@ -4,6 +4,10 @@ use tracing::{error, info, warn};
     clippy::too_many_lines,
     reason = "predates the function-size limit (#147); split it before growing it"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) fn persist_runtime_event(event: restream_engine::events::Event) {
     use restream_engine::events::EventKind;
 

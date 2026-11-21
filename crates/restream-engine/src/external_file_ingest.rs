@@ -247,6 +247,10 @@ async fn register_current_child(
     Ok(())
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 async fn run_external_file_ingest(
     runtime: Arc<ExternalFileIngestRuntime>,
     mut spawned: SpawnedExternalFileIngest,

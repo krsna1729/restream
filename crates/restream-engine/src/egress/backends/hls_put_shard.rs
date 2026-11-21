@@ -481,6 +481,10 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         None
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     fn drive_slot(&mut self, key: LeafKey, now: Instant) {
         loop {
             let Some(slot) = self.slots.get_mut(key) else {

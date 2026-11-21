@@ -52,6 +52,10 @@ pub(super) fn spawn_signal_watcher() -> CancellationToken {
     shutdown
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn cleanup(
     engine: &Arc<MediaEngine>,
     pool: &SqlitePool,

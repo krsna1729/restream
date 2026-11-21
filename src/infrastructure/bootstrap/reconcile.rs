@@ -124,6 +124,10 @@ impl Reconciler {
     /// Each step reads its own rows under the deadline. A step that cannot
     /// read skips its convergence and the pass is retried after the gap;
     /// the other steps still run.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "predates the complexity limit; split it before growing it"
+    )]
     async fn output_pass(&self, interval: Duration) {
         let mut converged =
             apply_requested_selections(&self.db, &self.engine, &self.requests).await;

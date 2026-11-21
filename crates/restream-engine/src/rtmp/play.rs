@@ -33,6 +33,10 @@ pub(super) struct RtmpPlayRequest<'a> {
     pub(super) stream_id: u32,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "predates the complexity limit; split it before growing it"
+)]
 pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<(), &'static str> {
     let (reply, response) = oneshot::channel();
     tokio::select! {
