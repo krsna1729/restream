@@ -1,4 +1,4 @@
-//! Policy types: per-leaf limits, work budgets.
+//! Policy types: per-leaf policy and stall classification, work budgets.
 //!
 //! Policy belongs to the protocol-neutral fabric. Protocol engines observe
 //! limits through `WorkBudget` and report results through `EngineProgress`;
@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 // LeafPolicy — per-output configuration
 // ---------------------------------------------------------------------------
 
-/// Operational policy for one egress leaf.
+/// Operational policy for one egress leaf. The connect-phase timeouts apply
+/// while the output starts; a live leaf keeps the whole policy in
+/// `LeafCommon::policy` for `classify_stall`.
 #[derive(Debug, Clone)]
 pub struct LeafPolicy {
     /// Maximum feed lag (in units) before the leaf is stalled.
@@ -42,43 +44,6 @@ impl Default for LeafPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// LeafLimits — strict per-leaf accounting ceilings
-// ---------------------------------------------------------------------------
-
-/// Ceilings `classify_stall` applies to one leaf during operation.
-///
-/// Pending send bytes have no ceiling here; each backend bounds its own send
-/// queue. The RTMP publisher encodes the next feed unit only after the
-/// previous one reached the transport, so it holds at most one unit's wire
-/// bytes; an SRT leaf's backlog is the SRT socket's bounded send buffer.
-#[derive(Debug, Clone)]
-pub struct LeafLimits {
-    /// Maximum number of feed units the leaf may lag behind the head.
-    pub max_lag_units: u64,
-    /// Maximum time the leaf may be continuously backpressured before recovery.
-    pub max_backpressure_duration: Duration,
-}
-
-impl Default for LeafLimits {
-    fn default() -> Self {
-        Self {
-            max_lag_units: 300,
-            max_backpressure_duration: Duration::from_secs(30),
-        }
-    }
-}
-
-impl LeafLimits {
-    /// Derive strict limits from a `LeafPolicy`.
-    pub fn from_policy(policy: &LeafPolicy) -> Self {
-        Self {
-            max_lag_units: policy.max_feed_lag_units,
-            max_backpressure_duration: policy.no_progress_timeout,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Stall classification
 // ---------------------------------------------------------------------------
 
@@ -90,7 +55,7 @@ pub enum LeafStallClass {
     /// Data is waiting but the most recent progress is within the deadline.
     Backpressured,
     /// Data is waiting and no progress has occurred within
-    /// `max_backpressure_duration` — the leaf needs recovery.
+    /// `no_progress_timeout` — the leaf needs recovery.
     Stalled,
 }
 
@@ -100,24 +65,29 @@ pub enum LeafStallClass {
 /// far its read cursor lags the live feed edge.
 ///
 /// The lag ceiling is a strict loss-of-liveness bound: a leaf whose cursor
-/// sits more than `max_lag_units` behind the feed head can never catch up
+/// sits more than `max_feed_lag_units` behind the feed head can never catch up
 /// without losing data (the ring has already advanced past its position),
 /// so it is stalled regardless of progress age. It applies to protocols
 /// whose catch-up is lossy (SRT's TSBPD/TLPKTDROP); lossless-TCP protocols
 /// pass 0 because a lagging leaf recovers by reading flat-out.
+///
+/// Pending send bytes have no ceiling here; each backend bounds its own send
+/// queue. The RTMP publisher encodes the next feed unit only after the
+/// previous one reached the transport, so it holds at most one unit's wire
+/// bytes; an SRT leaf's backlog is the SRT socket's bounded send buffer.
 pub fn classify_stall(
     pending_bytes: u64,
     age_since_progress: Duration,
     lag_units: u64,
-    limits: &LeafLimits,
+    policy: &LeafPolicy,
 ) -> LeafStallClass {
     if pending_bytes == 0 {
         return LeafStallClass::Idle;
     }
-    if lag_units > limits.max_lag_units {
+    if lag_units > policy.max_feed_lag_units {
         return LeafStallClass::Stalled;
     }
-    if age_since_progress >= limits.max_backpressure_duration {
+    if age_since_progress >= policy.no_progress_timeout {
         return LeafStallClass::Stalled;
     }
     LeafStallClass::Backpressured
@@ -323,22 +293,10 @@ mod tests {
     }
 
     #[test]
-    fn leaf_limits_from_policy() {
-        let policy = LeafPolicy {
-            max_feed_lag_units: 500,
-            no_progress_timeout: Duration::from_secs(7),
-            ..LeafPolicy::default()
-        };
-        let limits = LeafLimits::from_policy(&policy);
-        assert_eq!(limits.max_lag_units, 500);
-        assert_eq!(limits.max_backpressure_duration, Duration::from_secs(7));
-    }
-
-    #[test]
     fn classify_stall_splits_idle_backpressured_stalled() {
-        let limits = LeafLimits {
-            max_backpressure_duration: Duration::from_secs(15),
-            ..LeafLimits::default()
+        let limits = LeafPolicy {
+            no_progress_timeout: Duration::from_secs(15),
+            ..LeafPolicy::default()
         };
         assert_eq!(
             classify_stall(0, Duration::from_secs(3600), 0, &limits),
@@ -355,13 +313,14 @@ mod tests {
     }
 
     /// The lag ceiling is a strict liveness bound independent of progress
-    /// age: a leaf whose cursor is more than `max_lag_units` behind the
+    /// age: a leaf whose cursor is more than `max_feed_lag_units` behind the
     /// head is stalled even while its transport still drains.
     #[test]
     fn classify_stall_lag_over_limit_is_stalled_regardless_of_progress() {
-        let limits = LeafLimits {
-            max_lag_units: 300,
-            max_backpressure_duration: Duration::from_secs(15),
+        let limits = LeafPolicy {
+            max_feed_lag_units: 300,
+            no_progress_timeout: Duration::from_secs(15),
+            ..LeafPolicy::default()
         };
         assert_eq!(
             classify_stall(1, Duration::from_secs(1), 301, &limits),

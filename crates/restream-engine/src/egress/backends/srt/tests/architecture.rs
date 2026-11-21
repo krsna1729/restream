@@ -40,7 +40,7 @@ fn runtime_and_owners_live_and_die_on_the_shard_thread() {
         config,
         move || {
             *shard_thread.lock().unwrap() = Some(std::thread::current().id());
-            resolve_runtime::resolving_srt_shard_backend(
+            srt_shard_backend(
                 reader,
                 budget(),
                 Duration::from_millis(300),
@@ -182,7 +182,7 @@ fn mixed_family_bond_is_rejected_without_partial_admission() {
 #[test]
 fn shard_factory_builds_backend_or_returns_a_typed_error() {
     let feed = TestFeed::new();
-    let built = resolve_runtime::resolving_srt_shard_backend(
+    let built = srt_shard_backend(
         feed.reader(),
         budget(),
         Duration::from_millis(100),

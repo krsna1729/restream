@@ -16,23 +16,15 @@
 use super::*;
 use std::sync::Arc;
 
-/// Builds a backend wired to a real `RtmpResolveCompletionQueue` so this
-/// test can push a connect completion the same way the production resolve
-/// worker does, then observe `on_media_tick`'s real return value.
+/// Builds a backend with no resolver whose completion sender this test
+/// pushes a connect completion into the same way a resolver thread does,
+/// then observes `on_media_tick`'s real return value.
 fn backend_with_resolve_queue() -> (
     RtmpShardBackend<CompioTcpPoller>,
     std::sync::mpsc::Sender<RtmpResolvedConnect>,
 ) {
-    let (sender, queue) = rtmp_resolve_completion_queue();
-    let backend = RtmpShardBackend::with_runtime_components(
-        CompioTcpPoller::new(4).unwrap(),
-        feed(),
-        budget(),
-        4096,
-        crate::egress::tls::rustls_client_config(),
-        queue,
-        EmptyRtmpPublishStartupSource,
-    );
+    let backend = RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let sender = backend.resolved_sender.clone();
     (backend, sender)
 }
 

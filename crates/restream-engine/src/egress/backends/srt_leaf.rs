@@ -117,7 +117,7 @@ impl SrtFabricLeaf {
             pressure.pending_bytes(),
             age,
             lag_units,
-            &self.common.limits,
+            &self.common.policy,
         )
     }
 

@@ -3,6 +3,17 @@
 //! The fabric consumes a bounded, sequence-addressed, immutable feed.
 //! The contract is defined here; the adapters for `RingBuffer` and
 //! `TsChunkRing` live in `journal.rs`.
+//!
+//! Why a trait and not one concrete feed: the two production feeds are not
+//! one implementation with a different `Unit`. `RingFeed` hands out the
+//! packet `Arc` and follows the ring's replacement chain on every read;
+//! `TsFeed` hands out the payload `Bytes` from one fixed ring and scans for
+//! keyframes on it alone. The shared visit and resynchronization policy
+//! (`visit.rs`) is also proven against feeds that script what no real ring
+//! produces on demand (`egress/tests.rs`): every combination of epoch,
+//! retained window and sync point (a proptest), a keyframe published while
+//! the leaf queries for a sync point, and `test_driver::FakeFeed` for the
+//! unit tests and the `egress_visit` benchmark.
 
 // ---------------------------------------------------------------------------
 // FeedCursor
@@ -121,9 +132,7 @@ pub enum FeedRead<U> {
 /// Stable contract for a bounded, immutable, sequence-addressed feed.
 ///
 /// Implementors wrap existing ring structures (`RingBuffer`, `TsChunkRing`)
-/// without rewriting them. The interface is defined here so the scheduler,
-/// leaf, and test driver can work against a stable boundary before any
-/// concrete implementation exists.
+/// without rewriting them; see the module doc for why this stays a trait.
 pub trait EgressFeed {
     /// The unit produced by this feed (e.g. `Bytes` for MPEG-TS messages,
     /// `Arc<MediaPacket>` for RTMP-compatible units).

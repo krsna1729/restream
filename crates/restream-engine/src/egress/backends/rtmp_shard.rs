@@ -1,6 +1,7 @@
 //! RTMP fabric shard backend. A shard-local Compio runtime owns connection
-//! receives and writes; DNS resolution stays on a dedicated worker so a slow
-//! resolver cannot stall the shard.
+//! receives and writes; each `Add`/`Update` destination resolves on the
+//! process resolver (`crate::resolver`), which answers into the backend's
+//! completion queue, so a slow resolver cannot stall the shard.
 //!
 //! Completion events are bounded and generation-tagged. The protocol engine
 //! remains shard-scheduled, preserving feed fairness, drain and retry rules.
@@ -22,13 +23,11 @@ use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
-use crate::egress::policy::{
-    LeafLimits, LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall,
-};
+use crate::egress::policy::{LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardConfig};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
-use crate::resolver::ResolveError;
+use crate::resolver::{ResolveError, Resolver};
 use restream_rtmp::parse_rtmp_url;
 
 #[cfg(test)]
@@ -41,6 +40,7 @@ use super::tcp::TcpEgressPollError;
 use super::tcp::TcpReadyLeaf;
 use crate::egress::tls::TlsTcpConnection;
 
+pub(crate) use self::rtmp_shard_connect::rtmp_shard_backend;
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
 pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
 
@@ -103,7 +103,7 @@ impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve worker
+// DNS completions
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,27 +113,6 @@ pub(crate) struct RtmpResolvedConnect {
     /// An error fails the matching pending connect instead of keeping it
     /// resident (and holding leaf capacity) forever.
     pub(crate) peer: Result<SocketAddr, ResolveError>,
-}
-
-pub(crate) struct RtmpResolveCompletionQueue {
-    receiver: Receiver<RtmpResolvedConnect>,
-}
-
-/// Unbounded so a resolver thread never blocks on, or drops, a shard's
-/// answer: it holds one completion per accepted `Add`/`Update`, each
-/// answered by its deadline and drained every media tick.
-pub(crate) fn rtmp_resolve_completion_queue()
--> (Sender<RtmpResolvedConnect>, RtmpResolveCompletionQueue) {
-    let (sender, receiver) = mpsc::channel();
-    (sender, RtmpResolveCompletionQueue { receiver })
-}
-
-impl RtmpResolveCompletionQueue {
-    pub(crate) fn drain_resolved(&mut self, resolved: &mut Vec<RtmpResolvedConnect>) {
-        while let Ok(completion) = self.receiver.try_recv() {
-            resolved.push(completion);
-        }
-    }
 }
 
 fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
@@ -223,7 +202,7 @@ impl RtmpFabricLeaf {
             // Lossless-TCP catch-up: a lagging RTMP leaf recovers by
             // reading flat-out, so the lag ceiling is SRT-only.
             0,
-            &self.common.limits,
+            &self.common.policy,
         )
     }
 
@@ -327,7 +306,14 @@ where
     poller: P,
     /// Raw → FLV conversions shared by every leaf on this shard thread.
     payload_cache: restream_rtmp::egress_payload_cache::SharedRtmpPayloadCache,
-    resolve_completions: RtmpResolveCompletionQueue,
+    /// Destination lookups go to the process resolver; `None` only in tests,
+    /// which complete connects by hand.
+    resolver: Option<Arc<Resolver>>,
+    /// Unbounded so a resolver thread never blocks on, or drops, a shard's
+    /// answer: it holds one completion per accepted `Add`/`Update`, each
+    /// answered by its deadline and drained every media tick.
+    resolved_sender: Sender<RtmpResolvedConnect>,
+    resolved_receiver: Receiver<RtmpResolvedConnect>,
     resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
     feed: RingFeed,
@@ -384,13 +370,16 @@ where
         budget: WorkBudgetConfig,
         chunk_size: u32,
         rtmps_client_config: Arc<ClientConfig>,
-        resolve_completions: RtmpResolveCompletionQueue,
+        resolver: Option<Arc<Resolver>>,
         startup_source: S,
     ) -> Self {
         let ready_capacity = poller.ready_capacity();
+        let (resolved_sender, resolved_receiver) = mpsc::channel();
         Self {
             poller,
-            resolve_completions,
+            resolver,
+            resolved_sender,
+            resolved_receiver,
             resolved_connects: Vec::with_capacity(1024),
             startup_source,
             feed,
@@ -457,7 +446,7 @@ where
 
     /// Override the per-leaf drain deadline. Production threads the
     /// configured `EgressFabricConfig::drain_timeout_ms` through here (see
-    /// `resolving_rtmp_shard_backend`); tests use it for fast, deterministic
+    /// `rtmp_shard_backend`); tests use it for fast, deterministic
     /// timing instead of the constructor's multi-second default.
     pub(crate) fn with_drain_timeout(mut self, drain_timeout: Duration) -> Self {
         self.drain_timeout = drain_timeout;
@@ -743,7 +732,7 @@ where
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = std::mem::take(&mut self.resolved_connects);
         resolved.clear();
-        self.resolve_completions.drain_resolved(&mut resolved);
+        resolved.extend(self.resolved_receiver.try_iter());
         let mut connected_any = false;
         for completion in resolved.drain(..) {
             let peer_addr = match completion.peer {
@@ -796,9 +785,7 @@ impl<P> RtmpShardBackend<P, EmptyRtmpPublishStartupSource>
 where
     P: RtmpReadinessPoller,
 {
-    // Production always constructs via `with_runtime_components` directly
-    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
-    // only used by tests.
+    /// A backend with no resolver: tests complete its connects by hand.
     #[cfg(test)]
     pub(crate) fn new(
         poller: P,
@@ -806,14 +793,13 @@ where
         budget: WorkBudgetConfig,
         chunk_size: u32,
     ) -> Self {
-        let (_sender, queue) = rtmp_resolve_completion_queue();
         Self::with_runtime_components(
             poller,
             feed,
             budget,
             chunk_size,
             crate::egress::tls::rustls_client_config(),
-            queue,
+            None,
             EmptyRtmpPublishStartupSource,
         )
     }

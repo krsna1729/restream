@@ -23,7 +23,7 @@ use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
-use crate::egress::policy::{LeafLimits, WorkBudgetConfig};
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
@@ -157,13 +157,8 @@ impl<C: MoqConnector> MoqShardBackend<C> {
             Err(error) => return refuse(&format!("MoQ broadcast: {error}")),
         };
         let progress = spec.progress.clone();
-        let common = LeafCommon::new(
-            spec.id,
-            spec.generation,
-            spec.feed,
-            LeafLimits::from_policy(&spec.policy),
-        )
-        .with_progress_sink(spec.progress);
+        let common = LeafCommon::new(spec.id, spec.generation, spec.feed, spec.policy)
+            .with_progress_sink(spec.progress);
         let activity = self.activity.clone();
         let Some(key) = self.leaves.insert_with(|key| MoqFabricLeaf {
             common,

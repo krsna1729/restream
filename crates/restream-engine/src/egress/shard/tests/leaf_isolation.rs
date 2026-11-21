@@ -4,7 +4,7 @@ use crate::egress::backend::{EngineProgress, Interest, Readiness, WaitCondition}
 use crate::egress::command::{EgressCommand, FeedId, OutputId, ShardId};
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
-use crate::egress::policy::{LeafLimits, WorkBudget};
+use crate::egress::policy::{LeafPolicy, WorkBudget};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
@@ -311,7 +311,7 @@ impl EgressShardBackend for LeafHarnessBackend {
             let key = self
                 .leaves
                 .insert_with(|_| HarnessLeaf {
-                    common: LeafCommon::new(spec.id, 1, FeedId::new("feed"), LeafLimits::default()),
+                    common: LeafCommon::new(spec.id, 1, FeedId::new("feed"), LeafPolicy::default()),
                     engine,
                     transport: FakeTransport::default(),
                 })

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::egress::backends::rtmp::RtmpPublishStartup;
 use crate::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
-use crate::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
+use crate::egress::backends::rtmp_shard::rtmp_shard_backend;
 use crate::egress::backends::tcp::TcpEgressPollError;
 use crate::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
@@ -291,7 +291,7 @@ impl MediaEngine {
                 let leaf_capacity = shard_config.leaf_capacity().get();
                 move || {
                     let poller = CompioTcpPoller::new(poller_max_events)?;
-                    Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
+                    Ok::<_, TcpEgressPollError>(rtmp_shard_backend(
                         poller,
                         feed,
                         budget,

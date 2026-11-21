@@ -65,15 +65,16 @@ impl Harness {
 
     pub(super) fn with_settings(settings: SrtOwnerSettings) -> Self {
         let feed = TestFeed::new();
-        let (resolved, queue) = srt_resolve_completion_queue();
-        let backend = SrtShardBackend::with_runtime_components(
+        // No resolver: the tests deliver every DNS completion by hand.
+        let backend = SrtShardBackend::new(
             feed.reader(),
             budget(),
-            queue,
             SrtOwners::new(settings).expect("shard runtime builds on this host"),
+            None,
         )
         .with_leaf_capacity(64)
         .with_drain_timeout(Duration::from_millis(400));
+        let resolved = backend.resolved_sender.clone();
         let (commands, commands_rx) = flume::bounded(64);
         Self {
             backend,
