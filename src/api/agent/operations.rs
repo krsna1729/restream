@@ -469,6 +469,75 @@ fn output_runtime_is_running(runtime: &serde_json::Value) -> bool {
     runtime["status"].as_str() == Some("running")
 }
 
+/// Whether one proposed change took effect, and why not if it did not.
+/// `output` is the persisted row, `runtime` its live status and
+/// `pipeline_health` its pipeline's health entry.
+#[cfg(feature = "agent-execution")]
+fn verify_change(
+    change: &restream_agent_contract::ProposedChange,
+    output: Option<&restream_domain::models::Output>,
+    runtime: Option<&serde_json::Value>,
+    pipeline_health: &serde_json::Value,
+) -> (bool, &'static str) {
+    let runtime_status = runtime.and_then(|runtime| runtime["status"].as_str());
+    match change.kind.as_str() {
+        "addOutput" | "updateOutput" => match output {
+            Some(output) => verify_output_upsert(change, output, runtime_status, pipeline_health),
+            None => (false, "outputMissing"),
+        },
+        "removeOutput" if output.is_none() => (true, "removed"),
+        "removeOutput" => (false, "stillPresent"),
+        "startOutput" => {
+            if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
+                && runtime.is_some_and(output_runtime_is_running)
+            {
+                (true, "running")
+            } else if output.is_some_and(|output| output.retries_exhausted) {
+                (false, "retriesExhausted")
+            } else if !pipeline_input_is_on(pipeline_health) {
+                (false, "pendingInput")
+            } else {
+                (false, "notRunning")
+            }
+        }
+        "stopOutput" => {
+            if output.is_some_and(|output| output.desired_state == DesiredOutputState::Stopped)
+                && runtime_status != Some("running")
+            {
+                (true, "stopped")
+            } else {
+                (false, "stillRunning")
+            }
+        }
+        _ => (false, "unsupportedChangeKind"),
+    }
+}
+
+/// An added or updated output: its persisted desired state, then the runtime
+/// state that desired state asks for.
+#[cfg(feature = "agent-execution")]
+fn verify_output_upsert(
+    change: &restream_agent_contract::ProposedChange,
+    output: &restream_domain::models::Output,
+    runtime_status: Option<&str>,
+    pipeline_health: &serde_json::Value,
+) -> (bool, &'static str) {
+    let desired = change.desired_state.as_deref();
+    if let Some(desired) = desired
+        && output.desired_state.as_str() != desired
+    {
+        return (false, "desiredStateMismatch");
+    }
+    match desired {
+        Some("running") if runtime_status.unwrap_or("off") == "running" => (true, "running"),
+        Some("running") if !pipeline_input_is_on(pipeline_health) => (false, "pendingInput"),
+        Some("running") => (false, "notRunning"),
+        Some("stopped") if runtime_status != Some("running") => (true, "stopped"),
+        Some("stopped") => (false, "stillRunning"),
+        _ => (true, "persisted"),
+    }
+}
+
 #[cfg(feature = "agent-execution")]
 async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::response::Response {
     let record = match state.agent_execution.get(operation_id) {
@@ -493,10 +562,6 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
 }
 
 #[cfg(feature = "agent-execution")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 async fn verify_operation(
     state: &AppState,
     record: &restream_agent::execution::OperationRecord,
@@ -527,69 +592,8 @@ async fn verify_operation(
         let runtime = output_id
             .as_deref()
             .map(|output_id| &health["pipelines"][pipeline_id]["outputs"][output_id]);
-        let (passed, reason) = match change.kind.as_str() {
-            "addOutput" | "updateOutput" => {
-                if let Some(output) = output {
-                    if let Some(desired) = change.desired_state.as_deref()
-                        && output.desired_state.as_str() != desired
-                    {
-                        (false, "desiredStateMismatch")
-                    } else if change.desired_state.as_deref() == Some("running") {
-                        let status = runtime
-                            .and_then(|runtime| runtime["status"].as_str())
-                            .unwrap_or("off");
-                        if status == "running" {
-                            (true, "running")
-                        } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
-                            (false, "pendingInput")
-                        } else {
-                            (false, "notRunning")
-                        }
-                    } else if change.desired_state.as_deref() == Some("stopped") {
-                        if runtime.and_then(|runtime| runtime["status"].as_str()) != Some("running")
-                        {
-                            (true, "stopped")
-                        } else {
-                            (false, "stillRunning")
-                        }
-                    } else {
-                        (true, "persisted")
-                    }
-                } else {
-                    (false, "outputMissing")
-                }
-            }
-            "removeOutput" => {
-                if output.is_none() {
-                    (true, "removed")
-                } else {
-                    (false, "stillPresent")
-                }
-            }
-            "startOutput" => {
-                if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
-                    && runtime.is_some_and(output_runtime_is_running)
-                {
-                    (true, "running")
-                } else if output.is_some_and(|output| output.retries_exhausted) {
-                    (false, "retriesExhausted")
-                } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
-                    (false, "pendingInput")
-                } else {
-                    (false, "notRunning")
-                }
-            }
-            "stopOutput" => {
-                if output.is_some_and(|output| output.desired_state == DesiredOutputState::Stopped)
-                    && runtime.and_then(|runtime| runtime["status"].as_str()) != Some("running")
-                {
-                    (true, "stopped")
-                } else {
-                    (false, "stillRunning")
-                }
-            }
-            _ => (false, "unsupportedChangeKind"),
-        };
+        let (passed, reason) =
+            verify_change(change, output, runtime, &health["pipelines"][pipeline_id]);
         checks.push(serde_json::json!({
             "kind": change.kind,
             "pipelineId": pipeline_id,
