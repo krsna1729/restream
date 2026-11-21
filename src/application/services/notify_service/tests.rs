@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use super::*;
 use crate::application::notify::AlertBrief;
 use crate::application::ports::PostFuture;
-use crate::infrastructure::sqlite_ports::SqliteNotifyStore;
 
 /// One recorded send: the URL and its extra headers.
 type Sent = (String, Vec<(&'static str, String)>);
@@ -75,13 +74,8 @@ impl NotifyTransport for Scripted {
 async fn service(transport: Arc<Scripted>) -> NotifyService {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
-    NotifyService::with_ports(
-        Arc::new(SqliteNotifyStore::new(crate::db::DeadlineDb::api(
-            pool.clone(),
-        ))),
-        transport,
-    )
-    .with_retry_delays(vec![0, 0])
+    NotifyService::new(crate::db::DeadlineDb::api(pool.clone()), transport)
+        .with_retry_delays(vec![0, 0])
 }
 
 fn draft(kind: ChannelKind, min_severity: NotifySeverity) -> ChannelDraft {

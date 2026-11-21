@@ -12,11 +12,12 @@ use crate::application::notify::{
     RETRY_DELAYS_MS, jittered, push_payload, render_body, valid_channel_target,
     valid_push_endpoint, wants, webhook_signature,
 };
-use crate::application::ports::{NotifyStore, NotifyStoreError, NotifyTransport, PostOutcome};
+use crate::application::ports::{NotifyTransport, PostOutcome};
+use crate::db::{DeadlineDb, notify_repo};
 
 use super::error::{ServiceError, ServiceResult};
 
-fn store_error(context: &str) -> impl Fn(NotifyStoreError) -> ServiceError + '_ {
+fn store_error<E: std::fmt::Display>(context: &str) -> impl Fn(E) -> ServiceError + '_ {
     move |err| ServiceError::internal(format!("{context}: {err}"))
 }
 
@@ -31,7 +32,7 @@ pub struct NotifyContext {
 
 #[derive(Clone)]
 pub struct NotifyService {
-    store: Arc<dyn NotifyStore>,
+    db: DeadlineDb,
     transport: Arc<dyn NotifyTransport>,
     context: Arc<OnceLock<NotifyContext>>,
     retry_delays_ms: Vec<u64>,
@@ -49,9 +50,9 @@ pub struct ChannelDraft {
 }
 
 impl NotifyService {
-    pub fn with_ports(store: Arc<dyn NotifyStore>, transport: Arc<dyn NotifyTransport>) -> Self {
+    pub fn new(db: DeadlineDb, transport: Arc<dyn NotifyTransport>) -> Self {
         Self {
-            store,
+            db,
             transport,
             context: Arc::new(OnceLock::new()),
             retry_delays_ms: RETRY_DELAYS_MS.to_vec(),
@@ -80,10 +81,48 @@ impl NotifyService {
     }
 
     pub async fn channels(&self) -> ServiceResult<Vec<NotifyChannel>> {
-        self.store
-            .list_channels()
+        let rows = self
+            .db
+            .read(notify_repo::list_channels)
             .await
-            .map_err(store_error("list channels"))
+            .map_err(store_error("list channels"))?;
+        Ok(rows.into_iter().filter_map(channel_from_row).collect())
+    }
+
+    async fn save_channel(&self, channel: &NotifyChannel) -> ServiceResult<()> {
+        let row = (
+            channel.id.clone(),
+            channel.kind.as_str().to_string(),
+            channel.name.clone(),
+            channel.target.clone(),
+            channel.secret.clone(),
+            channel.min_severity.as_str().to_string(),
+            channel.on_resolved,
+            channel.enabled,
+            channel.created_at_ms,
+        );
+        self.db
+            .write(move |pool| async move { notify_repo::save_channel(&pool, &row).await })
+            .await
+            .map_err(store_error("save channel"))
+    }
+
+    async fn list_subscriptions(&self) -> ServiceResult<Vec<PushSubscription>> {
+        let rows = self
+            .db
+            .read(notify_repo::list_subscriptions)
+            .await
+            .map_err(store_error("list subscriptions"))?;
+        Ok(rows.into_iter().map(subscription_from_row).collect())
+    }
+
+    /// `false` when no such subscription exists.
+    async fn delete_subscription(&self, id: &str) -> ServiceResult<bool> {
+        let id = id.to_owned();
+        self.db
+            .write(move |pool| async move { notify_repo::delete_subscription(&pool, &id).await })
+            .await
+            .map_err(store_error("delete subscription"))
     }
 
     fn check(draft: &ChannelDraft) -> ServiceResult<()> {
@@ -118,10 +157,7 @@ impl NotifyService {
             enabled: draft.enabled,
             created_at_ms: now_ms,
         };
-        self.store
-            .save_channel(&channel)
-            .await
-            .map_err(store_error("save channel"))?;
+        self.save_channel(&channel).await?;
         Ok(channel)
     }
 
@@ -153,17 +189,15 @@ impl NotifyService {
             enabled: draft.enabled,
             ..current
         };
-        self.store
-            .save_channel(&channel)
-            .await
-            .map_err(store_error("save channel"))?;
+        self.save_channel(&channel).await?;
         Ok(channel)
     }
 
     pub async fn delete_channel(&self, id: &str) -> ServiceResult<()> {
+        let owned_id = id.to_owned();
         if !self
-            .store
-            .delete_channel(id)
+            .db
+            .write(move |pool| async move { notify_repo::delete_channel(&pool, &owned_id).await })
             .await
             .map_err(store_error("delete channel"))?
         {
@@ -186,10 +220,8 @@ impl NotifyService {
 
     pub async fn subscriptions_of(&self, username: &str) -> ServiceResult<Vec<PushSubscription>> {
         Ok(self
-            .store
             .list_subscriptions()
-            .await
-            .map_err(store_error("list subscriptions"))?
+            .await?
             .into_iter()
             .filter(|subscription| subscription.username == username)
             .collect())
@@ -209,8 +241,17 @@ impl NotifyService {
                 "The subscription keys are too long.",
             ));
         }
-        self.store
-            .save_subscription(&subscription)
+        let row = (
+            subscription.id.clone(),
+            subscription.username.clone(),
+            subscription.endpoint.clone(),
+            subscription.p256dh.clone(),
+            subscription.auth.clone(),
+            subscription.min_severity.as_str().to_string(),
+            subscription.created_at_ms,
+        );
+        self.db
+            .write(move |pool| async move { notify_repo::save_subscription(&pool, &row).await })
             .await
             .map_err(store_error("save subscription"))?;
         Ok(subscription)
@@ -226,24 +267,24 @@ impl NotifyService {
         {
             return Err(ServiceError::not_found(format!("no subscription {id}")));
         }
-        self.store
-            .delete_subscription(id)
-            .await
-            .map_err(store_error("delete subscription"))?;
+        self.delete_subscription(id).await?;
         Ok(())
     }
 
     pub async fn deliveries(&self, limit: u32) -> ServiceResult<Vec<Delivery>> {
-        self.store
-            .list_deliveries(limit.clamp(1, 500))
+        let limit = i64::from(limit.clamp(1, 500));
+        let rows = self
+            .db
+            .read(|pool| notify_repo::list_deliveries(pool, limit))
             .await
-            .map_err(store_error("list deliveries"))
+            .map_err(store_error("list deliveries"))?;
+        Ok(rows.into_iter().map(delivery_from_row).collect())
     }
 
     /// Tells everyone who wants `event`, concurrently, and logs each outcome.
     pub async fn dispatch(&self, event: &NotifyEvent) -> Vec<Delivery> {
-        let channels = self.store.list_channels().await.unwrap_or_default();
-        let subscriptions = self.store.list_subscriptions().await.unwrap_or_default();
+        let channels = self.channels().await.unwrap_or_default();
+        let subscriptions = self.list_subscriptions().await.unwrap_or_default();
         let channel_sends = channels
             .iter()
             .filter(|channel| {
@@ -355,7 +396,7 @@ impl NotifyService {
             .await;
         // 404 and 410: the browser unsubscribed; stop sending to it.
         if matches!(outcome.status, Some(404 | 410)) {
-            let _ = self.store.delete_subscription(&subscription.id).await;
+            let _ = self.delete_subscription(&subscription.id).await;
         }
         self.log(
             event,
@@ -391,10 +432,79 @@ impl NotifyService {
                 (None, None) => "no answer".to_string(),
             },
         };
-        if let Err(error) = self.store.append_delivery(&delivery).await {
+        let row = (
+            delivery.at_ms,
+            delivery.target_id.clone(),
+            delivery.target_name.clone(),
+            delivery.event.as_str().to_string(),
+            delivery.alert_id.clone(),
+            delivery.title.clone(),
+            delivery.ok,
+            i64::from(delivery.attempts),
+            delivery.detail.clone(),
+        );
+        let logged = self
+            .db
+            .write(move |pool| async move { notify_repo::append_delivery(&pool, &row).await })
+            .await;
+        if let Err(error) = logged {
             tracing::warn!(err = %error, "failed to log notification delivery");
         }
         delivery
+    }
+}
+
+/// A stored severity this build does not know reads as a warning.
+fn severity(value: &str) -> NotifySeverity {
+    NotifySeverity::parse(value).unwrap_or(NotifySeverity::Warning)
+}
+
+/// A channel of a kind this build does not know is skipped.
+fn channel_from_row(row: notify_repo::ChannelRow) -> Option<NotifyChannel> {
+    let (id, kind, name, target, secret, min_severity, on_resolved, enabled, created_at_ms) = row;
+    Some(NotifyChannel {
+        kind: ChannelKind::parse(&kind)?,
+        id,
+        name,
+        target,
+        secret,
+        min_severity: severity(&min_severity),
+        on_resolved,
+        enabled,
+        created_at_ms,
+    })
+}
+
+fn subscription_from_row(row: notify_repo::SubscriptionRow) -> PushSubscription {
+    let (id, username, endpoint, p256dh, auth, min_severity, created_at_ms) = row;
+    PushSubscription {
+        id,
+        username,
+        endpoint,
+        p256dh,
+        auth,
+        min_severity: severity(&min_severity),
+        created_at_ms,
+    }
+}
+
+fn delivery_from_row((id, row): (i64, notify_repo::DeliveryRow)) -> Delivery {
+    let (at_ms, target_id, target_name, event, alert_id, title, ok, attempts, detail) = row;
+    Delivery {
+        id,
+        at_ms,
+        target_id,
+        target_name,
+        event: match event.as_str() {
+            "opened" => EventKind::Opened,
+            "resolved" => EventKind::Resolved,
+            _ => EventKind::Test,
+        },
+        alert_id,
+        title,
+        ok,
+        attempts: u8::try_from(attempts).unwrap_or(u8::MAX),
+        detail,
     }
 }
 
