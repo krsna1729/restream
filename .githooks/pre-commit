@@ -2,4 +2,15 @@
 set -eu
 
 cd "$(git rev-parse --show-toplevel)"
+# The xtask alias uses `cargo run`, which can build before any checks start.
+if pgrep -a -x 'restream|mediamtx|ffmpeg'; then
+    echo 'pre-commit: a live media process is running; stop it before running Cargo checks' >&2
+    exit 1
+else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+        echo 'pre-commit: could not check for live media processes' >&2
+        exit "$status"
+    fi
+fi
 exec cargo xtask precommit

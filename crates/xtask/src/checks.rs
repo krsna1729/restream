@@ -9,6 +9,8 @@ use std::fmt::{self, Write as _};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
+mod precommit;
+
 #[cfg(test)]
 mod tests;
 
@@ -535,8 +537,8 @@ static GROUPS: &[Group] = &[
     },
     Group {
         name: "precommit",
-        about: "the pre-commit hook",
-        steps: &[&FMT, &DOCS_AUDIT, &SOURCE_AUDIT],
+        about: "format, audits and Clippy scoped to staged paths",
+        steps: &[&Step::builtin("staged-checks", precommit::run)],
     },
 ];
 

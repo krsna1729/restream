@@ -64,9 +64,16 @@ cargo fmt --all
 - Run the test you are writing, not the full suite. GitHub PR CI runs the
   correctness gates. [AGENTS.md](../AGENTS.md#inner-loop) maps each kind of
   change to its CI job.
-- The pre-commit hook runs `cargo xtask precommit`: `cargo fmt --all --check`,
-  `docs-audit` and `source-audit`. Each CI source gate is one
-  `cargo xtask <group>`; `cargo xtask help` lists the groups and their steps.
+- The pre-commit hook selects checks from the staged paths. Docs changes run
+  `docs-audit`; Rust changes run formatting, `source-audit`, and Clippy for
+  the affected package. A changed top-level integration test runs only its
+  own Clippy target unless the package also needs an all-targets check.
+  Clippy reads the working tree, so stage the complete Rust changes you
+  want checked. Stop live media before committing.
+- For shared Cargo or lint configuration changes and cross-crate refactors,
+  run `cargo xtask clippy-workspace` before opening or updating the PR. The
+  full feature matrix and reportcard stay in CI. `cargo xtask help` lists
+  the groups and their steps.
 - Use `--profile bench` instead of `--release` for local builds. Harness
   modes need `cargo xtask build-bench`, which fills `target/bench/`.
 - Engine benchmarks are declared in `crates/restream-engine/Cargo.toml` and
