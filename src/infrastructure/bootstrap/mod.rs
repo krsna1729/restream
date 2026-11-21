@@ -110,14 +110,6 @@ pub async fn run_app(config: Arc<AppConfig>) -> Result<(), String> {
 }
 
 /// Everything `run_app` does once logging is up.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn serve(
     config: Arc<AppConfig>,
     pool: sqlx::SqlitePool,
@@ -125,53 +117,7 @@ async fn serve(
     lifecycle: db::DeadlineDb,
     log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
 ) -> Result<(), String> {
-    info!(
-        event_class = "lifecycle",
-        event_type = "restream.config.effective",
-        http_port = config.ports.http,
-        rtmp_port = config.ports.rtmp,
-        srt_port = config.ports.srt,
-        db_path = %config.db_path,
-        media_dir = %config.media_dir,
-        log_dir = %config.log_dir,
-        external_ffmpeg_permits = config.engine.external_ffmpeg_permits,
-        ffmpeg_threads = ?config.ffmpeg_threads,
-        recording_threads = ?config.engine.recording_threads,
-        summary = %config.effective_summary(),
-        "effective startup configuration",
-    );
-    crate::host::host_tuning::warn_unmet();
-    restream_engine::ffmpeg_binary::ffmpeg_bin_path();
-    tokio::spawn(restream_engine::ffmpeg_capabilities::check_at_startup());
-    match crate::host::malloc_tuning::applied() {
-        Some(setting @ crate::host::malloc_tuning::ArenaSetting::Failed { .. })
-        | Some(setting @ crate::host::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => {
-            warn!(
-                event_class = "lifecycle",
-                event_type = "restream.malloc.arenas",
-                setting = %setting,
-                "malloc arena policy not applied as requested",
-            )
-        }
-        Some(setting) => info!(
-            event_class = "lifecycle",
-            event_type = "restream.malloc.arenas",
-            setting = %setting,
-            "malloc arena policy",
-        ),
-        None => {}
-    }
-    for warning in config
-        .engine
-        .egress_fabric
-        .validate(restream_engine::host_capacity::HostCapacity::get().cpus)
-    {
-        warn!(
-            event_class = "lifecycle",
-            event_type = "restream.config.warning",
-            "{warning}",
-        );
-    }
+    log_startup_settings(&config);
 
     db::reset_running_jobs(&pool, &restream_domain::timestamp::now_rfc3339())
         .await
@@ -183,32 +129,7 @@ async fn serve(
     let security = Arc::new(restream_engine::security::IngestSecurityService::new(
         sec_config,
     ));
-    let srt_ingest_policy_store = Arc::new(
-        match crate::application::srt_ingest::load_policy_store(
-            &api_db,
-            config.srt_passphrase.clone(),
-            config.srt_pbkeylen,
-        )
-        .await
-        {
-            Ok(store) => store,
-            Err(error) => {
-                warn!(
-                    err = %error,
-                    "pipeline catalog error initializing SRT ingest policy store"
-                );
-                restream_engine::srt::SrtIngestPolicyStore::new(
-                    crate::application::srt_ingest::load_global_srt_ingest_config(
-                        &api_db,
-                        config.srt_passphrase.clone(),
-                        config.srt_pbkeylen,
-                    )
-                    .await,
-                    &[],
-                )
-            }
-        },
-    );
+    let srt_ingest_policy_store = Arc::new(load_srt_ingest_policy_store(&api_db, &config).await);
 
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     let bootstrap_password_path =
@@ -264,21 +185,7 @@ async fn serve(
         crate::api::state::AppStateRuntimeConfig::from(config.clone()),
     ));
 
-    let requests = state.reconcile.clone();
-    let runtime_state = state.runtime_state.clone();
-    let disconnect_grace =
-        std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
-    // Shared so a restart after a panic resumes the same channel; a tokio
-    // Mutex is not poisoned by the panicking holder.
-    let event_rx = Arc::new(tokio::sync::Mutex::new(event_rx));
-    supervised_task::spawn_supervised("runtime_event_consumer", move || {
-        consume_runtime_events(
-            event_rx.clone(),
-            requests.clone(),
-            runtime_state.clone(),
-            disconnect_grace,
-        )
-    });
+    spawn_runtime_event_consumer(event_rx, &state, &config);
 
     // Created before the reconciler because the reconciler converges HLS
     // pull inputs through it; the router gets the same registry from the
@@ -299,7 +206,7 @@ async fn serve(
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
-    let mut housekeeping_task = supervised_task::spawn_supervised("housekeeping", {
+    let housekeeping_task = supervised_task::spawn_supervised("housekeeping", {
         let housekeeping = Arc::new(housekeeping::Housekeeping::new(
             config.clone(),
             lifecycle.clone(),
@@ -320,89 +227,7 @@ async fn serve(
                 .reload_periodically(crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL)
         }
     });
-    supervised_task::spawn_supervised("runtime_state_projector", {
-        let (hub, db, engine, stop) = (
-            state.runtime_state.clone(),
-            state.db.clone(),
-            engine.clone(),
-            projector_stop.clone(),
-        );
-        let interval = std::time::Duration::from_millis(config.tuning.reconciler_interval_ms);
-        move || {
-            crate::application::runtime_state::hub::run_projector(
-                hub.clone(),
-                db.clone(),
-                engine.clone(),
-                interval,
-                stop.clone(),
-            )
-        }
-    });
-    supervised_task::spawn_supervised("fleet_sampler", {
-        let (history, hub, db, engine, config, stop) = (
-            state.fleet_history.clone(),
-            state.runtime_state.clone(),
-            state.db.clone(),
-            engine.clone(),
-            config.clone(),
-            projector_stop.clone(),
-        );
-        move || {
-            crate::application::fleet_history::run_fleet_sampler(
-                history.clone(),
-                hub.clone(),
-                db.clone(),
-                engine.clone(),
-                config.clone(),
-                crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
-                stop.clone(),
-            )
-        }
-    });
-    supervised_task::spawn_supervised("flight_recorder", {
-        let (recorder, hub, db, engine, stop) = (
-            state.flight_recorder.clone(),
-            state.runtime_state.clone(),
-            state.db.clone(),
-            engine.clone(),
-            projector_stop.clone(),
-        );
-        let retention = (config.flight_history_hours > 0)
-            .then(|| std::time::Duration::from_secs(config.flight_history_hours * 3600));
-        move || {
-            crate::application::flight_recorder::run_flight_recorder(
-                recorder.clone(),
-                hub.clone(),
-                db.clone(),
-                engine.clone(),
-                crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
-                retention,
-                stop.clone(),
-            )
-        }
-    });
-    supervised_task::spawn_supervised("alert_notifier", {
-        let (state, stop) = (state.clone(), projector_stop.clone());
-        move || {
-            crate::api::alerts::run_alert_notifier(
-                state.clone(),
-                crate::api::alerts::NOTIFY_INTERVAL,
-                stop.clone(),
-            )
-        }
-    });
-    supervised_task::spawn_supervised("scheduler", {
-        let (state, db, stop) = (state.clone(), lifecycle.clone(), projector_stop.clone());
-        move || {
-            crate::api::schedules::run_scheduler(
-                state.clone(),
-                db.clone(),
-                crate::api::schedules::SCHEDULER_TICK,
-                crate::api::schedules::ACTION_DEADLINE,
-                stop.clone(),
-            )
-        }
-    });
+    spawn_state_loops(&state, &lifecycle, &config, &projector_stop);
     let runtime::RuntimeTasks {
         http_stop,
         listeners,
@@ -422,18 +247,229 @@ async fn serve(
     let listeners = run_control_loops(&reconciler, listeners, &shutdown).await;
     projector_stop.cancel();
     catalog_auth.shutdown();
-    // A tick in progress ends before cleanup tears the runtime down, or is
-    // cut short: it must not start a recording after cleanup.
-    if tokio::time::timeout(HOUSEKEEPING_STOP_WAIT, &mut housekeeping_task)
-        .await
-        .is_err()
-    {
-        housekeeping_task.abort();
-    }
+    stop_housekeeping(housekeeping_task).await;
 
     shutdown::cleanup(&engine, &pool, listeners, http_stop).await;
     lifecycle_pool.close().await;
     Ok(())
+}
+
+/// Logs the effective configuration and the host settings it depends on.
+fn log_startup_settings(config: &AppConfig) {
+    info!(
+        event_class = "lifecycle",
+        event_type = "restream.config.effective",
+        http_port = config.ports.http,
+        rtmp_port = config.ports.rtmp,
+        srt_port = config.ports.srt,
+        db_path = %config.db_path,
+        media_dir = %config.media_dir,
+        log_dir = %config.log_dir,
+        external_ffmpeg_permits = config.engine.external_ffmpeg_permits,
+        ffmpeg_threads = ?config.ffmpeg_threads,
+        recording_threads = ?config.engine.recording_threads,
+        summary = %config.effective_summary(),
+        "effective startup configuration",
+    );
+    crate::host::host_tuning::warn_unmet();
+    restream_engine::ffmpeg_binary::ffmpeg_bin_path();
+    tokio::spawn(restream_engine::ffmpeg_capabilities::check_at_startup());
+    log_malloc_arena_policy();
+    warn_egress_fabric_config(config);
+}
+
+fn log_malloc_arena_policy() {
+    match crate::host::malloc_tuning::applied() {
+        Some(setting @ crate::host::malloc_tuning::ArenaSetting::Failed { .. })
+        | Some(setting @ crate::host::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => {
+            warn!(
+                event_class = "lifecycle",
+                event_type = "restream.malloc.arenas",
+                setting = %setting,
+                "malloc arena policy not applied as requested",
+            )
+        }
+        Some(setting) => info!(
+            event_class = "lifecycle",
+            event_type = "restream.malloc.arenas",
+            setting = %setting,
+            "malloc arena policy",
+        ),
+        None => {}
+    }
+}
+
+fn warn_egress_fabric_config(config: &AppConfig) {
+    for warning in config
+        .engine
+        .egress_fabric
+        .validate(restream_engine::host_capacity::HostCapacity::get().cpus)
+    {
+        warn!(
+            event_class = "lifecycle",
+            event_type = "restream.config.warning",
+            "{warning}",
+        );
+    }
+}
+
+/// Loads the per-pipeline SRT ingest policies; a catalog error falls back
+/// to the global policy alone.
+async fn load_srt_ingest_policy_store(
+    api_db: &db::DeadlineDb,
+    config: &AppConfig,
+) -> restream_engine::srt::SrtIngestPolicyStore {
+    match crate::application::srt_ingest::load_policy_store(
+        api_db,
+        config.srt_passphrase.clone(),
+        config.srt_pbkeylen,
+    )
+    .await
+    {
+        Ok(store) => store,
+        Err(error) => {
+            warn!(
+                err = %error,
+                "pipeline catalog error initializing SRT ingest policy store"
+            );
+            restream_engine::srt::SrtIngestPolicyStore::new(
+                crate::application::srt_ingest::load_global_srt_ingest_config(
+                    api_db,
+                    config.srt_passphrase.clone(),
+                    config.srt_pbkeylen,
+                )
+                .await,
+                &[],
+            )
+        }
+    }
+}
+
+/// Starts the one runtime-event consumer over the engine's event channel.
+fn spawn_runtime_event_consumer(
+    event_rx: tokio::sync::mpsc::UnboundedReceiver<restream_engine::events::Event>,
+    state: &crate::api::AppState,
+    config: &AppConfig,
+) {
+    let requests = state.reconcile.clone();
+    let runtime_state = state.runtime_state.clone();
+    let disconnect_grace =
+        std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
+    // Shared so a restart after a panic resumes the same channel; a tokio
+    // Mutex is not poisoned by the panicking holder.
+    let event_rx = Arc::new(tokio::sync::Mutex::new(event_rx));
+    supervised_task::spawn_supervised("runtime_event_consumer", move || {
+        consume_runtime_events(
+            event_rx.clone(),
+            requests.clone(),
+            runtime_state.clone(),
+            disconnect_grace,
+        )
+    });
+}
+
+/// Starts the loops that sample, project and act on runtime state; each
+/// ends when `stop` is cancelled.
+fn spawn_state_loops(
+    state: &Arc<crate::api::AppState>,
+    lifecycle: &db::DeadlineDb,
+    config: &Arc<AppConfig>,
+    stop: &tokio_util::sync::CancellationToken,
+) {
+    supervised_task::spawn_supervised("runtime_state_projector", {
+        let (hub, db, engine, stop) = (
+            state.runtime_state.clone(),
+            state.db.clone(),
+            state.engine.clone(),
+            stop.clone(),
+        );
+        let interval = std::time::Duration::from_millis(config.tuning.reconciler_interval_ms);
+        move || {
+            crate::application::runtime_state::hub::run_projector(
+                hub.clone(),
+                db.clone(),
+                engine.clone(),
+                interval,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("fleet_sampler", {
+        let (history, hub, db, engine, config, stop) = (
+            state.fleet_history.clone(),
+            state.runtime_state.clone(),
+            state.db.clone(),
+            state.engine.clone(),
+            config.clone(),
+            stop.clone(),
+        );
+        move || {
+            crate::application::fleet_history::run_fleet_sampler(
+                history.clone(),
+                hub.clone(),
+                db.clone(),
+                engine.clone(),
+                config.clone(),
+                crate::application::fleet_history::FLEET_SAMPLE_INTERVAL,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("flight_recorder", {
+        let (recorder, hub, db, engine, stop) = (
+            state.flight_recorder.clone(),
+            state.runtime_state.clone(),
+            state.db.clone(),
+            state.engine.clone(),
+            stop.clone(),
+        );
+        let retention = (config.flight_history_hours > 0)
+            .then(|| std::time::Duration::from_secs(config.flight_history_hours * 3600));
+        move || {
+            crate::application::flight_recorder::run_flight_recorder(
+                recorder.clone(),
+                hub.clone(),
+                db.clone(),
+                engine.clone(),
+                crate::application::flight_recorder::FLIGHT_SAMPLE_INTERVAL,
+                retention,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("alert_notifier", {
+        let (state, stop) = (state.clone(), stop.clone());
+        move || {
+            crate::api::alerts::run_alert_notifier(
+                state.clone(),
+                crate::api::alerts::NOTIFY_INTERVAL,
+                stop.clone(),
+            )
+        }
+    });
+    supervised_task::spawn_supervised("scheduler", {
+        let (state, db, stop) = (state.clone(), lifecycle.clone(), stop.clone());
+        move || {
+            crate::api::schedules::run_scheduler(
+                state.clone(),
+                db.clone(),
+                crate::api::schedules::SCHEDULER_TICK,
+                crate::api::schedules::ACTION_DEADLINE,
+                stop.clone(),
+            )
+        }
+    });
+}
+
+/// A tick in progress ends before cleanup tears the runtime down, or is
+/// cut short: it must not start a recording after cleanup.
+async fn stop_housekeeping(mut task: tokio::task::JoinHandle<()>) {
+    if tokio::time::timeout(HOUSEKEEPING_STOP_WAIT, &mut task)
+        .await
+        .is_err()
+    {
+        task.abort();
+    }
 }
 
 /// Runs the reconciler's output passes on this future until shutdown, with
