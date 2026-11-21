@@ -200,10 +200,6 @@ impl EgressReconciler {
 
     /// Plans one output: starts, stops or retries it. Returns how long until
     /// it should be planned again, when that is a deadline of its own.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn reconcile_output(&self, output: &Output) -> Option<Duration> {
         let engine = &self.starter.engine;
         let tuning = self.starter.tuning;
@@ -234,15 +230,7 @@ impl EgressReconciler {
         if !output.wants_running() {
             engine.clear_egress_retry_state(&output.id).await;
         }
-        let failure = {
-            let last_failed = self.starter.last_failed.lock().await;
-            last_failed
-                .get(&output.id)
-                .map(|(failed_at, retries)| OutputFailureWindow {
-                    retries: *retries,
-                    elapsed_ms: failed_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-                })
-        };
+        let failure = self.failure_window(&output.id).await;
 
         match (self.decide_start)(
             output.desired_state,
@@ -295,40 +283,43 @@ impl EgressReconciler {
             }
         }
 
-        match decide_output_stop_action(
-            output.desired_state,
-            snapshot.is_active,
-            snapshot.effective_has_ingest,
-        ) {
-            OutputStopAction::KeepRunning => {}
-            OutputStopAction::StopBecauseIngestLost => {
-                info!(
-                    correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                    output_id = %output.id,
-                    output_name = %output.name,
-                    pipeline_id = %output.pipeline_id,
-                    event_class = "lifecycle",
-                    event_type = "lifecycle.stop",
-                    "output job stopped because ingest is no longer active",
-                );
-                engine.unregister_egress(&output.id).await;
-                engine.clear_egress_retry_state(&output.id).await;
-            }
-            OutputStopAction::StopRequested => {
-                info!(
-                    correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
-                    output_id = %output.id,
-                    output_name = %output.name,
-                    pipeline_id = %output.pipeline_id,
-                    event_class = "lifecycle",
-                    event_type = "lifecycle.stop",
-                    "output job stopped",
-                );
-                engine.unregister_egress(&output.id).await;
-                engine.clear_egress_retry_state(&output.id).await;
-            }
-        }
+        self.apply_stop_action(output, snapshot.is_active, snapshot.effective_has_ingest)
+            .await;
         None
+    }
+
+    /// The output's tracked failure: its retry count and time since it failed.
+    async fn failure_window(&self, output_id: &str) -> Option<OutputFailureWindow> {
+        let last_failed = self.starter.last_failed.lock().await;
+        last_failed
+            .get(output_id)
+            .map(|(failed_at, retries)| OutputFailureWindow {
+                retries: *retries,
+                elapsed_ms: failed_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            })
+    }
+
+    /// Stops an active output that is no longer wanted or lost its ingest.
+    async fn apply_stop_action(&self, output: &Output, is_active: bool, has_ingest: bool) {
+        let engine = &self.starter.engine;
+        let message = match decide_output_stop_action(output.desired_state, is_active, has_ingest) {
+            OutputStopAction::KeepRunning => return,
+            OutputStopAction::StopBecauseIngestLost => {
+                "output job stopped because ingest is no longer active"
+            }
+            OutputStopAction::StopRequested => "output job stopped",
+        };
+        info!(
+            correlation_id = %restream_engine::correlation_id::next_correlation_id("out"),
+            output_id = %output.id,
+            output_name = %output.name,
+            pipeline_id = %output.pipeline_id,
+            event_class = "lifecycle",
+            event_type = "lifecycle.stop",
+            "{message}",
+        );
+        engine.unregister_egress(&output.id).await;
+        engine.clear_egress_retry_state(&output.id).await;
     }
 }
 

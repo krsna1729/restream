@@ -143,10 +143,6 @@ impl Housekeeping {
         .await;
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn prune_sessions_and_logs(&self) {
         if let Err(error) = self
             .db
@@ -166,6 +162,11 @@ impl Housekeeping {
         {
             warn!(err = %error, "app log retention stopped early; the next prune continues");
         }
+        self.prune_session_cache().await;
+    }
+
+    /// Drops in-memory sessions whose rows are gone.
+    async fn prune_session_cache(&self) {
         match self.db.read(crate::db::list_sessions).await {
             Ok(live_tokens) => {
                 let live_set = live_tokens.into_iter().collect::<HashSet<_>>();

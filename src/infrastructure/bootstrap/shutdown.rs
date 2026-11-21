@@ -52,10 +52,6 @@ pub(super) fn spawn_signal_watcher() -> CancellationToken {
     shutdown
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) async fn cleanup(
     engine: &Arc<MediaEngine>,
     pool: &SqlitePool,
@@ -74,8 +70,36 @@ pub(super) async fn cleanup(
         "shutdown: cancelling all active tasks",
     );
     // The dashboard first, while the engine and database its handlers use
-    // are still up: stop accepting, finish in-flight responses. `serve`
-    // bounds its own drain; the extra second only guards that bound.
+    // are still up.
+    stop_http(http_stop, http_handle).await;
+
+    engine.cancel_all_active_tasks().await;
+    engine.shutdown_all_hls_segmenters().await;
+    engine.shutdown_listeners();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    join_engine_threads(engine).await;
+
+    pool.close().await;
+
+    stop_listener_tasks(rtmp_handle, srt_handle, moq_handle).await;
+
+    // The listener threads (RTMP, SRT, MoQ) are joined and their tasks have
+    // ended, so no session is left to drop a lease: stop the release task
+    // and end any attempt still queued.
+    engine.stop_ingest_release_drain().await;
+
+    info!(
+        event_class = "lifecycle",
+        event_type = "restream.shutdown.completed",
+        "shutdown complete",
+    );
+}
+
+/// Stops the dashboard: stop accepting, finish in-flight responses. `serve`
+/// bounds its own drain; the extra second only guards that bound.
+async fn stop_http(http_stop: HttpStop, http_handle: Option<tokio::task::JoinHandle<()>>) {
     http_stop.begin();
     let http_deadline = crate::api::http_server::DRAIN_TIMEOUT + Duration::from_secs(1);
     if let Some(mut http_handle) = http_handle
@@ -85,13 +109,10 @@ pub(super) async fn cleanup(
     {
         http_handle.abort();
     }
+}
 
-    engine.cancel_all_active_tasks().await;
-    engine.shutdown_all_hls_segmenters().await;
-    engine.shutdown_listeners();
-
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
+/// Joins the engine's OS threads off the runtime's workers.
+async fn join_engine_threads(engine: &MediaEngine) {
     let handles = engine.drain_os_thread_handles();
     if !handles.is_empty() {
         tokio::task::spawn_blocking(move || {
@@ -102,9 +123,13 @@ pub(super) async fn cleanup(
         .await
         .ok();
     }
+}
 
-    pool.close().await;
-
+async fn stop_listener_tasks(
+    rtmp_handle: tokio::task::JoinHandle<()>,
+    srt_handle: tokio::task::JoinHandle<()>,
+    moq_handle: Option<tokio::task::JoinHandle<()>>,
+) {
     if !rtmp_handle.is_finished() {
         rtmp_handle.abort();
     }
@@ -119,15 +144,4 @@ pub(super) async fn cleanup(
         }
         let _ = moq_handle.await;
     }
-
-    // The listener threads (RTMP, SRT, MoQ) are joined and their tasks have
-    // ended, so no session is left to drop a lease: stop the release task
-    // and end any attempt still queued.
-    engine.stop_ingest_release_drain().await;
-
-    info!(
-        event_class = "lifecycle",
-        event_type = "restream.shutdown.completed",
-        "shutdown complete",
-    );
 }
