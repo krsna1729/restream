@@ -257,14 +257,6 @@ pub(super) async fn check_ingest_stream_info(
     .with_issues(issues)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) async fn check_publisher_transport(
     idx: u32,
     engine: &Arc<MediaEngine>,
@@ -277,204 +269,15 @@ pub(super) async fn check_publisher_transport(
     let mut issues = vec![];
     let mut lines = vec![];
 
-    if let Some(ingest) = ingest_opt {
-        let q = &ingest.quality;
-        if probe_protocol == "srt" {
-            lines.push("Protocol: SRT".to_string());
-            push_bonded_srt_quality(q, &mut lines, &mut issues);
-            if let Some(rtt) = q.ms_rtt {
-                lines.push(format!("RTT: {:.1} ms", rtt));
-                if rtt > 200.0 {
-                    issues.push(format!("High SRT RTT: {:.1}ms (threshold 200ms)", rtt));
-                }
-            }
-            if let Some(recv_rate) = q.mbps_receive_rate {
-                lines.push(format!("Receive rate: {:.2} Mbps", recv_rate));
-            }
-            if let Some(cap) = q.mbps_link_capacity {
-                lines.push(format!("Link capacity: {:.2} Mbps", cap));
-            }
-            // Ordinary publisher counters are a LOGICAL view. A bond reports
-            // its degradation as the explicit wire counters above, so these
-            // stay unprinted rather than reading "—/s (0 total)".
-            if q.srt_bonded != Some(true) {
-                let loss_total = q.packets_received_loss.unwrap_or(0);
-                match q.packets_received_loss_per_sec {
-                    Some(rate) => {
-                        lines.push(format!(
-                            "Packets lost: {:.1}/s ({} total)",
-                            rate, loss_total
-                        ));
-                        if rate >= 5.0 {
-                            issues.push(format!(
-                                "High SRT packet loss rate: {:.1}/s (threshold 5/s)",
-                                rate
-                            ));
-                        }
-                    }
-                    None => lines.push(format!("Packets lost: —/s ({} total)", loss_total)),
-                }
-                let drop_total = q.packets_received_drop.unwrap_or(0);
-                match q.packets_received_drop_per_sec {
-                    Some(rate) => {
-                        lines.push(format!(
-                            "Packets dropped: {:.1}/s ({} total)",
-                            rate, drop_total
-                        ));
-                        if rate >= 1.0 {
-                            issues.push(format!(
-                                "SRT packet drop rate: {:.1}/s (threshold 1/s)",
-                                rate
-                            ));
-                        }
-                    }
-                    None => lines.push(format!("Packets dropped: —/s ({} total)", drop_total)),
-                }
-                let retrans_total = q.packets_received_retrans.unwrap_or(0);
-                match q.packets_received_retrans_per_sec {
-                    Some(rate) => {
-                        lines.push(format!(
-                            "Packets retransmitted: {:.1}/s ({} total)",
-                            rate, retrans_total
-                        ));
-                        if rate >= 10.0 {
-                            issues.push(format!(
-                                "High SRT retransmission rate: {:.1}/s (threshold 10/s)",
-                                rate
-                            ));
-                        }
-                    }
-                    None => lines.push(format!(
-                        "Packets retransmitted: —/s ({} total)",
-                        retrans_total
-                    )),
-                }
-                let undecrypt_total = q.packets_received_undecrypt.unwrap_or(0);
-                match q.packets_received_undecrypt_per_sec {
-                    Some(rate) => {
-                        lines.push(format!(
-                            "Packets undecrypted: {:.1}/s ({} total)",
-                            rate, undecrypt_total
-                        ));
-                        if rate > 0.0 {
-                            issues.push(format!(
-                                "SRT undecrypted packet rate: {:.1}/s (expected 0/s)",
-                                rate
-                            ));
-                        }
-                    }
-                    None => lines.push(format!(
-                        "Packets undecrypted: —/s ({} total)",
-                        undecrypt_total
-                    )),
-                }
-            }
-            if let Some(latency) = q.ms_receive_tsb_pd_delay {
-                lines.push(format!("Negotiated latency buffer: {:.0}ms", latency));
-            }
-            if let Some(buf) = q.ms_receive_buf {
-                lines.push(format!("Current latency buffer: {:.0}ms", buf));
-            }
-            if let (Some(buffered), Some(capacity)) =
-                (q.srt_recv_buf_packets, q.srt_recv_buf_capacity_packets)
-                && capacity > 0
-            {
-                let pct = f64::from(buffered) / f64::from(capacity) * 100.0;
-                lines.push(format!(
-                    "Recv buffer: {} / {} packets ({:.0}%), {} payload bytes",
-                    buffered,
-                    capacity,
-                    pct,
-                    q.srt_recv_buf_payload_bytes.unwrap_or(0)
-                ));
-                if pct >= DIAG_SRT_BUFFER_CRITICAL_PCT {
-                    issues.push(format!(
-                        "SRT application receive buffer is {:.0}% full ({} / {} packets). Restream is not draining publisher data; downstream outputs will starve.",
-                        pct, buffered, capacity
-                    ));
-                } else if pct >= DIAG_SRT_BUFFER_WARNING_PCT {
-                    issues.push(format!(
-                        "SRT application receive buffer is {:.0}% full ({} / {} packets). Ingest is close to stalling.",
-                        pct, buffered, capacity
-                    ));
-                }
-            }
-            if lines.len() == 1 {
-                lines.push("No SRT transport stats available yet.".to_string());
-                issues.push("SRT quality metrics not yet populated. Stats update after first packets arrive.".to_string());
-            }
-        } else {
-            // RTMP/TCP
-            lines.push("Protocol: RTMP (TCP)".to_string());
-            if let Some(reason) = &q.tcp_stats_unavailable_reason {
-                lines.push(format!("TCP stats unavailable: {}", reason));
-                issues.push(format!(
-                    "TCP transport stats could not be collected: {}",
-                    reason
-                ));
-            } else {
-                if let Some(rtt) = q.tcp_rtt_ms {
-                    lines.push(format!("TCP RTT: {:.1} ms", rtt));
-                    if rtt >= 200.0 {
-                        issues.push(format!("High TCP RTT: {:.1}ms (threshold 200ms)", rtt));
-                    }
-                }
-                if let Some(rate) = q.tcp_receive_rate_mbps {
-                    lines.push(format!("TCP receive rate: {:.2} Mbps", rate));
-                }
-                if let Some(rcv_rtt) = q.tcp_rcv_rtt_ms {
-                    lines.push(format!("TCP receive RTT: {:.1} ms", rcv_rtt));
-                }
-                if let Some(last_rcv) = q.tcp_last_rcv_ms {
-                    lines.push(format!("Time since last receive: {} ms", last_rcv));
-                    if last_rcv >= 5_000 {
-                        issues.push(format!(
-                            "RTMP publisher receive stall: {}ms since last packet (threshold 5000ms)",
-                            last_rcv
-                        ));
-                    }
-                }
-                if let Some(out_of_order) = q.tcp_rcv_ooopack {
-                    lines.push(format!("Out-of-order packets (HOL): {}", out_of_order));
-                    if out_of_order >= 50 {
-                        issues.push(format!(
-                            "High TCP out-of-order packet count: {} (threshold 50)",
-                            out_of_order
-                        ));
-                    }
-                }
-                if let Some(window) = q.tcp_rcv_space {
-                    lines.push(format!("TCP receive window: {} bytes", window));
-                }
-                if let Some(used) = q.tcp_skmem_rmem_alloc {
-                    match q.tcp_skmem_rmem_max {
-                        Some(max) if max > 0 => {
-                            let saturation = used as f64 / max as f64;
-                            lines.push(format!(
-                                "TCP receive buffer: {} / {} bytes ({:.1}%)",
-                                used,
-                                max,
-                                saturation * 100.0
-                            ));
-                            if saturation > 0.8 {
-                                issues.push(format!(
-                                    "TCP receive buffer is {:.1}% full (threshold 80%)",
-                                    saturation * 100.0
-                                ));
-                            }
-                        }
-                        _ => lines.push(format!("TCP receive buffer used: {} bytes", used)),
-                    }
-                }
-                if lines.len() == 1 {
-                    lines.push("No TCP socket stats available yet.".to_string());
-                    issues.push("TCP quality metrics not yet populated. Stats update periodically while RTMP is connected.".to_string());
-                }
-            }
+    match ingest_opt {
+        Some(ingest) if probe_protocol == "srt" => {
+            push_srt_transport(&ingest.quality, &mut lines, &mut issues);
         }
-    } else {
-        lines.push("No active ingest — cannot inspect publisher transport.".to_string());
-        issues.push("Pipeline has no active publisher.".to_string());
+        Some(ingest) => push_rtmp_transport(&ingest.quality, &mut lines, &mut issues),
+        None => {
+            lines.push("No active ingest — cannot inspect publisher transport.".to_string());
+            issues.push("Pipeline has no active publisher.".to_string());
+        }
     }
 
     DiagResult::ok(
@@ -490,6 +293,227 @@ pub(super) async fn check_publisher_transport(
         start.elapsed().as_millis() as u64,
     )
     .with_issues(issues)
+}
+
+/// SRT publisher transport: link, logical packet counters and the
+/// application receive buffer.
+fn push_srt_transport(q: &PublisherQuality, lines: &mut Vec<String>, issues: &mut Vec<String>) {
+    lines.push("Protocol: SRT".to_string());
+    push_bonded_srt_quality(q, lines, issues);
+    if let Some(rtt) = q.ms_rtt {
+        lines.push(format!("RTT: {:.1} ms", rtt));
+        if rtt > 200.0 {
+            issues.push(format!("High SRT RTT: {:.1}ms (threshold 200ms)", rtt));
+        }
+    }
+    if let Some(recv_rate) = q.mbps_receive_rate {
+        lines.push(format!("Receive rate: {:.2} Mbps", recv_rate));
+    }
+    if let Some(cap) = q.mbps_link_capacity {
+        lines.push(format!("Link capacity: {:.2} Mbps", cap));
+    }
+    // Ordinary publisher counters are a LOGICAL view. A bond reports
+    // its degradation as the explicit wire counters above, so these
+    // stay unprinted rather than reading "—/s (0 total)".
+    if q.srt_bonded != Some(true) {
+        push_srt_packet_counters(q, lines, issues);
+    }
+    if let Some(latency) = q.ms_receive_tsb_pd_delay {
+        lines.push(format!("Negotiated latency buffer: {:.0}ms", latency));
+    }
+    if let Some(buf) = q.ms_receive_buf {
+        lines.push(format!("Current latency buffer: {:.0}ms", buf));
+    }
+    push_srt_recv_buffer(q, lines, issues);
+    if lines.len() == 1 {
+        lines.push("No SRT transport stats available yet.".to_string());
+        issues.push(
+            "SRT quality metrics not yet populated. Stats update after first packets arrive."
+                .to_string(),
+        );
+    }
+}
+
+fn push_srt_packet_counters(
+    q: &PublisherQuality,
+    lines: &mut Vec<String>,
+    issues: &mut Vec<String>,
+) {
+    push_rate_counter(
+        lines,
+        issues,
+        "lost",
+        q.packets_received_loss_per_sec,
+        q.packets_received_loss,
+        |rate| {
+            (rate >= 5.0)
+                .then(|| format!("High SRT packet loss rate: {:.1}/s (threshold 5/s)", rate))
+        },
+    );
+    push_rate_counter(
+        lines,
+        issues,
+        "dropped",
+        q.packets_received_drop_per_sec,
+        q.packets_received_drop,
+        |rate| {
+            (rate >= 1.0).then(|| format!("SRT packet drop rate: {:.1}/s (threshold 1/s)", rate))
+        },
+    );
+    push_rate_counter(
+        lines,
+        issues,
+        "retransmitted",
+        q.packets_received_retrans_per_sec,
+        q.packets_received_retrans,
+        |rate| {
+            (rate >= 10.0).then(|| {
+                format!(
+                    "High SRT retransmission rate: {:.1}/s (threshold 10/s)",
+                    rate
+                )
+            })
+        },
+    );
+    push_rate_counter(
+        lines,
+        issues,
+        "undecrypted",
+        q.packets_received_undecrypt_per_sec,
+        q.packets_received_undecrypt,
+        |rate| {
+            (rate > 0.0)
+                .then(|| format!("SRT undecrypted packet rate: {:.1}/s (expected 0/s)", rate))
+        },
+    );
+}
+
+/// One "Packets <label>: <rate>/s (<total> total)" line, with the issue
+/// `issue` raises for the rate, if any. An unknown rate prints "—/s".
+fn push_rate_counter<T: std::fmt::Display + Default>(
+    lines: &mut Vec<String>,
+    issues: &mut Vec<String>,
+    label: &str,
+    rate: Option<f64>,
+    total: Option<T>,
+    issue: impl FnOnce(f64) -> Option<String>,
+) {
+    let total = total.unwrap_or_default();
+    match rate {
+        Some(rate) => {
+            lines.push(format!("Packets {label}: {:.1}/s ({} total)", rate, total));
+            issues.extend(issue(rate));
+        }
+        None => lines.push(format!("Packets {label}: —/s ({} total)", total)),
+    }
+}
+
+fn push_srt_recv_buffer(q: &PublisherQuality, lines: &mut Vec<String>, issues: &mut Vec<String>) {
+    let (Some(buffered), Some(capacity)) =
+        (q.srt_recv_buf_packets, q.srt_recv_buf_capacity_packets)
+    else {
+        return;
+    };
+    if capacity == 0 {
+        return;
+    }
+    let pct = f64::from(buffered) / f64::from(capacity) * 100.0;
+    lines.push(format!(
+        "Recv buffer: {} / {} packets ({:.0}%), {} payload bytes",
+        buffered,
+        capacity,
+        pct,
+        q.srt_recv_buf_payload_bytes.unwrap_or(0)
+    ));
+    if pct >= DIAG_SRT_BUFFER_CRITICAL_PCT {
+        issues.push(format!(
+            "SRT application receive buffer is {:.0}% full ({} / {} packets). Restream is not draining publisher data; downstream outputs will starve.",
+            pct, buffered, capacity
+        ));
+    } else if pct >= DIAG_SRT_BUFFER_WARNING_PCT {
+        issues.push(format!(
+            "SRT application receive buffer is {:.0}% full ({} / {} packets). Ingest is close to stalling.",
+            pct, buffered, capacity
+        ));
+    }
+}
+
+/// RTMP publisher transport from the socket's TCP_INFO and SO_MEMINFO.
+fn push_rtmp_transport(q: &PublisherQuality, lines: &mut Vec<String>, issues: &mut Vec<String>) {
+    lines.push("Protocol: RTMP (TCP)".to_string());
+    if let Some(reason) = &q.tcp_stats_unavailable_reason {
+        lines.push(format!("TCP stats unavailable: {}", reason));
+        issues.push(format!(
+            "TCP transport stats could not be collected: {}",
+            reason
+        ));
+        return;
+    }
+    if let Some(rtt) = q.tcp_rtt_ms {
+        lines.push(format!("TCP RTT: {:.1} ms", rtt));
+        if rtt >= 200.0 {
+            issues.push(format!("High TCP RTT: {:.1}ms (threshold 200ms)", rtt));
+        }
+    }
+    if let Some(rate) = q.tcp_receive_rate_mbps {
+        lines.push(format!("TCP receive rate: {:.2} Mbps", rate));
+    }
+    if let Some(rcv_rtt) = q.tcp_rcv_rtt_ms {
+        lines.push(format!("TCP receive RTT: {:.1} ms", rcv_rtt));
+    }
+    if let Some(last_rcv) = q.tcp_last_rcv_ms {
+        lines.push(format!("Time since last receive: {} ms", last_rcv));
+        if last_rcv >= 5_000 {
+            issues.push(format!(
+                "RTMP publisher receive stall: {}ms since last packet (threshold 5000ms)",
+                last_rcv
+            ));
+        }
+    }
+    if let Some(out_of_order) = q.tcp_rcv_ooopack {
+        lines.push(format!("Out-of-order packets (HOL): {}", out_of_order));
+        if out_of_order >= 50 {
+            issues.push(format!(
+                "High TCP out-of-order packet count: {} (threshold 50)",
+                out_of_order
+            ));
+        }
+    }
+    if let Some(window) = q.tcp_rcv_space {
+        lines.push(format!("TCP receive window: {} bytes", window));
+    }
+    push_tcp_recv_buffer(q, lines, issues);
+    if lines.len() == 1 {
+        lines.push("No TCP socket stats available yet.".to_string());
+        issues.push(
+            "TCP quality metrics not yet populated. Stats update periodically while RTMP is connected."
+                .to_string(),
+        );
+    }
+}
+
+fn push_tcp_recv_buffer(q: &PublisherQuality, lines: &mut Vec<String>, issues: &mut Vec<String>) {
+    let Some(used) = q.tcp_skmem_rmem_alloc else {
+        return;
+    };
+    match q.tcp_skmem_rmem_max {
+        Some(max) if max > 0 => {
+            let saturation = used as f64 / max as f64;
+            lines.push(format!(
+                "TCP receive buffer: {} / {} bytes ({:.1}%)",
+                used,
+                max,
+                saturation * 100.0
+            ));
+            if saturation > 0.8 {
+                issues.push(format!(
+                    "TCP receive buffer is {:.1}% full (threshold 80%)",
+                    saturation * 100.0
+                ));
+            }
+        }
+        _ => lines.push(format!("TCP receive buffer used: {} bytes", used)),
+    }
 }
 
 /// Bonded SRT publisher transport: bond identity plus the wire degradation
