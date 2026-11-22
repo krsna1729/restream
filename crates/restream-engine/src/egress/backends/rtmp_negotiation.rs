@@ -71,91 +71,28 @@ impl SessionNegotiation {
         stream: &mut TlsTcpConnection,
         readiness: Readiness,
     ) -> SessionAdvanceOutcome {
-        let mut wrote = false;
-        if let Some(pending) = &mut self.pending_write {
-            if !readiness.writable {
-                return SessionAdvanceOutcome::Pending(Interest::WRITE);
-            }
-            match stream.write(pending.remaining()) {
-                Ok(0) => {
-                    return SessionAdvanceOutcome::Failed("peer closed during write".to_string());
-                }
-                Ok(n) => {
-                    pending.offset += n;
-                    if !pending.is_complete() {
-                        return SessionAdvanceOutcome::Pending(Interest::WRITE);
-                    }
-                    self.pending_write = None;
-                    wrote = true;
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
-                }
-                Err(error) => return SessionAdvanceOutcome::Failed(error.to_string()),
-            }
+        let wrote = match self.write_pending(stream, readiness.writable) {
+            Ok(wrote) => wrote,
+            Err(outcome) => return outcome,
+        };
+        if let Err(error) = self.process_unread() {
+            return SessionAdvanceOutcome::Failed(error);
         }
 
-        if !self.unread.is_empty() {
-            let input = std::mem::take(&mut self.unread);
-            match self.core.handle_server_input(&input) {
-                Ok((packets, events)) => {
-                    self.outbound.extend(packets);
-                    if events
-                        .iter()
-                        .any(|event| matches!(event, RtmpSessionEvent::PublishRequestAccepted))
-                    {
-                        self.publish_accepted = true;
-                    }
-                }
-                Err(RtmpSessionError::ConnectionRejected(description)) => {
-                    return SessionAdvanceOutcome::Failed(format!(
-                        "connection rejected: {description}"
-                    ));
-                }
-                Err(other) => return SessionAdvanceOutcome::Failed(other.to_string()),
-            }
-        }
+        // A successful write_pending leaves the slot empty.
+        self.pending_write =
+            std::iter::from_fn(|| self.outbound.pop_front()).find_map(PendingWrite::new);
 
-        if self.pending_write.is_none() {
-            while let Some(next) = self.outbound.pop_front() {
-                if let Some(pending) = PendingWrite::new(next) {
-                    self.pending_write = Some(pending);
-                    break;
-                }
-            }
-        }
-
-        if let Some(pending) = &mut self.pending_write {
-            if wrote || !readiness.writable {
-                return SessionAdvanceOutcome::Pending(Interest::WRITE);
-            }
-            match stream.write(pending.remaining()) {
-                Ok(0) => {
-                    return SessionAdvanceOutcome::Failed("peer closed during write".to_string());
-                }
-                Ok(n) => {
-                    pending.offset += n;
-                    if !pending.is_complete() {
-                        return SessionAdvanceOutcome::Pending(Interest::WRITE);
-                    }
-                    self.pending_write = None;
-                    wrote = true;
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
-                }
-                Err(error) => return SessionAdvanceOutcome::Failed(error.to_string()),
-            }
-        }
+        // A visit writes at most once, even if parsing input queued another reply.
+        let wrote_queued = match self.write_pending(stream, readiness.writable && !wrote) {
+            Ok(wrote_queued) => wrote_queued,
+            Err(outcome) => return outcome,
+        };
 
         if self.publish_accepted && self.outbound.is_empty() && self.pending_write.is_none() {
             return SessionAdvanceOutcome::PublishAccepted;
         }
-        if wrote {
-            return SessionAdvanceOutcome::Pending(Interest::READ);
-        }
-
-        if !readiness.readable {
+        if wrote || wrote_queued || !readiness.readable {
             return SessionAdvanceOutcome::Pending(Interest::READ);
         }
 
@@ -173,5 +110,56 @@ impl SessionNegotiation {
             }
             Err(error) => SessionAdvanceOutcome::Failed(error.to_string()),
         }
+    }
+
+    fn write_pending(
+        &mut self,
+        stream: &mut TlsTcpConnection,
+        writable: bool,
+    ) -> Result<bool, SessionAdvanceOutcome> {
+        let Some(pending) = &mut self.pending_write else {
+            return Ok(false);
+        };
+        if !writable {
+            return Err(SessionAdvanceOutcome::Pending(Interest::WRITE));
+        }
+        match stream.write(pending.remaining()) {
+            Ok(0) => Err(SessionAdvanceOutcome::Failed(
+                "peer closed during write".to_string(),
+            )),
+            Ok(n) => {
+                pending.offset += n;
+                if !pending.is_complete() {
+                    return Err(SessionAdvanceOutcome::Pending(Interest::WRITE));
+                }
+                self.pending_write = None;
+                Ok(true)
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => Err(
+                SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE)),
+            ),
+            Err(error) => Err(SessionAdvanceOutcome::Failed(error.to_string())),
+        }
+    }
+
+    fn process_unread(&mut self) -> Result<(), String> {
+        if self.unread.is_empty() {
+            return Ok(());
+        }
+        let input = std::mem::take(&mut self.unread);
+        let (packets, events) =
+            self.core
+                .handle_server_input(&input)
+                .map_err(|error| match error {
+                    RtmpSessionError::ConnectionRejected(description) => {
+                        format!("connection rejected: {description}")
+                    }
+                    other => other.to_string(),
+                })?;
+        self.outbound.extend(packets);
+        self.publish_accepted |= events
+            .iter()
+            .any(|event| matches!(event, RtmpSessionEvent::PublishRequestAccepted));
+        Ok(())
     }
 }
