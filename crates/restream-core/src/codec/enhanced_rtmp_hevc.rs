@@ -194,6 +194,34 @@ pub fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel>
         (u64::from(reader.read_bits(16)?) << 32) | u64::from(reader.read_bits(32)?);
     let level_idc = u8::try_from(reader.read_bits(8)?).ok()?;
     skip_hevc_sub_layer_profile_tier_level(&mut reader, max_sub_layers_minus1)?;
+    let picture = read_hevc_picture_format(&mut reader)?;
+
+    Some(HevcProfileTierLevel {
+        profile_space,
+        tier_flag,
+        profile_idc,
+        profile_compatibility_flags,
+        constraint_indicator_flags,
+        level_idc,
+        width: picture.width,
+        height: picture.height,
+        max_sub_layers_minus1,
+        temporal_id_nested,
+        chroma_format_idc: picture.chroma_format_idc,
+        bit_depth_luma_minus8: picture.bit_depth_luma_minus8,
+        bit_depth_chroma_minus8: picture.bit_depth_chroma_minus8,
+    })
+}
+
+struct HevcPictureFormat {
+    width: u32,
+    height: u32,
+    chroma_format_idc: u8,
+    bit_depth_luma_minus8: u8,
+    bit_depth_chroma_minus8: u8,
+}
+
+fn read_hevc_picture_format(reader: &mut BitReader<'_>) -> Option<HevcPictureFormat> {
     let _sps_seq_parameter_set_id = reader.read_ue()?;
     let chroma_format_idc = u8::try_from(reader.read_ue()?).ok()?;
     if chroma_format_idc > 3 {
@@ -202,6 +230,22 @@ pub fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel>
     if chroma_format_idc == 3 {
         let _separate_colour_plane_flag = reader.read_bits(1)?;
     }
+    let (width, height) = read_hevc_picture_size(reader, chroma_format_idc)?;
+    let bit_depth_luma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
+    let bit_depth_chroma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
+    if bit_depth_luma_minus8 > 7 || bit_depth_chroma_minus8 > 7 {
+        return None;
+    }
+    Some(HevcPictureFormat {
+        width,
+        height,
+        chroma_format_idc,
+        bit_depth_luma_minus8,
+        bit_depth_chroma_minus8,
+    })
+}
+
+fn read_hevc_picture_size(reader: &mut BitReader<'_>, chroma_format_idc: u8) -> Option<(u32, u32)> {
     let pic_width = reader.read_ue()?;
     let pic_height = reader.read_ue()?;
     let (mut crop_x, mut crop_y) = (0u32, 0u32);
@@ -222,27 +266,7 @@ pub fn parse_hevc_profile_tier_level(sps: &[u8]) -> Option<HevcProfileTierLevel>
     let sub_height = if chroma_format_idc == 1 { 2 } else { 1 };
     let width = pic_width.saturating_sub(crop_x.saturating_mul(sub_width));
     let height = pic_height.saturating_sub(crop_y.saturating_mul(sub_height));
-    let bit_depth_luma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
-    let bit_depth_chroma_minus8 = u8::try_from(reader.read_ue()?).ok()?;
-    if bit_depth_luma_minus8 > 7 || bit_depth_chroma_minus8 > 7 {
-        return None;
-    }
-
-    Some(HevcProfileTierLevel {
-        profile_space,
-        tier_flag,
-        profile_idc,
-        profile_compatibility_flags,
-        constraint_indicator_flags,
-        level_idc,
-        width,
-        height,
-        max_sub_layers_minus1,
-        temporal_id_nested,
-        chroma_format_idc,
-        bit_depth_luma_minus8,
-        bit_depth_chroma_minus8,
-    })
+    Some((width, height))
 }
 
 fn skip_hevc_sub_layer_profile_tier_level(
