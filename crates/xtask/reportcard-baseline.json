@@ -4,7 +4,6 @@
   "crates/restream-core/src/codec/h264_sps.rs::parse_h264_sps#0": 64,
   "crates/restream-core/src/codec/h264_sps.rs::vui_frame_rate#0": 25,
   "crates/restream-engine/src/egress/backends/hls_put_shard.rs::HlsPutShardBackend<P>::drive_slot#0": 30,
-  "crates/restream-engine/src/egress/backends/rtmp.rs::MediaPublisher::advance#0": 29,
   "crates/restream-engine/src/egress/backends/rtmp/tests.rs::run_full_server_peer_reporting_bytes_read#0": 23,
   "crates/restream-engine/src/egress/backends/rtmp_negotiation.rs::SessionNegotiation::advance#0": 36,
   "crates/restream-engine/src/egress/backends/rtmp_shard/tests.rs::run_accepting_server_peer_reporting_video_after_idle#0": 23,
