@@ -40,6 +40,11 @@ skip = [
   { name = "thiserror" },
 ]
 
+# Fragmented MP4 muxing and demuxing are owned by the media engine.
+deny = [
+  { name = "shiguredo_mp4", wrappers = ["restream-engine"], reason = "keep fragmented MP4 behind the engine's mux and ingest paths" },
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

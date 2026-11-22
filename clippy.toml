@@ -17,6 +17,7 @@ disallowed-methods = [
   { path = "reqwest::ClientBuilder::add_root_certificate", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_pem_roots" },
   { path = "reqwest::ClientBuilder::tls_certs_merge", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_pem_roots" },
   { path = "reqwest::ClientBuilder::tls_certs_only", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_tls" },
+  { path = "httparse::Response::new", reason = "use the bounded HTTP/1 response reader in restream_engine::egress::http1 (header and body limits, framing and connection reuse)" },
 ]
 # `clippy::await_holding_invalid_type`: a tokio guard held across an await
 # (another lock's acquisition included) is how a registry read re-acquired

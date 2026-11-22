@@ -290,6 +290,10 @@ impl ResponseReader {
         }
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the HTTP/1 response parser owner; this path enforces head limits and validates framing"
+    )]
     fn read_head(&mut self, unread: &[u8]) -> Result<Step, HttpError> {
         let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
         let mut parsed = httparse::Response::new(&mut headers);
