@@ -625,10 +625,6 @@ impl TsDemuxer {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     fn parse_pmt(&mut self, payload: &[u8], pusi: bool) {
         let data = if pusi {
             self.pmt_buf.clear();
@@ -658,15 +654,24 @@ impl TsDemuxer {
             return;
         }
 
-        let data = &self.pmt_buf;
-        let end = self.pmt_expected;
+        // Temporarily move the section out so rebuilding the stream table can
+        // borrow the demuxer mutably without copying the section.
+        let mut data = std::mem::take(&mut self.pmt_buf);
+        let publish = self.apply_pmt(&data);
+        data.clear();
+        self.pmt_buf = data;
+        self.pmt_expected = 0;
+        if publish {
+            self.publish_probe();
+        }
+    }
 
+    /// Accepts a complete section and returns whether to publish a probe.
+    fn apply_pmt(&mut self, data: &[u8]) -> bool {
         let (Some((loop_start, loop_end)), Some(&version_byte)) =
-            (pmt_stream_loop_bounds(data, end), data.get(5))
+            (pmt_stream_loop_bounds(data, data.len()), data.get(5))
         else {
-            self.pmt_buf.clear();
-            self.pmt_expected = 0;
-            return;
+            return false;
         };
 
         // PMTs have one section. A future table must not consume its version
@@ -675,20 +680,20 @@ impl TsDemuxer {
             || version_byte & 1 == 0
             || !matches!(data.get(6..8), Some([0, 0]))
         {
-            self.pmt_buf.clear();
-            self.pmt_expected = 0;
-            return;
+            return false;
         }
         self.pmt_version = (version_byte >> 1) & 0x1F;
         let layout = data.get(10..loop_end).unwrap_or_default();
         if self.pmt_layout == layout {
-            self.pmt_buf.clear();
-            self.pmt_expected = 0;
-            return;
+            return false;
         }
         self.pmt_layout.clear();
         self.pmt_layout.extend_from_slice(layout);
 
+        self.rebuild_pmt_streams(data.get(loop_start..loop_end).unwrap_or_default())
+    }
+
+    fn rebuild_pmt_streams(&mut self, mut entries: &[u8]) -> bool {
         let mut probes = std::mem::take(&mut self.stream_probes).into_iter();
         let mut old_streams: HashMap<u16, (StreamInfo, Option<StreamProbe>)> = self
             .streams
@@ -701,9 +706,7 @@ impl TsDemuxer {
         let mut removed_config = false;
         let mut retained_metadata_changed = false;
         let mut changes = TopologyChanges::default();
-        let mut has_video = false;
         // `pmt_stream_loop_bounds` validated that these entries tile the loop.
-        let mut entries = data.get(loop_start..loop_end).unwrap_or_default();
         while let Some((&[stream_type, pid_high, pid_low, info_high, info_low], tail)) =
             entries.split_first_chunk::<5>()
         {
@@ -716,20 +719,8 @@ impl TsDemuxer {
             entries = tail;
 
             if let Some(kind) = StreamKind::from_stream_type(stream_type) {
-                let track_index = match kind.media_type() {
-                    MediaType::Video => {
-                        self.video_track_count = self.video_track_count.saturating_add(1);
-                        if has_video {
-                            continue;
-                        }
-                        has_video = true;
-                        0
-                    }
-                    MediaType::Audio => {
-                        let idx = self.audio_track_counter;
-                        self.audio_track_counter = self.audio_track_counter.saturating_add(1);
-                        idx
-                    }
+                let Some(track_index) = self.assign_pmt_track(kind) else {
+                    continue;
                 };
 
                 let descriptors = parse_stream_descriptors(descriptor_bytes);
@@ -781,6 +772,30 @@ impl TsDemuxer {
             changes.mark(old.kind);
             removed_config |= probe.is_some();
         }
+        self.apply_topology_changes(changes);
+        self.probed = self.stream_probes.iter().all(Option::is_some);
+        // Preserve initial promotion's completeness requirement. Once promoted,
+        // removals/index/descriptor changes must not wait for an added track's
+        // PES. Its decoded configuration will publish a later full snapshot.
+        self.probed || (self.initial_probe_done && (removed_config || retained_metadata_changed))
+    }
+
+    fn assign_pmt_track(&mut self, kind: StreamKind) -> Option<u32> {
+        match kind.media_type() {
+            MediaType::Video => {
+                let first = self.video_track_count == 0;
+                self.video_track_count = self.video_track_count.saturating_add(1);
+                first.then_some(0)
+            }
+            MediaType::Audio => {
+                let index = self.audio_track_counter;
+                self.audio_track_counter = self.audio_track_counter.saturating_add(1);
+                Some(index)
+            }
+        }
+    }
+
+    fn apply_topology_changes(&mut self, changes: TopologyChanges) {
         // Completed packets carry indexes, not PIDs. Discard affected media
         // while this boundary's old identities are still known; a later PMT
         // in this feed must not relabel them under a restored final layout.
@@ -791,16 +806,6 @@ impl TsDemuxer {
             });
             self.topology_changes.audio |= changes.audio;
             self.topology_changes.video |= changes.video;
-        }
-        self.probed = self.stream_probes.iter().all(Option::is_some);
-        self.pmt_buf.clear();
-        self.pmt_expected = 0;
-        // Preserve initial promotion's completeness requirement. Once promoted,
-        // removals/index/descriptor changes must not wait for an added track's
-        // PES. Its decoded configuration will publish a later full snapshot.
-        if self.probed || (self.initial_probe_done && (removed_config || retained_metadata_changed))
-        {
-            self.publish_probe();
         }
     }
 
