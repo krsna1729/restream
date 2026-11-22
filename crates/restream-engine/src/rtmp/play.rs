@@ -1,5 +1,6 @@
 //! RTMP play admission and owner-side protocol delivery.
 
+use bytes::Bytes;
 use rml_rtmp::sessions::{ServerSession, ServerSessionEvent, ServerSessionResult};
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::sync::{mpsc, oneshot};
@@ -33,16 +34,12 @@ pub(super) struct RtmpPlayRequest<'a> {
     pub(super) stream_id: u32,
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
-pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<(), &'static str> {
+async fn prepare_playback(request: &mut RtmpPlayRequest<'_>) -> Result<String, &'static str> {
     let (reply, response) = oneshot::channel();
     tokio::select! {
         _ = request.shutdown.cancelled() => return Err("Play finished"),
         result = request.commands.send(RtmpControlCommand::PlayRequested {
-            stream_key: request.stream_key,
+            stream_key: std::mem::take(&mut request.stream_key),
             client_ip: request.client_ip.to_string(),
             reply,
         }) => result.map_err(|_| "RTMP control session closed")?,
@@ -65,21 +62,7 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         }
     };
 
-    let responses = request
-        .session
-        .accept_request(request.request_id)
-        .map_err(|_| "Failed to accept play request")?;
-    // rml_rtmp 0.8 adds optional AMF data messages after the required three
-    // play responses. Keep the read endpoint media-only.
-    for response in responses.into_iter().take(3) {
-        if let ServerSessionResult::OutboundResponse(packet) = response {
-            request
-                .socket
-                .write_all(packet.bytes)
-                .await
-                .map_err(|_| "Write error")?;
-        }
-    }
+    accept_play(request.session, request.socket, request.request_id).await?;
     info!(
         pipeline = %pipeline_id,
         stream_id = request.stream_id,
@@ -98,30 +81,70 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         _ = request.shutdown.cancelled() => return Err("Play finished"),
         result = response => result.map_err(|_| "RTMP control session closed")?,
     };
+    send_sequence_headers(
+        request.session,
+        request.socket,
+        request.stream_id,
+        video_sequence_header,
+        audio_sequence_header,
+    )
+    .await;
+
+    Ok(pipeline_id)
+}
+
+async fn send_sequence_headers(
+    session: &mut ServerSession,
+    socket: &RtmpClientSocket,
+    stream_id: u32,
+    video_sequence_header: Option<Bytes>,
+    audio_sequence_header: Option<Bytes>,
+) {
     if let Some(sequence_header) = video_sequence_header
-        && let Ok(packet) = request.session.send_video_data(
-            request.stream_id,
-            sequence_header,
-            RtmpTimestamp::new(0),
-            false,
-        )
+        && let Ok(packet) =
+            session.send_video_data(stream_id, sequence_header, RtmpTimestamp::new(0), false)
     {
-        let _ = request.socket.write_all(packet.bytes).await;
+        let _ = socket.write_all(packet.bytes).await;
     }
     if let Some(sequence_header) = audio_sequence_header
-        && let Ok(packet) = request.session.send_audio_data(
-            request.stream_id,
-            sequence_header,
-            RtmpTimestamp::new(0),
-            false,
-        )
+        && let Ok(packet) =
+            session.send_audio_data(stream_id, sequence_header, RtmpTimestamp::new(0), false)
     {
-        let _ = request.socket.write_all(packet.bytes).await;
+        let _ = socket.write_all(packet.bytes).await;
     }
+}
 
-    let mut timestamp_guard = RtmpTimestampGuard::new();
+async fn accept_play(
+    session: &mut ServerSession,
+    socket: &RtmpClientSocket,
+    request_id: u32,
+) -> Result<(), &'static str> {
+    let responses = session
+        .accept_request(request_id)
+        .map_err(|_| "Failed to accept play request")?;
+    // rml_rtmp 0.8 adds optional AMF data messages after the required three
+    // play responses. Keep the read endpoint media-only.
+    for response in responses.into_iter().take(3) {
+        if let ServerSessionResult::OutboundResponse(packet) = response {
+            socket
+                .write_all(packet.bytes)
+                .await
+                .map_err(|_| "Write error")?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn handle_play_request(
+    mut request: RtmpPlayRequest<'_>,
+) -> Result<(), &'static str> {
+    let pipeline_id = prepare_playback(&mut request).await?;
     let socket: &RtmpClientSocket = request.socket;
     let session = request.session;
+    let commands = request.commands;
+    let shutdown = request.shutdown;
+    let stream_id = request.stream_id;
+    let mut timestamp_guard = RtmpTimestampGuard::new();
     // One read stays in flight for the whole playback, so client commands
     // (closeStream, deleteStream, pings, acknowledgements) are handled while
     // media flows instead of queueing unread until playback ends. A new read
@@ -132,8 +155,8 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
     loop {
         let (reply, response) = oneshot::channel();
         tokio::select! {
-            _ = request.shutdown.cancelled() => return Err("Play finished"),
-            result = request.commands.send(RtmpControlCommand::PlayNext { reply, recycled }) => {
+            _ = shutdown.cancelled() => return Err("Play finished"),
+            result = commands.send(RtmpControlCommand::PlayNext { reply, recycled }) => {
                 result.map_err(|_| "RTMP control session closed")?;
             }
         }
@@ -141,8 +164,8 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         let packets = loop {
             tokio::select! {
                 biased;
-                _ = request.shutdown.cancelled() => {
-                    let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                _ = shutdown.cancelled() => {
+                    let _ = commands.try_send(RtmpControlCommand::Cancel);
                     return Err("Play finished");
                 }
                 read = &mut inbound => {
@@ -151,12 +174,12 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
                             inbound = Box::pin(socket.append(session.take_input_buffer()));
                         }
                         PlayInput::Finished => {
-                            let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                            let _ = commands.try_send(RtmpControlCommand::Cancel);
                             info!(pipeline = %pipeline_id, "[rtmp] Play stopped by client");
                             return Ok(());
                         }
                         PlayInput::Disconnected(reason) => {
-                            let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                            let _ = commands.try_send(RtmpControlCommand::Cancel);
                             info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
                             return Err(reason);
                         }
@@ -167,24 +190,12 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
                 }
             }
         };
-        let Some(packets) = packets else {
-            return Err("Play finished");
-        };
-        recycled = match send_media_packets(
-            session,
-            socket,
-            request.stream_id,
-            &mut timestamp_guard,
-            packets,
-        )
-        .await
-        {
-            Ok(emptied) => emptied,
-            Err(error) => {
+        let packets = packets.ok_or("Play finished")?;
+        recycled = send_media_packets(session, socket, stream_id, &mut timestamp_guard, packets)
+            .await
+            .inspect_err(|_| {
                 info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
-                return Err(error);
-            }
-        };
+            })?;
     }
 }
 
