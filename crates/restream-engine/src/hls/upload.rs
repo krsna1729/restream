@@ -94,62 +94,67 @@ pub(crate) fn upload_session_token() -> String {
     format!("r{:016x}", rand::random::<u64>())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn start_hls_put_upload(
     start: HlsUploadStart,
     store: Arc<HlsStore>,
     engine: Arc<MediaEngine>,
     registration: EgressRegistration,
 ) {
-    let HlsUploadStart {
+    let report = Report {
+        engine: &engine,
+        output_id: &start.output_id,
+        pipeline_id: &start.pipeline_id,
+        registration: &registration,
+    };
+    if let Some(playlist_url) = prepare_upload(&start, &report).await {
+        upload_loop(store, &report, &playlist_url).await;
+    }
+}
+
+async fn prepare_upload(start: &HlsUploadStart, report: &Report<'_>) -> Option<Url> {
+    let Report {
+        engine,
         output_id,
-        pipeline_id,
-        target_url,
-        terminal_stage_key,
-    } = start;
+        registration,
+        ..
+    } = *report;
+    let terminal_stage_key = &start.terminal_stage_key;
 
     let terminal_matches = engine
-        .with_active_egress(&output_id, |egress| {
+        .with_active_egress(output_id, |egress| {
             egress.attempt_id == registration.attempt_id
-                && egress.terminal_stage_key.as_ref() == Some(&terminal_stage_key)
+                && egress.terminal_stage_key.as_ref() == Some(terminal_stage_key)
         })
         .await
         .unwrap_or(false);
     if !terminal_matches {
         engine
             .record_egress_error_if_current(
-                &output_id,
-                &registration,
+                output_id,
+                registration,
                 "hls_terminal_stage_mismatch",
                 format!("expected terminal stage {terminal_stage_key}"),
             )
             .await;
-        return;
+        return None;
     }
 
     engine
-        .update_egress_phase_if_current(&output_id, &registration, EgressPhase::Uploading)
+        .update_egress_phase_if_current(output_id, registration, EgressPhase::Uploading)
         .await;
-    let playlist_url = match Url::parse(&target_url) {
+    let playlist_url = match Url::parse(&start.target_url) {
         Ok(url) => url,
         Err(err) => {
             warn!(output_id = %output_id, err = %err, "invalid HLS upload URL");
             engine
                 .record_egress_error_if_current(
-                    &output_id,
-                    &registration,
+                    output_id,
+                    registration,
                     "parse_url",
                     err.to_string(),
                 )
                 .await;
-            return;
+            return None;
         }
     };
     if let Some(host) = playlist_url.host_str() {
@@ -158,26 +163,20 @@ pub async fn start_hls_put_upload(
             .map(|p| p.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         engine
-            .update_egress_target_addr_if_current(
-                &output_id,
-                &registration,
-                format!("{host}:{port}"),
-            )
+            .update_egress_target_addr_if_current(output_id, registration, format!("{host}:{port}"))
             .await;
     }
+    Some(playlist_url)
+}
+
+async fn upload_loop(store: Arc<HlsStore>, report: &Report<'_>, playlist_url: &Url) {
+    let cancel = &report.registration.cancel_token;
     let mut published = store.subscribe();
     drop(store);
     // Once every store handle is gone no segment can follow, but uploads
     // already taken (and their retries) still finish.
     let mut store_open = true;
     let mut policy = UploadPolicy::new(upload_session_token());
-    let report = Report {
-        engine: &engine,
-        output_id: &output_id,
-        pipeline_id: &pipeline_id,
-        registration: &registration,
-    };
-
     let mut dropped = 0;
     let mut backlog_dropped = 0;
     // Why the last request failed, so a drop reports its cause.
@@ -196,45 +195,14 @@ pub async fn start_hls_put_upload(
         }
         match next {
             Next::Put(request) => {
-                let url = object_url(&playlist_url, &request);
-                let ending = matches!(request.target, UploadTarget::Playlist { end: true, .. });
-                let timeout = if ending {
-                    HLS_UPLOAD_END_TIMEOUT
-                } else {
-                    HLS_UPLOAD_REQUEST_TIMEOUT
-                };
                 let avoid_pool = avoid_pool_until.is_some_and(|until| Instant::now() < until);
-                let clients =
-                    hls_upload_clients(engine.config.rtmps_extra_trust_roots_pem_path.as_deref());
-                let client = if request.fresh_connection || avoid_pool {
-                    &clients.fresh
-                } else {
-                    &clients.pooled
-                };
-                let send = send_upload(client, url, &request, timeout);
-                let result = if ending {
-                    send.await
-                } else {
-                    tokio::select! {
-                        result = send => result,
-                        _ = registration.cancel_token.cancelled() => {
-                            // Abandon the request; the stop sends the end
-                            // playlist next.
-                            policy.on_result(UploadOutcome::Transport, Instant::now());
-                            policy.finish();
-                            continue;
-                        }
-                    }
-                };
-                let (outcome, failure) = match result {
-                    Ok(status) if status.is_success() => {
-                        (UploadOutcome::Status(status.as_u16()), None)
-                    }
-                    Ok(status) => (
-                        UploadOutcome::Status(status.as_u16()),
-                        Some(status_failure_message(&request, status.as_u16())),
-                    ),
-                    Err(error) => (UploadOutcome::Transport, Some(error)),
+                let Some((outcome, failure)) =
+                    put_request(report, playlist_url, &request, avoid_pool).await
+                else {
+                    // Abandon the request; the stop sends the end playlist next.
+                    policy.on_result(UploadOutcome::Transport, Instant::now());
+                    policy.finish();
+                    continue;
                 };
                 if failure.is_some() {
                     last_failure.clone_from(&failure);
@@ -257,7 +225,7 @@ pub async fn start_hls_put_upload(
                     }
                 };
                 tokio::select! {
-                    _ = registration.cancel_token.cancelled(), if !policy.is_finishing() => {
+                    _ = cancel.cancelled(), if !policy.is_finishing() => {
                         policy.finish();
                     }
                     changed = published.changed(), if store_open => {
@@ -272,16 +240,57 @@ pub async fn start_hls_put_upload(
             }
             Next::Stop(Stopped::Ended) => return,
             Next::Stop(Stopped::Rejected { status }) => {
-                warn!(
-                    output_id = %output_id,
-                    pipeline_id = %pipeline_id,
-                    status,
-                    "HLS ingest rejected the upload; not retrying"
-                );
+                report.log_rejection(status);
                 return;
             }
         }
     }
+}
+
+/// `None` means cancellation interrupted an ordinary PUT. The end
+/// playlist instead gets its own deadline, even after cancellation.
+async fn put_request(
+    report: &Report<'_>,
+    playlist_url: &Url,
+    request: &UploadRequest,
+    avoid_pool: bool,
+) -> Option<(UploadOutcome, Option<String>)> {
+    let url = object_url(playlist_url, request);
+    let ending = matches!(request.target, UploadTarget::Playlist { end: true, .. });
+    let timeout = if ending {
+        HLS_UPLOAD_END_TIMEOUT
+    } else {
+        HLS_UPLOAD_REQUEST_TIMEOUT
+    };
+    let clients = hls_upload_clients(
+        report
+            .engine
+            .config
+            .rtmps_extra_trust_roots_pem_path
+            .as_deref(),
+    );
+    let client = if request.fresh_connection || avoid_pool {
+        &clients.fresh
+    } else {
+        &clients.pooled
+    };
+    let send = send_upload(client, url, request, timeout);
+    let result = if ending {
+        send.await
+    } else {
+        tokio::select! {
+            result = send => result,
+            _ = report.registration.cancel_token.cancelled() => return None,
+        }
+    };
+    Some(match result {
+        Ok(status) if status.is_success() => (UploadOutcome::Status(status.as_u16()), None),
+        Ok(status) => (
+            UploadOutcome::Status(status.as_u16()),
+            Some(status_failure_message(request, status.as_u16())),
+        ),
+        Err(error) => (UploadOutcome::Transport, Some(error)),
+    })
 }
 
 /// Status reporting for one uploader.
@@ -293,6 +302,15 @@ struct Report<'a> {
 }
 
 impl Report<'_> {
+    fn log_rejection(&self, status: u16) {
+        warn!(
+            output_id = %self.output_id,
+            pipeline_id = %self.pipeline_id,
+            status,
+            "HLS ingest rejected the upload; not retrying"
+        );
+    }
+
     /// A segment failed for its whole retry window. The failure stays
     /// recorded as an `upload_segment` failure with its cause (a timeout, a
     /// status, a reset); the drop only adds to the message.
