@@ -12,8 +12,8 @@ use super::store::Fmp4HlsStore;
 use crate::engine::MediaEngine;
 use crate::stage_lifecycle::StageLifecycle;
 use crate::stage_metrics::StageMetrics;
-use restream_core::MediaType;
 use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::{MediaPacket, MediaType};
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
@@ -62,14 +62,6 @@ pub async fn start_hls_fmp4_segmenter(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_hls_fmp4_segmenter(
     pipeline_id: String,
     store: Arc<Fmp4HlsStore>,
@@ -100,16 +92,8 @@ async fn run_hls_fmp4_segmenter(
     let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     let (video_sequence_header, audio_sequence_header) =
         resolve_hls_sequence_headers(&engine, &pipeline_id).await;
-    let config = store.config();
-    let min_segment_ms = (config.min_segment_secs * 1000.0).round() as i64;
-    let preview_video_meta = start.video_meta_override.clone();
-
-    let mut video_state: Option<VideoRenditionState> = None;
-    let mut audio_states: HashMap<u32, AudioRenditionState> = HashMap::new();
-    let mut next_segment_index = 0u64;
-    let mut got_first_keyframe = false;
-    let mut global_zero_ms = 0i64;
-    let mut segment_start_pts_ms = 0i64;
+    let min_segment_ms = (store.config().min_segment_secs * 1000.0).round() as i64;
+    let mut renditions = None;
 
     'segmenter: loop {
         tokio::select! {
@@ -120,110 +104,37 @@ async fn run_hls_fmp4_segmenter(
                         break 'segmenter;
                     }
                     packets.clear();
-                    match reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
+                    if matches!(reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS), Ok(0) | Err(_)) {
+                        break;
                     }
-
-                    for packet in packets.iter() {
+                    for packet in &packets {
                         metrics.record_in(packet.payload.len() as u64);
-
-                        if video_state.is_none() {
-                            let Some((video, audio_tracks)) = resolve_hls_preview_metadata(
+                        if renditions.is_none() {
+                            let Some((video, audio)) = resolve_hls_preview_metadata(
                                 &engine,
                                 &ring_buffer,
                                 &cancel_token,
                                 &pipeline_id,
-                                preview_video_meta.clone(),
-                            )
-                            .await else {
-                                engine.remove_stage_runtime_if_current(&hls_stage_key, &lifecycle).await;
-                                engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
-                                    pipeline_id: pipeline_id.clone(),
-                                    encoding: "hls".to_string(),
-                                });
-                                return;
+                                start.video_meta_override.clone(),
+                            ).await else {
+                                break 'segmenter;
                             };
-
-                            let (bound_audio_states, advertised_audio_tracks) =
-                                bind_preview_audio_tracks(
-                                    audio_tracks,
-                                    audio_sequence_header.as_deref(),
-                                    &pipeline_id,
-                                );
-                            store.set_stream_metadata(
-                                Some(video.clone()),
-                                advertised_audio_tracks,
-                            );
-                            video_state = Some(VideoRenditionState::new(
-                                &video,
-                                video_sequence_header.as_deref(),
-                            ));
-                            audio_states = bound_audio_states;
+                            let (audio, advertised) =
+                                bind_preview_audio_tracks(audio, audio_sequence_header.as_deref(), &pipeline_id);
+                            store.set_stream_metadata(Some(video.clone()), advertised);
+                            renditions = Some(Renditions {
+                                video: VideoRenditionState::new(&video, video_sequence_header.as_deref()),
+                                audio,
+                                segment_index: 0,
+                                clock: None,
+                            });
                         }
-
                         let t0 = Instant::now();
-                        match packet.media_type {
-                            MediaType::Video => {
-                                let Some(state) = video_state.as_mut() else {
-                                    continue;
-                                };
-                                if packet.is_keyframe {
-                                    if !got_first_keyframe {
-                                        got_first_keyframe = true;
-                                        global_zero_ms = packet.dts;
-                                        segment_start_pts_ms = packet.pts;
-                                    } else if packet.pts - segment_start_pts_ms >= min_segment_ms {
-                                        if let Err(err) = state.flush_segment(
-                                            &store,
-                                            next_segment_index,
-                                            segment_duration_secs(segment_start_pts_ms, packet.pts),
-                                            Some(relative_to_hls_zero_ms(
-                                                packet.dts,
-                                                global_zero_ms,
-                                            )),
-                                        ) {
-                                            warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush video fmp4 segment");
-                                        }
-                                        for audio_state in audio_states.values_mut() {
-                                            if let Err(err) = audio_state.flush_segment(
-                                                &store,
-                                                next_segment_index,
-                                                segment_duration_secs(segment_start_pts_ms, packet.pts),
-                                            ) {
-                                                warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush audio fmp4 segment");
-                                            }
-                                        }
-                                        next_segment_index += 1;
-                                        segment_start_pts_ms = packet.pts;
-                                    }
-                                }
-
-                                if !got_first_keyframe || packet.dts < global_zero_ms {
-                                    continue;
-                                }
-                                if let Err(err) = state.push_packet(packet, global_zero_ms) {
-                                    warn!(pipeline_id = %pipeline_id, err = %err, "dropping video packet from fmp4 preview");
-                                }
-                            }
-                            MediaType::Audio => {
-                                if !got_first_keyframe || packet.dts < global_zero_ms {
-                                    continue;
-                                }
-                                let Some(state) = audio_states.get_mut(&packet.track_index) else {
-                                    continue;
-                                };
-                                if let Err(err) = state.push_packet(packet, global_zero_ms) {
-                                    warn!(
-                                        pipeline_id = %pipeline_id,
-                                        track_index = packet.track_index,
-                                        err = %err,
-                                        "dropping audio packet from fmp4 preview"
-                                    );
-                                }
-                            }
+                        if let Some(state) = renditions.as_mut()
+                            && state.push(packet, &store, &pipeline_id, min_segment_ms)
+                        {
+                            metrics.record_processing(t0.elapsed().as_micros() as u64);
                         }
-                        metrics.record_processing(t0.elapsed().as_micros() as u64);
                     }
                     tokio::task::yield_now().await;
                 }
@@ -231,24 +142,9 @@ async fn run_hls_fmp4_segmenter(
         }
     }
 
-    if let Some(state) = video_state.as_mut()
-        && let Err(err) = state.flush_segment(
-            &store,
-            next_segment_index,
-            state.current_segment_duration_secs(),
-            None,
-        )
-    {
-        warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush final video fmp4 segment");
-    }
-    for audio_state in audio_states.values_mut() {
-        if let Err(err) = audio_state.flush_segment(
-            &store,
-            next_segment_index,
-            audio_state.current_segment_duration_secs(),
-        ) {
-            warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush final audio fmp4 segment");
-        }
+    // Cancellation during the metadata wait leaves no renditions to flush.
+    if let Some(state) = renditions.as_mut() {
+        state.flush_final(&store, &pipeline_id);
     }
 
     engine
@@ -261,6 +157,109 @@ async fn run_hls_fmp4_segmenter(
             pipeline_id,
             encoding: "hls".to_string(),
         });
+}
+
+struct SegmentClock {
+    zero_dts_ms: i64,
+    start_pts_ms: i64,
+}
+
+struct Renditions {
+    video: VideoRenditionState,
+    audio: HashMap<u32, AudioRenditionState>,
+    segment_index: u64,
+    clock: Option<SegmentClock>,
+}
+
+impl Renditions {
+    /// Returns whether the packet reached a rendition, including mux errors.
+    fn push(
+        &mut self,
+        packet: &MediaPacket,
+        store: &Fmp4HlsStore,
+        pipeline_id: &str,
+        min_segment_ms: i64,
+    ) -> bool {
+        if packet.media_type == MediaType::Video && packet.is_keyframe {
+            self.cut_at_keyframe(packet, store, pipeline_id, min_segment_ms);
+        }
+        let Some(clock) = &self.clock else {
+            return false;
+        };
+        if packet.dts < clock.zero_dts_ms {
+            return false;
+        }
+        match packet.media_type {
+            MediaType::Video => {
+                if let Err(err) = self.video.push_packet(packet, clock.zero_dts_ms) {
+                    warn!(pipeline_id, %err, "dropping video packet from fmp4 preview");
+                }
+            }
+            MediaType::Audio => {
+                let Some(state) = self.audio.get_mut(&packet.track_index) else {
+                    return false;
+                };
+                if let Err(err) = state.push_packet(packet, clock.zero_dts_ms) {
+                    warn!(pipeline_id, track_index = packet.track_index, %err, "dropping audio packet from fmp4 preview");
+                }
+            }
+        }
+        true
+    }
+
+    fn cut_at_keyframe(
+        &mut self,
+        packet: &MediaPacket,
+        store: &Fmp4HlsStore,
+        pipeline_id: &str,
+        min_segment_ms: i64,
+    ) {
+        let Some(clock) = self.clock.as_mut() else {
+            self.clock = Some(SegmentClock {
+                zero_dts_ms: packet.dts,
+                start_pts_ms: packet.pts,
+            });
+            return;
+        };
+        if packet.pts - clock.start_pts_ms < min_segment_ms {
+            return;
+        }
+        let duration = segment_duration_secs(clock.start_pts_ms, packet.pts);
+        let end = relative_to_hls_zero_ms(packet.dts, clock.zero_dts_ms);
+        if let Err(err) = self
+            .video
+            .flush_segment(store, self.segment_index, duration, Some(end))
+        {
+            warn!(pipeline_id, %err, "failed to flush video fmp4 segment");
+        }
+        for state in self.audio.values_mut() {
+            if let Err(err) = state.flush_segment(store, self.segment_index, duration) {
+                warn!(pipeline_id, %err, "failed to flush audio fmp4 segment");
+            }
+        }
+        self.segment_index += 1;
+        clock.start_pts_ms = packet.pts;
+    }
+
+    fn flush_final(&mut self, store: &Fmp4HlsStore, pipeline_id: &str) {
+        if let Err(err) = self.video.flush_segment(
+            store,
+            self.segment_index,
+            self.video.current_segment_duration_secs(),
+            None,
+        ) {
+            warn!(pipeline_id, %err, "failed to flush final video fmp4 segment");
+        }
+        for state in self.audio.values_mut() {
+            if let Err(err) = state.flush_segment(
+                store,
+                self.segment_index,
+                state.current_segment_duration_secs(),
+            ) {
+                warn!(pipeline_id, %err, "failed to flush final audio fmp4 segment");
+            }
+        }
+    }
 }
 
 fn bind_preview_audio_tracks(
