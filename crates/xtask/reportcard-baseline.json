@@ -19,7 +19,6 @@
   "crates/restream-engine/src/moq/ingest/session.rs::ingest#0": 24,
   "crates/restream-engine/src/rtmp/ingest/session.rs::handle_session_results#0": 34,
   "crates/restream-engine/src/rtmp/listener.rs::start_rtmp_server_on_with_shutdown#0": 26,
-  "crates/restream-engine/src/snapshots.rs::SrtIngressOwnerSnapshot::serialize#0": 47,
   "crates/restream-mcp/src/handlers.rs::AgentToolHandler<B>::dispatch#0": 22,
   "crates/restream-mcp/src/main.rs::main#1": 25,
   "crates/restream-mcp/src/transport/mod.rs::classify#0": 21,
