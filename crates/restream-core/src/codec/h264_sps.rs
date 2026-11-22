@@ -47,10 +47,6 @@ pub fn level_name(level_idc: u8) -> String {
 
 /// Parses an SPS NAL unit payload: the bytes after the one-byte NAL header,
 /// emulation-prevention bytes still present.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
     let sps = rbsp(payload);
     let &[profile_idc, _constraints, level_idc] = sps.first_chunk::<3>()?;
@@ -58,32 +54,54 @@ pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
     let _seq_parameter_set_id = reader.read_ue()?;
 
     let chroma_format_idc = if HIGH_PROFILES.contains(&profile_idc) {
-        let chroma_format_idc = reader.read_ue()?;
-        if chroma_format_idc > 3 {
-            return None;
-        }
-        if chroma_format_idc == 3 {
-            reader.skip(1)?; // separate_colour_plane_flag
-        }
-        let bit_depth_luma_minus8 = reader.read_ue()?;
-        let bit_depth_chroma_minus8 = reader.read_ue()?;
-        if bit_depth_luma_minus8 > 8 || bit_depth_chroma_minus8 > 8 {
-            return None;
-        }
-        reader.skip(1)?; // qpprime_y_zero_transform_bypass_flag
-        if reader.read_bits(1)? == 1 {
-            let lists = if chroma_format_idc == 3 { 12 } else { 8 };
-            for index in 0..lists {
-                if reader.read_bits(1)? == 1 {
-                    skip_scaling_list(&mut reader, if index < 6 { 16 } else { 64 })?;
-                }
-            }
-        }
-        chroma_format_idc
+        read_chroma_format(&mut reader)?
     } else {
         1
     };
+    skip_picture_order(&mut reader)?;
+    let (width, height) = read_dimensions(&mut reader, chroma_format_idc)?;
 
+    Some(H264Sps {
+        profile_idc,
+        level_idc,
+        width,
+        height,
+        // A truncated SPS fails closed: the VUI flag, and the VUI when
+        // present, must be complete.
+        fps: if reader.read_bits(1)? == 1 {
+            vui_frame_rate(&mut reader)?
+        } else {
+            0.0
+        },
+    })
+}
+
+fn read_chroma_format(reader: &mut BitReader) -> Option<u32> {
+    let chroma_format_idc = reader.read_ue()?;
+    if chroma_format_idc > 3 {
+        return None;
+    }
+    if chroma_format_idc == 3 {
+        reader.skip(1)?; // separate_colour_plane_flag
+    }
+    let bit_depth_luma_minus8 = reader.read_ue()?;
+    let bit_depth_chroma_minus8 = reader.read_ue()?;
+    if bit_depth_luma_minus8 > 8 || bit_depth_chroma_minus8 > 8 {
+        return None;
+    }
+    reader.skip(1)?; // qpprime_y_zero_transform_bypass_flag
+    if reader.read_bits(1)? == 1 {
+        let lists = if chroma_format_idc == 3 { 12 } else { 8 };
+        for index in 0..lists {
+            if reader.read_bits(1)? == 1 {
+                skip_scaling_list(reader, if index < 6 { 16 } else { 64 })?;
+            }
+        }
+    }
+    Some(chroma_format_idc)
+}
+
+fn skip_picture_order(reader: &mut BitReader) -> Option<()> {
     let _log2_max_frame_num_minus4 = reader.read_ue()?;
     match reader.read_ue()? {
         0 => {
@@ -105,6 +123,10 @@ pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
         2 => {}
         _ => return None,
     }
+    Some(())
+}
+
+fn read_dimensions(reader: &mut BitReader, chroma_format_idc: u32) -> Option<(u32, u32)> {
     let _max_num_ref_frames = reader.read_ue()?;
     reader.skip(1)?; // gaps_in_frame_num_value_allowed_flag
     let width_in_mbs_minus1 = reader.read_ue()?;
@@ -114,7 +136,7 @@ pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
         reader.skip(1)?; // mb_adaptive_frame_field_flag
     }
     reader.skip(1)?; // direct_8x8_inference_flag
-    let (crop_left, crop_right, crop_top, crop_bottom) = if reader.read_bits(1)? == 1 {
+    let crop = if reader.read_bits(1)? == 1 {
         (
             reader.read_ue()?,
             reader.read_ue()?,
@@ -124,7 +146,22 @@ pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
     } else {
         (0, 0, 0, 0)
     };
+    crop_dimensions(
+        width_in_mbs_minus1,
+        height_in_map_units_minus1,
+        frame_mbs_only,
+        chroma_format_idc,
+        crop,
+    )
+}
 
+fn crop_dimensions(
+    width_in_mbs_minus1: u32,
+    height_in_map_units_minus1: u32,
+    frame_mbs_only: u32,
+    chroma_format_idc: u32,
+    (crop_left, crop_right, crop_top, crop_bottom): (u32, u32, u32, u32),
+) -> Option<(u32, u32)> {
     // Crop units (Table 6-1 and 7.4.2.1.1): SubWidthC across, SubHeightC
     // times (2 - frame_mbs_only) down; monochrome and 4:4:4 use 1.
     let sub_width = if matches!(chroma_format_idc, 1 | 2) {
@@ -152,19 +189,7 @@ pub fn parse_h264_sps(payload: &[u8]) -> Option<H264Sps> {
         sub_height.checked_mul(frame_height_factor)?,
     )?;
 
-    Some(H264Sps {
-        profile_idc,
-        level_idc,
-        width,
-        height,
-        // A truncated SPS fails closed: the VUI flag, and the VUI when
-        // present, must be complete.
-        fps: if reader.read_bits(1)? == 1 {
-            vui_frame_rate(&mut reader)?
-        } else {
-            0.0
-        },
-    })
+    Some((width, height))
 }
 
 /// `size - (first + second) * unit`, non-zero and within `u32`.
@@ -200,6 +225,20 @@ fn skip_scaling_list(reader: &mut BitReader, size: usize) -> Option<()> {
 /// Frame rate from the VUI timing information (0.0 when absent); `None`
 /// when the VUI is truncated.
 fn vui_frame_rate(reader: &mut BitReader) -> Option<f64> {
+    skip_vui_picture_info(reader)?;
+    if reader.read_bits(1)? == 0 {
+        return Some(0.0);
+    }
+    let num_units_in_tick = reader.read_bits(32)?;
+    let time_scale = reader.read_bits(32)?;
+    Some(if num_units_in_tick > 0 && time_scale > 0 {
+        f64::from(time_scale) / (2.0 * f64::from(num_units_in_tick))
+    } else {
+        0.0
+    })
+}
+
+fn skip_vui_picture_info(reader: &mut BitReader) -> Option<()> {
     if reader.read_bits(1)? == 1 && reader.read_bits(8)? == 255 {
         reader.skip(32)?; // sar_width, sar_height
     }
@@ -216,14 +255,5 @@ fn vui_frame_rate(reader: &mut BitReader) -> Option<f64> {
         reader.read_ue()?; // chroma_sample_loc_type_top_field
         reader.read_ue()?; // chroma_sample_loc_type_bottom_field
     }
-    if reader.read_bits(1)? == 0 {
-        return Some(0.0);
-    }
-    let num_units_in_tick = reader.read_bits(32)?;
-    let time_scale = reader.read_bits(32)?;
-    Some(if num_units_in_tick > 0 && time_scale > 0 {
-        f64::from(time_scale) / (2.0 * f64::from(num_units_in_tick))
-    } else {
-        0.0
-    })
+    Some(())
 }
