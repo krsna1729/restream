@@ -306,10 +306,6 @@ struct PullState {
     re_expired: bool,
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run(
     engine: Arc<MediaEngine>,
     ingest: Arc<HlsIngest>,
@@ -319,32 +315,9 @@ async fn run(
     resolver: Arc<crate::resolver::Resolver>,
     cancel: CancellationToken,
 ) -> PullEnd {
-    let mut url = match Url::parse(&source.url) {
-        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-        Ok(url) => {
-            error!(
-                url = %log_url(url.as_str()),
-                "HLS pull source must be an HTTP or HTTPS URL"
-            );
-            return PullEnd::Fatal;
-        }
-        Err(error) => {
-            // The URL itself may carry a token, so only the parse error is logged.
-            error!(%error, "HLS pull source URL does not parse");
-            return PullEnd::Fatal;
-        }
-    };
-    url.set_fragment(None);
-    if !url.username().is_empty() || url.password().is_some() {
-        // Userinfo in the URL is a password a log line would render in part,
-        // and a URL is not the place for this credential: it is configuration
-        // that gets copied around and shown back.
-        error!(
-            url = %log_url(url.as_str()),
-            "HLS pull source URL carries userinfo; use the basic credential choice instead"
-        );
+    let Some(url) = source_url(&source.url) else {
         return PullEnd::Fatal;
-    }
+    };
     let client_addr = url.host_str().unwrap_or("hls-origin").to_string();
     let auth = match RequestAuth::new(&source.auth) {
         Ok(auth) => auth,
@@ -389,16 +362,50 @@ async fn run(
         last_refused: None,
         re_expired: false,
     };
-    info!(
-        pipeline = %state.pipeline.id,
-        input = %state.pipeline.input_id,
-        url = %log_url(state.next_url.as_str()),
-        "HLS pull started"
-    );
+    state.log_started();
+    let end = follow_source(&mut state, &client, &ingest, &limits, &engine, &cancel).await;
+    state.log_status("HLS pull stopped");
+    end
+}
 
+fn source_url(source: &str) -> Option<Url> {
+    let mut url = match Url::parse(source) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+        Ok(url) => {
+            error!(
+                url = %log_url(url.as_str()),
+                "HLS pull source must be an HTTP or HTTPS URL"
+            );
+            return None;
+        }
+        Err(error) => {
+            // The URL itself may carry a token, so only the parse error is logged.
+            error!(%error, "HLS pull source URL does not parse");
+            return None;
+        }
+    };
+    url.set_fragment(None);
+    if !url.username().is_empty() || url.password().is_some() {
+        // Keep credentials out of URLs that are copied around and shown back.
+        error!(
+            url = %log_url(url.as_str()),
+            "HLS pull source URL carries userinfo; use the basic credential choice instead"
+        );
+        return None;
+    }
+    Some(url)
+}
+
+async fn follow_source(
+    state: &mut PullState,
+    client: &Client,
+    ingest: &Arc<HlsIngest>,
+    limits: &HlsIngestLimits,
+    engine: &MediaEngine,
+    cancel: &CancellationToken,
+) -> PullEnd {
     let mut attempts = 0u32;
     let mut last_error: Option<String> = None;
-    let mut end = PullEnd::Fatal;
     loop {
         let result = tokio::select! {
             // Cancellation first, and biased: a task woken with both branches
@@ -407,63 +414,33 @@ async fn run(
             // knows nothing is still in flight.
             biased;
             _ = cancel.cancelled() => break,
-            result = state.pull_once(&client, &ingest, &limits) => result,
+            result = state.pull_once(client, ingest, limits) => result,
         };
-        match result {
+        let delay = match result {
             Ok(Cycle::Ended) => {
-                info!(
-                    pipeline = %state.pipeline.id,
-                    input = %state.pipeline.input_id,
-                    "HLS pull reached EXT-X-ENDLIST"
-                );
-                end = PullEnd::Ended;
-                break;
+                state.log_status("HLS pull reached EXT-X-ENDLIST");
+                return PullEnd::Ended;
             }
             Ok(Cycle::Live { had_new, target }) => {
                 attempts = 0;
                 if last_error.take().is_some() {
-                    info!(
-                        pipeline = %state.pipeline.id,
-                        input = %state.pipeline.input_id,
-                        "HLS pull recovered"
-                    );
+                    state.log_status("HLS pull recovered");
                 }
-                if sleep_or_cancel(refresh_delay(target, had_new), &cancel).await {
-                    break;
-                }
+                refresh_delay(target, had_new)
             }
             Err(PullError::PublisherActive) => {
-                error!(
-                    pipeline = %state.pipeline.id,
-                    input = %state.pipeline.input_id,
-                    "HLS pull stopped: another publisher holds the input"
-                );
+                state.log_publisher_active();
                 break;
             }
             Err(PullError::Fatal(error)) => {
-                error!(
-                    pipeline = %state.pipeline.id,
-                    input = %state.pipeline.input_id,
-                    %error,
-                    "HLS pull stopped"
-                );
-                if engine
-                    .input_has_session(&state.pipeline.id, &state.pipeline.input_id)
-                    .await
-                {
-                    engine.cancel_pipeline_input(&state.pipeline.input_id).await;
-                }
+                state.log_failure(&error);
+                cancel_failed_input(engine, &state.pipeline).await;
                 break;
             }
             Err(PullError::Cancelled) => break,
             Err(PullError::Retry(error)) => {
                 if last_error.as_deref() != Some(error.as_str()) {
-                    warn!(
-                        pipeline = %state.pipeline.id,
-                        input = %state.pipeline.input_id,
-                        %error,
-                        "HLS pull failed; retrying"
-                    );
+                    log_retry(state, &error);
                     last_error = Some(error);
                 }
                 let delay = retry_delay(&mut attempts);
@@ -476,21 +453,72 @@ async fn run(
                     // says nothing in that case.
                     state.re_resolve("the retry burst failed six times", Resolve::Video);
                 }
-                if sleep_or_cancel(delay, &cancel).await {
-                    break;
-                }
+                delay
             }
+        };
+        if sleep_or_cancel(delay, cancel).await {
+            break;
         }
     }
-    info!(
+    PullEnd::Fatal
+}
+
+#[cold]
+fn log_retry(state: &PullState, error: &str) {
+    warn!(
         pipeline = %state.pipeline.id,
         input = %state.pipeline.input_id,
-        "HLS pull stopped"
+        %error,
+        "HLS pull failed; retrying"
     );
-    end
+}
+
+async fn cancel_failed_input(engine: &MediaEngine, pipeline: &AuthenticatedPipeline) {
+    if engine
+        .input_has_session(&pipeline.id, &pipeline.input_id)
+        .await
+    {
+        engine.cancel_pipeline_input(&pipeline.input_id).await;
+    }
 }
 
 impl PullState {
+    fn log_started(&self) {
+        info!(
+            pipeline = %self.pipeline.id,
+            input = %self.pipeline.input_id,
+            url = %log_url(self.next_url.as_str()),
+            "HLS pull started"
+        );
+    }
+
+    #[cold]
+    fn log_publisher_active(&self) {
+        error!(
+            pipeline = %self.pipeline.id,
+            input = %self.pipeline.input_id,
+            "HLS pull stopped: another publisher holds the input"
+        );
+    }
+
+    fn log_status(&self, message: &'static str) {
+        info!(
+            pipeline = %self.pipeline.id,
+            input = %self.pipeline.input_id,
+            "{message}"
+        );
+    }
+
+    #[cold]
+    fn log_failure(&self, error: &str) {
+        error!(
+            pipeline = %self.pipeline.id,
+            input = %self.pipeline.input_id,
+            %error,
+            "HLS pull stopped"
+        );
+    }
+
     /// Fetch the current playlist, choose a rendition if needed, apply the
     /// media playlist, then fetch and hand over its new segments in order.
     async fn pull_once(
