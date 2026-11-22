@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream_core::MediaPacket;
+use restream_core::MediaType;
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls::{HlsConfig, HlsSegmenterStart, HlsStore};
+use restream_engine::hls_fmp4::{Fmp4HlsStore, start_hls_fmp4_segmenter};
 use restream_sync::RingBuffer;
 use tokio_util::sync::CancellationToken;
 
@@ -145,5 +147,100 @@ fn bench_hls_segmenter(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_hls_segmenter);
+fn bench_hls_fmp4_segmenter(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (video, audio, packets) =
+        restream_engine::test_fixtures::primary_av_packets_for_codec("h264").unwrap();
+    let audio_track = audio.first().expect("fixture has AAC audio").track_index;
+    let mut keyframes = packets
+        .iter()
+        .enumerate()
+        .filter(|(_, packet)| packet.media_type == MediaType::Video && packet.is_keyframe);
+    let (first, keyframe) = keyframes.next().expect("fixture has a starting keyframe");
+    let (end, next_keyframe) = keyframes.next().expect("fixture has a complete GOP");
+    let tail = &packets[first + 1..end];
+    let period = next_keyframe.dts - keyframe.dts;
+    let ring = Arc::new(RingBuffer::new(8192));
+    ring.set_audio_tracks(audio);
+    let store = Arc::new(Fmp4HlsStore::with_config(HlsConfig {
+        min_segment_secs: 0.0,
+        max_segments: 3,
+        ..HlsConfig::default()
+    }));
+    let cancel = CancellationToken::new();
+    let segmenter = runtime.spawn(start_hls_fmp4_segmenter(
+        "bench-hls-fmp4".to_string(),
+        store.clone(),
+        ring.clone(),
+        Arc::new(MediaEngine::new()),
+        cancel.clone(),
+        HlsSegmenterStart {
+            video_meta_override: Some(video),
+            planned_stage_key: None,
+        },
+    ));
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while ring.reader_snapshots().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the fMP4 segmenter attaches its reader");
+        ring.push(keyframe.clone());
+    });
+    let mut index = 0;
+    let mut offset = 0;
+    let mut group = c.benchmark_group("hls_fmp4_segmenter");
+    group.throughput(Throughput::Elements((tail.len() + 1) as u64));
+    group.bench_function("h264_gop_to_store", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..iterations {
+                elapsed += runtime.block_on(async {
+                    let start = Instant::now();
+                    // The next keyframe closes this GOP and primes the next.
+                    ring.push_batch(
+                        tail.iter()
+                            .map(|packet| (packet, offset))
+                            .chain(std::iter::once((keyframe, offset + period)))
+                            .map(|(packet, offset)| {
+                                let mut packet = packet.clone();
+                                packet.dts += offset;
+                                packet.pts += offset;
+                                packet
+                            }),
+                    );
+                    tokio::time::timeout(Duration::from_secs(10), async {
+                        while store.get_video_segment(index).is_none()
+                            || store.get_audio_segment(audio_track, index).is_none()
+                        {
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .expect("both renditions publish this GOP");
+                    start.elapsed()
+                });
+                offset += period;
+                index += 1;
+            }
+            elapsed
+        });
+    });
+    group.finish();
+    cancel.cancel();
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), segmenter)
+            .await
+            .expect("the fMP4 segmenter stops")
+            .expect("the fMP4 segmenter does not panic");
+    });
+}
+
+criterion_group!(benches, bench_hls_segmenter, bench_hls_fmp4_segmenter);
 criterion_main!(benches);
