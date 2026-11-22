@@ -190,32 +190,30 @@ pub struct ListenerSocketStats {
 }
 
 macro_rules! ingress_owner_stats {
-    ($($counter:ident),* $(,)?; $($gauge:ident),* $(,)?) => {
+    ($($(#[$wire:meta])? $metric:ident),* $(,)?) => {
         /// Low-cardinality SRT ingress Owner counters and gauges. Written only
         /// by the ingress Owner thread (and the bridge accounting it owns);
         /// read by status/diagnostics. No peer or StreamID labels.
         #[derive(Debug, Default)]
         pub struct SrtIngressOwnerStats {
-            $(pub $counter: AtomicU64,)*
-            $(pub $gauge: AtomicU64,)*
+            $(pub $metric: AtomicU64,)*
             pub faulted: AtomicBool,
             pub managed_rx: AtomicBool,
         }
 
         /// Plain-value copy of [`SrtIngressOwnerStats`].
-        #[derive(Debug, Clone, Default, PartialEq, Eq)]
+        #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
         pub struct SrtIngressOwnerSnapshot {
-            $(pub $counter: u64,)*
-            $(pub $gauge: u64,)*
             pub faulted: bool,
             pub managed_rx: bool,
+            $($(#[$wire])? pub $metric: u64,)*
         }
 
         impl SrtIngressOwnerStats {
             pub fn snapshot(&self) -> SrtIngressOwnerSnapshot {
                 SrtIngressOwnerSnapshot {
-                    $($counter: self.$counter.load(Ordering::Relaxed),)*
-                    $($gauge: self.$gauge.load(Ordering::Relaxed),)*
+                    $($metric: self.$metric.load(Ordering::Relaxed),)*
                     faulted: self.faulted.load(Ordering::Relaxed),
                     managed_rx: self.managed_rx.load(Ordering::Relaxed),
                 }
@@ -224,21 +222,27 @@ macro_rules! ingress_owner_stats {
     };
 }
 
+// Also defines the serialized field order after `faulted` and `managed_rx`.
 ingress_owner_stats! {
-    // Cumulative counters.
+    owners,
     service_visits,
     service_actions,
     maintenance_actions,
     budget_exhausted,
+    tx_capacity,
+    tx_in_flight,
+    tx_high_water,
     tx_exhaustions,
     tx_packets,
     tx_completed_ok,
     tx_failed,
     rx_packets,
     rx_bytes,
+    rx_ring_depth,
     rx_ring_dropped,
     rx_buffer_exhaustions,
     rx_truncated,
+    peers,
     policy_requests,
     policy_rejections,
     policy_deferred,
@@ -246,30 +250,25 @@ ingress_owner_stats! {
     auth_failures_dropped,
     key_derivation_drops,
     window_memory_rejections,
+    #[serde(rename = "commandDepthHighWater")]
+    command_depth_hwm,
+    #[serde(rename = "eventDepthHighWater")]
+    event_depth_hwm,
+    event_bridge_full_visits,
+    telemetry_dropped,
+    deferred_sends,
+    #[serde(rename = "deferredSendsHighWater")]
+    deferred_sends_hwm,
     stale_commands,
     overload_disconnects,
     send_failures,
-    event_bridge_full_visits,
-    telemetry_dropped,
     media_payloads,
     media_work_us,
+    media_pass_max_us,
     media_slow_passes_5ms,
     media_slow_passes_20ms,
     media_unattached_dropped,
     media_probe_hold_overflows,
-    ;
-    // Gauges and high-water marks.
-    owners,
-    tx_capacity,
-    tx_in_flight,
-    tx_high_water,
-    rx_ring_depth,
-    peers,
-    command_depth_hwm,
-    event_depth_hwm,
-    deferred_sends,
-    deferred_sends_hwm,
-    media_pass_max_us,
     media_probe_ack_max_us,
 }
 
@@ -285,65 +284,34 @@ pub struct RtmpListenerStats {
     pub owners: AtomicU64,
 }
 
-impl serde::Serialize for SrtIngressOwnerSnapshot {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("SrtIngressOwnerSnapshot", 45)?;
-        s.serialize_field("faulted", &self.faulted)?;
-        s.serialize_field("managedRx", &self.managed_rx)?;
-        s.serialize_field("owners", &self.owners)?;
-        s.serialize_field("serviceVisits", &self.service_visits)?;
-        s.serialize_field("serviceActions", &self.service_actions)?;
-        s.serialize_field("maintenanceActions", &self.maintenance_actions)?;
-        s.serialize_field("budgetExhausted", &self.budget_exhausted)?;
-        s.serialize_field("txCapacity", &self.tx_capacity)?;
-        s.serialize_field("txInFlight", &self.tx_in_flight)?;
-        s.serialize_field("txHighWater", &self.tx_high_water)?;
-        s.serialize_field("txExhaustions", &self.tx_exhaustions)?;
-        s.serialize_field("txPackets", &self.tx_packets)?;
-        s.serialize_field("txCompletedOk", &self.tx_completed_ok)?;
-        s.serialize_field("txFailed", &self.tx_failed)?;
-        s.serialize_field("rxPackets", &self.rx_packets)?;
-        s.serialize_field("rxBytes", &self.rx_bytes)?;
-        s.serialize_field("rxRingDepth", &self.rx_ring_depth)?;
-        s.serialize_field("rxRingDropped", &self.rx_ring_dropped)?;
-        s.serialize_field("rxBufferExhaustions", &self.rx_buffer_exhaustions)?;
-        s.serialize_field("rxTruncated", &self.rx_truncated)?;
-        s.serialize_field("peers", &self.peers)?;
-        s.serialize_field("policyRequests", &self.policy_requests)?;
-        s.serialize_field("policyRejections", &self.policy_rejections)?;
-        s.serialize_field("policyDeferred", &self.policy_deferred)?;
-        s.serialize_field("credentialFailures", &self.credential_failures)?;
-        s.serialize_field("authFailuresDropped", &self.auth_failures_dropped)?;
-        s.serialize_field("keyDerivationDrops", &self.key_derivation_drops)?;
-        s.serialize_field("windowMemoryRejections", &self.window_memory_rejections)?;
-        s.serialize_field("commandDepthHighWater", &self.command_depth_hwm)?;
-        s.serialize_field("eventDepthHighWater", &self.event_depth_hwm)?;
-        s.serialize_field("eventBridgeFullVisits", &self.event_bridge_full_visits)?;
-        s.serialize_field("telemetryDropped", &self.telemetry_dropped)?;
-        s.serialize_field("deferredSends", &self.deferred_sends)?;
-        s.serialize_field("deferredSendsHighWater", &self.deferred_sends_hwm)?;
-        s.serialize_field("staleCommands", &self.stale_commands)?;
-        s.serialize_field("overloadDisconnects", &self.overload_disconnects)?;
-        s.serialize_field("sendFailures", &self.send_failures)?;
-        s.serialize_field("mediaPayloads", &self.media_payloads)?;
-        s.serialize_field("mediaWorkUs", &self.media_work_us)?;
-        s.serialize_field("mediaPassMaxUs", &self.media_pass_max_us)?;
-        s.serialize_field("mediaSlowPasses5ms", &self.media_slow_passes_5ms)?;
-        s.serialize_field("mediaSlowPasses20ms", &self.media_slow_passes_20ms)?;
-        s.serialize_field("mediaUnattachedDropped", &self.media_unattached_dropped)?;
-        s.serialize_field("mediaProbeHoldOverflows", &self.media_probe_hold_overflows)?;
-        s.serialize_field("mediaProbeAckMaxUs", &self.media_probe_ack_max_us)?;
-        s.end()
-    }
-}
-
 impl SrtIngressOwnerSnapshot {
     /// The status-API projection: camelCase, low-cardinality, no identities.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SrtIngressOwnerSnapshot;
+
+    #[test]
+    fn ingress_owner_snapshot_preserves_status_names() {
+        let json = SrtIngressOwnerSnapshot {
+            managed_rx: true,
+            command_depth_hwm: 1,
+            event_depth_hwm: 2,
+            deferred_sends_hwm: 3,
+            media_slow_passes_5ms: 4,
+            media_slow_passes_20ms: 5,
+            ..Default::default()
+        }
+        .to_json();
+        assert_eq!(json.get("managedRx"), Some(&true.into()));
+        assert_eq!(json.get("commandDepthHighWater"), Some(&1.into()));
+        assert_eq!(json.get("eventDepthHighWater"), Some(&2.into()));
+        assert_eq!(json.get("deferredSendsHighWater"), Some(&3.into()));
+        assert_eq!(json.get("mediaSlowPasses5ms"), Some(&4.into()));
+        assert_eq!(json.get("mediaSlowPasses20ms"), Some(&5.into()));
     }
 }
