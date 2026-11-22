@@ -12,7 +12,6 @@
   "crates/restream-engine/src/egress/shard.rs::EgressShardRuntime<'_, B>::run#0": 23,
   "crates/restream-engine/src/egress/tls/connection.rs::KtlsConnection::read_records#0": 21,
   "crates/restream-engine/src/ffmpeg_binary.rs::fetch_into#0": 24,
-  "crates/restream-engine/src/hls_ingest/playlist.rs::parse_with#0": 41,
   "crates/restream-engine/src/ingest_publisher/fmp4.rs::parse_init#0": 25,
   "crates/restream-engine/src/moq/ingest/session.rs::ingest#0": 24,
   "crates/restream-engine/src/rtmp/ingest/session.rs::handle_session_results#0": 22,

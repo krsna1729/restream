@@ -202,10 +202,6 @@ pub fn parse(bytes: &[u8], playlist_path: &str) -> Result<Playlist, PlaylistErro
 /// Parse a playlist whose URIs a caller resolves (push uploads against their
 /// namespace, pull ingest against the remote playlist URL). The resolver gets
 /// each raw URI; `None` rejects it.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub fn parse_with(
     bytes: &[u8],
     mut resolve: impl FnMut(&str) -> Option<String>,
@@ -222,58 +218,88 @@ pub fn parse_with(
         _ => return Err(PlaylistError::MissingHeader),
     }
 
-    let mut target_duration = None;
-    let mut media_sequence = 0u64;
-    let mut ended = false;
-    let mut map_uri = None;
-    let mut byte_range = false;
-    // The key in force, and the encryption a *listed segment* is under: the
-    // latter is sticky and records the first non-`NONE` method a segment was
-    // listed with, which is what makes an encrypted entry anywhere in the
-    // list visible however the list ends.
-    let mut key_in_force: Option<Encryption> = None;
-    let mut media_encryption: Option<Encryption> = None;
-    let mut session_encryption = None;
-    let mut pending_duration = None;
-    let mut pending_discontinuity = false;
-    let mut pending_bandwidth = None;
-    let mut pending_audio_group = None;
-    let mut pending_codecs: Vec<String> = Vec::new();
-    let mut segment_uris: Vec<(String, Duration, bool, Option<String>)> = Vec::new();
-    let mut variants = Vec::new();
-    let mut audio = Vec::new();
+    let mut draft = PlaylistDraft::default();
+    for (number, line) in lines {
+        draft.read_line(number, line, &mut resolve)?;
+    }
+    draft.finish()
+}
 
-    for (line_number, line) in lines {
-        let invalid = |tag| PlaylistError::InvalidTag {
-            line: line_number,
-            tag,
-        };
+type PendingSegment = (String, Duration, bool, Option<String>);
+
+#[derive(Default)]
+struct PlaylistDraft {
+    target_duration: Option<Duration>,
+    media_sequence: u64,
+    ended: bool,
+    map_uri: Option<String>,
+    byte_range: bool,
+    // The key in force and the first key that applied to a listed segment.
+    key_in_force: Option<Encryption>,
+    media_encryption: Option<Encryption>,
+    session_encryption: Option<Encryption>,
+    pending_duration: Option<Duration>,
+    pending_discontinuity: bool,
+    pending_variant: Option<PendingVariant>,
+    segment_uris: Vec<PendingSegment>,
+    variants: Vec<Variant>,
+    audio: Vec<AudioRendition>,
+}
+
+struct PendingVariant {
+    bandwidth: u64,
+    audio_group: Option<String>,
+    codecs: Vec<String>,
+}
+
+impl PlaylistDraft {
+    fn read_media_tag(&mut self, number: usize, line: &str) -> Result<bool, PlaylistError> {
+        let invalid = |tag| PlaylistError::InvalidTag { line: number, tag };
         if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
-            target_duration = Some(
+            self.target_duration = Some(
                 parse_seconds(value)
                     .filter(|duration| duration.as_secs_f64() <= MAX_TARGET_DURATION_SECS)
                     .filter(|duration| !duration.is_zero())
                     .ok_or_else(|| invalid("EXT-X-TARGETDURATION"))?,
             );
         } else if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
-            media_sequence = value
+            self.media_sequence = value
                 .trim()
                 .parse()
                 .map_err(|_| invalid("EXT-X-MEDIA-SEQUENCE"))?;
         } else if let Some(value) = line.strip_prefix("#EXTINF:") {
             let duration = value.split(',').next().unwrap_or_default();
-            pending_duration = Some(parse_seconds(duration).ok_or_else(|| invalid("EXTINF"))?);
+            self.pending_duration = Some(parse_seconds(duration).ok_or_else(|| invalid("EXTINF"))?);
         } else if line == "#EXT-X-DISCONTINUITY" {
-            pending_discontinuity = true;
+            self.pending_discontinuity = true;
         } else if line == "#EXT-X-ENDLIST" {
-            ended = true;
+            self.ended = true;
         } else if line.starts_with("#EXT-X-BYTERANGE:") {
             // Recorded whether or not the tag carries a range: an entry is a
             // slice either way. Neither tag becomes a parse error here, both
             // were ignored before, and push must go on reading what it
             // always read.
-            byte_range = true;
-        } else if let Some(attributes) = key_attributes(line) {
+            self.byte_range = true;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn read_line(
+        &mut self,
+        line_number: usize,
+        line: &str,
+        resolve: &mut impl FnMut(&str) -> Option<String>,
+    ) -> Result<(), PlaylistError> {
+        if self.read_media_tag(line_number, line)? {
+            return Ok(());
+        }
+        let invalid = |tag| PlaylistError::InvalidTag {
+            line: line_number,
+            tag,
+        };
+        if let Some(attributes) = key_attributes(line) {
             // Both tags carry the same attributes; only which one is
             // remembered differs. `METHOD=NONE` clears the key, as in the
             // RFC's own example, and a tag that names no `METHOD` — which the
@@ -286,55 +312,28 @@ pub fn parse_with(
             let encryption =
                 (!method.eq_ignore_ascii_case("NONE")).then_some(Encryption { method, session });
             if session {
-                session_encryption = encryption;
+                self.session_encryption = encryption;
             } else {
-                key_in_force = encryption;
+                self.key_in_force = encryption;
             }
         } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let uri = attribute(value, "URI").ok_or_else(|| invalid("EXT-X-MAP"))?;
             // A map with its own `BYTERANGE` is a slice too: the pull would
             // fetch the whole resource as the init.
-            byte_range |= attribute(value, "BYTERANGE").is_some_and(|range| !range.is_empty());
-            map_uri = Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
+            self.byte_range |= attribute(value, "BYTERANGE").is_some_and(|range| !range.is_empty());
+            self.map_uri =
+                Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?);
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
-            // Only audio groups matter here: `SUBTITLES` and
-            // `CLOSED-CAPTIONS` renditions carry no media this ingest
-            // publishes, so they are ignored like any other tag.
-            match attribute(attributes, "TYPE") {
-                Some(kind) if kind.eq_ignore_ascii_case("AUDIO") => {}
-                _ => continue,
-            }
-            let group_id = attribute(attributes, "GROUP-ID")
-                .filter(|group| !group.is_empty())
-                .ok_or_else(|| invalid("EXT-X-MEDIA"))?;
-            // A missing URI means the group's audio is muxed into the
-            // variants that name it, so nothing separate can be followed.
-            let path = match attribute(attributes, "URI").filter(|uri| !uri.is_empty()) {
-                Some(uri) => {
-                    Some(resolve(uri).ok_or(PlaylistError::InvalidUri { line: line_number })?)
-                }
-                None => None,
-            };
-            audio.push(AudioRendition {
-                group_id: group_id.to_string(),
-                name: attribute(attributes, "NAME")
-                    .unwrap_or_default()
-                    .to_string(),
-                default: attribute(attributes, "DEFAULT")
-                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
-                autoselect: attribute(attributes, "AUTOSELECT")
-                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
-                path,
-            });
+            self.audio
+                .extend(parse_audio_rendition(attributes, line_number, resolve)?);
         } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
             let bandwidth = attribute(attributes, "BANDWIDTH")
                 .and_then(|value| value.parse().ok())
                 .ok_or_else(|| invalid("EXT-X-STREAM-INF"))?;
-            pending_bandwidth = Some(bandwidth);
-            pending_audio_group = attribute(attributes, "AUDIO")
+            let audio_group = attribute(attributes, "AUDIO")
                 .filter(|group| !group.is_empty())
                 .map(str::to_string);
-            pending_codecs = attribute(attributes, "CODECS")
+            let codecs = attribute(attributes, "CODECS")
                 .map(|codecs| {
                     codecs
                         .split(',')
@@ -344,76 +343,142 @@ pub fn parse_with(
                         .collect()
                 })
                 .unwrap_or_default();
-        } else if line.starts_with('#') {
-            // Comments and tags this ingest does not need.
-        } else {
+            self.pending_variant = Some(PendingVariant {
+                bandwidth,
+                audio_group,
+                codecs,
+            });
+        } else if !line.starts_with('#') {
             let path = resolve(line).ok_or(PlaylistError::InvalidUri { line: line_number })?;
-            if let Some(bandwidth) = pending_bandwidth.take() {
-                variants.push(Variant {
-                    bandwidth,
-                    path,
-                    audio_group: pending_audio_group.take(),
-                    codecs: std::mem::take(&mut pending_codecs),
-                });
-            } else {
-                let duration = pending_duration
-                    .take()
-                    .ok_or(PlaylistError::SegmentWithoutDuration { line: line_number })?;
-                // This entry is under the key in force, whatever the list
-                // does after it.
-                if media_encryption.is_none() {
-                    media_encryption.clone_from(&key_in_force);
-                }
-                segment_uris.push((
-                    path,
-                    duration,
-                    std::mem::take(&mut pending_discontinuity),
-                    map_uri.clone(),
-                ));
-            }
+            self.read_uri(line_number, path)?;
         }
+        Ok(())
     }
 
-    if pending_bandwidth.is_some() {
-        return Err(PlaylistError::VariantWithoutUri);
-    }
-    if !variants.is_empty() {
-        if !segment_uris.is_empty() || target_duration.is_some() {
-            return Err(PlaylistError::MixedMasterAndMedia);
+    fn read_uri(&mut self, line: usize, path: String) -> Result<(), PlaylistError> {
+        if let Some(PendingVariant {
+            bandwidth,
+            audio_group,
+            codecs,
+        }) = self.pending_variant.take()
+        {
+            self.variants.push(Variant {
+                bandwidth,
+                path,
+                audio_group,
+                codecs,
+            });
+        } else {
+            let duration = self
+                .pending_duration
+                .take()
+                .ok_or(PlaylistError::SegmentWithoutDuration { line })?;
+            // A later key change must not hide an encrypted segment.
+            if self.media_encryption.is_none() {
+                self.media_encryption.clone_from(&self.key_in_force);
+            }
+            self.segment_uris.push((
+                path,
+                duration,
+                std::mem::take(&mut self.pending_discontinuity),
+                self.map_uri.clone(),
+            ));
         }
-        return Ok(Playlist::Master(MasterPlaylist {
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Playlist, PlaylistError> {
+        let Self {
+            pending_variant,
             variants,
             audio,
-            session_key: session_encryption,
-        }));
-    }
-
-    let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
-    let mut segments = Vec::with_capacity(segment_uris.len());
-    for (offset, (path, duration, discontinuity, map_uri)) in segment_uris.into_iter().enumerate() {
-        let sequence = u64::try_from(offset)
-            .ok()
-            .and_then(|offset| media_sequence.checked_add(offset))
-            .ok_or(PlaylistError::SequenceOverflow)?;
-        segments.push(SegmentEntry {
-            sequence,
-            path,
-            duration,
-            discontinuity,
+            session_encryption,
+            segment_uris,
+            target_duration,
+            media_sequence,
+            ended,
             map_uri,
-        });
+            media_encryption,
+            byte_range,
+            ..
+        } = self;
+
+        if pending_variant.is_some() {
+            return Err(PlaylistError::VariantWithoutUri);
+        }
+        if !variants.is_empty() {
+            if !segment_uris.is_empty() || target_duration.is_some() {
+                return Err(PlaylistError::MixedMasterAndMedia);
+            }
+            return Ok(Playlist::Master(MasterPlaylist {
+                variants,
+                audio,
+                session_key: session_encryption,
+            }));
+        }
+
+        let target_duration = target_duration.ok_or(PlaylistError::MissingTargetDuration)?;
+        let mut segments = Vec::with_capacity(segment_uris.len());
+        for (offset, (path, duration, discontinuity, map_uri)) in
+            segment_uris.into_iter().enumerate()
+        {
+            let sequence = u64::try_from(offset)
+                .ok()
+                .and_then(|offset| media_sequence.checked_add(offset))
+                .ok_or(PlaylistError::SequenceOverflow)?;
+            segments.push(SegmentEntry {
+                sequence,
+                path,
+                duration,
+                discontinuity,
+                map_uri,
+            });
+        }
+        Ok(Playlist::Media(MediaPlaylist {
+            target_duration,
+            media_sequence,
+            segments,
+            ended,
+            map_uri,
+            // A media playlist that names a session key is out of place; it is
+            // still recorded, so the pull refuses the playlist rather than
+            // demuxing encrypted frames as media.
+            encryption: media_encryption.or(session_encryption),
+            byte_range,
+        }))
     }
-    Ok(Playlist::Media(MediaPlaylist {
-        target_duration,
-        media_sequence,
-        segments,
-        ended,
-        map_uri,
-        // A media playlist that names a session key is out of place; it is
-        // still recorded, so the pull refuses the playlist rather than
-        // demuxing encrypted frames as media.
-        encryption: media_encryption.or(session_encryption),
-        byte_range,
+}
+
+fn parse_audio_rendition(
+    attributes: &str,
+    line: usize,
+    resolve: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<Option<AudioRendition>, PlaylistError> {
+    // Other rendition types carry no media this ingest publishes.
+    if !attribute(attributes, "TYPE").is_some_and(|kind| kind.eq_ignore_ascii_case("AUDIO")) {
+        return Ok(None);
+    }
+    let group_id = attribute(attributes, "GROUP-ID")
+        .filter(|group| !group.is_empty())
+        .ok_or(PlaylistError::InvalidTag {
+            line,
+            tag: "EXT-X-MEDIA",
+        })?;
+    // Without a URI this group's audio is muxed into the variant.
+    let path = attribute(attributes, "URI")
+        .filter(|uri| !uri.is_empty())
+        .map(|uri| resolve(uri).ok_or(PlaylistError::InvalidUri { line }))
+        .transpose()?;
+    Ok(Some(AudioRendition {
+        group_id: group_id.to_string(),
+        name: attribute(attributes, "NAME")
+            .unwrap_or_default()
+            .to_string(),
+        default: attribute(attributes, "DEFAULT")
+            .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+        autoselect: attribute(attributes, "AUTOSELECT")
+            .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+        path,
     }))
 }
 
