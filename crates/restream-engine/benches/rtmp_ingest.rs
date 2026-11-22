@@ -1,9 +1,13 @@
-//! RTMP publish ingest over loopback, through the production listener: one
+//! RTMP publish and play over loopback, through the production listener: one
 //! publishing client stays connected while each iteration writes a batch of
-//! H.264 inter frames and waits until the connection's owner has published
-//! all of them to the pipeline ring. Covers the per-read path of
-//! `handle_rtmp_client`: socket read, session parse, parser budget and
-//! publish to the ring.
+//! H.264 inter frames.
+//!
+//! - `rtmp_ingest/publish_batch_to_ring` waits until the connection's owner
+//!   has published the batch to the pipeline ring: socket read, session
+//!   parse, parser budget and publish (`handle_rtmp_client`).
+//! - `rtmp_play/publish_batch_to_player` waits until one RTMP player has
+//!   received the batch: the same ingest, then the control session's
+//!   `PlayNext` bursts (`run_rtmp_control_session`) and the play writes.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,6 +76,109 @@ fn avc_frame(keyframe: bool) -> Bytes {
     Bytes::from(body)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Publish,
+    Play,
+}
+
+/// Handshake, connect, then publish or play `key`; returns once the server
+/// accepts.
+async fn open_client(address: std::net::SocketAddr, role: Role) -> (TcpStream, ClientSession) {
+    let mut socket = TcpStream::connect(address).await.unwrap();
+    let remaining = client_handshake(&mut socket).await;
+    let mut config = ClientSessionConfig::new();
+    config.tc_url = Some("rtmp://127.0.0.1/live".to_string());
+    let (mut session, initial) = ClientSession::new(config).unwrap();
+    write_results(&mut socket, initial).await;
+    let connect = session.request_connection("live".to_string()).unwrap();
+    write_results(&mut socket, vec![connect]).await;
+
+    let mut pending = remaining;
+    let mut buffer = vec![0; 4096];
+    loop {
+        if pending.is_empty() {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "server closed before accepting the request");
+            pending.extend_from_slice(&buffer[..count]);
+        }
+        let results = session.handle_input(&std::mem::take(&mut pending)).unwrap();
+        let mut outbound = Vec::new();
+        let mut accepted = false;
+        for result in results {
+            match result {
+                ClientSessionResult::RaisedEvent(ClientSessionEvent::ConnectionRequestAccepted) => {
+                    outbound.push(match role {
+                        Role::Publish => session
+                            .request_publishing("key".to_string(), PublishRequestType::Live)
+                            .unwrap(),
+                        Role::Play => session.request_playback("key".to_string()).unwrap(),
+                    });
+                }
+                ClientSessionResult::RaisedEvent(
+                    ClientSessionEvent::PublishRequestAccepted
+                    | ClientSessionEvent::PlaybackRequestAccepted,
+                ) => accepted = true,
+                other => outbound.push(other),
+            }
+        }
+        write_results(&mut socket, outbound).await;
+        if accepted {
+            return (socket, session);
+        }
+    }
+}
+
+/// An RTMP player of the pipeline.
+struct Player {
+    socket: TcpStream,
+    session: ClientSession,
+    buffer: Vec<u8>,
+}
+
+impl Player {
+    async fn connect(address: std::net::SocketAddr) -> Self {
+        let (socket, session) = open_client(address, Role::Play).await;
+        Self {
+            socket,
+            session,
+            buffer: vec![0; 64 * 1024],
+        }
+    }
+
+    /// Reads until `count` video messages have arrived.
+    async fn receive_video(&mut self, count: usize) {
+        let mut received = 0;
+        while received < count {
+            received += self.read_video().await;
+        }
+    }
+
+    /// Reads until nothing arrives for `quiet`.
+    async fn drain(&mut self, quiet: Duration) {
+        while tokio::time::timeout(quiet, self.read_video()).await.is_ok() {}
+    }
+
+    /// One socket read; returns the video messages it completed.
+    async fn read_video(&mut self) -> usize {
+        let count = self.socket.read(&mut self.buffer).await.unwrap();
+        assert!(count > 0, "server closed the playback");
+        let results = self.session.handle_input(&self.buffer[..count]).unwrap();
+        let mut video = 0;
+        let mut outbound = Vec::new();
+        for result in results {
+            match result {
+                ClientSessionResult::RaisedEvent(ClientSessionEvent::VideoDataReceived {
+                    ..
+                }) => video += 1,
+                other => outbound.push(other),
+            }
+        }
+        write_results(&mut self.socket, outbound).await;
+        video
+    }
+}
+
 struct Publisher {
     socket: TcpStream,
     session: ClientSession,
@@ -80,48 +187,7 @@ struct Publisher {
 
 impl Publisher {
     async fn connect(address: std::net::SocketAddr) -> Self {
-        let mut socket = TcpStream::connect(address).await.unwrap();
-        let remaining = client_handshake(&mut socket).await;
-        let mut config = ClientSessionConfig::new();
-        config.tc_url = Some("rtmp://127.0.0.1/live".to_string());
-        let (mut session, initial) = ClientSession::new(config).unwrap();
-        write_results(&mut socket, initial).await;
-        let connect = session.request_connection("live".to_string()).unwrap();
-        write_results(&mut socket, vec![connect]).await;
-
-        let mut pending = remaining;
-        let mut buffer = vec![0; 4096];
-        loop {
-            if pending.is_empty() {
-                let count = socket.read(&mut buffer).await.unwrap();
-                assert!(count > 0, "server closed before accepting the publish");
-                pending.extend_from_slice(&buffer[..count]);
-            }
-            let results = session.handle_input(&std::mem::take(&mut pending)).unwrap();
-            let mut outbound = Vec::new();
-            let mut published = false;
-            for result in results {
-                match result {
-                    ClientSessionResult::RaisedEvent(
-                        ClientSessionEvent::ConnectionRequestAccepted,
-                    ) => outbound.push(
-                        session
-                            .request_publishing("key".to_string(), PublishRequestType::Live)
-                            .unwrap(),
-                    ),
-                    ClientSessionResult::RaisedEvent(
-                        ClientSessionEvent::PublishRequestAccepted,
-                    ) => {
-                        published = true;
-                    }
-                    other => outbound.push(other),
-                }
-            }
-            write_results(&mut socket, outbound).await;
-            if published {
-                break;
-            }
-        }
+        let (socket, session) = open_client(address, Role::Publish).await;
         let mut publisher = Self {
             socket,
             session,
@@ -200,7 +266,7 @@ fn bench_rtmp_ingest(c: &mut Criterion) {
         .unwrap();
     let engine = Arc::new(MediaEngine::new());
     let shutdown = CancellationToken::new();
-    let (mut publisher, ring, server) = runtime.block_on(async {
+    let (mut publisher, ring, server, address) = runtime.block_on(async {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(restream_engine::rtmp::start_rtmp_server_on_with_shutdown(
             Arc::new(AcceptAll),
@@ -216,7 +282,7 @@ fn bench_rtmp_ingest(c: &mut Criterion) {
         tokio::time::timeout(Duration::from_secs(5), wait_for_ring(&ring, 2))
             .await
             .expect("the sequence header and keyframe reach the ring");
-        (publisher, ring, server)
+        (publisher, ring, server, address)
     });
     let frame = avc_frame(false);
 
@@ -241,6 +307,42 @@ fn bench_rtmp_ingest(c: &mut Criterion) {
         });
     });
     group.finish();
+
+    // One player of the same pipeline: each iteration's batch goes publisher
+    // -> ring -> control session `PlayNext` bursts -> player socket.
+    let mut player = runtime.block_on(async {
+        let mut player = Player::connect(address).await;
+        let wire = publisher.batch(&frame);
+        publisher.socket.write_all(&wire).await.unwrap();
+        player.drain(Duration::from_millis(300)).await;
+        player
+    });
+    let mut group = c.benchmark_group("rtmp_play");
+    group.throughput(Throughput::Elements(FRAMES_PER_BATCH as u64));
+    group.bench_function("publish_batch_to_player", |b| {
+        b.iter_custom(|iterations| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..iterations {
+                let wire = publisher.batch(&frame);
+                elapsed += runtime.block_on(async {
+                    let start = Instant::now();
+                    let (written, ()) = tokio::join!(publisher.socket.write_all(&wire), async {
+                        tokio::time::timeout(
+                            Duration::from_secs(10),
+                            player.receive_video(FRAMES_PER_BATCH),
+                        )
+                        .await
+                        .expect("every frame of the batch reaches the player");
+                    });
+                    written.unwrap();
+                    start.elapsed()
+                });
+            }
+            elapsed
+        });
+    });
+    group.finish();
+    drop(player);
 
     drop(publisher);
     engine.shutdown_listeners();
