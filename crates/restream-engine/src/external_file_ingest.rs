@@ -9,6 +9,7 @@ mod transport;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 use crate::engine::{IngestRegistration, MediaEngine};
@@ -247,10 +248,6 @@ async fn register_current_child(
     Ok(())
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_external_file_ingest(
     runtime: Arc<ExternalFileIngestRuntime>,
     mut spawned: SpawnedExternalFileIngest,
@@ -273,26 +270,15 @@ async fn run_external_file_ingest(
             break;
         }
 
-        let stdout = async {
-            let result = transport::pump_stdout(runtime.clone(), spawned.stdout, timestamps).await;
-            // Reap before joining stderr: a failed reader or cancelled media
-            // task can otherwise leave FFmpeg blocked on stdout indefinitely.
-            if result.as_ref().map_or(true, |(_, res)| res.is_err()) || cancel.is_cancelled() {
-                stop_owned_child(&runtime, child_pid).await;
-            }
-            result
-        };
-        let stderr = process::capture_stderr(&runtime.ingest_id, spawned.stderr);
-        let readers = async { tokio::join!(stdout, stderr) };
-        tokio::pin!(readers);
-        let (stdout_result, stderr_result) = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                stop_owned_child(&runtime, child_pid).await;
-                readers.await
-            }
-            results = &mut readers => results,
-        };
+        let (stdout_result, stderr_result) = read_child_pipes(
+            &runtime,
+            &cancel,
+            child_pid,
+            spawned.stdout,
+            spawned.stderr,
+            timestamps,
+        )
+        .await;
         let stdout_result = match stdout_result {
             Ok((returned_timestamps, result)) => {
                 timestamps = returned_timestamps;
@@ -310,65 +296,7 @@ async fn run_external_file_ingest(
         }
         cleanup.child_pid = None;
 
-        if let Err(err) = stdout_result
-            && !cancel.is_cancelled()
-        {
-            error!(
-                ingest_id = %runtime.ingest_id,
-                err = %err,
-                "file-ingest stdout reader failed"
-            );
-            runtime
-                .engine
-                .record_ingest_disconnect_if_current(
-                    &runtime.pipeline_id,
-                    &runtime.registration,
-                    Some("stdout"),
-                    Some(err),
-                    true,
-                )
-                .await;
-        }
-        if let Err(err) = stderr_result
-            && !cancel.is_cancelled()
-        {
-            error!(
-                ingest_id = %runtime.ingest_id,
-                err = %err,
-                "file-ingest stderr reader failed"
-            );
-            runtime
-                .engine
-                .record_ingest_disconnect_if_current(
-                    &runtime.pipeline_id,
-                    &runtime.registration,
-                    Some("stderr"),
-                    Some(err.to_string()),
-                    true,
-                )
-                .await;
-        }
-
-        if let Some(status) = exit_status
-            && !status.success()
-            && !cancel.is_cancelled()
-        {
-            warn!(
-                ingest_id = %runtime.ingest_id,
-                status = %status,
-                "ffmpeg exited unsuccessfully"
-            );
-            runtime
-                .engine
-                .record_ingest_disconnect_if_current(
-                    &runtime.pipeline_id,
-                    &runtime.registration,
-                    Some("exit"),
-                    Some(format!("ffmpeg exited with status {status}")),
-                    true,
-                )
-                .await;
-        }
+        report_child_exit(&runtime, &cancel, stdout_result, stderr_result, exit_status).await;
         let clean = exit_status.is_some_and(|status| status.success());
         failures = if clean { 0 } else { failures + 1 };
         let next = next_item(
@@ -410,6 +338,112 @@ async fn run_external_file_ingest(
     }
 
     cleanup.finish().await;
+}
+
+async fn read_child_pipes(
+    runtime: &Arc<ExternalFileIngestRuntime>,
+    cancel: &CancellationToken,
+    child_pid: Option<u32>,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+    timestamps: IngestTimestamps,
+) -> (
+    Result<(IngestTimestamps, Result<(), String>), String>,
+    std::io::Result<()>,
+) {
+    let stdout = async {
+        let result = transport::pump_stdout(runtime.clone(), stdout, timestamps).await;
+        // Reap before joining stderr: a failed reader or cancelled media
+        // task can otherwise leave FFmpeg blocked on stdout indefinitely.
+        if result.as_ref().map_or(true, |(_, res)| res.is_err()) || cancel.is_cancelled() {
+            stop_owned_child(runtime, child_pid).await;
+        }
+        result
+    };
+    let stderr = process::capture_stderr(&runtime.ingest_id, stderr);
+    let readers = async { tokio::join!(stdout, stderr) };
+    tokio::pin!(readers);
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            stop_owned_child(runtime, child_pid).await;
+            readers.await
+        }
+        results = &mut readers => results,
+    }
+}
+
+async fn report_child_exit(
+    runtime: &ExternalFileIngestRuntime,
+    cancel: &CancellationToken,
+    stdout_result: Result<(), String>,
+    stderr_result: std::io::Result<()>,
+    exit_status: Option<std::process::ExitStatus>,
+) {
+    if let Err(err) = stdout_result
+        && !cancel.is_cancelled()
+    {
+        error!(
+            ingest_id = %runtime.ingest_id,
+            err = %err,
+            "file-ingest stdout reader failed"
+        );
+        runtime
+            .engine
+            .record_ingest_disconnect_if_current(
+                &runtime.pipeline_id,
+                &runtime.registration,
+                Some("stdout"),
+                Some(err),
+                true,
+            )
+            .await;
+    }
+    if let Err(err) = stderr_result
+        && !cancel.is_cancelled()
+    {
+        error!(
+            ingest_id = %runtime.ingest_id,
+            err = %err,
+            "file-ingest stderr reader failed"
+        );
+        runtime
+            .engine
+            .record_ingest_disconnect_if_current(
+                &runtime.pipeline_id,
+                &runtime.registration,
+                Some("stderr"),
+                Some(err.to_string()),
+                true,
+            )
+            .await;
+    }
+
+    if let Some(status) = exit_status
+        && !status.success()
+        && !cancel.is_cancelled()
+    {
+        log_unsuccessful_exit(runtime, status);
+        runtime
+            .engine
+            .record_ingest_disconnect_if_current(
+                &runtime.pipeline_id,
+                &runtime.registration,
+                Some("exit"),
+                Some(format!("ffmpeg exited with status {status}")),
+                true,
+            )
+            .await;
+    }
+}
+
+#[cold]
+fn log_unsuccessful_exit(runtime: &ExternalFileIngestRuntime, status: std::process::ExitStatus) {
+    warn!(
+        ingest_id = %runtime.ingest_id,
+        status = %status,
+        "ffmpeg exited unsuccessfully"
+    );
 }
 
 #[cfg(test)]
