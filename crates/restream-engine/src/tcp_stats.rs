@@ -202,208 +202,65 @@ fn field_available<T>(returned_len: usize, offset: usize) -> bool {
     returned_len >= offset + std::mem::size_of::<T>()
 }
 
+/// `value`, when the kernel's `returned_len` covers the field at `offset`.
 #[cfg(target_os = "linux")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
+fn returned<T>(value: T, returned_len: usize, offset: usize) -> Option<T> {
+    field_available::<T>(returned_len, offset).then_some(value)
+}
+
+#[cfg(target_os = "linux")]
 fn stats_from_tcp_info(info: &LinuxTcpInfo, returned_len: usize) -> TcpReceiverStats {
+    // A `tcp_info` field, when an older kernel did not cut it off.
+    macro_rules! field {
+        ($field:ident) => {
+            returned(
+                info.$field,
+                returned_len,
+                std::mem::offset_of!(LinuxTcpInfo, $field),
+            )
+        };
+    }
+    let ms = |micros: u32| f64::from(micros) / 1_000.0;
     TcpReceiverStats {
-        tcp_rtt_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rtt),
-        )
-        .then_some(info.tcpi_rtt as f64 / 1_000.0),
-        tcp_rtt_var_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rttvar),
-        )
-        .then_some(info.tcpi_rttvar as f64 / 1_000.0),
-        tcp_bytes_received: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_bytes_received),
-        )
-        .then_some(info.tcpi_bytes_received),
-        tcp_bytes_sent: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_bytes_sent),
-        )
-        .then_some(info.tcpi_bytes_sent),
-        tcp_bytes_acked: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_bytes_acked),
-        )
-        .then_some(info.tcpi_bytes_acked),
-        tcp_bytes_retrans: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_bytes_retrans),
-        )
-        .then_some(info.tcpi_bytes_retrans),
-        tcp_last_rcv_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_last_data_recv),
-        )
-        .then_some(info.tcpi_last_data_recv as u64),
-        tcp_last_snd_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_last_data_sent),
-        )
-        .then_some(info.tcpi_last_data_sent as u64),
-        tcp_rcv_rtt_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rcv_rtt),
-        )
-        .then_some(info.tcpi_rcv_rtt as f64 / 1_000.0),
-        tcp_rcv_space: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rcv_space),
-        )
-        .then_some(info.tcpi_rcv_space as u64),
-        tcp_rcv_ooopack: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rcv_ooopack),
-        )
-        .then_some(info.tcpi_rcv_ooopack as u64),
-        tcp_snd_mss: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_snd_mss),
-        )
-        .then_some(info.tcpi_snd_mss as u64),
-        tcp_pmtu: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_pmtu),
-        )
-        .then_some(info.tcpi_pmtu as u64),
-        tcp_unacked: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_unacked),
-        )
-        .then_some(info.tcpi_unacked as u64),
-        tcp_sacked: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_sacked),
-        )
-        .then_some(info.tcpi_sacked as u64),
-        tcp_lost: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_lost),
-        )
-        .then_some(info.tcpi_lost as u64),
-        tcp_retrans: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_retrans),
-        )
-        .then_some(info.tcpi_retrans as u64),
-        tcp_snd_cwnd: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_snd_cwnd),
-        )
-        .then_some(info.tcpi_snd_cwnd as u64),
-        tcp_snd_ssthresh: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_snd_ssthresh),
-        )
-        .then_some(info.tcpi_snd_ssthresh as u64),
-        tcp_advmss: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_advmss),
-        )
-        .then_some(info.tcpi_advmss as u64),
-        tcp_reordering: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_reordering),
-        )
-        .then_some(info.tcpi_reordering as u64),
-        tcp_notsent_bytes: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_notsent_bytes),
-        )
-        .then_some(info.tcpi_notsent_bytes as u64),
-        tcp_total_retrans: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_total_retrans),
-        )
-        .then_some(info.tcpi_total_retrans as u64),
-        tcp_pacing_rate_bps: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_pacing_rate),
-        )
-        .then_some(info.tcpi_pacing_rate),
-        tcp_max_pacing_rate_bps: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_max_pacing_rate),
-        )
-        .then_some(info.tcpi_max_pacing_rate),
-        tcp_delivery_rate_bps: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_delivery_rate),
-        )
-        .then_some(info.tcpi_delivery_rate),
-        tcp_segs_out: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_segs_out),
-        )
-        .then_some(info.tcpi_segs_out as u64),
-        tcp_data_segs_out: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_data_segs_out),
-        )
-        .then_some(info.tcpi_data_segs_out as u64),
-        tcp_delivered: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_delivered),
-        )
-        .then_some(info.tcpi_delivered as u64),
-        tcp_delivered_ce: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_delivered_ce),
-        )
-        .then_some(info.tcpi_delivered_ce as u64),
-        tcp_busy_time_ms: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_busy_time),
-        )
-        .then_some(info.tcpi_busy_time / 1_000),
-        tcp_rwnd_limited_ms: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_rwnd_limited),
-        )
-        .then_some(info.tcpi_rwnd_limited / 1_000),
-        tcp_sndbuf_limited_ms: field_available::<u64>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_sndbuf_limited),
-        )
-        .then_some(info.tcpi_sndbuf_limited / 1_000),
-        tcp_dsack_dups: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_dsack_dups),
-        )
-        .then_some(info.tcpi_dsack_dups as u64),
-        tcp_reord_seen: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_reord_seen),
-        )
-        .then_some(info.tcpi_reord_seen as u64),
-        tcp_snd_wnd: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_snd_wnd),
-        )
-        .then_some(info.tcpi_snd_wnd as u64),
-        tcp_total_rto: field_available::<u16>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_total_rto),
-        )
-        .then_some(info.tcpi_total_rto as u64),
-        tcp_total_rto_recoveries: field_available::<u16>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_total_rto_recoveries),
-        )
-        .then_some(info.tcpi_total_rto_recoveries as u64),
-        tcp_total_rto_time_ms: field_available::<u32>(
-            returned_len,
-            std::mem::offset_of!(LinuxTcpInfo, tcpi_total_rto_time),
-        )
-        .then_some(info.tcpi_total_rto_time as u64),
+        tcp_rtt_ms: field!(tcpi_rtt).map(ms),
+        tcp_rtt_var_ms: field!(tcpi_rttvar).map(ms),
+        tcp_bytes_received: field!(tcpi_bytes_received),
+        tcp_bytes_sent: field!(tcpi_bytes_sent),
+        tcp_bytes_acked: field!(tcpi_bytes_acked),
+        tcp_bytes_retrans: field!(tcpi_bytes_retrans),
+        tcp_last_rcv_ms: field!(tcpi_last_data_recv).map(u64::from),
+        tcp_last_snd_ms: field!(tcpi_last_data_sent).map(u64::from),
+        tcp_rcv_rtt_ms: field!(tcpi_rcv_rtt).map(ms),
+        tcp_rcv_space: field!(tcpi_rcv_space).map(u64::from),
+        tcp_rcv_ooopack: field!(tcpi_rcv_ooopack).map(u64::from),
+        tcp_snd_mss: field!(tcpi_snd_mss).map(u64::from),
+        tcp_pmtu: field!(tcpi_pmtu).map(u64::from),
+        tcp_unacked: field!(tcpi_unacked).map(u64::from),
+        tcp_sacked: field!(tcpi_sacked).map(u64::from),
+        tcp_lost: field!(tcpi_lost).map(u64::from),
+        tcp_retrans: field!(tcpi_retrans).map(u64::from),
+        tcp_snd_cwnd: field!(tcpi_snd_cwnd).map(u64::from),
+        tcp_snd_ssthresh: field!(tcpi_snd_ssthresh).map(u64::from),
+        tcp_advmss: field!(tcpi_advmss).map(u64::from),
+        tcp_reordering: field!(tcpi_reordering).map(u64::from),
+        tcp_notsent_bytes: field!(tcpi_notsent_bytes).map(u64::from),
+        tcp_total_retrans: field!(tcpi_total_retrans).map(u64::from),
+        tcp_pacing_rate_bps: field!(tcpi_pacing_rate),
+        tcp_max_pacing_rate_bps: field!(tcpi_max_pacing_rate),
+        tcp_delivery_rate_bps: field!(tcpi_delivery_rate),
+        tcp_segs_out: field!(tcpi_segs_out).map(u64::from),
+        tcp_data_segs_out: field!(tcpi_data_segs_out).map(u64::from),
+        tcp_delivered: field!(tcpi_delivered).map(u64::from),
+        tcp_delivered_ce: field!(tcpi_delivered_ce).map(u64::from),
+        tcp_busy_time_ms: field!(tcpi_busy_time).map(|micros| micros / 1_000),
+        tcp_rwnd_limited_ms: field!(tcpi_rwnd_limited).map(|micros| micros / 1_000),
+        tcp_sndbuf_limited_ms: field!(tcpi_sndbuf_limited).map(|micros| micros / 1_000),
+        tcp_dsack_dups: field!(tcpi_dsack_dups).map(u64::from),
+        tcp_reord_seen: field!(tcpi_reord_seen).map(u64::from),
+        tcp_snd_wnd: field!(tcpi_snd_wnd).map(u64::from),
+        tcp_total_rto: field!(tcpi_total_rto).map(u64::from),
+        tcp_total_rto_recoveries: field!(tcpi_total_rto_recoveries).map(u64::from),
+        tcp_total_rto_time_ms: field!(tcpi_total_rto_time).map(u64::from),
         ..TcpReceiverStats::default()
     }
 }
