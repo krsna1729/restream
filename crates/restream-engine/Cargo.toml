@@ -120,6 +120,10 @@ name = "ingest_handoff"
 harness = false
 
 [[bench]]
+name = "rtmp_egress"
+harness = false
+
+[[bench]]
 name = "byte_queue_throughput"
 harness = false
 

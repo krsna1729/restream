@@ -349,10 +349,6 @@ impl MediaPublisher {
         .map_err(str::to_string)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     fn advance(
         &mut self,
         stream: &mut TlsTcpConnection,
@@ -380,173 +376,190 @@ impl MediaPublisher {
                     WaitCondition::FeedOrIo(Interest::READ_WRITE),
                 );
             }
-
-            if let Some(pending) = &mut self.pending_write {
-                if !readiness.writable {
-                    return Self::finish(
-                        budget.spent_bytes(),
-                        budget.spent_units(),
-                        WaitCondition::Io(Interest::READ_WRITE),
-                    );
-                }
-                // Media payload is queued by reference (no per-output copy);
-                // only chunk headers and small control messages are copied.
-                let result = match pending {
-                    MediaPendingWrite::Bytes { bytes, offset } => {
-                        stream.write_shared(&[TxPart::Share(bytes.slice(*offset..))])
-                    }
-                    MediaPendingWrite::Vectored(message) => {
-                        let mut parts: [TxPart<'_>; MAX_VECTORED_PACKETS] =
-                            std::array::from_fn(|_| TxPart::Copy(&[]));
-                        let (count, _) = message.fill_parts(budget.remaining_bytes(), &mut parts);
-                        stream.write_shared(&parts[..count])
-                    }
-                };
-                match result {
-                    Ok(0) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_write",
-                            detail: "peer closed during write".to_string(),
-                            retryable: true,
-                        });
-                    }
-                    Ok(n) => {
-                        pending.consume(n);
-                        budget.debit_bytes(n);
-                        if !pending.is_complete() {
-                            return Self::finish(
-                                budget.spent_bytes(),
-                                budget.spent_units(),
-                                WaitCondition::Io(Interest::READ_WRITE),
-                            );
-                        }
-                        self.pending_write = None;
-                    }
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        let hint = stream.interest_hint(Interest::WRITE);
-                        return Self::finish(
-                            budget.spent_bytes(),
-                            budget.spent_units(),
-                            WaitCondition::Io(Interest {
-                                readable: true,
-                                writable: hint.writable,
-                            }),
-                        );
-                    }
-                    Err(error) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_write",
-                            detail: error.to_string(),
-                            retryable: true,
-                        });
-                    }
-                }
+            if let Err(progress) = self.write_pending(stream, readiness, &mut budget) {
+                return progress;
             }
-
             if self.pending_write.is_none()
                 && let Some(next) = self.current_batch.pop_front()
             {
                 self.pending_write = MediaPendingWrite::new(next);
                 continue;
             }
-
             if self.unit_in_flight {
                 self.unit_in_flight = false;
                 budget.debit_unit();
             }
-
-            // Keep the RTMP control channel readable after publish startup.
-            // Otherwise server acknowledgements and peer closes remain unseen
-            // until a write happens to fail. Parse one bounded read per visit
-            // with the active session and queue any replies for the next write
-            // pass. Further readiness visits drain the kernel buffer, matching
-            // `SessionNegotiation::advance`, and make `Ok(0)` an observed close.
-            if readiness.readable {
-                let mut buffer = [0u8; SESSION_READ_BUFFER];
-                match stream.read(&mut buffer) {
-                    Ok(0) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_control_read",
-                            detail: "peer closed connection".to_string(),
-                            retryable: true,
-                        });
-                    }
-                    Ok(n) => match self.core.handle_server_input(&buffer[..n]) {
-                        Ok((packets, _events)) => {
-                            self.current_batch
-                                .extend(packets.into_iter().map(MediaWirePacket::Bytes));
-                            continue;
-                        }
-                        Err(error) => {
-                            return EngineProgress::Failed(ProtocolFailure {
-                                reason: "rtmp_control_input",
-                                detail: error.to_string(),
-                                retryable: true,
-                            });
-                        }
-                    },
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {}
-                    Err(error) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_control_read",
-                            detail: error.to_string(),
-                            retryable: true,
-                        });
-                    }
-                }
+            match self.read_control(stream, readiness) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(progress) => return progress,
             }
-
-            if self.pending_units_index >= self.pending_units.len() {
-                self.pending_units.clear();
-                self.pending_units_index = 0;
-                match feed.read_from_into(
-                    *cursor,
-                    ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
-                    &mut self.pending_units,
-                ) {
-                    FeedRead::Units { next_cursor, .. } => {
-                        self.pending_units_start =
-                            next_cursor.next_sequence - self.pending_units.len() as u64;
-                        *cursor = next_cursor;
-                    }
-                    FeedRead::Empty => {
-                        return Self::finish(
-                            budget.spent_bytes(),
-                            budget.spent_units(),
-                            WaitCondition::FeedOrIo(Interest::READ),
-                        );
-                    }
-                    FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
-                        return EngineProgress::FeedOverrun;
-                    }
-                }
+            if let Err(progress) = self.encode_next_unit(feed, cursor, &budget) {
+                return progress;
             }
+        }
+    }
 
-            let Some(packet) = self.pending_units.get(self.pending_units_index).cloned() else {
-                return Self::finish(
+    /// Writes the in-flight packet, if any. `Err` ends the visit: the socket
+    /// is not writable or full, the packet is only partly written, or the
+    /// write failed.
+    fn write_pending(
+        &mut self,
+        stream: &mut TlsTcpConnection,
+        readiness: Readiness,
+        budget: &mut WorkBudget,
+    ) -> Result<(), EngineProgress> {
+        let Some(pending) = &mut self.pending_write else {
+            return Ok(());
+        };
+        if !readiness.writable {
+            return Err(Self::finish(
+                budget.spent_bytes(),
+                budget.spent_units(),
+                WaitCondition::Io(Interest::READ_WRITE),
+            ));
+        }
+        // Media payload is queued by reference (no per-output copy);
+        // only chunk headers and small control messages are copied.
+        let result = match pending {
+            MediaPendingWrite::Bytes { bytes, offset } => {
+                stream.write_shared(&[TxPart::Share(bytes.slice(*offset..))])
+            }
+            MediaPendingWrite::Vectored(message) => {
+                let mut parts: [TxPart<'_>; MAX_VECTORED_PACKETS] =
+                    std::array::from_fn(|_| TxPart::Copy(&[]));
+                let (count, _) = message.fill_parts(budget.remaining_bytes(), &mut parts);
+                stream.write_shared(&parts[..count])
+            }
+        };
+        match result {
+            Ok(0) => Err(Self::failed(
+                "rtmp_media_write",
+                "peer closed during write".to_string(),
+            )),
+            Ok(n) => {
+                pending.consume(n);
+                budget.debit_bytes(n);
+                if !pending.is_complete() {
+                    return Err(Self::finish(
+                        budget.spent_bytes(),
+                        budget.spent_units(),
+                        WaitCondition::Io(Interest::READ_WRITE),
+                    ));
+                }
+                self.pending_write = None;
+                Ok(())
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                let hint = stream.interest_hint(Interest::WRITE);
+                Err(Self::finish(
                     budget.spent_bytes(),
                     budget.spent_units(),
-                    WaitCondition::FeedOrIo(Interest::READ),
-                );
-            };
-            let sequence = self.pending_units_start + self.pending_units_index as u64;
-            self.pending_units_index += 1;
-            let Ok(video_config) = keyframe_video_config(feed, sequence, &packet) else {
-                // The producer lapped this unit while it waited here: resync
-                // like any overrun rather than announce a stale configuration.
-                self.pending_units.clear();
-                self.pending_units_index = 0;
-                return EngineProgress::FeedOverrun;
-            };
-            if let Err(detail) = self.encode_unit(&packet, video_config.as_deref()) {
-                return EngineProgress::Failed(ProtocolFailure {
-                    reason: "rtmp_media_encode",
-                    detail,
-                    retryable: true,
-                });
+                    WaitCondition::Io(Interest {
+                        readable: true,
+                        writable: hint.writable,
+                    }),
+                ))
             }
-            self.unit_in_flight = true;
+            Err(error) => Err(Self::failed("rtmp_media_write", error.to_string())),
         }
+    }
+
+    /// Keeps the RTMP control channel readable after publish startup.
+    /// Otherwise server acknowledgements and peer closes remain unseen
+    /// until a write happens to fail. Parses one bounded read per visit
+    /// with the active session and queues any replies for the next write
+    /// pass. Further readiness visits drain the kernel buffer, matching
+    /// `SessionNegotiation::advance`, and make `Ok(0)` an observed close.
+    /// `Ok(true)` when a read was parsed.
+    fn read_control(
+        &mut self,
+        stream: &mut TlsTcpConnection,
+        readiness: Readiness,
+    ) -> Result<bool, EngineProgress> {
+        if !readiness.readable {
+            return Ok(false);
+        }
+        let mut buffer = [0u8; SESSION_READ_BUFFER];
+        match stream.read(&mut buffer) {
+            Ok(0) => Err(Self::failed(
+                "rtmp_control_read",
+                "peer closed connection".to_string(),
+            )),
+            Ok(n) => {
+                let (packets, _events) = self
+                    .core
+                    .handle_server_input(&buffer[..n])
+                    .map_err(|error| Self::failed("rtmp_control_input", error.to_string()))?;
+                self.current_batch
+                    .extend(packets.into_iter().map(MediaWirePacket::Bytes));
+                Ok(true)
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(Self::failed("rtmp_control_read", error.to_string())),
+        }
+    }
+
+    /// Takes the next feed unit, refilling `pending_units` in one burst when
+    /// it is used up, and encodes it into `current_batch`. `Err` ends the
+    /// visit: the feed is empty, overrun, or the unit failed to encode.
+    fn encode_next_unit(
+        &mut self,
+        feed: &RingFeed,
+        cursor: &mut FeedCursor,
+        budget: &WorkBudget,
+    ) -> Result<(), EngineProgress> {
+        let feed_empty = || {
+            Self::finish(
+                budget.spent_bytes(),
+                budget.spent_units(),
+                WaitCondition::FeedOrIo(Interest::READ),
+            )
+        };
+        if self.pending_units_index >= self.pending_units.len() {
+            self.pending_units.clear();
+            self.pending_units_index = 0;
+            match feed.read_from_into(
+                *cursor,
+                ReadBudget::new(FEED_READ_BURST, budget.max_bytes()),
+                &mut self.pending_units,
+            ) {
+                FeedRead::Units { next_cursor, .. } => {
+                    self.pending_units_start =
+                        next_cursor.next_sequence - self.pending_units.len() as u64;
+                    *cursor = next_cursor;
+                }
+                FeedRead::Empty => return Err(feed_empty()),
+                FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
+                    return Err(EngineProgress::FeedOverrun);
+                }
+            }
+        }
+        let Some(packet) = self.pending_units.get(self.pending_units_index).cloned() else {
+            return Err(feed_empty());
+        };
+        let sequence = self.pending_units_start + self.pending_units_index as u64;
+        self.pending_units_index += 1;
+        let Ok(video_config) = keyframe_video_config(feed, sequence, &packet) else {
+            // The producer lapped this unit while it waited here: resync
+            // like any overrun rather than announce a stale configuration.
+            self.pending_units.clear();
+            self.pending_units_index = 0;
+            return Err(EngineProgress::FeedOverrun);
+        };
+        self.encode_unit(&packet, video_config.as_deref())
+            .map_err(|detail| Self::failed("rtmp_media_encode", detail))?;
+        self.unit_in_flight = true;
+        Ok(())
+    }
+
+    #[cold]
+    fn failed(reason: &'static str, detail: String) -> EngineProgress {
+        EngineProgress::Failed(ProtocolFailure {
+            reason,
+            detail,
+            retryable: true,
+        })
     }
 
     fn finish(bytes: usize, units: usize, wait: WaitCondition) -> EngineProgress {
