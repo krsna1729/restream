@@ -465,14 +465,6 @@ async fn feed_recording(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn start_recording(
     start: RecordingStart,
     ring_buffer: Arc<RingBuffer>,
@@ -541,24 +533,12 @@ pub async fn start_recording(
     // is completing its current burst after executor::run cancels its token.
     let _queue_guard = QueueCloseGuard(queue.clone());
 
-    let queue_clone = queue.clone();
-    let file_path_clone = file_path.clone();
-    let cancel_token_clone = cancel_token.clone();
-    // Store the JoinHandle so we can join the thread on exit and detect panics.
-    // Dropping the handle detaches the thread silently — any crash becomes invisible.
-    let muxer_handle = spawn_ts_writer(&recording_id, move || {
-        let _queue_guard = QueueCloseGuard(queue_clone.clone());
-        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_ts_writer(queue_clone, &file_path_clone, cancel_token_clone.clone())
-        })) {
-            Ok(result) => result.map_err(str::to_owned),
-            Err(_) => Err("TS writer panicked".to_string()),
-        };
-        if result.is_err() {
-            cancel_token_clone.cancel();
-        }
-        result
-    });
+    let muxer_handle = start_ts_writer(
+        &recording_id,
+        queue.clone(),
+        file_path.clone(),
+        cancel_token.clone(),
+    );
 
     let result = match muxer_handle {
         // Thread or memory limits: fail this recording through the normal
@@ -591,17 +571,10 @@ pub async fn start_recording(
 
             queue.close();
 
-            // Join the muxer thread to ensure the file is fully flushed before
-            // we check the duration and potentially delete it. Joining also
-            // surfaces any panic that escaped catch_unwind (shouldn't happen,
-            // but be explicit).
-            let writer_result = match tokio::task::spawn_blocking(move || muxer_handle.join()).await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err("TS writer thread panicked".to_string()),
-                Err(e) => Err(format!("TS writer join task failed: {e}")),
-            };
-            writer_result.and(feeder_result).map(drop)
+            join_ts_writer(muxer_handle)
+                .await
+                .and(feeder_result)
+                .map(drop)
         }
     };
 
@@ -613,23 +586,15 @@ pub async fn start_recording(
     );
 
     if let Err(error) = result {
-        error!(filename = %filename, err = %error, "recording failed");
-        lifecycle.record_error(error.clone());
-        if let Some(metadata) = &metadata {
-            metadata.report(RecordingMetadataEvent::Failed {
-                recording_id: recording_id.clone(),
-                error,
-            });
-        }
+        report_recording_failure(
+            &lifecycle,
+            &filename,
+            &recording_id,
+            metadata.as_ref(),
+            error,
+        );
     } else if duration.as_secs() < MIN_DURATION_SECS {
-        let _ = fs::remove_file(&file_path);
-        if let Some(metadata) = &metadata {
-            metadata.report(RecordingMetadataEvent::Failed {
-                recording_id: recording_id.clone(),
-                error: format!("Recording shorter than {MIN_DURATION_SECS}s was discarded"),
-            });
-        }
-        info!(filename = %filename, "deleted short recording");
+        discard_short_recording(&file_path, &filename, &recording_id, metadata.as_ref());
     } else {
         write_conversion_state(
             Path::new(&file_path),
@@ -655,6 +620,69 @@ pub async fn start_recording(
             pipeline_id: pipeline_id.clone(),
             encoding: "recording".to_string(),
         });
+}
+
+fn report_recording_failure(
+    lifecycle: &crate::stage_lifecycle::StageLifecycle,
+    filename: &str,
+    recording_id: &str,
+    metadata: Option<&RecordingMetadataReporter>,
+    error: String,
+) {
+    error!(%filename, err = %error, "recording failed");
+    lifecycle.record_error(error.clone());
+    if let Some(metadata) = metadata {
+        metadata.report(RecordingMetadataEvent::Failed {
+            recording_id: recording_id.to_owned(),
+            error,
+        });
+    }
+}
+
+fn discard_short_recording(
+    file_path: &str,
+    filename: &str,
+    recording_id: &str,
+    metadata: Option<&RecordingMetadataReporter>,
+) {
+    let _ = fs::remove_file(file_path);
+    if let Some(metadata) = metadata {
+        metadata.report(RecordingMetadataEvent::Failed {
+            recording_id: recording_id.to_owned(),
+            error: format!("Recording shorter than {MIN_DURATION_SECS}s was discarded"),
+        });
+    }
+    info!(%filename, "deleted short recording");
+}
+
+fn start_ts_writer(
+    recording_id: &str,
+    queue: Arc<restream_sync::byte_queue::MemoryQueue>,
+    file_path: String,
+    cancel: CancellationToken,
+) -> std::io::Result<std::thread::JoinHandle<Result<(), String>>> {
+    spawn_ts_writer(recording_id, move || {
+        let _queue_guard = QueueCloseGuard(queue.clone());
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_ts_writer(queue, &file_path, cancel.clone())
+        })) {
+            Ok(result) => result.map_err(str::to_owned),
+            Err(_) => Err("TS writer panicked".to_string()),
+        };
+        if result.is_err() {
+            cancel.cancel();
+        }
+        result
+    })
+}
+
+/// Wait for the file to flush before it can be deleted or remuxed.
+async fn join_ts_writer(writer: std::thread::JoinHandle<Result<(), String>>) -> Result<(), String> {
+    match tokio::task::spawn_blocking(move || writer.join()).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("TS writer thread panicked".to_string()),
+        Err(error) => Err(format!("TS writer join task failed: {error}")),
+    }
 }
 
 /// Starts the TS writer thread; `Err` when the OS refuses a thread.
