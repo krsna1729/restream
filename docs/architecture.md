@@ -725,6 +725,10 @@ script and that real SQLite cannot produce.
 - `restream-agent-contract` depends on no product, engine, Reqwest, axum,
   sqlx or Tokio crate, and `restream-mcp` on no product or engine crate
   (`tests/architecture/compliance.rs`).
+- Only `restream-engine` may directly depend on `shiguredo_mp4` (`deny.toml`).
+  Socket-level HTTP/1 egress parses responses through `egress::http1` so
+  every caller gets the same header and body limits and framing checks
+  (`clippy.toml`).
 - API handlers stay thin. Agent orchestration lives in
   `application::services::agent_service`. API modules do not start FFmpeg or
   transcoder stages.
