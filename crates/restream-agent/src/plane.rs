@@ -446,10 +446,6 @@ pub fn plan_response(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub fn validate_plan(
     request: &PlanRequest,
     pipelines: &[Pipeline],
@@ -486,143 +482,164 @@ pub fn validate_plan(
             .pipeline_id
             .as_deref()
             .or(request.pipeline_id.as_deref());
-        match pipeline_id {
-            Some(pid) if !pipeline_ids.contains(pid) => errors.push(issue(
-                "error",
-                "pipelineNotFound",
-                format!("Pipeline '{pid}' does not exist."),
-                Some("pipelineId"),
-            )),
-            None => errors.push(issue(
-                "error",
-                "missingPipelineId",
-                "A pipelineId is required for each proposed change.",
-                Some("pipelineId"),
-            )),
-            _ => {}
-        }
-
-        if !matches!(
-            change.kind.as_str(),
-            "addOutput" | "updateOutput" | "removeOutput" | "startOutput" | "stopOutput"
-        ) {
-            errors.push(issue(
-                "error",
-                "unsupportedChangeKind",
-                format!("Unsupported change kind '{}'.", change.kind),
-                Some("kind"),
-            ));
-        }
-
-        if matches!(
-            change.kind.as_str(),
-            "updateOutput" | "removeOutput" | "startOutput" | "stopOutput"
-        ) {
-            match (pipeline_id, change.output_id.as_deref()) {
-                (Some(pid), Some(oid)) if !output_ids.contains(&(pid, oid)) => {
-                    errors.push(issue(
-                        "error",
-                        "outputNotFound",
-                        format!("Output '{oid}' does not exist on pipeline '{pid}'."),
-                        Some("outputId"),
-                    ));
-                }
-                (_, None) => errors.push(issue(
-                    "error",
-                    "missingOutputId",
-                    "This change kind requires outputId.",
-                    Some("outputId"),
-                )),
-                _ => {}
-            }
-        }
-
+        validate_change_target(change, pipeline_id, &pipeline_ids, &output_ids, &mut errors);
         if change.kind == "addOutput" {
-            if change
-                .name
-                .as_deref()
-                .is_none_or(|name| name.trim().is_empty())
-            {
-                errors.push(issue(
-                    "error",
-                    "missingOutputName",
-                    "addOutput requires a non-empty name.",
-                    Some("name"),
-                ));
-            }
-            if change
-                .url
-                .as_deref()
-                .is_none_or(|url| url.trim().is_empty())
-            {
-                errors.push(issue(
-                    "error",
-                    "missingOutputUrl",
-                    "addOutput requires a non-empty url.",
-                    Some("url"),
-                ));
-            }
-            if change.config.is_none() {
-                errors.push(issue(
-                    "error",
-                    "missingOutputConfig",
-                    "addOutput requires config.",
-                    Some("config"),
-                ));
-            }
+            validate_output_add(change, &mut errors);
         }
-
-        if let Some(url) = change.url.as_deref()
-            && !is_supported_output_url(url.trim())
-        {
-            errors.push(issue(
-                "error",
-                "unsupportedOutputUrl",
-                OUTPUT_URL_SCHEME_ERROR,
-                Some("url"),
-            ));
-        }
-
-        if let Some(config) = change_output_config(change)
-            && config.is_custom_output()
-        {
-            errors.push(issue(
-                "error",
-                "customEncodingUnsupported",
-                "Custom output encoding is not available in the runtime planner yet.",
-                Some("config"),
-            ));
-        }
-
-        if let Some((url, config)) = effective_output_capability_input(change, pipeline_id, outputs)
-            && is_supported_output_url(url)
-            && let Err(error) =
-                config.validate_capabilities(ProtocolCapabilities::from_output(url, config))
-        {
-            errors.push(issue(
-                "error",
-                "unsupportedOutputCodec",
-                error.message(),
-                Some("config.video.codec"),
-            ));
-        }
-
-        if let Some(desired_state) = change.desired_state.as_deref()
-            && !matches!(desired_state, "running" | "stopped")
-        {
-            errors.push(issue(
-                "error",
-                "invalidDesiredState",
-                "desiredState must be either 'running' or 'stopped'.",
-                Some("desiredState"),
-            ));
-        }
+        validate_output_values(change, pipeline_id, outputs, &mut errors);
     }
 
     ValidationResult {
         valid: errors.is_empty(),
         errors,
         warnings,
+    }
+}
+
+fn validate_change_target(
+    change: &ProposedChange,
+    pipeline_id: Option<&str>,
+    pipeline_ids: &HashSet<&str>,
+    output_ids: &HashSet<(&str, &str)>,
+    errors: &mut Vec<ValidationIssue>,
+) {
+    match pipeline_id {
+        Some(pid) if !pipeline_ids.contains(pid) => errors.push(issue(
+            "error",
+            "pipelineNotFound",
+            format!("Pipeline '{pid}' does not exist."),
+            Some("pipelineId"),
+        )),
+        None => errors.push(issue(
+            "error",
+            "missingPipelineId",
+            "A pipelineId is required for each proposed change.",
+            Some("pipelineId"),
+        )),
+        _ => {}
+    }
+
+    if !matches!(
+        change.kind.as_str(),
+        "addOutput" | "updateOutput" | "removeOutput" | "startOutput" | "stopOutput"
+    ) {
+        errors.push(issue(
+            "error",
+            "unsupportedChangeKind",
+            format!("Unsupported change kind '{}'.", change.kind),
+            Some("kind"),
+        ));
+    }
+
+    if matches!(
+        change.kind.as_str(),
+        "updateOutput" | "removeOutput" | "startOutput" | "stopOutput"
+    ) {
+        match (pipeline_id, change.output_id.as_deref()) {
+            (Some(pid), Some(oid)) if !output_ids.contains(&(pid, oid)) => {
+                errors.push(issue(
+                    "error",
+                    "outputNotFound",
+                    format!("Output '{oid}' does not exist on pipeline '{pid}'."),
+                    Some("outputId"),
+                ));
+            }
+            (_, None) => errors.push(issue(
+                "error",
+                "missingOutputId",
+                "This change kind requires outputId.",
+                Some("outputId"),
+            )),
+            _ => {}
+        }
+    }
+}
+
+fn validate_output_add(change: &ProposedChange, errors: &mut Vec<ValidationIssue>) {
+    if change
+        .name
+        .as_deref()
+        .is_none_or(|name| name.trim().is_empty())
+    {
+        errors.push(issue(
+            "error",
+            "missingOutputName",
+            "addOutput requires a non-empty name.",
+            Some("name"),
+        ));
+    }
+    if change
+        .url
+        .as_deref()
+        .is_none_or(|url| url.trim().is_empty())
+    {
+        errors.push(issue(
+            "error",
+            "missingOutputUrl",
+            "addOutput requires a non-empty url.",
+            Some("url"),
+        ));
+    }
+    if change.config.is_none() {
+        errors.push(issue(
+            "error",
+            "missingOutputConfig",
+            "addOutput requires config.",
+            Some("config"),
+        ));
+    }
+}
+
+fn validate_output_values(
+    change: &ProposedChange,
+    pipeline_id: Option<&str>,
+    outputs: &[Output],
+    errors: &mut Vec<ValidationIssue>,
+) {
+    if let Some(url) = change.url.as_deref()
+        && !is_supported_output_url(url.trim())
+    {
+        errors.push(issue(
+            "error",
+            "unsupportedOutputUrl",
+            OUTPUT_URL_SCHEME_ERROR,
+            Some("url"),
+        ));
+    }
+
+    if let Some(config) = change_output_config(change)
+        && config.is_custom_output()
+    {
+        errors.push(issue(
+            "error",
+            "customEncodingUnsupported",
+            "Custom output encoding is not available in the runtime planner yet.",
+            Some("config"),
+        ));
+    }
+
+    if let Some((url, config)) = effective_output_capability_input(change, pipeline_id, outputs)
+        && is_supported_output_url(url)
+        && let Err(error) =
+            config.validate_capabilities(ProtocolCapabilities::from_output(url, config))
+    {
+        errors.push(issue(
+            "error",
+            "unsupportedOutputCodec",
+            error.message(),
+            Some("config.video.codec"),
+        ));
+    }
+
+    if let Some(desired_state) = change.desired_state.as_deref()
+        && !matches!(desired_state, "running" | "stopped")
+    {
+        errors.push(issue(
+            "error",
+            "invalidDesiredState",
+            "desiredState must be either 'running' or 'stopped'.",
+            Some("desiredState"),
+        ));
     }
 }
 
