@@ -232,30 +232,8 @@ fn run_full_server_peer_reporting_bytes_read(
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
 
-    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
     let mut buf = [0u8; 4096];
-    let remaining;
-    loop {
-        let n = stream.read(&mut buf).expect("server handshake read");
-        assert_ne!(n, 0);
-        match handshake.process_bytes(&buf[..n]).unwrap() {
-            PeerResult::InProgress { response_bytes } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-            }
-            PeerResult::Completed {
-                response_bytes,
-                remaining_bytes,
-            } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-                remaining = remaining_bytes;
-                break;
-            }
-        }
-    }
+    let remaining = handshake_before_counting(&mut stream, &mut buf);
 
     let config = ServerSessionConfig::new();
     let (mut session, initial_results) = ServerSession::new(config).unwrap();
@@ -317,6 +295,30 @@ fn run_full_server_peer_reporting_bytes_read(
             return;
         }
         pending_input = buf[..n].to_vec();
+    }
+}
+
+fn handshake_before_counting(stream: &mut TcpStream, buf: &mut [u8]) -> Vec<u8> {
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    loop {
+        let n = stream.read(buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                return remaining_bytes;
+            }
+        }
     }
 }
 

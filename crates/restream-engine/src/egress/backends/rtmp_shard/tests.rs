@@ -697,34 +697,10 @@ fn run_accepting_server_peer_reporting_video_after_idle(
         .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
 
-    let mut handshake = PeerHandshake::new(PeerType::Server);
     let mut buf = [0u8; 4096];
-    let remaining;
-    loop {
-        let Ok(n) = stream.read(&mut buf) else {
-            return;
-        };
-        if n == 0 {
-            return;
-        }
-        match handshake.process_bytes(&buf[..n]).unwrap() {
-            PeerResult::InProgress { response_bytes } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-            }
-            PeerResult::Completed {
-                response_bytes,
-                remaining_bytes,
-            } => {
-                if !response_bytes.is_empty() {
-                    stream.write_all(&response_bytes).unwrap();
-                }
-                remaining = remaining_bytes;
-                break;
-            }
-        }
-    }
+    let Some(remaining) = handshake_before_video(&mut stream, &mut buf) else {
+        return;
+    };
 
     let config = ServerSessionConfig::new();
     let (mut session, initial_results) = ServerSession::new(config).unwrap();
@@ -786,6 +762,32 @@ fn run_accepting_server_peer_reporting_video_after_idle(
             return;
         }
         pending_input = buf[..n].to_vec();
+    }
+}
+
+fn handshake_before_video(stream: &mut StdTcpStream, buf: &mut [u8]) -> Option<Vec<u8>> {
+    let mut handshake = PeerHandshake::new(PeerType::Server);
+    loop {
+        let n = stream.read(buf).ok()?;
+        if n == 0 {
+            return None;
+        }
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                return Some(remaining_bytes);
+            }
+        }
     }
 }
 
