@@ -236,10 +236,6 @@ fn ensure_loopback() {
         .status();
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let command = raw.first().cloned().unwrap_or_else(|| "suite".to_string());
@@ -247,76 +243,138 @@ async fn run() -> Result<(), String> {
         return run_catalog_cli(&raw[1..]);
     }
 
+    prepare_run(&command, &raw[1..])?;
+    let result = run_command(&command, &raw[1..]).await;
+    finish_run(&command, result)
+}
+
+fn prepare_run(command: &str, args: &[String]) -> Result<(), String> {
     ensure_loopback();
     maybe_prune_old_artifacts()?;
     maybe_global_process_cleanup();
-    ensure_msr_nofile_limit(&command)?;
-    ensure_measurement_profile(&command, &raw[1..])?;
-    let result = if command == MIXED_MATRIX_MODE {
-        mixed_input_matrix_correctness().await
-    } else if command == MIXED_SIGNAL_MODE {
-        mixed_signal_correctness().await
-    } else if command == MIXED_FAST_BREADTH_MODE {
-        mixed_fast_breadth_correctness().await
-    } else if let Some(case) = mixed_input_case_for_command(&command) {
-        mixed_input_case_correctness(case).await
-    } else {
-        match command.as_str() {
-            "api-smoke" => api_smoke().await,
-            "srt.policy" => srt_policy_correctness().await,
-            "timestamp.bframe" => bframe_rtmp_correctness().await,
-            "ramp-family" => ramp_family_correctness().await,
-            "suite" => suite_run().await,
-            "preflight" => preflight_check().await,
-            "fault.egress-retry" => fault_egress_retry().await,
-            "fault.output-stall" => fault_output_stall().await,
-            "fault.srt-output-stall" => fault_srt_output_stall().await,
-            "fault.sibling-isolation" => fault_sibling_isolation().await,
-            "srt.slow-peer" => srt_slow_peer().await,
-            "srt.backup-failover" => srt_backup_failover().await,
-            "srt.admission" => admission(AdmissionFabric::Srt).await,
-            "sink.admission" => admission(AdmissionFabric::Sink).await,
-            "pipeline.admission" => admission(AdmissionFabric::Pipeline).await,
-            "hls-put.admission" => admission(AdmissionFabric::HlsPut).await,
-            "fault.resilience" => fault_resilience().await,
-            "file.live-edge" => file_live_edge().await,
-            "signal.control" => signal_control().await,
-            "recovery" => recovery().await,
-            "resource-sweep" => resource_sweep().await,
-            "srt-sink" => srt_sink::srt_sink_mode().await,
-            "hls-pull-duty" => hls_pull_duty(&raw[1..]).await,
-            "hls-push-duty" => hls_push_duty(&raw[1..]).await,
-            "moq-relay-interop" => moq_relay_interop::moq_relay_interop(&raw[1..]).await,
-            "moq-dev-interop" => moq_dev_interop::moq_dev_interop(&raw[1..]).await,
-            "moq-impairment" => moq_impairment::moq_impairment(&raw[1..]).await,
-            "moq-moxygen-interop" => moq_moxygen_interop::moq_moxygen_interop(&raw[1..]).await,
-            "msr" => msr().await,
-            "bitrate-sweep" => bitrate_sweep().await,
-            "branch-matrix" => branch_matrix().await,
-            "srt-crypto-matrix" => srt_crypto_matrix().await,
-            other => Err(unknown_command_error(other)),
-        }
-    };
+    ensure_msr_nofile_limit(command)?;
+    ensure_measurement_profile(command, args)?;
+    Ok(())
+}
 
-    match result {
-        Ok(value) => {
-            let path = mixed_command_artifact_path(&command)
-                .unwrap_or_else(|| artifact_path(&format!("{command}.json")));
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
-                .map_err(|e| e.to_string())?;
-            if !env_flag("TEST_HARNESS_SUPPRESS_SUCCESS_JSON") {
-                println!("{}", serde_json::to_string_pretty(&value).unwrap());
-            }
-            println!("artifact={}", path.display());
-            // Exit without dropping the runtime, which would wait on the
-            // engine's still-running blocking tasks and OS threads.
-            std::process::exit(0);
-        }
-        Err(error) => Err(error),
+/// Artifact write and success exit. The runtime is left un-dropped on the
+/// success path because dropping it would wait on the engine's still-running
+/// blocking tasks and OS threads.
+fn finish_run(command: &str, result: Result<Value, String>) -> Result<(), String> {
+    let value = result?;
+    let path = mixed_command_artifact_path(command)
+        .unwrap_or_else(|| artifact_path(&format!("{command}.json")));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).map_err(|e| e.to_string())?;
+    if !env_flag("TEST_HARNESS_SUPPRESS_SUCCESS_JSON") {
+        println!("{}", serde_json::to_string_pretty(&value).unwrap());
+    }
+    println!("artifact={}", path.display());
+    // Exit without dropping the runtime, which would wait on the engine's
+    // still-running blocking tasks and OS threads.
+    std::process::exit(0);
+}
+
+async fn run_command(command: &str, args: &[String]) -> Result<Value, String> {
+    if let Some(result) = run_mixed_mode(command).await {
+        return result;
+    }
+    if let Some(result) = run_engine_mode(command).await {
+        return result;
+    }
+    if let Some(result) = run_fault_mode(command).await {
+        return result;
+    }
+    if let Some(result) = run_admission_mode(command).await {
+        return result;
+    }
+    if let Some(result) = run_duty_and_interop_mode(command, args).await {
+        return result;
+    }
+    Err(unknown_command_error(command))
+}
+
+async fn run_mixed_mode(command: &str) -> Option<Result<Value, String>> {
+    if command == MIXED_MATRIX_MODE {
+        Some(mixed_input_matrix_correctness().await)
+    } else if command == MIXED_SIGNAL_MODE {
+        Some(mixed_signal_correctness().await)
+    } else if command == MIXED_FAST_BREADTH_MODE {
+        Some(mixed_fast_breadth_correctness().await)
+    } else if let Some(case) = mixed_input_case_for_command(command) {
+        Some(mixed_input_case_correctness(case).await)
+    } else {
+        None
+    }
+}
+
+async fn run_engine_mode(command: &str) -> Option<Result<Value, String>> {
+    let result = match command {
+        "api-smoke" => api_smoke().await,
+        "srt.policy" => srt_policy_correctness().await,
+        "timestamp.bframe" => bframe_rtmp_correctness().await,
+        "ramp-family" => ramp_family_correctness().await,
+        "suite" => suite_run().await,
+        "preflight" => preflight_check().await,
+        "file.live-edge" => file_live_edge().await,
+        "signal.control" => signal_control().await,
+        "recovery" => recovery().await,
+        "resource-sweep" => resource_sweep().await,
+        "srt-sink" => srt_sink::srt_sink_mode().await,
+        "msr" => msr().await,
+        "bitrate-sweep" => bitrate_sweep().await,
+        "branch-matrix" => branch_matrix().await,
+        "srt-crypto-matrix" => srt_crypto_matrix().await,
+        _ => return None,
+    };
+    Some(result)
+}
+
+async fn run_fault_mode(command: &str) -> Option<Result<Value, String>> {
+    let result = match command {
+        "fault.egress-retry" => fault_egress_retry().await,
+        "fault.output-stall" => fault_output_stall().await,
+        "fault.srt-output-stall" => fault_srt_output_stall().await,
+        "fault.sibling-isolation" => fault_sibling_isolation().await,
+        "fault.resilience" => fault_resilience().await,
+        "srt.slow-peer" => srt_slow_peer().await,
+        "srt.backup-failover" => srt_backup_failover().await,
+        _ => return None,
+    };
+    Some(result)
+}
+
+fn admission_fabric(command: &str) -> Option<AdmissionFabric> {
+    Some(match command {
+        "srt.admission" => AdmissionFabric::Srt,
+        "sink.admission" => AdmissionFabric::Sink,
+        "pipeline.admission" => AdmissionFabric::Pipeline,
+        "hls-put.admission" => AdmissionFabric::HlsPut,
+        _ => return None,
+    })
+}
+
+async fn run_admission_mode(command: &str) -> Option<Result<Value, String>> {
+    let fabric = admission_fabric(command)?;
+    Some(admission(fabric).await)
+}
+
+async fn run_duty_and_interop_mode(
+    command: &str,
+    args: &[String],
+) -> Option<Result<Value, String>> {
+    let result = match command {
+        "hls-pull-duty" => hls_pull_duty(args).await,
+        "hls-push-duty" => hls_push_duty(args).await,
+        "moq-relay-interop" => moq_relay_interop::moq_relay_interop(args).await,
+        "moq-dev-interop" => moq_dev_interop::moq_dev_interop(args).await,
+        "moq-impairment" => moq_impairment::moq_impairment(args).await,
+        "moq-moxygen-interop" => moq_moxygen_interop::moq_moxygen_interop(args).await,
+        _ => return None,
+    };
+    Some(result)
 }
 
 async fn api_smoke() -> Result<Value, String> {
