@@ -276,10 +276,6 @@ impl EgressFabricRuntime {
     ///
     /// Returns the shard ids touched (replaced, grown or shut down) on
     /// success, for logging.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     pub fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,
@@ -295,69 +291,11 @@ impl EgressFabricRuntime {
         G: FnMut(ShardId) -> F,
     {
         let mut touched = Vec::new();
-        let mut grow_error = None;
-        let panicked = self.group.panicked_shards();
-        // Isolate every dead shard before any fallible replacement. An
-        // unavailable backend on one shard must not strand another's outputs
-        // or leave that other dead shard eligible for placement.
-        for &shard_id in &panicked {
-            let released = self.manager.forget_shard(shard_id);
-            tracing::warn!(shard_id = ?shard_id, outputs = released.len(),
-                "egress shard panicked; replacing it and retrying its outputs");
-            for spec in &released {
-                spec.progress.mark_terminated_unexpectedly();
-            }
-        }
-        for shard_id in panicked {
-            match self
-                .group
-                .replace_with(shard_id, shard_config, factory_for(shard_id))
-            {
-                Ok(()) => {
-                    self.manager.revive_shard(shard_id);
-                    touched.push(shard_id);
-                }
-                Err(error) => {
-                    // Keep the first error for the caller, but give every
-                    // other failed shard its own chance to recover.
-                    grow_error.get_or_insert(error);
-                }
-            }
-        }
+        let mut grow_error =
+            self.replace_panicked_shards(shard_config, &mut factory_for, &mut touched);
         let now = Instant::now();
         let placement = self.manager.placement_count().get();
-        let outputs =
-            self.manager.output_count() + usize::from(matches!(reason, ResizeReason::Add));
-        let maximum = host.egress_shards_per_pool().min(self.shard_ceiling);
-        let target = if profile.shard_override().is_none() {
-            let prior = profile.outputs_per_shard();
-            match reason {
-                ResizeReason::Add => placement.max(self.sizer.recommend(outputs, prior, maximum)),
-                ResizeReason::Remove => placement,
-                ResizeReason::Observe => {
-                    if self.observe_service(now) {
-                        self.sizer.shrink_target(now, outputs, placement, prior)
-                    } else {
-                        placement
-                    }
-                }
-            }
-        } else {
-            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
-        };
-        // An Add also needs a free leaf: grow, within the ceiling, until the
-        // pool's leaf tables hold every output.
-        let leaf_shards = outputs
-            .div_ceil(shard_config.leaf_capacity().get())
-            .try_into()
-            .unwrap_or(u32::MAX)
-            .min(maximum);
-        let target = if matches!(reason, ResizeReason::Add) {
-            target.max(leaf_shards)
-        } else {
-            target
-        }
-        .max(1) as usize;
+        let target = self.rescale_target(profile, host, reason, shard_config, now, placement);
 
         while grow_error.is_none() && self.group.shard_count() < target {
             let shard_id =
@@ -413,6 +351,92 @@ impl EgressFabricRuntime {
             Some(error) => Err(error),
             None => Ok(touched),
         }
+    }
+
+    fn replace_panicked_shards<B, E, F, G>(
+        &mut self,
+        shard_config: EgressShardConfig,
+        factory_for: &mut G,
+        touched: &mut Vec<ShardId>,
+    ) -> Option<E>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+        G: FnMut(ShardId) -> F,
+    {
+        let mut first_error = None;
+        let panicked = self.group.panicked_shards();
+        // Isolate every dead shard before any fallible replacement. An
+        // unavailable backend on one shard must not strand another's outputs
+        // or leave that other dead shard eligible for placement.
+        for &shard_id in &panicked {
+            let released = self.manager.forget_shard(shard_id);
+            tracing::warn!(shard_id = ?shard_id, outputs = released.len(),
+                "egress shard panicked; replacing it and retrying its outputs");
+            for spec in &released {
+                spec.progress.mark_terminated_unexpectedly();
+            }
+        }
+        for shard_id in panicked {
+            match self
+                .group
+                .replace_with(shard_id, shard_config, factory_for(shard_id))
+            {
+                Ok(()) => {
+                    self.manager.revive_shard(shard_id);
+                    touched.push(shard_id);
+                }
+                Err(error) => {
+                    // Keep the first error but try to recover every dead shard.
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error
+    }
+
+    fn rescale_target(
+        &mut self,
+        profile: crate::config::EgressShardProfile,
+        host: crate::host_capacity::HostCapacity,
+        reason: ResizeReason,
+        shard_config: EgressShardConfig,
+        now: Instant,
+        placement: u32,
+    ) -> usize {
+        let outputs =
+            self.manager.output_count() + usize::from(matches!(reason, ResizeReason::Add));
+        let maximum = host.egress_shards_per_pool().min(self.shard_ceiling);
+        let target = if profile.shard_override().is_none() {
+            let prior = profile.outputs_per_shard();
+            match reason {
+                ResizeReason::Add => placement.max(self.sizer.recommend(outputs, prior, maximum)),
+                ResizeReason::Remove => placement,
+                ResizeReason::Observe => {
+                    if self.observe_service(now) {
+                        self.sizer.shrink_target(now, outputs, placement, prior)
+                    } else {
+                        placement
+                    }
+                }
+            }
+        } else {
+            crate::config::target_egress_fabric_shards(profile, outputs, host.cpus)
+        };
+        // An Add also needs a free leaf: grow, within the ceiling, until the
+        // pool's leaf tables hold every output.
+        let leaf_shards = outputs
+            .div_ceil(shard_config.leaf_capacity().get())
+            .try_into()
+            .unwrap_or(u32::MAX)
+            .min(maximum);
+        let target = if matches!(reason, ResizeReason::Add) {
+            target.max(leaf_shards)
+        } else {
+            target
+        };
+        target.max(1) as usize
     }
 
     #[cfg(any(test, feature = "test-support"))]
