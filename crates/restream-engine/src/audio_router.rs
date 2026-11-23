@@ -14,10 +14,6 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFol
 /// `SelectTracks` filters and reindexes reference-counted packets in a tight
 /// async loop. `Remap` and `Downmix` require DSP and run on the external FFmpeg
 /// backend.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn start_audio_router(
     pipeline_id: String,
     routing: AudioRouting,
@@ -40,32 +36,10 @@ pub async fn start_audio_router(
         pid: None,
     });
 
-    let hint = input_buffer.codec_hint_str();
-    if !hint.is_empty() {
-        output_buffer.set_codec_hint(hint);
-    }
-    if let Some(parameter_sets) = input_buffer.video_parameter_sets() {
-        output_buffer.set_video_parameter_sets(parameter_sets);
-    }
     // Live inputs may publish track metadata after output wiring, so seed it
     // here and refresh it in the packet loop when it arrives later.
-    if let Some(input_tracks) = input_buffer.audio_tracks() {
-        output_buffer.set_audio_tracks(apply_audio_routing(&routing, &input_tracks));
-    }
-
-    let routing_mode = match &routing {
-        AudioRouting::Passthrough => "all",
-        AudioRouting::SelectTracks { .. } => "subset",
-        AudioRouting::Remap { .. } => "remap",
-        AudioRouting::Downmix { .. } => "downmix",
-    };
-    info!(
-        "[audio-router] start pipeline={} mode={} input_codec='{}' output_codec='{}'",
-        pipeline_id,
-        routing_mode,
-        input_buffer.codec_hint_str(),
-        output_buffer.codec_hint_str(),
-    );
+    seed_output_metadata(&routing, &input_buffer, &output_buffer);
+    log_router_start(&pipeline_id, &routing, &input_buffer, &output_buffer);
 
     let mut reader = Reader::new_stage_input(
         format!(
@@ -120,13 +94,7 @@ pub async fn start_audio_router(
                     if let Some(output) = route_audio_packet(&routing, &packet) {
                         stage_metrics.record_out(output.payload.len() as u64);
                         if !first_push_logged {
-                            info!(
-                                "[audio-router] first push pipeline={} type={:?} track={} codec_out='{}'",
-                                pipeline_id,
-                                output.media_type,
-                                output.track_index,
-                                output_buffer.codec_hint_str()
-                            );
+                            log_first_push(&pipeline_id, &output, &output_buffer);
                             first_push_logged = true;
                         }
                         out_batch.push(output);
@@ -157,6 +125,58 @@ pub async fn start_audio_router(
             pipeline_id,
             encoding: stage_key.kind.to_string(),
         });
+}
+
+/// Copy codec, parameter-set and track metadata from input to output before
+/// the packet loop starts. Live inputs may publish tracks later; the loop
+/// refreshes them.
+fn seed_output_metadata(routing: &AudioRouting, input: &RingBuffer, output: &RingBuffer) {
+    let hint = input.codec_hint_str();
+    if !hint.is_empty() {
+        output.set_codec_hint(hint);
+    }
+    if let Some(parameter_sets) = input.video_parameter_sets() {
+        output.set_video_parameter_sets(parameter_sets);
+    }
+    if let Some(input_tracks) = input.audio_tracks() {
+        output.set_audio_tracks(apply_audio_routing(routing, &input_tracks));
+    }
+}
+
+fn routing_mode(routing: &AudioRouting) -> &'static str {
+    match routing {
+        AudioRouting::Passthrough => "all",
+        AudioRouting::SelectTracks { .. } => "subset",
+        AudioRouting::Remap { .. } => "remap",
+        AudioRouting::Downmix { .. } => "downmix",
+    }
+}
+
+#[cold]
+fn log_router_start(
+    pipeline_id: &str,
+    routing: &AudioRouting,
+    input: &RingBuffer,
+    output: &RingBuffer,
+) {
+    info!(
+        "[audio-router] start pipeline={} mode={} input_codec='{}' output_codec='{}'",
+        pipeline_id,
+        routing_mode(routing),
+        input.codec_hint_str(),
+        output.codec_hint_str(),
+    );
+}
+
+#[cold]
+fn log_first_push(pipeline_id: &str, output: &MediaPacket, output_buffer: &RingBuffer) {
+    info!(
+        "[audio-router] first push pipeline={} type={:?} track={} codec_out='{}'",
+        pipeline_id,
+        output.media_type,
+        output.track_index,
+        output_buffer.codec_hint_str()
+    );
 }
 
 /// Projects input track metadata through the configured routing operation.
