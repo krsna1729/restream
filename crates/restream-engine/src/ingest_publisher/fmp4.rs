@@ -490,18 +490,7 @@ impl SegmentDemux for Fmp4Demux {
 /// Parse an init segment into the demuxer, the published tracks and the
 /// probe the ingest's metadata comes from.
 fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), MediaRejection> {
-    if bytes.len() > max_bytes {
-        return Err(MediaRejection::TooLarge(format!(
-            "fMP4 init segment of {} bytes is over its {max_bytes}-byte bound",
-            bytes.len()
-        )));
-    }
-    let moov = boxes::moov_range(bytes)
-        .ok()
-        .and_then(|range| bytes.get(range))
-        .ok_or_else(|| malformed("fMP4 init segment has no moov"))?;
-    let (moov, _) =
-        MoovBox::decode(moov).map_err(|error| malformed(format!("fMP4 init moov: {error}")))?;
+    let moov = decode_init_moov(bytes, max_bytes)?;
 
     let mut tracks = Vec::new();
     let mut video = None;
@@ -529,30 +518,10 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
                     // Like TS ingest, the first video track is published.
                     continue;
                 }
-                let avcc = &avc1.avcc_box;
-                let mut parameter_sets = Vec::new();
-                for nalu in avcc.sps_list.iter().chain(&avcc.pps_list) {
-                    parameter_sets.extend_from_slice(&START_CODE);
-                    parameter_sets.extend_from_slice(nalu);
-                }
-                let sps = avcc
-                    .sps_list
-                    .first()
-                    .ok_or_else(|| malformed(format!("fMP4 track {track_id}: avcC has no SPS")))?;
-                video = Some(video_meta(sps, avc1.visual.width, avc1.visual.height));
-                video_sequence_header = build_avcc_sequence_header(&parameter_sets);
-                let parameter_sets = Bytes::from(parameter_sets);
-                tracks.push(Track {
-                    track_id,
-                    media_type,
-                    track_index: 0,
-                    codec: Codec::Video {
-                        nal: VideoNal::H264,
-                        nalu_length_size: usize::from(avcc.length_size_minus_one.get())
-                            .saturating_add(1),
-                        parameter_sets,
-                    },
-                });
+                let (meta, header, track) = avc_track(track_id, avc1)?;
+                video = Some(meta);
+                video_sequence_header = header;
+                tracks.push(track);
             }
             (MediaType::Video, SampleEntry::Hev1(hevc)) => {
                 video_track_count = video_track_count.saturating_add(1);
@@ -571,47 +540,12 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
                 }
             }
             (MediaType::Audio, SampleEntry::Mp4a(mp4a)) => {
-                let asc = mp4a
-                    .esds_box
-                    .es
-                    .dec_config_descr
-                    .dec_specific_info
-                    .as_ref()
-                    .map(|info| info.payload.as_slice())
-                    .ok_or_else(|| {
-                        malformed(format!(
-                            "fMP4 track {track_id}: esds has no AudioSpecificConfig"
-                        ))
-                    })?;
-                let adts = AdtsConfig::from_audio_specific_config(asc)?;
                 let track_index = u32::try_from(audio_tracks.len()).unwrap_or(u32::MAX);
-                audio_tracks.push(AudioMeta {
-                    codec: "aac".to_string(),
-                    sample_rate: adts.sample_rate(),
-                    channels: adts.channels(),
-                    track_index,
-                    profile: Some(adts.profile().to_string()),
-                    ..AudioMeta::default()
-                });
-                tracks.push(Track {
-                    track_id,
-                    media_type,
-                    track_index,
-                    codec: Codec::Aac(adts),
-                });
+                let (meta, track) = aac_track(track_id, track_index, mp4a)?;
+                audio_tracks.push(meta);
+                tracks.push(track);
             }
-            (MediaType::Video, other) => {
-                return Err(unsupported(format!(
-                    "fMP4 video codec {} is not supported; H.264 or HEVC only",
-                    shiguredo_mp4::BaseBox::box_type(other)
-                )));
-            }
-            (MediaType::Audio, other) => {
-                return Err(unsupported(format!(
-                    "fMP4 audio codec {} is not supported; AAC only",
-                    shiguredo_mp4::BaseBox::box_type(other)
-                )));
-            }
+            (_, entry) => return Err(unsupported_init_codec(media_type, entry)),
         }
     }
     if tracks.is_empty() {
@@ -631,6 +565,96 @@ fn parse_init(bytes: &[u8], max_bytes: usize) -> Result<(Init, DemuxProbe), Medi
         audio_tracks,
     };
     Ok((Init { demuxer, tracks }, probe))
+}
+
+fn unsupported_init_codec(media_type: MediaType, entry: &SampleEntry) -> MediaRejection {
+    let codec = shiguredo_mp4::BaseBox::box_type(entry);
+    unsupported(match media_type {
+        MediaType::Video => {
+            format!("fMP4 video codec {codec} is not supported; H.264 or HEVC only")
+        }
+        MediaType::Audio => format!("fMP4 audio codec {codec} is not supported; AAC only"),
+    })
+}
+
+fn decode_init_moov(bytes: &[u8], max_bytes: usize) -> Result<MoovBox, MediaRejection> {
+    if bytes.len() > max_bytes {
+        return Err(MediaRejection::TooLarge(format!(
+            "fMP4 init segment of {} bytes is over its {max_bytes}-byte bound",
+            bytes.len()
+        )));
+    }
+    let moov = boxes::moov_range(bytes)
+        .ok()
+        .and_then(|range| bytes.get(range))
+        .ok_or_else(|| malformed("fMP4 init segment has no moov"))?;
+    let (moov, _) =
+        MoovBox::decode(moov).map_err(|error| malformed(format!("fMP4 init moov: {error}")))?;
+    Ok(moov)
+}
+
+fn avc_track(
+    track_id: u32,
+    avc1: &shiguredo_mp4::boxes::Avc1Box,
+) -> Result<(VideoMeta, Option<Bytes>, Track), MediaRejection> {
+    let avcc = &avc1.avcc_box;
+    let sps = avcc
+        .sps_list
+        .first()
+        .ok_or_else(|| malformed(format!("fMP4 track {track_id}: avcC has no SPS")))?;
+    let mut parameter_sets = Vec::new();
+    for nalu in avcc.sps_list.iter().chain(&avcc.pps_list) {
+        parameter_sets.extend_from_slice(&START_CODE);
+        parameter_sets.extend_from_slice(nalu);
+    }
+    let meta = video_meta(sps, avc1.visual.width, avc1.visual.height);
+    let header = build_avcc_sequence_header(&parameter_sets);
+    let track = Track {
+        track_id,
+        media_type: MediaType::Video,
+        track_index: 0,
+        codec: Codec::Video {
+            nal: VideoNal::H264,
+            nalu_length_size: usize::from(avcc.length_size_minus_one.get()).saturating_add(1),
+            parameter_sets: Bytes::from(parameter_sets),
+        },
+    };
+    Ok((meta, header, track))
+}
+
+fn aac_track(
+    track_id: u32,
+    track_index: u32,
+    mp4a: &shiguredo_mp4::boxes::Mp4aBox,
+) -> Result<(AudioMeta, Track), MediaRejection> {
+    let asc = mp4a
+        .esds_box
+        .es
+        .dec_config_descr
+        .dec_specific_info
+        .as_ref()
+        .map(|info| info.payload.as_slice())
+        .ok_or_else(|| {
+            malformed(format!(
+                "fMP4 track {track_id}: esds has no AudioSpecificConfig"
+            ))
+        })?;
+    let adts = AdtsConfig::from_audio_specific_config(asc)?;
+    let meta = AudioMeta {
+        codec: "aac".to_string(),
+        sample_rate: adts.sample_rate(),
+        channels: adts.channels(),
+        track_index,
+        profile: Some(adts.profile().to_string()),
+        ..AudioMeta::default()
+    };
+    let track = Track {
+        track_id,
+        media_type: MediaType::Audio,
+        track_index,
+        codec: Codec::Aac(adts),
+    };
+    Ok((meta, track))
 }
 
 /// An HEVC track from its `hvcC`: the VPS, SPS and PPS as Annex B, and the
