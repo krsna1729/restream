@@ -32,13 +32,15 @@ use restream_sync::standby_gop::StandbyGopCache;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
-use admission::Admissions;
 #[cfg(test)]
 pub(super) use admission::{AUTH_DEADLINE, MAX_ADMISSIONS_PER_KEY};
+use admission::{Admissions, Joined};
 use peer_work::{PeerWork, ProbeAnswer, ProbeJob};
 
 use super::calls::CallSupervisor;
-use super::ingress_admission::{AUTH_FAILURE_CAPACITY, AdmissionGuard, ReceiverGroupId};
+use super::ingress_admission::{
+    AUTH_FAILURE_CAPACITY, AdmissionGuard, AuthFailure, ReceiverGroupId,
+};
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use super::ingress_owner::{
     INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
@@ -127,6 +129,25 @@ struct Publisher {
     quality_fold: QualityFold,
 }
 
+/// Everything the listener loop mutates, so the select arms borrow fields of
+/// one owner instead of a long argument list.
+struct SrtLoop {
+    ingress: Ingress,
+    sessions: HashMap<IngressPeer, Session>,
+    calls: CallSupervisor,
+    admissions: Admissions,
+    peers: PeerWork,
+    answers: tokio::sync::mpsc::UnboundedReceiver<ProbeAnswer>,
+}
+
+/// How one listener turn ended.
+enum SrtTurn {
+    Continue,
+    /// Stop the loop; the payload is an owner fault, `None` for a requested
+    /// shutdown.
+    Stop(Option<String>),
+}
+
 impl SrtServer {
     pub fn new(
         pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
@@ -142,15 +163,11 @@ impl SrtServer {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     pub async fn run(self: Arc<Self>, port: u16) {
         let bind = match format!("0.0.0.0:{port}").parse() {
             Ok(bind) => bind,
             Err(error) => {
-                error!(port, %error, "invalid SRT listener address");
+                log_bind_error(port, error);
                 return;
             }
         };
@@ -179,13 +196,21 @@ impl SrtServer {
         {
             Ok(handle) => handle,
             Err(error) => {
-                error!(port, %error, "failed to start the SRT ingress owner");
+                log_start_error(port, error);
                 return;
             }
         };
-        let mut ingress = Ingress {
-            handle,
-            pending_command: None,
+        let (peers, answers) = PeerWork::new();
+        let mut state = SrtLoop {
+            ingress: Ingress {
+                handle,
+                pending_command: None,
+            },
+            sessions: HashMap::new(),
+            calls: CallSupervisor::new(),
+            admissions: Admissions::new(self.engine.config.srt_max_peers_per_ip),
+            peers,
+            answers,
         };
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -198,93 +223,29 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let mut sessions: HashMap<IngressPeer, Session> = HashMap::new();
-        let mut calls: CallSupervisor = CallSupervisor::new();
-        let mut admissions = Admissions::new(self.engine.config.srt_max_peers_per_ip);
-        let (mut peers, mut answers) = PeerWork::new();
 
-        info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
-        let mut owner_fault = None;
-        let mut housekeeping = tokio::time::interval(HOUSEKEEPING_INTERVAL);
-        housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                event = Ingress::next_event(&mut ingress.handle.events, &ingress.pending_command) => match event {
-                    Some(SrtIngressEvent::Fault { detail }) => {
-                        owner_fault = Some(detail);
-                        break;
-                    }
-                    Some(event) => {
-                        if self.handle_ingress_event(&mut ingress, &mut sessions, &mut calls, &mut admissions, event).is_err() {
-                            owner_fault = Some("SRT ingress command reservation exhausted".to_string());
-                            break;
-                        }
-                    }
-                    None => {
-                        owner_fault = Some("the SRT ingress owner thread stopped".to_string());
-                        break;
-                    }
-                },
-                Some(resolved) = calls.resolved.recv(), if ingress.pending_command.is_none() => {
-                    if let Some(command) = calls.resolved(resolved, std::time::Instant::now()) {
-                        // The slot is free (the guard above), so this is accepted.
-                        let _ = ingress.command(command);
-                    }
-                }
-                // Completions are backpressured like events: applying one may
-                // issue a command, so it runs only with the slot free.
-                Some(joined) = admissions.join_next(), if ingress.pending_command.is_none() => {
-                    if self.apply_admission(&mut ingress, &mut sessions, &mut peers, joined).is_err() {
-                        owner_fault = Some("SRT ingress command reservation exhausted".to_string());
-                        break;
-                    }
-                }
-                // A probe answer is one command: backpressured the same way.
-                Some(ProbeAnswer { logical_peer, identity, ring }) = answers.recv(), if ingress.pending_command.is_none() => {
-                    // The slot is free (the guard above), so this is accepted.
-                    let _ = ingress.command(IngressCommand::ProbeApplied { logical_peer, identity, ring });
-                }
-                Some(()) = peers.reap() => {}
-                Ok((scope, ip)) = auth_failure_rx.recv_async() => {
-                    if self.security.record_failure_for(scope, &ip.to_string()) {
-                        warn!(peer_ip = %ip, scope = scope.key(), "SRT caller banned after repeated unknown stream keys");
-                    }
-                }
-                sample = ingress.handle.telemetry.recv() => {
-                    if let Some(sample) = sample {
-                        fold_telemetry(&mut sessions, sample);
-                    }
-                }
-                _ = housekeeping.tick() => {
-                    if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-                        break;
-                    }
-                    close_deleted_sessions(&self.engine, &mut ingress, &mut sessions);
-                    calls.tick(&self.engine.ingests.srt_calls, std::time::Instant::now(), |peer| {
-                        ingress.pending_command.is_none() && ingress.disconnect(peer).is_ok()
-                    });
-                    if ingress.handle.is_closed() {
-                        owner_fault = Some("the SRT ingress owner thread stopped".to_string());
-                        break;
-                    }
-                }
-            }
-            ingress.flush_commands();
-        }
+        log_listener_ready(port, state.ingress.handle.local_addr());
+        let owner_fault = self
+            .serve_loop(&mut state, &auth_failure_rx, &shutdown)
+            .await;
         // Held to here so the failure channel stayed open for the select.
         drop(admission_guard);
 
+        let SrtLoop {
+            ingress,
+            mut admissions,
+            mut peers,
+            mut sessions,
+            ..
+        } = state;
         // Deliver the one already-accepted command before shutdown. Native
         // Owner shutdown closes all peers and flushes their last media.
         let exit = ingress.handle.shutdown(ingress.pending_command).await;
-        if let Some(fault) = owner_fault.as_ref().or(exit.fault.as_ref()) {
-            error!(port, fault = %fault, quiescent = exit.quiescent, "SRT listener stopped after an owner fault");
-        } else if !exit.quiescent {
-            warn!(
-                port,
-                "SRT ingress owner did not reach quiescence at shutdown"
-            );
-        }
+        log_stop_fault(
+            port,
+            owner_fault.as_deref().or(exit.fault.as_deref()),
+            exit.quiescent,
+        );
         self.drain_admissions(&mut admissions, &mut peers).await;
         // Dropping each publisher's handle closes its queue: its task applies
         // what is queued, then finishes the attempt.
@@ -294,7 +255,138 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        info!(port, quiescent = exit.quiescent, "SRT listener stopped");
+        log_listener_stopped(port, exit.quiescent);
+    }
+
+    /// Run the listener select until a shutdown request or an owner fault.
+    async fn serve_loop(
+        self: &Arc<Self>,
+        state: &mut SrtLoop,
+        auth_failure_rx: &flume::Receiver<AuthFailure>,
+        shutdown: &std::sync::atomic::AtomicBool,
+    ) -> Option<String> {
+        let mut housekeeping = tokio::time::interval(HOUSEKEEPING_INTERVAL);
+        housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            let turn = tokio::select! {
+                event = Ingress::next_event(&mut state.ingress.handle.events, &state.ingress.pending_command) =>
+                    self.on_loop_event(state, event),
+                Some(resolved) = state.calls.resolved.recv(), if state.ingress.pending_command.is_none() => {
+                    if let Some(command) = state.calls.resolved(resolved, std::time::Instant::now()) {
+                        // The slot is free (the guard above), so this is accepted.
+                        let _ = state.ingress.command(command);
+                    }
+                    SrtTurn::Continue
+                }
+                // Completions are backpressured like events: applying one may
+                // issue a command, so it runs only with the slot free.
+                Some(joined) = state.admissions.join_next(), if state.ingress.pending_command.is_none() =>
+                    self.on_admission_joined(state, joined),
+                // A probe answer is one command: backpressured the same way.
+                Some(ProbeAnswer { logical_peer, identity, ring }) = state.answers.recv(), if state.ingress.pending_command.is_none() => {
+                    // The slot is free (the guard above), so this is accepted.
+                    let _ = state.ingress.command(IngressCommand::ProbeApplied { logical_peer, identity, ring });
+                    SrtTurn::Continue
+                }
+                Some(()) = state.peers.reap() => SrtTurn::Continue,
+                Ok(failure) = auth_failure_rx.recv_async() => {
+                    self.on_auth_failure(failure);
+                    SrtTurn::Continue
+                }
+                sample = state.ingress.handle.telemetry.recv() => {
+                    if let Some(sample) = sample {
+                        fold_telemetry(&mut state.sessions, sample);
+                    }
+                    SrtTurn::Continue
+                }
+                _ = housekeeping.tick() => self.on_housekeeping(state, shutdown),
+            };
+            match turn {
+                SrtTurn::Continue => {}
+                SrtTurn::Stop(fault) => break fault,
+            }
+            state.ingress.flush_commands();
+        }
+    }
+
+    fn on_loop_event(
+        self: &Arc<Self>,
+        state: &mut SrtLoop,
+        event: Option<SrtIngressEvent>,
+    ) -> SrtTurn {
+        match event {
+            Some(SrtIngressEvent::Fault { detail }) => SrtTurn::Stop(Some(detail)),
+            Some(event) => {
+                if self
+                    .handle_ingress_event(
+                        &mut state.ingress,
+                        &mut state.sessions,
+                        &mut state.calls,
+                        &mut state.admissions,
+                        event,
+                    )
+                    .is_err()
+                {
+                    SrtTurn::Stop(Some(
+                        "SRT ingress command reservation exhausted".to_string(),
+                    ))
+                } else {
+                    SrtTurn::Continue
+                }
+            }
+            None => SrtTurn::Stop(Some("the SRT ingress owner thread stopped".to_string())),
+        }
+    }
+
+    fn on_admission_joined(self: &Arc<Self>, state: &mut SrtLoop, joined: Joined) -> SrtTurn {
+        if self
+            .apply_admission(
+                &mut state.ingress,
+                &mut state.sessions,
+                &mut state.peers,
+                joined,
+            )
+            .is_err()
+        {
+            SrtTurn::Stop(Some(
+                "SRT ingress command reservation exhausted".to_string(),
+            ))
+        } else {
+            SrtTurn::Continue
+        }
+    }
+
+    fn on_auth_failure(&self, failure: AuthFailure) {
+        let (scope, ip) = failure;
+        if self.security.record_failure_for(scope, &ip.to_string()) {
+            warn!(peer_ip = %ip, scope = scope.key(), "SRT caller banned after repeated unknown stream keys");
+        }
+    }
+
+    fn on_housekeeping(
+        self: &Arc<Self>,
+        state: &mut SrtLoop,
+        shutdown: &std::sync::atomic::AtomicBool,
+    ) -> SrtTurn {
+        let SrtLoop {
+            ingress,
+            sessions,
+            calls,
+            ..
+        } = state;
+        if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            return SrtTurn::Stop(None);
+        }
+        close_deleted_sessions(&self.engine, ingress, sessions);
+        calls.tick(
+            &self.engine.ingests.srt_calls,
+            std::time::Instant::now(),
+            |peer| ingress.pending_command.is_none() && ingress.disconnect(peer).is_ok(),
+        );
+        if ingress.handle.is_closed() {
+            return SrtTurn::Stop(Some("the SRT ingress owner thread stopped".to_string()));
+        }
+        SrtTurn::Continue
     }
 
     fn handle_ingress_event(
@@ -559,6 +651,38 @@ fn close_deleted_sessions(
             }
         }
     }
+}
+
+#[cold]
+fn log_listener_ready(port: u16, bind: impl std::fmt::Display) {
+    info!(port, %bind, "SRT listener ready (srt-rs compio Owner ingress)");
+}
+
+#[cold]
+fn log_listener_stopped(port: u16, quiescent: bool) {
+    info!(port, quiescent, "SRT listener stopped");
+}
+
+#[cold]
+fn log_stop_fault(port: u16, fault: Option<&str>, quiescent: bool) {
+    if let Some(fault) = fault {
+        error!(port, %fault, quiescent, "SRT listener stopped after an owner fault");
+    } else if !quiescent {
+        warn!(
+            port,
+            "SRT ingress owner did not reach quiescence at shutdown"
+        );
+    }
+}
+
+#[cold]
+fn log_bind_error(port: u16, error: impl std::fmt::Display) {
+    error!(port, %error, "invalid SRT listener address");
+}
+
+#[cold]
+fn log_start_error(port: u16, error: impl std::fmt::Display) {
+    error!(port, %error, "failed to start the SRT ingress owner");
 }
 
 /// Test-only fault point: `start_publisher` for a marked stream key unwinds
