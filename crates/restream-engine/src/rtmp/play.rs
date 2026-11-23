@@ -51,6 +51,18 @@ pub(super) async fn handle_play_request(
             return Err(error);
         }
     };
+    accept_play(&mut request, &pipeline_id).await?;
+    let (video, audio) = start_play(&request, &pipeline_id).await?;
+    send_sequence_headers(
+        request.session,
+        request.socket,
+        request.stream_id,
+        video,
+        audio,
+    )
+    .await;
+    run_playback(request, &pipeline_id).await
+}
 
 async fn request_authorization(
     request: &mut RtmpPlayRequest<'_>,
@@ -136,6 +148,7 @@ async fn send_sequence_headers(
     }
 }
 
+async fn run_playback(request: RtmpPlayRequest<'_>, pipeline_id: &str) -> Result<(), &'static str> {
     let mut timestamp_guard = RtmpTimestampGuard::new();
     let socket: &RtmpClientSocket = request.socket;
     let session = request.session;
@@ -147,14 +160,7 @@ async fn send_sequence_headers(
     let mut inbound = Box::pin(socket.append(session.take_input_buffer()));
     let mut recycled = Vec::new();
     loop {
-        let (reply, response) = oneshot::channel();
-        tokio::select! {
-            _ = request.shutdown.cancelled() => return Err("Play finished"),
-            result = request.commands.send(RtmpControlCommand::PlayNext { reply, recycled }) => {
-                result.map_err(|_| "RTMP control session closed")?;
-            }
-        }
-        let mut response = response;
+        let mut response = request_next_batch(request.commands, request.shutdown, recycled).await?;
         let packets = loop {
             tokio::select! {
                 biased;
