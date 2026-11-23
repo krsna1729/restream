@@ -330,15 +330,9 @@ async fn ingest<L: Lifecycle + Clone>(
 ) -> SessionEnd {
     let consumer = origin.consume();
     let mut announced = consumer.announced();
-    let broadcast = loop {
-        match compio::time::timeout(limits.announce_timeout, announced.next()).await {
-            Err(_) => return SessionEnd::new(Error::Timeout, "no broadcast was announced"),
-            Ok(None) => {
-                return SessionEnd::new(Error::Closed, "the publisher left before announcing");
-            }
-            Ok(Some(update)) if update.kind.is_active() => break update.prefix,
-            Ok(Some(_)) => {}
-        }
+    let broadcast = match wait_for_announcement(&mut announced, limits.announce_timeout).await {
+        Ok(broadcast) => broadcast,
+        Err(end) => return end,
     };
     let Some(key) = stream_key(connection_path, broadcast.as_str()) else {
         return SessionEnd::new(
@@ -356,20 +350,9 @@ async fn ingest<L: Lifecycle + Clone>(
         std::panic::resume_unwind(Box::new("injected MoQ connection panic"));
     }
 
-    let preference = CatalogFormat::detect(broadcast.as_str());
-    let broadcast = match compio::time::timeout(
-        limits.catalog_timeout,
-        consumer.routed_broadcast(broadcast.as_str()),
-    )
-    .await
-    {
-        Err(_) => return SessionEnd::new(Error::Timeout, "the announced broadcast never resolved"),
-        Ok(Err(error)) => return SessionEnd::moq("broadcast", error),
-        Ok(Ok(broadcast)) => broadcast,
-    };
-    let (reader, catalog) =
-        match first_catalog(read_catalog(&broadcast, preference), limits.catalog_timeout).await {
-            Ok(first) => first,
+    let (broadcast, reader, catalog) =
+        match open_catalog(&consumer, broadcast.as_str(), limits.catalog_timeout).await {
+            Ok(opened) => opened,
             Err(end) => return end,
         };
     let tracks = TrackSet::new(from_hang_catalog(&catalog));
@@ -443,6 +426,50 @@ async fn ingest<L: Lifecycle + Clone>(
             }
         }
     }
+}
+
+async fn wait_for_announcement(
+    announcements: &mut moq_net::announce::Consumer,
+    timeout: Duration,
+) -> Result<moq_net::PathOwned, SessionEnd> {
+    loop {
+        match compio::time::timeout(timeout, announcements.next()).await {
+            Err(_) => {
+                return Err(SessionEnd::new(
+                    Error::Timeout,
+                    "no broadcast was announced",
+                ));
+            }
+            Ok(None) => {
+                return Err(SessionEnd::new(
+                    Error::Closed,
+                    "the publisher left before announcing",
+                ));
+            }
+            Ok(Some(update)) if update.kind.is_active() => return Ok(update.prefix),
+            Ok(Some(_)) => {}
+        }
+    }
+}
+
+async fn open_catalog(
+    consumer: &moq_net::origin::Consumer,
+    name: &str,
+    timeout: Duration,
+) -> Result<(moq_net::broadcast::Consumer, CatalogReader, hang::Catalog), SessionEnd> {
+    let preference = CatalogFormat::detect(name);
+    let broadcast = match compio::time::timeout(timeout, consumer.routed_broadcast(name)).await {
+        Err(_) => {
+            return Err(SessionEnd::new(
+                Error::Timeout,
+                "the announced broadcast never resolved",
+            ));
+        }
+        Ok(Err(error)) => return Err(SessionEnd::moq("broadcast", error)),
+        Ok(Ok(broadcast)) => broadcast,
+    };
+    let (reader, catalog) = first_catalog(read_catalog(&broadcast, preference), timeout).await?;
+    Ok((broadcast, reader, catalog))
 }
 
 async fn subscribe(
