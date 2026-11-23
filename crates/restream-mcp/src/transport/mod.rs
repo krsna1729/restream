@@ -127,44 +127,11 @@ fn classify(message: Value, session: Option<&Session>, handshake: Handshake) -> 
             match method {
                 "tools/list" => {
                     let panels = session.is_some_and(Session::renders_panels);
-                    return Inbound::Reply(tools_list_response(id, panels));
+                    Inbound::Reply(tools_list_response(id, panels))
                 }
-                "resources/list" => return Inbound::Reply(result_response(id, panels::list())),
-                "resources/read" => {
-                    let uri = params
-                        .get("uri")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    return Inbound::Reply(match panels::read(uri) {
-                        Some(contents) => result_response(id, contents),
-                        None => error_response(
-                            id,
-                            -32002,
-                            "Resource not found".into(),
-                            Some(json!({ "uri": uri })),
-                        ),
-                    });
-                }
-                _ => {}
-            }
-            let Some(name) = params.get("name").and_then(Value::as_str) else {
-                return Inbound::Reply(error_response(
-                    id,
-                    -32602,
-                    "tools/call requires a string 'name'".into(),
-                    None,
-                ));
-            };
-            Inbound::ToolCall {
-                id,
-                name: name.to_owned(),
-                arguments: normalize_tool_arguments(
-                    params
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                ),
-                progress_token: params.pointer("/_meta/progressToken").cloned(),
+                "resources/list" => Inbound::Reply(result_response(id, panels::list())),
+                "resources/read" => Inbound::Reply(read_resource(id, &params)),
+                _ => classify_tool_call(id, &params),
             }
         }
         other => Inbound::Reply(error_response(
@@ -173,6 +140,44 @@ fn classify(message: Value, session: Option<&Session>, handshake: Handshake) -> 
             format!("unknown method '{other}'"),
             None,
         )),
+    }
+}
+
+fn read_resource(id: Value, params: &Value) -> Value {
+    let uri = params
+        .get("uri")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match panels::read(uri) {
+        Some(contents) => result_response(id, contents),
+        None => error_response(
+            id,
+            -32002,
+            "Resource not found".into(),
+            Some(json!({ "uri": uri })),
+        ),
+    }
+}
+
+fn classify_tool_call(id: Value, params: &Value) -> Inbound {
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return Inbound::Reply(error_response(
+            id,
+            -32602,
+            "tools/call requires a string 'name'".into(),
+            None,
+        ));
+    };
+    Inbound::ToolCall {
+        id,
+        name: name.to_owned(),
+        arguments: normalize_tool_arguments(
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        ),
+        progress_token: params.pointer("/_meta/progressToken").cloned(),
     }
 }
 
