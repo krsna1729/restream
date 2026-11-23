@@ -34,6 +34,27 @@ fn compatibility_mode_from_env() -> Result<CompatibilityMode, String> {
     }
 }
 
+#[cfg(all(feature = "mcp-server", feature = "mcp-http-backend"))]
+fn auth_from_env() -> restream_mcp::http::HttpAgentAuth {
+    use restream_mcp::http::HttpAgentAuth;
+
+    if let Ok(cookie) = std::env::var("RESTREAM_AGENT_SESSION_COOKIE") {
+        let cookie = cookie.trim();
+        return if cookie.is_empty() {
+            HttpAgentAuth::None
+        } else {
+            HttpAgentAuth::SessionCookie(cookie.to_owned())
+        };
+    }
+    if let Ok(token) = std::env::var("RESTREAM_AGENT_BEARER_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            return HttpAgentAuth::BearerToken(token.to_owned());
+        }
+    }
+    HttpAgentAuth::None
+}
+
 #[cfg(not(feature = "mcp-server"))]
 fn main() {
     eprintln!(
@@ -94,25 +115,7 @@ fn main() {
         };
         let base_url = std::env::var("RESTREAM_AGENT_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:3030".to_string());
-        let auth = if let Ok(cookie) =
-            std::env::var("RESTREAM_AGENT_SESSION_COOKIE").map(|s| s.trim().to_string())
-        {
-            if cookie.is_empty() {
-                restream_mcp::http::HttpAgentAuth::None
-            } else {
-                restream_mcp::http::HttpAgentAuth::SessionCookie(cookie)
-            }
-        } else if let Ok(token) =
-            std::env::var("RESTREAM_AGENT_BEARER_TOKEN").map(|s| s.trim().to_string())
-        {
-            if token.is_empty() {
-                restream_mcp::http::HttpAgentAuth::None
-            } else {
-                restream_mcp::http::HttpAgentAuth::BearerToken(token)
-            }
-        } else {
-            restream_mcp::http::HttpAgentAuth::None
-        };
+        let auth = auth_from_env();
         let allowed_origins = std::env::var("RESTREAM_MCP_ALLOWED_ORIGINS")
             .ok()
             .map(|value| {
@@ -151,20 +154,28 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        if compatibility_mode != CompatibilityMode::Off {
-            match runtime.block_on(backend.verify_target_compatibility()) {
-                Ok(()) => {}
-                Err(error) if compatibility_mode == CompatibilityMode::Warn => {
-                    eprintln!("warning: {error}");
-                }
-                Err(error) => {
-                    eprintln!("{error}");
-                    std::process::exit(1);
-                }
-            }
-        }
+        check_target_compatibility(&runtime, &backend, compatibility_mode);
         let result = runtime.block_on(restream_mcp::run_server(config, Arc::new(backend)));
         if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(all(feature = "mcp-server", feature = "mcp-http-backend"))]
+fn check_target_compatibility(
+    runtime: &tokio::runtime::Runtime,
+    backend: &restream_mcp::http::HttpAgentBackend,
+    mode: CompatibilityMode,
+) {
+    if mode == CompatibilityMode::Off {
+        return;
+    }
+    if let Err(error) = runtime.block_on(backend.verify_target_compatibility()) {
+        if mode == CompatibilityMode::Warn {
+            eprintln!("warning: {error}");
+        } else {
             eprintln!("{error}");
             std::process::exit(1);
         }
