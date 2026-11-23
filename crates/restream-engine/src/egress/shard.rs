@@ -549,46 +549,12 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             let mut ready_processed = self.process_ready_batch(&mut running);
             let mut timers_processed = self.process_timer_batch(&mut running);
             if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
-                processed = self.wait_for_activity(&mut running);
-                if running {
-                    ready_processed += self.process_ready_batch(&mut running);
-                }
-                if running {
-                    timers_processed = self.process_timer_batch(&mut running);
-                }
-                let mut idle_poll_found_work = false;
-                if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
-                    // Nothing scheduled a readiness check this iteration (no
-                    // `FeedWake`, no self-perpetuating `ScheduleReady` from a
-                    // previous visit). A leaf waiting on real I/O readiness
-                    // that isn't feed-related — most commonly a handshake or
-                    // negotiation response — has no other way to ever be
-                    // rediscovered on an otherwise-quiet shard: `on_ready`'s
-                    // `poll_ready()` (the only thing that actually calls the
-                    // native poller) never runs unless something schedules
-                    // it, and a shard with one output and no active media
-                    // yet schedules nothing. This closes that gap by giving
-                    // every idle shard one real poller check per idle-wait
-                    // cycle, matching the cadence `RtmpShardBackend`'s
-                    // `FeedWake` handling doc comments already assume exists
-                    // ("the shard's own idle poll cycle").
-                    let effect = self.backend.on_ready();
-                    idle_poll_found_work = effect != EgressShardCommandEffect::Continue;
-                    if self.apply_effect(effect).stops_shard() {
-                        running = false;
-                    }
-                }
-                // Fully idle while draining: nothing left to flush, so stop
-                // now instead of waiting out the rest of the deadline.
-                if running
-                    && self.draining_until.is_some()
-                    && processed == 0
-                    && ready_processed == 0
-                    && timers_processed == 0
-                    && !idle_poll_found_work
-                {
-                    running = false;
-                }
+                self.idle_cycle(
+                    &mut running,
+                    &mut processed,
+                    &mut ready_processed,
+                    &mut timers_processed,
+                );
             }
             if self.wake_gate.take_full_delivery() {
                 // Preserve a queued wake's gate: it still owns its delivery.
@@ -608,6 +574,57 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             }
         }
         self.backend.on_shutdown();
+    }
+
+    /// Park until work arrives, then process one round of ready visits and
+    /// timers.
+    fn idle_cycle(
+        &mut self,
+        running: &mut bool,
+        processed: &mut usize,
+        ready_processed: &mut usize,
+        timers_processed: &mut usize,
+    ) {
+        *processed = self.wait_for_activity(running);
+        if *running {
+            *ready_processed += self.process_ready_batch(running);
+        }
+        if *running {
+            *timers_processed = self.process_timer_batch(running);
+        }
+        let mut idle_poll_found_work = false;
+        if *running && *processed == 0 && *ready_processed == 0 && *timers_processed == 0 {
+            // Nothing scheduled a readiness check this iteration (no
+            // `FeedWake`, no self-perpetuating `ScheduleReady` from a
+            // previous visit). A leaf waiting on real I/O readiness
+            // that isn't feed-related — most commonly a handshake or
+            // negotiation response — has no other way to ever be
+            // rediscovered on an otherwise-quiet shard: `on_ready`'s
+            // `poll_ready()` (the only thing that actually calls the
+            // native poller) never runs unless something schedules
+            // it, and a shard with one output and no active media
+            // yet schedules nothing. This closes that gap by giving
+            // every idle shard one real poller check per idle-wait
+            // cycle, matching the cadence `RtmpShardBackend`'s
+            // `FeedWake` handling doc comments already assume exists
+            // ("the shard's own idle poll cycle").
+            let effect = self.backend.on_ready();
+            idle_poll_found_work = effect != EgressShardCommandEffect::Continue;
+            if self.apply_effect(effect).stops_shard() {
+                *running = false;
+            }
+        }
+        // Fully idle while draining: nothing left to flush, so stop
+        // now instead of waiting out the rest of the deadline.
+        if *running
+            && self.draining_until.is_some()
+            && *processed == 0
+            && *ready_processed == 0
+            && *timers_processed == 0
+            && !idle_poll_found_work
+        {
+            *running = false;
+        }
     }
 
     fn process_command_batch(&mut self, running: &mut bool) -> usize {
