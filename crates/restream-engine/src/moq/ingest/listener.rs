@@ -351,16 +351,12 @@ async fn accept_loop(endpoint: &Endpoint, listener: &Rc<Listener>, max_connectio
 }
 
 /// One connection: handshake, SETUP, then origin or publisher.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: CapSlot) {
     let peer = incoming.remote_address();
     let accepted = match transport::accept(incoming).await {
         Ok(accepted) => accepted,
         Err(error) => {
-            debug!(%peer, %error, "MoQ handshake failed");
+            log_handshake_failed(peer, &error);
             return;
         }
     };
@@ -373,11 +369,11 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
     let handshake = match setup {
         Ok(Ok(handshake)) => handshake,
         Ok(Err(error)) => {
-            debug!(%peer, %error, "MoQ SETUP failed");
+            log_setup_failed(peer, &error);
             return;
         }
         Err(_) => {
-            debug!(%peer, "MoQ SETUP timed out");
+            log_setup_timeout(peer);
             return;
         }
     };
@@ -390,13 +386,7 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
                 listener.origin.clone().serve(grant, handshake).await;
             }
             Err(reject) => {
-                info!(
-                    event_class = "media",
-                    event_type = "restream.moq.origin.refused",
-                    %peer,
-                    reason = %reject,
-                    "MoQ subscriber refused",
-                );
+                log_viewer_refused(peer, &reject);
                 handshake.close(reject.error());
             }
         }
@@ -416,11 +406,42 @@ async fn serve_connection(incoming: Incoming, listener: &Rc<Listener>, slot: Cap
         &listener.shutdown,
     )
     .await;
+    log_session_ended(peer, &end.reason);
+}
+
+#[cold]
+fn log_handshake_failed(peer: SocketAddr, error: &impl std::fmt::Display) {
+    debug!(%peer, %error, "MoQ handshake failed");
+}
+
+#[cold]
+fn log_setup_failed(peer: SocketAddr, error: &impl std::fmt::Display) {
+    debug!(%peer, %error, "MoQ SETUP failed");
+}
+
+#[cold]
+fn log_setup_timeout(peer: SocketAddr) {
+    debug!(%peer, "MoQ SETUP timed out");
+}
+
+#[cold]
+fn log_viewer_refused(peer: SocketAddr, reject: &impl std::fmt::Display) {
+    info!(
+        event_class = "media",
+        event_type = "restream.moq.origin.refused",
+        %peer,
+        reason = %reject,
+        "MoQ subscriber refused",
+    );
+}
+
+#[cold]
+fn log_session_ended(peer: SocketAddr, reason: &impl std::fmt::Display) {
     info!(
         event_class = "media",
         event_type = "restream.moq.ingest.session_ended",
         %peer,
-        reason = %end.reason,
+        reason = %reason,
         "MoQ publisher session ended",
     );
 }
