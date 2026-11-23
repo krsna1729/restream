@@ -550,6 +550,15 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
                     self.tx_bytes = self.tx_bytes.saturating_add(bytes);
                     self.tx_units = self.tx_units.saturating_add(1);
                 }
+                if let Some(request) = slot.in_flight.take() {
+                    let failure = (!(200..300).contains(&response.status))
+                        .then(|| upload_policy::status_failure_message(&request, response.status));
+                    report(slot, &request, effect, failure.as_deref());
+                }
+                if !response.keep_alive {
+                    self.drop_connection(key);
+                }
+                Some(SlotPhase::Again)
             }
             ExchangeStep::Blocked if now < exchange.deadline => Some(SlotPhase::Stop),
             ExchangeStep::Blocked => {
