@@ -168,6 +168,23 @@ pub(crate) struct HlsPutShardBackend<P: RtmpReadinessPoller> {
     sweep: LeafServiceSweep,
 }
 
+/// What one phase of the slot loop decided.
+enum SlotPhase {
+    /// The slot did work; drive it again from the top.
+    Again,
+    /// Stop driving this slot for now.
+    Stop,
+}
+
+/// Why a pending connection has expired, if it has.
+fn expired_connection(conn: &Conn, now: Instant) -> Option<&'static str> {
+    match conn {
+        Conn::Resolving { deadline, .. } if now >= *deadline => Some("name resolution timed out"),
+        Conn::Connecting { deadline, .. } if now >= *deadline => Some("connect timed out"),
+        _ => None,
+    }
+}
+
 impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
     pub(crate) fn new(
         poller: P,
@@ -481,119 +498,144 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
         None
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     fn drive_slot(&mut self, key: LeafKey, now: Instant) {
         loop {
-            let Some(slot) = self.slots.get_mut(key) else {
+            let Some(slot) = self.slots.get(key) else {
                 return;
             };
-            match &slot.conn {
-                Conn::Resolving { deadline, .. } if now >= *deadline => {
-                    self.connection_failed(key, "name resolution timed out");
-                    continue;
-                }
-                Conn::Connecting { deadline, .. } if now >= *deadline => {
-                    self.connection_failed(key, "connect timed out");
-                    continue;
-                }
-                _ => {}
-            }
-            if let Some(exchange) = slot.exchange.as_mut() {
-                let Conn::Open(connection) = &mut slot.conn else {
-                    slot.exchange = None;
-                    self.fail_exchange(key, now, "connection closed");
-                    continue;
-                };
-                let step = exchange.advance(connection, &mut self.scratch);
-                connection.resume_receive();
-                match step {
-                    ExchangeStep::Done(response) => {
-                        slot.exchange = None;
-                        let effect = slot
-                            .policy
-                            .on_result(UploadOutcome::Status(response.status), now);
-                        if let Some(ResultEffect::Acknowledged { bytes }) = effect {
-                            self.tx_bytes = self.tx_bytes.saturating_add(bytes);
-                            self.tx_units = self.tx_units.saturating_add(1);
-                        }
-                        if let Some(request) = slot.in_flight.take() {
-                            let failure = (!(200..300).contains(&response.status)).then(|| {
-                                upload_policy::status_failure_message(&request, response.status)
-                            });
-                            report(slot, &request, effect, failure.as_deref());
-                        }
-                        if !response.keep_alive {
-                            self.drop_connection(key);
-                        }
-                        continue;
-                    }
-                    ExchangeStep::Blocked if now < exchange.deadline => return,
-                    ExchangeStep::Blocked => {
-                        self.drop_connection(key);
-                        self.fail_exchange(key, now, "request timed out");
-                        continue;
-                    }
-                    ExchangeStep::Failed(error) => {
-                        self.drop_connection(key);
-                        self.fail_exchange(key, now, &error);
-                        continue;
-                    }
-                }
-            }
-            if slot.waiting_request.is_some() {
-                // Waiting for a connection.
-                if matches!(slot.conn, Conn::Idle) {
-                    self.start_resolve(key);
-                }
-                // Take the request only once a connection is open; until
-                // then it stays waiting.
-                if let Some(slot) = self.slots.get_mut(key)
-                    && matches!(slot.conn, Conn::Open(_))
-                    && let Some(request) = slot.waiting_request.take()
-                {
-                    slot.exchange = Some(exchange_for(slot, &request, now));
-                    slot.in_flight = Some(request);
-                    continue;
-                }
-                return;
-            }
-            if let Conn::Open(connection) = &mut slot.conn
-                && peer_closed_idle(connection, &mut self.scratch)
-            {
-                self.drop_connection(key);
+            if let Some(why) = expired_connection(&slot.conn, now) {
+                self.connection_failed(key, why);
                 continue;
             }
-            match slot.policy.next(now) {
-                Next::Put(request) => {
-                    slot.wake_at = None;
-                    if request.fresh_connection && matches!(slot.conn, Conn::Open(_)) {
-                        self.drop_connection(key);
-                    }
-                    let Some(slot) = self.slots.get_mut(key) else {
-                        return;
-                    };
-                    if matches!(slot.conn, Conn::Open(_)) {
-                        slot.exchange = Some(exchange_for(slot, &request, now));
-                        slot.in_flight = Some(request);
-                    } else {
-                        slot.waiting_request = Some(request);
-                    }
+            if let Some(phase) = self.drive_exchange(key, now) {
+                match phase {
+                    SlotPhase::Again => continue,
+                    SlotPhase::Stop => return,
                 }
-                Next::Wait(until) => {
-                    slot.wake_at = until;
-                    return;
+            }
+            if let Some(phase) = self.promote_waiting_request(key, now) {
+                match phase {
+                    SlotPhase::Again => continue,
+                    SlotPhase::Stop => return,
                 }
-                Next::Stop(stopped) => {
-                    if let Stopped::Rejected { status } = stopped {
-                        tracing::warn!(output_id = %slot.output_id, status, "HLS ingest rejected the upload; not retrying");
-                        slot.progress.mark_terminated_unexpectedly();
-                    }
-                    self.close_slot(key);
-                    return;
+            }
+            if self.drop_closed_idle(key) {
+                continue;
+            }
+            match self.apply_policy(key, now) {
+                SlotPhase::Again => continue,
+                SlotPhase::Stop => return,
+            }
+        }
+    }
+
+    /// Advance the in-flight exchange, if any. `None` means there is none.
+    fn drive_exchange(&mut self, key: LeafKey, now: Instant) -> Option<SlotPhase> {
+        let slot = self.slots.get_mut(key)?;
+        let exchange = slot.exchange.as_mut()?;
+        let Conn::Open(connection) = &mut slot.conn else {
+            slot.exchange = None;
+            self.fail_exchange(key, now, "connection closed");
+            return Some(SlotPhase::Again);
+        };
+        let step = exchange.advance(connection, &mut self.scratch);
+        connection.resume_receive();
+        match step {
+            ExchangeStep::Done(response) => {
+                slot.exchange = None;
+                let effect = slot
+                    .policy
+                    .on_result(UploadOutcome::Status(response.status), now);
+                if let Some(ResultEffect::Acknowledged { bytes }) = effect {
+                    self.tx_bytes = self.tx_bytes.saturating_add(bytes);
+                    self.tx_units = self.tx_units.saturating_add(1);
                 }
+            }
+            ExchangeStep::Blocked if now < exchange.deadline => Some(SlotPhase::Stop),
+            ExchangeStep::Blocked => {
+                self.drop_connection(key);
+                self.fail_exchange(key, now, "request timed out");
+                Some(SlotPhase::Again)
+            }
+            ExchangeStep::Failed(error) => {
+                self.drop_connection(key);
+                self.fail_exchange(key, now, &error);
+                Some(SlotPhase::Again)
+            }
+        }
+    }
+
+    /// Start the waiting request once a connection is open. `None` means the
+    /// slot has no waiting request.
+    fn promote_waiting_request(&mut self, key: LeafKey, now: Instant) -> Option<SlotPhase> {
+        let slot = self.slots.get_mut(key)?;
+        slot.waiting_request.as_ref()?;
+        // Waiting for a connection.
+        if matches!(slot.conn, Conn::Idle) {
+            self.start_resolve(key);
+        }
+        // Take the request only once a connection is open; until then it
+        // stays waiting.
+        let slot = self.slots.get_mut(key)?;
+        if matches!(slot.conn, Conn::Open(_))
+            && let Some(request) = slot.waiting_request.take()
+        {
+            slot.exchange = Some(exchange_for(slot, &request, now));
+            slot.in_flight = Some(request);
+            return Some(SlotPhase::Again);
+        }
+        Some(SlotPhase::Stop)
+    }
+
+    /// Drop a connection the peer closed while idle. `true` means the slot
+    /// must be driven again.
+    fn drop_closed_idle(&mut self, key: LeafKey) -> bool {
+        let Some(slot) = self.slots.get_mut(key) else {
+            return false;
+        };
+        let Conn::Open(connection) = &mut slot.conn else {
+            return false;
+        };
+        if !peer_closed_idle(connection, &mut self.scratch) {
+            return false;
+        }
+        self.drop_connection(key);
+        true
+    }
+
+    /// Ask the upload policy what this slot does next.
+    fn apply_policy(&mut self, key: LeafKey, now: Instant) -> SlotPhase {
+        let Some(slot) = self.slots.get_mut(key) else {
+            return SlotPhase::Stop;
+        };
+        match slot.policy.next(now) {
+            Next::Put(request) => {
+                slot.wake_at = None;
+                if request.fresh_connection && matches!(slot.conn, Conn::Open(_)) {
+                    self.drop_connection(key);
+                }
+                let Some(slot) = self.slots.get_mut(key) else {
+                    return SlotPhase::Stop;
+                };
+                if matches!(slot.conn, Conn::Open(_)) {
+                    slot.exchange = Some(exchange_for(slot, &request, now));
+                    slot.in_flight = Some(request);
+                } else {
+                    slot.waiting_request = Some(request);
+                }
+                SlotPhase::Again
+            }
+            Next::Wait(until) => {
+                slot.wake_at = until;
+                SlotPhase::Stop
+            }
+            Next::Stop(stopped) => {
+                if let Stopped::Rejected { status } = stopped {
+                    tracing::warn!(output_id = %slot.output_id, status, "HLS ingest rejected the upload; not retrying");
+                    slot.progress.mark_terminated_unexpectedly();
+                }
+                self.close_slot(key);
+                SlotPhase::Stop
             }
         }
     }
