@@ -406,10 +406,6 @@ fn rtmp_io_uring_entries(connection_limit: usize) -> u32 {
         .clamp(64, MAX_IO_URING_ENTRIES as usize) as u32
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_compio_owner(
     listener: compio::net::TcpListener,
     control_tx: mpsc::Sender<ControlSession>,
@@ -442,34 +438,24 @@ async fn run_compio_owner(
                     Ok(accepted) => accepted,
                     Err(error) => break Err(error),
                 };
-                if let Err(error) = stream.set_nodelay(true) {
-                    warn!(%peer_addr, %error, "failed to enable TCP_NODELAY for RTMP client");
-                    drop(stream);
-                    continue;
-                }
-                if connections.len() >= connection_limit {
-                    warn!(%peer_addr, "RTMP connection rejected: max connection limit reached");
-                    drop(stream);
-                    continue;
-                }
-                let Some(client_slot) = client_slots.try_acquire(peer_addr.ip()) else {
-                    warn!(%peer_addr, "RTMP connection rejected: this client holds its maximum connections");
-                    drop(stream);
+                let Some(admitted) = admit_client(
+                    &stream,
+                    peer_addr,
+                    connection_limit,
+                    connections.len(),
+                    &client_slots,
+                    &control_tx,
+                    &connection_shutdown,
+                ) else {
                     continue;
                 };
-
-                let (command_tx, command_rx) = mpsc::channel(CONTROL_SESSION_CAPACITY);
-                let session_shutdown = connection_shutdown.child_token();
-                if control_tx.try_send(ControlSession {
-                    commands: command_rx,
-                    shutdown: session_shutdown.clone(),
-                }).is_err() {
-                    warn!(%peer_addr, "RTMP connection rejected: control sessions are saturated");
-                    drop(stream);
-                    continue;
-                }
-                let connection_parser_budget = parser_budget.clone();
+                let AdmittedClient {
+                    commands,
+                    shutdown: session_shutdown,
+                    slot: client_slot,
+                } = admitted;
                 let connection_engine = engine.clone();
+                let connection_parser_budget = parser_budget.clone();
                 // Fault domain: a panic while serving one connection ends that
                 // connection (its socket, parser charge and gate lease drop
                 // with the future; the control session sees its command
@@ -478,7 +464,7 @@ async fn run_compio_owner(
                 let connection = std::panic::AssertUnwindSafe(handle_rtmp_client(
                     stream,
                     peer_addr,
-                    command_tx,
+                    commands,
                     session_shutdown,
                     connection_engine,
                     connection_parser_budget,
@@ -510,6 +496,85 @@ async fn run_compio_owner(
     let close_result = listener.close().await;
     while connections.next().await.is_some() {}
     accept_result.and(close_result)
+}
+
+struct AdmittedClient {
+    commands: mpsc::Sender<RtmpControlCommand>,
+    shutdown: CancellationToken,
+    slot: restream_sync::client_slots::ClientSlot,
+}
+
+/// Admit one accepted socket: TCP options, owner and per-client limits, then
+/// the control session. `None` drops the socket.
+fn admit_client(
+    stream: &compio::net::TcpStream,
+    peer_addr: SocketAddr,
+    connection_limit: usize,
+    active: usize,
+    client_slots: &Arc<restream_sync::client_slots::ClientSlots>,
+    control_tx: &mpsc::Sender<ControlSession>,
+    connection_shutdown: &CancellationToken,
+) -> Option<AdmittedClient> {
+    apply_socket_options(stream, peer_addr)?;
+    check_connection_limit(peer_addr, connection_limit, active)?;
+    let slot = acquire_client_slot(client_slots, peer_addr)?;
+    let (commands, shutdown) = open_control_session(control_tx, connection_shutdown, peer_addr)?;
+    Some(AdmittedClient {
+        commands,
+        shutdown,
+        slot,
+    })
+}
+
+fn apply_socket_options(stream: &compio::net::TcpStream, peer_addr: SocketAddr) -> Option<()> {
+    if let Err(error) = stream.set_nodelay(true) {
+        warn!(%peer_addr, %error, "failed to enable TCP_NODELAY for RTMP client");
+        return None;
+    }
+    Some(())
+}
+
+fn check_connection_limit(
+    peer_addr: SocketAddr,
+    connection_limit: usize,
+    active: usize,
+) -> Option<()> {
+    if active >= connection_limit {
+        warn!(%peer_addr, "RTMP connection rejected: max connection limit reached");
+        return None;
+    }
+    Some(())
+}
+
+fn acquire_client_slot(
+    client_slots: &Arc<restream_sync::client_slots::ClientSlots>,
+    peer_addr: SocketAddr,
+) -> Option<restream_sync::client_slots::ClientSlot> {
+    let Some(slot) = client_slots.try_acquire(peer_addr.ip()) else {
+        warn!(%peer_addr, "RTMP connection rejected: this client holds its maximum connections");
+        return None;
+    };
+    Some(slot)
+}
+
+fn open_control_session(
+    control_tx: &mpsc::Sender<ControlSession>,
+    connection_shutdown: &CancellationToken,
+    peer_addr: SocketAddr,
+) -> Option<(mpsc::Sender<RtmpControlCommand>, CancellationToken)> {
+    let (commands, command_rx) = mpsc::channel(CONTROL_SESSION_CAPACITY);
+    let session_shutdown = connection_shutdown.child_token();
+    if control_tx
+        .try_send(ControlSession {
+            commands: command_rx,
+            shutdown: session_shutdown.clone(),
+        })
+        .is_err()
+    {
+        warn!(%peer_addr, "RTMP connection rejected: control sessions are saturated");
+        return None;
+    }
+    Some((commands, session_shutdown))
 }
 
 fn report_listener_error(
