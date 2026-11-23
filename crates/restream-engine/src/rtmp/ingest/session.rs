@@ -21,11 +21,6 @@ pub(super) async fn handle_session_results(
                     .map_err(|_| "Failed to write outbound response")?;
             }
             ServerSessionResult::RaisedEvent(event) => match event {
-                ServerSessionEvent::ConnectionRequested { request_id, .. } => {
-                    if let Ok(responses) = session.accept_request(request_id) {
-                        write_responses(socket, responses).await?;
-                    }
-                }
                 ServerSessionEvent::PublishStreamRequested {
                     request_id,
                     stream_key,
@@ -78,11 +73,6 @@ pub(super) async fn handle_session_results(
                         .await?;
                     }
                 }
-                // The encoder's own description: kept for the dashboard,
-                // never forwarded (each egress writes its own).
-                ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
-                    report_encoder(commands, shutdown, publisher.is_some(), metadata).await?;
-                }
                 ServerSessionEvent::PlayStreamRequested {
                     request_id,
                     stream_key,
@@ -105,12 +95,46 @@ pub(super) async fn handle_session_results(
                 ServerSessionEvent::PublishStreamFinished { .. } => {
                     return Err("Publish finished by client");
                 }
-                _ => {}
+                event => {
+                    handle_control_event(
+                        event,
+                        session,
+                        socket,
+                        commands,
+                        shutdown,
+                        publisher.is_some(),
+                    )
+                    .await?;
+                }
             },
             ServerSessionResult::UnhandleableMessageReceived(_) => {}
         }
     }
     Ok(accepted_publish)
+}
+
+async fn handle_control_event(
+    event: ServerSessionEvent,
+    session: &mut ServerSession,
+    socket: &mut RtmpClientSocket,
+    commands: &mpsc::Sender<RtmpControlCommand>,
+    shutdown: &CancellationToken,
+    publishing: bool,
+) -> Result<(), &'static str> {
+    match event {
+        ServerSessionEvent::ConnectionRequested { request_id, .. } => {
+            if let Ok(responses) = session.accept_request(request_id) {
+                write_responses(socket, responses).await?;
+            }
+            Ok(())
+        }
+        // The encoder's own description: kept for the dashboard,
+        // never forwarded (each egress writes its own).
+        ServerSessionEvent::StreamMetadataChanged { metadata, .. } => {
+            report_encoder(commands, shutdown, publishing, metadata).await
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn write_responses(
