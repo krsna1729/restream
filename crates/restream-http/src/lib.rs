@@ -62,6 +62,7 @@ fn webpki_roots() -> RootCertStore {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn tls_config(roots: RootCertStore) -> ClientConfig {
     let mut config = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
         .with_safe_default_protocol_versions()

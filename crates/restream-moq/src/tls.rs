@@ -27,6 +27,7 @@ fn provider() -> Arc<CryptoProvider> {
     Arc::new(crypto::ring::default_provider())
 }
 
+#[allow(clippy::disallowed_methods)]
 pub fn client_config(
     alpn: &[&str],
     extra_ca_pem: Option<&[u8]>,

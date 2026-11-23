@@ -178,6 +178,7 @@ impl ServerCertVerifier for AcceptAnyServerCert {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_client_config_tls12() -> Arc<ClientConfig> {
     let mut provider = tokio_rustls::rustls::crypto::ring::default_provider();
     provider.cipher_suites.retain(|suite| {
@@ -194,6 +195,7 @@ fn test_client_config_tls12() -> Arc<ClientConfig> {
     )
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_client_config_tls13_chacha() -> Arc<ClientConfig> {
     let mut provider = tokio_rustls::rustls::crypto::ring::default_provider();
     provider.cipher_suites.retain(|suite| {
@@ -210,6 +212,7 @@ fn test_client_config_tls13_chacha() -> Arc<ClientConfig> {
     )
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_client_config_tls13_aes256_gcm() -> Arc<ClientConfig> {
     let mut provider = tokio_rustls::rustls::crypto::ring::default_provider();
     provider.cipher_suites.retain(|suite| {

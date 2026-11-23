@@ -30,6 +30,7 @@ fn crypto_provider() -> Arc<tokio_rustls::rustls::crypto::CryptoProvider> {
     Arc::new(provider)
 }
 
+#[allow(clippy::disallowed_methods)]
 fn client_config_with_roots(roots: RootCertStore) -> Arc<ClientConfig> {
     Arc::new(
         ClientConfig::builder_with_provider(crypto_provider())
