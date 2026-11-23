@@ -136,8 +136,7 @@ fn execution_tools() -> Vec<McpToolDefinition> {
         },
         McpToolDefinition {
             name: "get_agent_operation",
-            description:
-                "Read operation status, audit log, execution result, and verification result.",
+            description: "Read operation status, audit log, execution result, and verification result.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
