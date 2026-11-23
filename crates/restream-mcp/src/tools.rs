@@ -12,12 +12,15 @@ pub struct McpToolDefinition {
     pub compiled_in: bool,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub fn tool_catalog() -> Vec<McpToolDefinition> {
-    let mut tools = vec![
+    let mut tools = planning_tools();
+    tools.extend(execution_tools());
+    tools
+}
+
+/// Discovery, investigation and planning tools: they never mutate runtime.
+fn planning_tools() -> Vec<McpToolDefinition> {
+    vec![
         McpToolDefinition {
             name: "get_agent_capabilities",
             description: "Discover which agent-plane routes and workflows are available.",
@@ -102,9 +105,12 @@ pub fn tool_catalog() -> Vec<McpToolDefinition> {
             requires_feature: "agent-plane",
             compiled_in: true,
         },
-    ];
+    ]
+}
 
-    tools.extend([
+/// Approval-gated operations; present only in an execution-enabled build.
+fn execution_tools() -> Vec<McpToolDefinition> {
+    vec![
         McpToolDefinition {
             name: "create_agent_operation",
             description: "Create an approval-gated execution record for a validated plan.",
@@ -130,8 +136,7 @@ pub fn tool_catalog() -> Vec<McpToolDefinition> {
         },
         McpToolDefinition {
             name: "get_agent_operation",
-            description:
-                "Read operation status, audit log, execution result, and verification result.",
+            description: "Read operation status, audit log, execution result, and verification result.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -191,9 +196,7 @@ pub fn tool_catalog() -> Vec<McpToolDefinition> {
             requires_feature: "agent-execution",
             compiled_in: cfg!(feature = "agent-execution"),
         },
-    ]);
-
-    tools
+    ]
 }
 
 pub fn available_tool_catalog() -> Vec<McpToolDefinition> {
