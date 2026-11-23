@@ -1,5 +1,6 @@
 //! RTMP play admission and owner-side protocol delivery.
 
+use bytes::Bytes;
 use rml_rtmp::sessions::{ServerSession, ServerSessionEvent, ServerSessionResult};
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::sync::{mpsc, oneshot};
@@ -33,24 +34,10 @@ pub(super) struct RtmpPlayRequest<'a> {
     pub(super) stream_id: u32,
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
-pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<(), &'static str> {
-    let (reply, response) = oneshot::channel();
-    tokio::select! {
-        _ = request.shutdown.cancelled() => return Err("Play finished"),
-        result = request.commands.send(RtmpControlCommand::PlayRequested {
-            stream_key: request.stream_key,
-            client_ip: request.client_ip.to_string(),
-            reply,
-        }) => result.map_err(|_| "RTMP control session closed")?,
-    }
-    let authorization = tokio::select! {
-        _ = request.shutdown.cancelled() => return Err("Play finished"),
-        result = response => result.map_err(|_| "RTMP control session closed")?,
-    };
+pub(super) async fn handle_play_request(
+    mut request: RtmpPlayRequest<'_>,
+) -> Result<(), &'static str> {
+    let authorization = request_authorization(&mut request).await?;
     let pipeline_id = match authorization {
         PlayAuthorization::Accepted { pipeline_id } => pipeline_id,
         PlayAuthorization::Rejected {
@@ -65,6 +52,28 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         }
     };
 
+async fn request_authorization(
+    request: &mut RtmpPlayRequest<'_>,
+) -> Result<PlayAuthorization, &'static str> {
+    let (reply, response) = oneshot::channel();
+    tokio::select! {
+        _ = request.shutdown.cancelled() => return Err("Play finished"),
+        result = request.commands.send(RtmpControlCommand::PlayRequested {
+            stream_key: std::mem::take(&mut request.stream_key),
+            client_ip: request.client_ip.to_string(),
+            reply,
+        }) => result.map_err(|_| "RTMP control session closed")?,
+    }
+    tokio::select! {
+        _ = request.shutdown.cancelled() => Err("Play finished"),
+        result = response => result.map_err(|_| "RTMP control session closed"),
+    }
+}
+
+async fn accept_play(
+    request: &mut RtmpPlayRequest<'_>,
+    pipeline_id: &str,
+) -> Result<(), &'static str> {
     let responses = request
         .session
         .accept_request(request.request_id)
@@ -85,39 +94,47 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         stream_id = request.stream_id,
         "[rtmp] Play subscriber connected"
     );
+    Ok(())
+}
 
+async fn start_play(
+    request: &RtmpPlayRequest<'_>,
+    pipeline_id: &str,
+) -> Result<(Option<Bytes>, Option<Bytes>), &'static str> {
     let (reply, response) = oneshot::channel();
     tokio::select! {
         _ = request.shutdown.cancelled() => return Err("Play finished"),
         result = request.commands.send(RtmpControlCommand::PlayStart {
-            pipeline_id: pipeline_id.clone(),
+            pipeline_id: pipeline_id.to_string(),
             reply,
         }) => result.map_err(|_| "RTMP control session closed")?,
     }
-    let (video_sequence_header, audio_sequence_header) = tokio::select! {
-        _ = request.shutdown.cancelled() => return Err("Play finished"),
-        result = response => result.map_err(|_| "RTMP control session closed")?,
-    };
-    if let Some(sequence_header) = video_sequence_header
-        && let Ok(packet) = request.session.send_video_data(
-            request.stream_id,
-            sequence_header,
-            RtmpTimestamp::new(0),
-            false,
-        )
-    {
-        let _ = request.socket.write_all(packet.bytes).await;
+    tokio::select! {
+        _ = request.shutdown.cancelled() => Err("Play finished"),
+        result = response => result.map_err(|_| "RTMP control session closed"),
     }
-    if let Some(sequence_header) = audio_sequence_header
-        && let Ok(packet) = request.session.send_audio_data(
-            request.stream_id,
-            sequence_header,
-            RtmpTimestamp::new(0),
-            false,
-        )
+}
+
+async fn send_sequence_headers(
+    session: &mut ServerSession,
+    socket: &RtmpClientSocket,
+    stream_id: u32,
+    video: Option<Bytes>,
+    audio: Option<Bytes>,
+) {
+    if let Some(sequence_header) = video
+        && let Ok(packet) =
+            session.send_video_data(stream_id, sequence_header, RtmpTimestamp::new(0), false)
     {
-        let _ = request.socket.write_all(packet.bytes).await;
+        let _ = socket.write_all(packet.bytes).await;
     }
+    if let Some(sequence_header) = audio
+        && let Ok(packet) =
+            session.send_audio_data(stream_id, sequence_header, RtmpTimestamp::new(0), false)
+    {
+        let _ = socket.write_all(packet.bytes).await;
+    }
+}
 
     let mut timestamp_guard = RtmpTimestampGuard::new();
     let socket: &RtmpClientSocket = request.socket;
@@ -146,19 +163,13 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
                     return Err("Play finished");
                 }
                 read = &mut inbound => {
-                    match handle_play_input(session, socket, read).await {
-                        PlayInput::Continue => {
+                    match apply_play_input(handle_play_input(session, socket, read).await, pipeline_id) {
+                        PlayInputAction::Reapply => {
                             inbound = Box::pin(socket.append(session.take_input_buffer()));
                         }
-                        PlayInput::Finished => {
+                        PlayInputAction::Stop(outcome) => {
                             let _ = request.commands.try_send(RtmpControlCommand::Cancel);
-                            info!(pipeline = %pipeline_id, "[rtmp] Play stopped by client");
-                            return Ok(());
-                        }
-                        PlayInput::Disconnected(reason) => {
-                            let _ = request.commands.try_send(RtmpControlCommand::Cancel);
-                            info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
-                            return Err(reason);
+                            return outcome;
                         }
                     }
                 }
@@ -170,7 +181,7 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
         let Some(packets) = packets else {
             return Err("Play finished");
         };
-        recycled = match send_media_packets(
+        recycled = send_media_packets(
             session,
             socket,
             request.stream_id,
@@ -178,13 +189,47 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
             packets,
         )
         .await
-        {
-            Ok(emptied) => emptied,
-            Err(error) => {
-                info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
-                return Err(error);
-            }
-        };
+        .map_err(|error| subscriber_lost(pipeline_id, error))?;
+    }
+}
+
+/// Ask the control session for the next media burst.
+async fn request_next_batch(
+    commands: &mpsc::Sender<RtmpControlCommand>,
+    shutdown: &CancellationToken,
+    recycled: Vec<std::sync::Arc<MediaPacket>>,
+) -> Result<oneshot::Receiver<Option<Vec<std::sync::Arc<MediaPacket>>>>, &'static str> {
+    let (reply, response) = oneshot::channel();
+    tokio::select! {
+        _ = shutdown.cancelled() => return Err("Play finished"),
+        result = commands.send(RtmpControlCommand::PlayNext { reply, recycled }) => {
+            result.map_err(|_| "RTMP control session closed")?;
+        }
+    }
+    Ok(response)
+}
+
+fn subscriber_lost(pipeline_id: &str, error: &'static str) -> &'static str {
+    info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
+    error
+}
+
+enum PlayInputAction {
+    Reapply,
+    Stop(Result<(), &'static str>),
+}
+
+fn apply_play_input(input: PlayInput, pipeline_id: &str) -> PlayInputAction {
+    match input {
+        PlayInput::Continue => PlayInputAction::Reapply,
+        PlayInput::Finished => {
+            info!(pipeline = %pipeline_id, "[rtmp] Play stopped by client");
+            PlayInputAction::Stop(Ok(()))
+        }
+        PlayInput::Disconnected(reason) => {
+            info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
+            PlayInputAction::Stop(Err(reason))
+        }
     }
 }
 
