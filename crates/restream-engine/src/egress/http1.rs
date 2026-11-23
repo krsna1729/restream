@@ -198,96 +198,136 @@ impl ResponseReader {
             State::Sized {
                 response,
                 remaining,
-            } => {
-                let taken = take_up_to(unread, remaining);
-                if taken == 0 {
-                    return Ok(Step::Wait);
-                }
-                let remaining = remaining.saturating_sub(taken as u64);
-                self.state = if remaining == 0 {
-                    State::Done(response)
-                } else {
-                    State::Sized {
-                        response,
-                        remaining,
-                    }
-                };
-                Ok(Step::Consumed(taken))
-            }
-            State::ChunkSize { response, total } => {
-                let Some((line, consumed)) = line(unread, MAX_CHUNK_LINE)? else {
-                    return Ok(Step::Wait);
-                };
-                let size = parse_chunk_size(line)?;
-                let total = total
-                    .checked_add(size)
-                    .filter(|total| *total <= MAX_RESPONSE_BODY)
-                    .ok_or(HttpError::BodyTooLarge)?;
-                self.state = if size == 0 {
-                    State::Trailers { response }
-                } else {
-                    State::ChunkData {
-                        response,
-                        total,
-                        remaining: size,
-                    }
-                };
-                Ok(Step::Consumed(consumed))
-            }
+            } => self.step_sized(unread, response, remaining),
+            State::ChunkSize { response, total } => self.step_chunk_size(unread, response, total),
             State::ChunkData {
                 response,
                 total,
                 remaining,
-            } => {
-                let taken = take_up_to(unread, remaining);
-                if taken == 0 {
-                    return Ok(Step::Wait);
-                }
-                let remaining = remaining.saturating_sub(taken as u64);
-                self.state = if remaining == 0 {
-                    State::ChunkDataEnd { response, total }
-                } else {
-                    State::ChunkData {
-                        response,
-                        total,
-                        remaining,
-                    }
-                };
-                Ok(Step::Consumed(taken))
-            }
+            } => self.step_chunk_data(unread, response, total, remaining),
             State::ChunkDataEnd { response, total } => {
-                let Some((line, consumed)) = line(unread, 0)? else {
-                    return Ok(Step::Wait);
-                };
-                if !line.is_empty() {
-                    return Err(HttpError::Malformed("chunk data longer than its size"));
-                }
-                self.state = State::ChunkSize { response, total };
-                Ok(Step::Consumed(consumed))
+                self.step_chunk_data_end(unread, response, total)
             }
-            State::Trailers { response } => {
-                let Some((line, consumed)) = line(unread, MAX_RESPONSE_HEAD)? else {
-                    return Ok(Step::Wait);
-                };
-                if line.is_empty() {
-                    self.state = State::Done(response);
-                }
-                Ok(Step::Consumed(consumed))
-            }
-            State::UntilClose { response, total } => {
-                if unread.is_empty() {
-                    return Ok(Step::Wait);
-                }
-                let total = u64::try_from(unread.len())
-                    .ok()
-                    .and_then(|len| total.checked_add(len))
-                    .filter(|total| *total <= MAX_RESPONSE_BODY)
-                    .ok_or(HttpError::BodyTooLarge)?;
-                self.state = State::UntilClose { response, total };
-                Ok(Step::Consumed(unread.len()))
-            }
+            State::Trailers { response } => self.step_trailers(unread, response),
+            State::UntilClose { response, total } => self.step_until_close(unread, response, total),
             State::Done(_) => Ok(Step::Wait),
         }
+    }
+
+    fn step_sized(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        remaining: u64,
+    ) -> Result<Step, HttpError> {
+        let taken = take_up_to(unread, remaining);
+        if taken == 0 {
+            return Ok(Step::Wait);
+        }
+        let remaining = remaining.saturating_sub(taken as u64);
+        self.state = if remaining == 0 {
+            State::Done(response)
+        } else {
+            State::Sized {
+                response,
+                remaining,
+            }
+        };
+        Ok(Step::Consumed(taken))
+    }
+
+    fn step_chunk_size(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        total: u64,
+    ) -> Result<Step, HttpError> {
+        let Some((line, consumed)) = line(unread, MAX_CHUNK_LINE)? else {
+            return Ok(Step::Wait);
+        };
+        let size = parse_chunk_size(line)?;
+        let total = total
+            .checked_add(size)
+            .filter(|total| *total <= MAX_RESPONSE_BODY)
+            .ok_or(HttpError::BodyTooLarge)?;
+        self.state = if size == 0 {
+            State::Trailers { response }
+        } else {
+            State::ChunkData {
+                response,
+                total,
+                remaining: size,
+            }
+        };
+        Ok(Step::Consumed(consumed))
+    }
+
+    fn step_chunk_data(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        total: u64,
+        remaining: u64,
+    ) -> Result<Step, HttpError> {
+        let taken = take_up_to(unread, remaining);
+        if taken == 0 {
+            return Ok(Step::Wait);
+        }
+        let remaining = remaining.saturating_sub(taken as u64);
+        self.state = if remaining == 0 {
+            State::ChunkDataEnd { response, total }
+        } else {
+            State::ChunkData {
+                response,
+                total,
+                remaining,
+            }
+        };
+        Ok(Step::Consumed(taken))
+    }
+
+    fn step_chunk_data_end(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        total: u64,
+    ) -> Result<Step, HttpError> {
+        let Some((line, consumed)) = line(unread, 0)? else {
+            return Ok(Step::Wait);
+        };
+        if !line.is_empty() {
+            return Err(HttpError::Malformed("chunk data longer than its size"));
+        }
+        self.state = State::ChunkSize { response, total };
+        Ok(Step::Consumed(consumed))
+    }
+
+    fn step_trailers(&mut self, unread: &[u8], response: Response) -> Result<Step, HttpError> {
+        let Some((line, consumed)) = line(unread, MAX_RESPONSE_HEAD)? else {
+            return Ok(Step::Wait);
+        };
+        if line.is_empty() {
+            self.state = State::Done(response);
+        }
+        Ok(Step::Consumed(consumed))
+    }
+
+    fn step_until_close(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        total: u64,
+    ) -> Result<Step, HttpError> {
+        if unread.is_empty() {
+            return Ok(Step::Wait);
+        }
+        let total = u64::try_from(unread.len())
+            .ok()
+            .and_then(|len| total.checked_add(len))
+            .filter(|total| *total <= MAX_RESPONSE_BODY)
+            .ok_or(HttpError::BodyTooLarge)?;
+        self.state = State::UntilClose { response, total };
+        Ok(Step::Consumed(unread.len()))
     }
 
     #[allow(
