@@ -258,65 +258,14 @@ impl TsMuxer {
         }
 
         let pid = self.streams[stream_idx].pid;
-        let mut pts_90k = ms_to_ts(pts_ms);
-        let mut dts_90k = ms_to_ts(dts_ms);
-        let pts_offset_90k = (pts_90k - dts_90k).max(0);
-        if let Some(prev) = self.last_dts_90k.get(stream_idx).copied()
-            && dts_90k <= prev
-        {
-            dts_90k = prev + 1;
-            pts_90k = dts_90k + pts_offset_90k;
-        }
-        if pts_90k < dts_90k {
-            pts_90k = dts_90k;
-        }
-        let packet_span_end_90k = self.packet_span_end_90k(stream_idx, dts_90k, payload);
-        if let Some(slot) = self.last_dts_90k.get_mut(stream_idx) {
-            *slot = packet_span_end_90k;
-        }
-
-        let should_insert_tables = match self.last_pat_pmt_dts {
-            None => true,
-            Some(last) => is_keyframe || (dts_ms - last).abs() >= 500,
-        };
-
-        if should_insert_tables {
-            self.write_pat(out);
-            self.write_pmt(out);
-            if !self.service_metadata.provider_name.is_empty()
-                || !self.service_metadata.service_name.is_empty()
-            {
-                self.write_sdt(out);
-            }
-            self.last_pat_pmt_dts = Some(dts_ms);
-        }
+        let (pts_90k, dts_90k) = self.packet_timestamps(stream_idx, pts_ms, dts_ms, payload);
+        self.maybe_write_program_tables(dts_ms, is_keyframe, out);
 
         // Build PES header on the stack — no allocation, no payload copy.
         // The logical PES is pes_hdr[..hdr_len] ++ payload.
-        let pts_differs = pts_90k != dts_90k;
         let mut pes_hdr = [0u8; 19];
-        pes_hdr[0..3].copy_from_slice(&PES_START_CODE);
-        pes_hdr[3] = match media_type {
-            MediaType::Video => 0xE0,
-            MediaType::Audio => 0xC0,
-        };
-        let hdr_len: usize = if pts_differs { 19 } else { 14 };
-        let pes_data_len = hdr_len - 6 + payload.len();
-        if media_type == MediaType::Audio && pes_data_len <= 0xFFFF {
-            pes_hdr[4] = (pes_data_len >> 8) as u8;
-            pes_hdr[5] = pes_data_len as u8;
-        }
-        pes_hdr[6] = 0x80;
-        pes_hdr[7] = if pts_differs { 0xC0 } else { 0x80 };
-        pes_hdr[8] = if pts_differs { 10 } else { 5 };
-        write_timestamp_buf(
-            &mut pes_hdr[9..14],
-            pts_90k,
-            if pts_differs { 0x03 } else { 0x02 },
-        );
-        if pts_differs {
-            write_timestamp_buf(&mut pes_hdr[14..19], dts_90k, 0x01);
-        }
+        let hdr_len =
+            Self::write_pes_header(&mut pes_hdr, media_type, pts_90k, dts_90k, payload.len());
 
         let total_pes = hdr_len + payload.len();
         let ts_count = total_pes.div_ceil(184);
@@ -395,6 +344,85 @@ impl TsMuxer {
             pes_offset += copy_len;
             first = false;
         }
+    }
+
+    #[inline]
+    fn packet_timestamps(
+        &mut self,
+        stream_idx: usize,
+        pts_ms: i64,
+        dts_ms: i64,
+        payload: &[u8],
+    ) -> (i64, i64) {
+        let mut pts_90k = ms_to_ts(pts_ms);
+        let mut dts_90k = ms_to_ts(dts_ms);
+        let pts_offset_90k = (pts_90k - dts_90k).max(0);
+        if let Some(prev) = self.last_dts_90k.get(stream_idx).copied()
+            && dts_90k <= prev
+        {
+            dts_90k = prev + 1;
+            pts_90k = dts_90k + pts_offset_90k;
+        }
+        if pts_90k < dts_90k {
+            pts_90k = dts_90k;
+        }
+        let packet_span_end_90k = self.packet_span_end_90k(stream_idx, dts_90k, payload);
+        if let Some(slot) = self.last_dts_90k.get_mut(stream_idx) {
+            *slot = packet_span_end_90k;
+        }
+        (pts_90k, dts_90k)
+    }
+
+    #[inline]
+    fn maybe_write_program_tables(&mut self, dts_ms: i64, is_keyframe: bool, out: &mut Vec<u8>) {
+        let should_insert_tables = match self.last_pat_pmt_dts {
+            None => true,
+            Some(last) => is_keyframe || (dts_ms - last).abs() >= 500,
+        };
+        if should_insert_tables {
+            self.write_pat(out);
+            self.write_pmt(out);
+            if !self.service_metadata.provider_name.is_empty()
+                || !self.service_metadata.service_name.is_empty()
+            {
+                self.write_sdt(out);
+            }
+            self.last_pat_pmt_dts = Some(dts_ms);
+        }
+    }
+
+    #[inline]
+    fn write_pes_header(
+        pes_hdr: &mut [u8; 19],
+        media_type: MediaType,
+        pts_90k: i64,
+        dts_90k: i64,
+        payload_len: usize,
+    ) -> usize {
+        let pts_differs = pts_90k != dts_90k;
+        pes_hdr[0..3].copy_from_slice(&PES_START_CODE);
+        pes_hdr[3] = match media_type {
+            MediaType::Video => 0xE0,
+            MediaType::Audio => 0xC0,
+        };
+        let hdr_len: usize = if pts_differs { 19 } else { 14 };
+        let pes_data_len = hdr_len - 6 + payload_len;
+        if media_type == MediaType::Audio && pes_data_len <= 0xFFFF {
+            pes_hdr[4] = (pes_data_len >> 8) as u8;
+            pes_hdr[5] = pes_data_len as u8;
+        }
+        pes_hdr[6] = 0x80;
+        pes_hdr[7] = if pts_differs { 0xC0 } else { 0x80 };
+        pes_hdr[8] = if pts_differs { 10 } else { 5 };
+        write_timestamp_buf(
+            &mut pes_hdr[9..14],
+            pts_90k,
+            if pts_differs { 0x03 } else { 0x02 },
+        );
+        if pts_differs {
+            write_timestamp_buf(&mut pes_hdr[14..19], dts_90k, 0x01);
+        }
+        hdr_len
     }
 
     fn write_pat(&mut self, out: &mut Vec<u8>) {
