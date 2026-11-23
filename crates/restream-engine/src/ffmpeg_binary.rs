@@ -350,8 +350,18 @@ async fn fetch_into(channel: Channel, dir: &Path) -> Result<PathBuf, String> {
 
     std::fs::create_dir_all(dir).map_err(|error| format!("creating {}: {error}", dir.display()))?;
     let archive = dir.join(format!("{asset}.part"));
-    let mut response = get(format!("{base}/{asset}")).await?;
-    let mut file = std::fs::File::create(&archive)
+    let response = get(format!("{base}/{asset}")).await?;
+    verify_download(response, &archive, asset, &expected).await?;
+    install_archive(dir, &archive)
+}
+
+async fn verify_download(
+    mut response: reqwest::Response,
+    archive: &Path,
+    asset: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let mut file = std::fs::File::create(archive)
         .map_err(|error| format!("creating {}: {error}", archive.display()))?;
     let mut hasher = Sha256::new();
     let downloaded: Result<(), String> = async {
@@ -369,24 +379,27 @@ async fn fetch_into(channel: Channel, dir: &Path) -> Result<PathBuf, String> {
     .await;
     drop(file);
     if let Err(error) = downloaded {
-        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_file(archive);
         return Err(error);
     }
     let actual = hex(&hasher.finalize());
     if actual != expected {
-        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_file(archive);
         return Err(format!(
             "checksum mismatch for {asset}: got {actual}, want {expected}"
         ));
     }
+    Ok(())
+}
 
+fn install_archive(dir: &Path, archive: &Path) -> Result<PathBuf, String> {
     let staging = dir.join("staging");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)
         .map_err(|error| format!("creating {}: {error}", staging.display()))?;
     let extracted = std::process::Command::new("tar")
         .arg("-xJf")
-        .arg(&archive)
+        .arg(archive)
         .arg("-C")
         .arg(&staging)
         .args([
@@ -397,7 +410,7 @@ async fn fetch_into(channel: Channel, dir: &Path) -> Result<PathBuf, String> {
         ])
         .status()
         .map_err(|error| format!("running tar: {error}"))?;
-    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_file(archive);
     let binary = staging.join("ffmpeg");
     if !extracted.success() || !is_file(&binary) {
         let _ = std::fs::remove_dir_all(&staging);
@@ -479,6 +492,40 @@ mod tests {
             Resolution::Missing(None)
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_download_with_the_wrong_digest_is_removed() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let dir = temp_dir("wrong-digest");
+        let archive = dir.join("ffmpeg.tar.xz.part");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/archive", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            while stream.read_line(&mut line).await.unwrap() > 0 && line != "\r\n" {
+                line.clear();
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbad")
+                .await
+                .unwrap();
+        });
+        let response = http_client().unwrap().get(url).send().await.unwrap();
+        let expected = hex(&Sha256::digest(b"good"));
+        let error = verify_download(response, &archive, "ffmpeg.tar.xz", &expected)
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("checksum mismatch for ffmpeg.tar.xz:"));
+        assert!(
+            !archive.exists(),
+            "an invalid download must not remain staged"
+        );
+        server.await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
