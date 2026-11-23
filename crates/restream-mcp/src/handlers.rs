@@ -44,6 +44,17 @@ impl<B: AgentBackend> AgentToolHandler<B> {
                 let request: PlanRequest = serde_json::from_value(input)?;
                 self.backend.graph_diff(request).await
             }
+            other => self.dispatch_operation(other, input, ctx).await,
+        }
+    }
+
+    async fn dispatch_operation(
+        &self,
+        tool_name: &str,
+        input: Value,
+        ctx: &CallContext,
+    ) -> Result<Value, AgentError> {
+        match tool_name {
             "create_agent_operation" => {
                 let request: OperationCreateRequest = serde_json::from_value(input)?;
                 self.backend.create_operation(request).await
