@@ -198,6 +198,39 @@ impl ResponseReader {
             State::Sized {
                 response,
                 remaining,
+            } => self.step_sized(unread, response, remaining),
+            State::ChunkSize { response, total } => self.step_chunk_size(unread, response, total),
+            State::ChunkData {
+                response,
+                total,
+                remaining,
+            } => self.step_chunk_data(unread, response, total, remaining),
+            State::ChunkDataEnd { response, total } => {
+                self.step_chunk_data_end(unread, response, total)
+            }
+            State::Trailers { response } => self.step_trailers(unread, response),
+            State::UntilClose { response, total } => self.step_until_close(unread, response, total),
+            State::Done(_) => Ok(Step::Wait),
+        }
+    }
+
+    fn step_sized(
+        &mut self,
+        unread: &[u8],
+        response: Response,
+        remaining: u64,
+    ) -> Result<Step, HttpError> {
+        let taken = take_up_to(unread, remaining);
+        if taken == 0 {
+            return Ok(Step::Wait);
+        }
+        let remaining = remaining.saturating_sub(taken as u64);
+        self.state = if remaining == 0 {
+            State::Done(response)
+        } else {
+            State::Sized {
+                response,
+                remaining,
             }
         };
         Ok(Step::Consumed(taken))
