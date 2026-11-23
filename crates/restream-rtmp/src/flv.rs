@@ -113,59 +113,48 @@ pub fn flv_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u8>> {
 /// parameter set (an incomplete set would be prepended to keyframes as if
 /// it were whole).
 pub fn flv_video_config(payload: &[u8]) -> Option<(usize, Vec<u8>)> {
-    let (length_size_minus_one, sets): (u8, Vec<&[u8]>) = match ex_video_tag(payload) {
-        Some(tag) if tag.packet_type != EX_SEQUENCE_START => return None,
-        Some(tag) if tag.is_hevc() => {
-            let record = hvcc_record(tag.body)?;
-            if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
-                return None;
-            }
-            let sets = [record.vps, record.sps, record.pps].concat();
-            (record.length_size_minus_one, sets)
+    let (hevc, body) = if let Some(tag) = ex_video_tag(payload) {
+        if tag.packet_type != EX_SEQUENCE_START {
+            return None;
         }
-        Some(tag) => {
-            let record = avcc_record(tag.body)?;
-            if record.sps.is_empty() || record.pps.is_empty() {
-                return None;
-            }
-            (
-                record.length_size_minus_one,
-                [record.sps, record.pps].concat(),
-            )
-        }
-        None => {
-            let (&[tag, 0, ..], body) = payload.split_first_chunk::<5>()? else {
-                return None;
-            };
-            match tag & 0x0F {
-                7 => {
-                    let record = avcc_record(body)?;
-                    if record.sps.is_empty() || record.pps.is_empty() {
-                        return None;
-                    }
-                    (
-                        record.length_size_minus_one,
-                        [record.sps, record.pps].concat(),
-                    )
-                }
-                12 => {
-                    let record = hvcc_record(body)?;
-                    if record.vps.is_empty() || record.sps.is_empty() || record.pps.is_empty() {
-                        return None;
-                    }
-                    let sets = [record.vps, record.sps, record.pps].concat();
-                    (record.length_size_minus_one, sets)
-                }
-                _ => return None,
-            }
-        }
+        (tag.is_hevc(), tag.body)
+    } else {
+        let (&[tag, 0, ..], body) = payload.split_first_chunk::<5>()? else {
+            return None;
+        };
+        let hevc = match tag & 0x0F {
+            7 => false,
+            12 => true,
+            _ => return None,
+        };
+        (hevc, body)
     };
+
     let mut annexb = Vec::new();
-    for nalu in sets {
+    let length_size_minus_one = if hevc {
+        let record = hvcc_record(body)?;
+        append_parameter_sets(&mut annexb, [record.vps, record.sps, record.pps])?;
+        record.length_size_minus_one
+    } else {
+        let record = avcc_record(body)?;
+        append_parameter_sets(&mut annexb, [record.sps, record.pps])?;
+        record.length_size_minus_one
+    };
+    Some((usize::from(length_size_minus_one).saturating_add(1), annexb))
+}
+
+fn append_parameter_sets<const N: usize>(
+    annexb: &mut Vec<u8>,
+    sets: [Vec<&[u8]>; N],
+) -> Option<()> {
+    if sets.iter().any(Vec::is_empty) {
+        return None;
+    }
+    for nalu in sets.into_iter().flatten() {
         annexb.extend_from_slice(&[0, 0, 0, 1]);
         annexb.extend_from_slice(nalu);
     }
-    Some((usize::from(length_size_minus_one).saturating_add(1), annexb))
+    Some(())
 }
 
 pub fn flv_video_composition_time_ms(data: &[u8]) -> i32 {
@@ -260,48 +249,51 @@ pub fn parse_flv_audio_meta(data: &[u8]) -> Option<AudioMeta> {
         && let Some((&0, asc)) = rest.split_first()
         && let Some(&[asc0, asc1]) = asc.first_chunk::<2>()
     {
-        {
-            let audio_object_type = asc0 >> 3;
-            meta.profile = match audio_object_type {
-                1 => Some("Main".to_string()),
-                2 => Some("LC".to_string()),
-                3 => Some("SSR".to_string()),
-                4 => Some("LTP".to_string()),
-                5 => Some("SBR".to_string()),
-                _ => Some(format!("AAC Profile {}", audio_object_type)),
-            };
-            // 5 bits object type, 4 bits frequency index, 4 bits channels.
-            let freq_idx = (u16::from_be_bytes([asc0, asc1]) >> 7) & 0x0F;
-            let ch_config = (asc1 >> 3) & 0x0F;
-            if let Some(&rate) = AAC_SAMPLE_RATES.get(usize::from(freq_idx)) {
-                meta.sample_rate = rate;
-            }
-            if ch_config > 0 {
-                // Channel configuration 7 is 7.1: eight channels (ISO/IEC
-                // 14496-3 Table 1.19), as the MPEG-TS ADTS probe reports.
-                meta.channels = if ch_config == 7 {
-                    8
-                } else {
-                    u32::from(ch_config)
-                };
-                meta.channel_layout = Some(
-                    match ch_config {
-                        1 => "mono",
-                        2 => "stereo",
-                        3 => "3.0",
-                        4 => "4.0",
-                        5 => "5.0",
-                        6 => "5.1",
-                        7 => "7.1",
-                        _ => "unknown",
-                    }
-                    .to_string(),
-                );
-            }
-        }
+        apply_aac_config(&mut meta, asc0, asc1);
     }
 
     Some(meta)
+}
+
+fn apply_aac_config(meta: &mut AudioMeta, asc0: u8, asc1: u8) {
+    let audio_object_type = asc0 >> 3;
+    meta.profile = Some(match audio_object_type {
+        1 => "Main".to_string(),
+        2 => "LC".to_string(),
+        3 => "SSR".to_string(),
+        4 => "LTP".to_string(),
+        5 => "SBR".to_string(),
+        _ => format!("AAC Profile {}", audio_object_type),
+    });
+    // 5 bits object type, 4 bits frequency index, 4 bits channels.
+    let freq_idx = (u16::from_be_bytes([asc0, asc1]) >> 7) & 0x0F;
+    if let Some(&rate) = AAC_SAMPLE_RATES.get(usize::from(freq_idx)) {
+        meta.sample_rate = rate;
+    }
+    let ch_config = (asc1 >> 3) & 0x0F;
+    if ch_config == 0 {
+        return;
+    }
+    // Channel configuration 7 is 7.1: eight channels (ISO/IEC
+    // 14496-3 Table 1.19), as the MPEG-TS ADTS probe reports.
+    meta.channels = if ch_config == 7 {
+        8
+    } else {
+        u32::from(ch_config)
+    };
+    meta.channel_layout = Some(
+        match ch_config {
+            1 => "mono",
+            2 => "stereo",
+            3 => "3.0",
+            4 => "4.0",
+            5 => "5.0",
+            6 => "5.1",
+            7 => "7.1",
+            _ => "unknown",
+        }
+        .to_string(),
+    );
 }
 
 pub use restream_core::codec::{

@@ -14,7 +14,5 @@
   "crates/restream-mcp/src/handlers.rs::AgentToolHandler<B>::dispatch#0": 22,
   "crates/restream-mcp/src/main.rs::main#1": 25,
   "crates/restream-mcp/src/transport/mod.rs::classify#0": 21,
-  "crates/restream-mpegts/src/mux.rs::TsMuxer::mux_packet_at#0": 33,
-  "crates/restream-rtmp/src/flv.rs::flv_video_config#0": 26,
-  "crates/restream-rtmp/src/flv.rs::parse_flv_audio_meta#0": 36
+  "crates/restream-mpegts/src/mux.rs::TsMuxer::mux_packet_at#0": 33
 }
