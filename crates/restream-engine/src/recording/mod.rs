@@ -158,10 +158,6 @@ fn build_recording_remux_args(
     ]
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn remux_recording_to_mp4(
     recording_id: String,
     ts_path: PathBuf,
@@ -169,31 +165,8 @@ async fn remux_recording_to_mp4(
     ffmpeg_threads: u32,
     metadata: Option<RecordingMetadataReporter>,
 ) {
-    let capabilities = crate::ffmpeg_capabilities::report().await;
-    if !capabilities.available(crate::ffmpeg_capabilities::Feature::RecordingRemux) {
-        let missing = capabilities
-            .features
-            .iter()
-            .find(|status| status.feature == crate::ffmpeg_capabilities::Feature::RecordingRemux)
-            .map(|status| status.missing.join(", "))
-            .unwrap_or_default();
-        let error = format!("FFmpeg cannot remux recordings to MP4: it lacks {missing}");
-        write_conversion_state(
-            &ts_path,
-            RecordingConversionStatus::Failed,
-            Some(error.clone()),
-        )
-        .await;
-        if let Some(metadata) = &metadata {
-            metadata.report(RecordingMetadataEvent::Failed {
-                recording_id,
-                error,
-            });
-        }
-        info!(
-            source = %ts_path.display(),
-            "recording remux skipped: FFmpeg lacks what MP4 remux needs"
-        );
+    if let Some(error) = remux_capability_error().await {
+        report_remux_unavailable(&ts_path, metadata.as_ref(), recording_id, error).await;
         return;
     }
 
@@ -215,86 +188,192 @@ async fn remux_recording_to_mp4(
         .map_or(0, |meta| meta.len());
     match crate::ffmpeg_binary::run_tool(&ffmpeg_path, &args, remux_limit(ts_len)).await {
         Ok(_) => {
-            if let Err(error) = tokio::fs::rename(&temp_path, &mp4_path).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                let error_message = format!("Finalized MP4 rename failed: {error}");
-                write_conversion_state(
-                    &ts_path,
-                    RecordingConversionStatus::Failed,
-                    Some(error_message.clone()),
-                )
-                .await;
-                if let Some(metadata) = &metadata {
-                    metadata.report(RecordingMetadataEvent::Failed {
-                        recording_id,
-                        error: error_message,
-                    });
-                }
-                error!(
-                    source = %ts_path.display(),
-                    output = %mp4_path.display(),
-                    err = %error,
-                    "recording remux completed but final rename failed"
-                );
-                return;
-            }
-
-            if settings.retain_source_ts {
-                write_conversion_state(&ts_path, RecordingConversionStatus::Ready, None).await;
-            } else if let Err(error) = tokio::fs::remove_file(&ts_path).await {
-                write_conversion_state(&ts_path, RecordingConversionStatus::Ready, None).await;
-                warn!(
-                    source = %ts_path.display(),
-                    output = %mp4_path.display(),
-                    err = %error,
-                    "recording remux succeeded but source ts cleanup failed"
-                );
-            } else {
-                let state_path = build_conversion_state_path(&ts_path);
-                if let Err(error) = tokio::fs::remove_file(&state_path).await
-                    && error.kind() != std::io::ErrorKind::NotFound
-                {
-                    warn!(
-                        state = %state_path.display(),
-                        err = %error,
-                        "recording remux succeeded but conversion state cleanup failed"
-                    );
-                }
-            }
-            info!(
-                source = %ts_path.display(),
-                output = %mp4_path.display(),
-                "recording remux completed"
-            );
-            if let Some(metadata) = &metadata {
-                metadata.report(RecordingMetadataEvent::Finalized {
-                    recording_id,
-                    ended_at: now_rfc3339(),
-                    final_path: mp4_path.display().to_string(),
-                });
-            }
-        }
-        Err(error) => {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            write_conversion_state(
-                &ts_path,
-                RecordingConversionStatus::Failed,
-                Some(error.clone()),
+            finalize_remux(
+                recording_id,
+                ts_path,
+                mp4_path,
+                temp_path,
+                settings,
+                metadata,
             )
             .await;
-            warn!(
-                source = %ts_path.display(),
-                output = %mp4_path.display(),
-                err = %error,
-                "recording remux failed; keeping original ts"
-            );
-            if let Some(metadata) = &metadata {
-                metadata.report(RecordingMetadataEvent::Failed {
-                    recording_id,
-                    error,
-                });
-            }
         }
+        Err(error) => {
+            report_remux_failure(
+                &ts_path,
+                &mp4_path,
+                &temp_path,
+                metadata.as_ref(),
+                recording_id,
+                error,
+            )
+            .await;
+        }
+    }
+}
+
+/// Why MP4 remux is unavailable, when FFmpeg lacks it.
+async fn remux_capability_error() -> Option<String> {
+    let capabilities = crate::ffmpeg_capabilities::report().await;
+    if capabilities.available(crate::ffmpeg_capabilities::Feature::RecordingRemux) {
+        return None;
+    }
+    let missing = capabilities
+        .features
+        .iter()
+        .find(|status| status.feature == crate::ffmpeg_capabilities::Feature::RecordingRemux)
+        .map(|status| status.missing.join(", "))
+        .unwrap_or_default();
+    Some(format!(
+        "FFmpeg cannot remux recordings to MP4: it lacks {missing}"
+    ))
+}
+
+/// Move the remuxed temp file into place, then clean the source and state.
+async fn finalize_remux(
+    recording_id: String,
+    ts_path: PathBuf,
+    mp4_path: PathBuf,
+    temp_path: PathBuf,
+    settings: RecordingSettings,
+    metadata: Option<RecordingMetadataReporter>,
+) {
+    if let Err(error) = tokio::fs::rename(&temp_path, &mp4_path).await {
+        report_remux_rename_failure(
+            &ts_path,
+            &mp4_path,
+            &temp_path,
+            metadata.as_ref(),
+            recording_id,
+            error,
+        )
+        .await;
+        return;
+    }
+    cleanup_remuxed_source(&ts_path, &mp4_path, &settings).await;
+    info!(
+        source = %ts_path.display(),
+        output = %mp4_path.display(),
+        "recording remux completed"
+    );
+    if let Some(metadata) = &metadata {
+        metadata.report(RecordingMetadataEvent::Finalized {
+            recording_id,
+            ended_at: now_rfc3339(),
+            final_path: mp4_path.display().to_string(),
+        });
+    }
+}
+
+/// Clear the source TS and its conversion state after a good remux.
+async fn cleanup_remuxed_source(ts_path: &Path, mp4_path: &Path, settings: &RecordingSettings) {
+    if settings.retain_source_ts {
+        write_conversion_state(ts_path, RecordingConversionStatus::Ready, None).await;
+    } else if let Err(error) = tokio::fs::remove_file(ts_path).await {
+        write_conversion_state(ts_path, RecordingConversionStatus::Ready, None).await;
+        warn!(
+            source = %ts_path.display(),
+            output = %mp4_path.display(),
+            err = %error,
+            "recording remux succeeded but source ts cleanup failed"
+        );
+    } else {
+        let state_path = build_conversion_state_path(ts_path);
+        if let Err(error) = tokio::fs::remove_file(&state_path).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                state = %state_path.display(),
+                err = %error,
+                "recording remux succeeded but conversion state cleanup failed"
+            );
+        }
+    }
+}
+
+/// The remux ran but the finished MP4 could not be put in place.
+async fn report_remux_rename_failure(
+    ts_path: &Path,
+    mp4_path: &Path,
+    temp_path: &Path,
+    metadata: Option<&RecordingMetadataReporter>,
+    recording_id: String,
+    error: std::io::Error,
+) {
+    let _ = tokio::fs::remove_file(temp_path).await;
+    let error_message = format!("Finalized MP4 rename failed: {error}");
+    write_conversion_state(
+        ts_path,
+        RecordingConversionStatus::Failed,
+        Some(error_message.clone()),
+    )
+    .await;
+    if let Some(metadata) = metadata {
+        metadata.report(RecordingMetadataEvent::Failed {
+            recording_id,
+            error: error_message,
+        });
+    }
+    error!(
+        source = %ts_path.display(),
+        output = %mp4_path.display(),
+        err = %error,
+        "recording remux completed but final rename failed"
+    );
+}
+
+/// FFmpeg lacks the remux feature; keep the source and record why.
+async fn report_remux_unavailable(
+    ts_path: &Path,
+    metadata: Option<&RecordingMetadataReporter>,
+    recording_id: String,
+    error: String,
+) {
+    write_conversion_state(
+        ts_path,
+        RecordingConversionStatus::Failed,
+        Some(error.clone()),
+    )
+    .await;
+    if let Some(metadata) = metadata {
+        metadata.report(RecordingMetadataEvent::Failed {
+            recording_id,
+            error,
+        });
+    }
+    info!(
+        source = %ts_path.display(),
+        "recording remux skipped: FFmpeg lacks what MP4 remux needs"
+    );
+}
+
+/// The FFmpeg remux failed; keep the source and record why.
+async fn report_remux_failure(
+    ts_path: &Path,
+    mp4_path: &Path,
+    temp_path: &Path,
+    metadata: Option<&RecordingMetadataReporter>,
+    recording_id: String,
+    error: String,
+) {
+    let _ = tokio::fs::remove_file(temp_path).await;
+    write_conversion_state(
+        ts_path,
+        RecordingConversionStatus::Failed,
+        Some(error.clone()),
+    )
+    .await;
+    warn!(
+        source = %ts_path.display(),
+        output = %mp4_path.display(),
+        err = %error,
+        "recording remux failed; keeping original ts"
+    );
+    if let Some(metadata) = metadata {
+        metadata.report(RecordingMetadataEvent::Failed {
+            recording_id,
+            error,
+        });
     }
 }
 
