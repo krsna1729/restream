@@ -53,10 +53,6 @@ pub async fn start_rtmp_server_on(
     .await;
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub async fn start_rtmp_server_on_with_shutdown(
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
@@ -79,41 +75,10 @@ pub async fn start_rtmp_server_on_with_shutdown(
         .clamp(1, 64)
         .min(connection_limit)
         .min((parser_budget / engine.config.rtmp_max_message_bytes.max(1)).max(1));
-    if owners < engine.config.rtmp_ingress_owners.clamp(1, 64) {
-        warn!(
-            requested = engine.config.rtmp_ingress_owners,
-            owners,
-            connection_limit,
-            parser_budget,
-            "RTMP ingress owners reduced by connection limit or parser budget"
-        );
-    }
-    let listeners = match bind_rtmp_listeners(port, engine.config.rtmp_backlog, owners) {
-        Ok(listeners) => listeners,
-        Err(error) => {
-            report_listener_error(
-                &engine,
-                &error,
-                "bind_failed",
-                "failed to bind RTMP TCP listener",
-            );
-            if let Some(started) = started.take() {
-                let _ = started.send(Err(format!("failed to bind RTMP TCP listener: {error}")));
-            }
-            return;
-        }
-    };
-    let bound_addr = match listeners[0].local_addr() {
-        Ok(addr) => addr,
-        Err(error) => {
-            error!(%error, "failed to inspect RTMP TCP listener address");
-            if let Some(started) = started.take() {
-                let _ = started.send(Err(format!(
-                    "failed to inspect RTMP listener address: {error}"
-                )));
-            }
-            return;
-        }
+    log_owner_limits(&engine, owners, connection_limit, parser_budget);
+    let Some((listeners, bound_addr)) = bind_for_startup(&engine, port, owners, &mut started)
+    else {
+        return;
     };
 
     // Partition exact totals, including remainders. Owner-local accounting
@@ -122,7 +87,7 @@ pub async fn start_rtmp_server_on_with_shutdown(
     let owners_shutdown = shutdown.child_token();
     let _owners_guard = owners_shutdown.clone().drop_guard();
     let accepting = CancellationToken::new();
-    let (control_tx, mut control_rx) = mpsc::channel(connection_limit);
+    let (control_tx, control_rx) = mpsc::channel(connection_limit);
     let mut readiness = Vec::with_capacity(owners);
     for (index, listener) in listeners.into_iter().enumerate() {
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -145,43 +110,112 @@ pub async fn start_rtmp_server_on_with_shutdown(
                 readiness.push(ready_rx);
             }
             Err(error) => {
-                error!(%error, owner = index, "failed to start RTMP Compio owner thread");
-                if let Some(started) = started.take() {
-                    let _ =
-                        started.send(Err(format!("failed to start RTMP owner thread: {error}")));
-                }
+                report_owner_launch_failure(&mut started, index, &error);
                 return;
             }
         }
     }
     drop(control_tx);
-    for (index, ready_rx) in readiness.into_iter().enumerate() {
-        let failure = match ready_rx.await {
-            Ok(Ok(())) => continue,
-            Ok(Err(error)) => error,
-            Err(error) => format!("RTMP Compio owner exited before startup readiness: {error}"),
-        };
-        error!(%failure, owner = index, "RTMP Compio io_uring owner failed to start");
+    if let Err(failure) = await_owner_readiness(readiness, &owners_shutdown).await {
         if let Some(started) = started.take() {
             let _ = started.send(Err(failure));
         }
         return;
     }
-    if owners_shutdown.is_cancelled() {
-        if let Some(started) = started.take() {
-            let _ = started.send(Err(
-                "RTMP ingress cancelled before startup readiness".to_string()
-            ));
-        }
-        return;
-    }
     // No owner accepts until every runtime/socket has initialized.
     accepting.cancel();
-    info!(owners, "Server listening on {}", addr);
+    log_listener_started(owners, &addr);
     let _running = RunningOwners::publish(&engine.runtime.rtmp_listener_stats.owners, owners);
     if let Some(started) = started {
         let _ = started.send(Ok(bound_addr));
     }
+    serve_control_sessions(control_rx, &pipeline_access, &security, &engine).await;
+
+    log_listener_stopped(&shutdown);
+}
+
+fn log_owner_limits(
+    engine: &MediaEngine,
+    owners: usize,
+    connection_limit: usize,
+    parser_budget: usize,
+) {
+    if owners < engine.config.rtmp_ingress_owners.clamp(1, 64) {
+        warn!(
+            requested = engine.config.rtmp_ingress_owners,
+            owners,
+            connection_limit,
+            parser_budget,
+            "RTMP ingress owners reduced by connection limit or parser budget"
+        );
+    }
+}
+
+fn log_listener_started(owners: usize, addr: &str) {
+    info!(owners, "Server listening on {}", addr);
+}
+
+fn log_listener_stopped(shutdown: &CancellationToken) {
+    if shutdown.is_cancelled() {
+        info!("RTMP Compio owner stopped during shutdown");
+    } else {
+        warn!("RTMP Compio owner stopped unexpectedly; no new connections will be accepted");
+    }
+}
+
+fn report_owner_launch_failure(
+    started: &mut Option<oneshot::Sender<Result<SocketAddr, String>>>,
+    index: usize,
+    error: &io::Error,
+) {
+    error!(%error, owner = index, "failed to start RTMP Compio owner thread");
+    if let Some(started) = started.take() {
+        let _ = started.send(Err(format!("failed to start RTMP owner thread: {error}")));
+    }
+}
+
+fn bind_for_startup(
+    engine: &MediaEngine,
+    port: u16,
+    owners: usize,
+    started: &mut Option<oneshot::Sender<Result<SocketAddr, String>>>,
+) -> Option<(Vec<std::net::TcpListener>, SocketAddr)> {
+    let listeners = match bind_rtmp_listeners(port, engine.config.rtmp_backlog, owners) {
+        Ok(listeners) => listeners,
+        Err(error) => {
+            report_listener_error(
+                engine,
+                &error,
+                "bind_failed",
+                "failed to bind RTMP TCP listener",
+            );
+            if let Some(started) = started.take() {
+                let _ = started.send(Err(format!("failed to bind RTMP TCP listener: {error}")));
+            }
+            return None;
+        }
+    };
+    let bound_addr = match listeners[0].local_addr() {
+        Ok(addr) => addr,
+        Err(error) => {
+            error!(%error, "failed to inspect RTMP TCP listener address");
+            if let Some(started) = started.take() {
+                let _ = started.send(Err(format!(
+                    "failed to inspect RTMP listener address: {error}"
+                )));
+            }
+            return None;
+        }
+    };
+    Some((listeners, bound_addr))
+}
+
+async fn serve_control_sessions(
+    mut control_rx: mpsc::Receiver<ControlSession>,
+    pipeline_access: &Arc<dyn PipelineAccessAuthenticator>,
+    security: &Arc<IngestSecurityService>,
+    engine: &Arc<MediaEngine>,
+) {
     let mut control_sessions = JoinSet::new();
     loop {
         tokio::select! {
@@ -212,12 +246,25 @@ pub async fn start_rtmp_server_on_with_shutdown(
             warn!(%error, "RTMP control session task failed");
         }
     }
+}
 
-    if shutdown.is_cancelled() {
-        info!("RTMP Compio owner stopped during shutdown");
-    } else {
-        warn!("RTMP Compio owner stopped unexpectedly; no new connections will be accepted");
+async fn await_owner_readiness(
+    readiness: Vec<oneshot::Receiver<Result<(), String>>>,
+    owners_shutdown: &CancellationToken,
+) -> Result<(), String> {
+    for (index, ready_rx) in readiness.into_iter().enumerate() {
+        let failure = match ready_rx.await {
+            Ok(Ok(())) => continue,
+            Ok(Err(error)) => error,
+            Err(error) => format!("RTMP Compio owner exited before startup readiness: {error}"),
+        };
+        error!(%failure, owner = index, "RTMP Compio io_uring owner failed to start");
+        return Err(failure);
     }
+    if owners_shutdown.is_cancelled() {
+        return Err("RTMP ingress cancelled before startup readiness".to_string());
+    }
+    Ok(())
 }
 
 /// The running-owner gauge while the listener accepts; dropping it (the
