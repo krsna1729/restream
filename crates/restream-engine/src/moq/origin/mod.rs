@@ -459,10 +459,6 @@ impl Origin {
         clippy::await_holding_invalid_type,
         reason = "this pipeline's attach lock (order: before its `selection`) serializes generation changes across the pipeline resolution"
     )]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn revalidate(self: Rc<Self>, pipeline_id: &str, generation: u64) {
         let _guard = self.attach_locks.lock(pipeline_id).await;
         let Some(current) = self.served.borrow().get(pipeline_id).cloned() else {
@@ -482,11 +478,7 @@ impl Origin {
         if track_set.is_empty() {
             if self.served.borrow_mut().remove(pipeline_id).is_some() {
                 current.close();
-                tracing::info!(
-                    pipeline_id,
-                    generation,
-                    "MoQ origin closed the generation: the pipeline lost all media"
-                );
+                log_generation_lost_media(pipeline_id, generation);
             }
             return;
         }
@@ -494,18 +486,8 @@ impl Origin {
             return;
         }
         match self.install(pipeline_id, ring, &startup, track_set, 0) {
-            Ok(served) => tracing::info!(
-                pipeline_id,
-                from = generation,
-                to = served.generation,
-                "MoQ origin replaced the served generation"
-            ),
-            Err(reason) => tracing::warn!(
-                pipeline_id,
-                generation,
-                %reason,
-                "MoQ origin could not replace the served generation"
-            ),
+            Ok(served) => log_generation_replaced(pipeline_id, generation, served.generation),
+            Err(reason) => log_generation_replace_failed(pipeline_id, generation, &reason),
         }
     }
 
@@ -602,6 +584,39 @@ fn log_generation_closed(pipeline_id: &str, generation: u64) {
 #[cold]
 fn log_viewer_left(pipeline_id: &str, error: &impl std::fmt::Display) {
     tracing::debug!(pipeline_id, %error, "MoQ viewer left");
+}
+
+#[cold]
+fn log_generation_lost_media(pipeline_id: &str, generation: u64) {
+    tracing::info!(
+        pipeline_id,
+        generation,
+        "MoQ origin closed the generation: the pipeline lost all media"
+    );
+}
+
+#[cold]
+fn log_generation_replaced(pipeline_id: &str, from: u64, to: u64) {
+    tracing::info!(
+        pipeline_id,
+        from,
+        to,
+        "MoQ origin replaced the served generation"
+    );
+}
+
+#[cold]
+fn log_generation_replace_failed(
+    pipeline_id: &str,
+    generation: u64,
+    reason: &impl std::fmt::Display,
+) {
+    tracing::warn!(
+        pipeline_id,
+        generation,
+        %reason,
+        "MoQ origin could not replace the served generation"
+    );
 }
 
 /// The pipeline's current ring and publish startup, read on the listener
