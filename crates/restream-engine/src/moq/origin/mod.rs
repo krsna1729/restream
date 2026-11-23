@@ -345,10 +345,6 @@ impl Origin {
     /// Complete the handshake publishing the grant's pipeline and drive the
     /// session until the viewer leaves. Never panics on peer input; every
     /// end is logged.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     pub(crate) async fn serve<S: moq_net::transport::poll::Session>(
         self: Rc<Self>,
         grant: OriginGrant,
@@ -358,7 +354,7 @@ impl Origin {
         let served = match self.clone().attach(&pipeline_id).await {
             Ok(served) => served,
             Err(reason) => {
-                tracing::warn!(pipeline_id = pipeline_id.as_str(), %reason, "MoQ origin cannot serve the pipeline");
+                log_attach_refused(&pipeline_id, &reason);
                 handshake.close(moq_net::Error::NotFound);
                 return;
             }
@@ -376,18 +372,14 @@ impl Origin {
         )
         .await
         else {
-            tracing::debug!(
-                pipeline_id = pipeline_id.as_str(),
-                generation = served.generation,
-                "MoQ viewer generation closed during the handshake"
-            );
+            log_closed_during_handshake(&pipeline_id, served.generation);
             drop(grant);
             return;
         };
         let (_session, driver) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
-                tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer handshake failed");
+                log_viewer_handshake_failed(&pipeline_id, &error);
                 return;
             }
         };
@@ -399,17 +391,13 @@ impl Origin {
             match select(driver, closed).await {
                 Either::Left((error, _)) => error,
                 Either::Right(((), _driver)) => {
-                    tracing::debug!(
-                        pipeline_id = pipeline_id.as_str(),
-                        generation = served.generation,
-                        "MoQ viewer generation closed"
-                    );
+                    log_generation_closed(&pipeline_id, served.generation);
                     drop(grant);
                     return;
                 }
             }
         };
-        tracing::debug!(pipeline_id = pipeline_id.as_str(), %error, "MoQ viewer left");
+        log_viewer_left(&pipeline_id, &error);
         drop(grant);
     }
 
@@ -585,6 +573,35 @@ impl Origin {
     pub(crate) fn slots_in_use(&self) -> usize {
         self.slots.in_use()
     }
+}
+
+#[cold]
+fn log_attach_refused(pipeline_id: &str, reason: &impl std::fmt::Display) {
+    tracing::warn!(pipeline_id, %reason, "MoQ origin cannot serve the pipeline");
+}
+
+#[cold]
+fn log_closed_during_handshake(pipeline_id: &str, generation: u64) {
+    tracing::debug!(
+        pipeline_id,
+        generation,
+        "MoQ viewer generation closed during the handshake"
+    );
+}
+
+#[cold]
+fn log_viewer_handshake_failed(pipeline_id: &str, error: &impl std::fmt::Display) {
+    tracing::debug!(pipeline_id, %error, "MoQ viewer handshake failed");
+}
+
+#[cold]
+fn log_generation_closed(pipeline_id: &str, generation: u64) {
+    tracing::debug!(pipeline_id, generation, "MoQ viewer generation closed");
+}
+
+#[cold]
+fn log_viewer_left(pipeline_id: &str, error: &impl std::fmt::Display) {
+    tracing::debug!(pipeline_id, %error, "MoQ viewer left");
 }
 
 /// The pipeline's current ring and publish startup, read on the listener
