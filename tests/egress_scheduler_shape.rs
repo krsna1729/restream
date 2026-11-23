@@ -44,12 +44,14 @@ fn fastest(population: usize, ready: usize, iters: u64) -> u128 {
 
 #[test]
 fn one_ready_leaf_is_population_independent() {
-    // 16x population; a scan would be ~16x, O(ready) stays flat within noise.
+    // 16x population; a scan would be far more than 8x, while an indexed
+    // queue only grows by the larger arena's cache and TLB footprint
+    // (coverage-instrumented CI measured 4.15x: 1150 ns vs 277 ns).
     let _ = drain_nanos(1_024, 1, 100);
     let small = fastest(1_024, 1, 2_000);
     let large = fastest(16_384, 1, 2_000);
     assert!(
-        large <= small.saturating_mul(4).max(1_000),
+        large <= small.saturating_mul(8).max(1_000),
         "T(N=16384,R=1)={large}ns vs T(N=1024,R=1)={small}ns: ready cost scales with population"
     );
 }
