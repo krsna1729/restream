@@ -524,26 +524,50 @@ impl CatalogReader {
 /// The next catalog version. Updates only add tracks, so one that ends,
 /// fails or panics stops the following and leaves the media running; with
 /// nothing to follow this never resolves.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn catalog_update(reader: &mut Option<CatalogReader>) -> hang::Catalog {
     while let Some(current) = reader.as_mut() {
-        match AssertUnwindSafe(current.next()).catch_unwind().await {
-            Ok(Ok(Some(catalog))) => return catalog,
-            Ok(Ok(None)) => debug!("the MoQ publisher's catalog track ended"),
-            Ok(Err(error)) => {
-                warn!(%error, "MoQ catalog update unreadable; no longer following updates");
-            }
-            Err(payload) => {
-                let panic = crate::panic_boundary::record_contained(payload.as_ref());
-                warn!(%panic, "MoQ catalog parser panicked; no longer following updates");
-            }
+        if let Some(catalog) = next_catalog_update(current).await {
+            return catalog;
         }
         *reader = None;
     }
     std::future::pending().await
+}
+
+/// One catalog read, contained: a failed or panicking parser ends following
+/// without ending the media.
+async fn next_catalog_update(reader: &mut CatalogReader) -> Option<hang::Catalog> {
+    match AssertUnwindSafe(reader.next()).catch_unwind().await {
+        Ok(Ok(Some(catalog))) => Some(catalog),
+        Ok(Ok(None)) => {
+            log_catalog_ended();
+            None
+        }
+        Ok(Err(error)) => {
+            log_catalog_unreadable(&error);
+            None
+        }
+        Err(payload) => {
+            log_catalog_panicked(payload.as_ref());
+            None
+        }
+    }
+}
+
+#[cold]
+fn log_catalog_ended() {
+    debug!("the MoQ publisher's catalog track ended");
+}
+
+#[cold]
+fn log_catalog_unreadable(error: &impl std::fmt::Display) {
+    warn!(%error, "MoQ catalog update unreadable; no longer following updates");
+}
+
+#[cold]
+fn log_catalog_panicked(payload: &(dyn std::any::Any + Send)) {
+    let panic = crate::panic_boundary::record_contained(payload);
+    warn!(%panic, "MoQ catalog parser panicked; no longer following updates");
 }
 
 /// The first catalog version, and the reader that follows later ones.
