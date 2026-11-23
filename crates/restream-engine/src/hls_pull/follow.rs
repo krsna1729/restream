@@ -71,10 +71,6 @@ pub(super) struct Followed {
 impl PullState {
     /// Apply a fetched media playlist: dispatch its rewritten text, then fetch
     /// and hand over its new segments in order.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     pub(super) async fn follow_media(
         &mut self,
         follow: &mut Follow,
@@ -84,6 +80,26 @@ impl PullState {
         media: MediaPlaylist,
         text: String,
     ) -> Result<Followed, PullError> {
+        self.apply_media_playlist(follow, ingest, &media, text)
+            .await?;
+        let next = self.starting_sequence(follow, &media);
+        let had_new = self
+            .fetch_new_segments(follow, client, ingest, limits, &media, next)
+            .await?;
+        Ok(Followed {
+            had_new,
+            ended: media.ended,
+            target: media.target_duration,
+        })
+    }
+
+    async fn apply_media_playlist(
+        &mut self,
+        follow: &mut Follow,
+        ingest: &Arc<HlsIngest>,
+        media: &MediaPlaylist,
+        text: String,
+    ) -> Result<(), PullError> {
         self.dispatch_playlist(ingest, text.into_bytes(), follow.playlist)
             .await?;
 
@@ -99,7 +115,12 @@ impl PullState {
             follow.segment_tries.clear();
         }
         follow.last_media_sequence = Some(media.media_sequence);
+        Ok(())
+    }
 
+    /// The first sequence this cycle should fetch, after following any
+    /// window that slid past unseen segments.
+    fn starting_sequence(&mut self, follow: &mut Follow, media: &MediaPlaylist) -> u64 {
         // The first cycle of a live playlist starts near the end: RFC 8216
         // section 6.3.3 has a client enter no less than three target
         // durations from it, so a DVR or EVENT window is not read from its
@@ -109,7 +130,7 @@ impl PullState {
             if media.ended {
                 media.media_sequence
             } else {
-                live_start(&media)
+                live_start(media)
             }
         });
         let first_new = media
@@ -130,7 +151,20 @@ impl PullState {
             follow.next_sequence = Some(next);
             follow.segment_tries.retain(|sequence, _| *sequence >= next);
         }
+        next
+    }
 
+    /// Fetch and hand over every segment at or after `next`; `true` when at
+    /// least one was new.
+    async fn fetch_new_segments(
+        &mut self,
+        follow: &mut Follow,
+        client: &Client,
+        ingest: &Arc<HlsIngest>,
+        limits: &HlsIngestLimits,
+        media: &MediaPlaylist,
+        next: u64,
+    ) -> Result<bool, PullError> {
         let mut had_new = false;
         for segment in media
             .segments
@@ -174,12 +208,7 @@ impl PullState {
                 Err(error) => return Err(error),
             }
         }
-
-        Ok(Followed {
-            had_new,
-            ended: media.ended,
-            target: media.target_duration,
-        })
+        Ok(had_new)
     }
 
     async fn fetch_segment(
