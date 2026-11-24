@@ -25,8 +25,11 @@ use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
 use super::{AttemptJob, FailureTracker};
 
+#[path = "egress_fabric_run.rs"]
+mod egress_fabric_run;
 #[path = "egress_moq.rs"]
 mod egress_moq;
+use self::egress_fabric_run::{FabricRun, HlsPutRun, RtmpRun, SrtRun};
 pub(super) use egress_moq::{MoqFabricTask, prepare_moq_fabric_task};
 
 #[derive(Clone)]
@@ -95,7 +98,7 @@ pub(super) struct HlsPutFabricTask {
 
 /// What `forward_upload_status` already passed on to the engine.
 #[derive(Default)]
-struct ForwardedUploadStatus {
+pub(super) struct ForwardedUploadStatus {
     failures: u64,
     retry: Option<(u32, u64)>,
     /// A failure was reported and no recovery since.
@@ -392,169 +395,66 @@ impl EgressTask {
             .await;
     }
 
-    async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
-        match self
-            .engine
-            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref(), &fabric.source)
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "srt_fabric_ensure",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        match self
-            .engine
-            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(outcome) => {
-                self.record_fabric_placement(&fabric.spec.feed, &outcome)
-                    .await;
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Sending,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self
-                    .engine
-                    .release_srt_fabric_runtime(&fabric.feed_id)
-                    .await;
-                let (phase, message) = match error.refused() {
-                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
-                    None => ("srt_fabric_dispatch", format!("{error:?}")),
-                };
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        phase,
-                        message,
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+    /// Runs one fabric output through the shared retain, prepare, place,
+    /// wait, report, and release sequence. Protocol hooks supply only their
+    /// engine calls, phases, and messages.
+    async fn run_fabric<R: FabricRun>(&self, mut run: R) {
+        if let Err(error) = run.ensure().await {
             self.engine
                 .record_egress_error_if_current(
                     &self.output_id,
                     &self.registration,
-                    "srt_fabric_leaf",
-                    "SRT fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
+                    run.ensure_phase(),
+                    error,
+                )
+                .await;
+            return;
+        }
+        run.prepare().await;
+        match run.add().await {
+            Ok(outcome) => {
+                self.record_fabric_placement(&run.feed(), &outcome).await;
+                self.engine
+                    .update_egress_phase_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        run.phase(),
+                    )
+                    .await;
+            }
+            Err(failure) => {
+                run.release().await;
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        failure.phase,
+                        failure.message,
+                    )
+                    .await;
+                return;
+            }
+        }
+        let end = run.wait().await;
+        if end.failed {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    run.leaf_phase(),
+                    run.leaf_message().to_string(),
                 )
                 .await;
         }
-        let _ = self
-            .engine
-            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
-            .await;
-        let _ = self
-            .engine
-            .release_srt_fabric_runtime(&fabric.feed_id)
-            .await;
+        run.stop(end.stage_ended).await;
+    }
+
+    async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
+        self.run_fabric(SrtRun::new(self, fabric)).await;
     }
 
     async fn run_rtmp_fabric(&self, fabric: RtmpFabricTask) {
-        match self
-            .engine
-            .retain_rtmp_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "rtmp_fabric_ensure",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        // Must land before the Add command: the shard thread reads this via
-        // RtmpPublishStartupSource::take_startup and never queries anything
-        // itself.
-        self.engine
-            .set_rtmp_publish_startup(
-                &fabric.feed_id,
-                fabric.spec.id.clone(),
-                fabric.startup.clone(),
-            )
-            .await;
-
-        match self
-            .engine
-            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(outcome) => {
-                self.record_fabric_placement(&fabric.spec.feed, &outcome)
-                    .await;
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Sending,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self
-                    .engine
-                    .release_rtmp_fabric_runtime(&fabric.feed_id)
-                    .await;
-                let (phase, message) = match error.refused() {
-                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
-                    None => ("rtmp_fabric_dispatch", format!("{error:?}")),
-                };
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        phase,
-                        message,
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "rtmp_fabric_leaf",
-                    "RTMP fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
-                )
-                .await;
-        }
-        let _ = self
-            .engine
-            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
-            .await;
-        let _ = self
-            .engine
-            .release_rtmp_fabric_runtime(&fabric.feed_id)
-            .await;
+        self.run_fabric(RtmpRun::new(self, fabric)).await;
     }
 
     async fn run_hls_put_fabric(
@@ -562,97 +462,7 @@ impl EgressTask {
         fabric: HlsPutFabricTask,
         store: Arc<restream_engine::hls::HlsStore>,
     ) {
-        let feed_id = restream_engine::engine_hls_egress_fabric::hls_put_feed_id(&self.pipeline_id);
-        if let Err(error) = self
-            .engine
-            .retain_hls_put_fabric_runtime(feed_id.clone(), &store)
-            .await
-        {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "hls_put_fabric_ensure",
-                    format!("{error:?}"),
-                )
-                .await;
-            return;
-        }
-        drop(store);
-        match self
-            .engine
-            .dispatch_hls_put_fabric_command(&feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(outcome) => {
-                self.record_fabric_placement(&fabric.spec.feed, &outcome)
-                    .await;
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Uploading,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
-                let (phase, message) = match error.refused() {
-                    Some(saturated) => (CAPACITY_REFUSED_PHASE, saturated.to_string()),
-                    None => ("hls_put_fabric_dispatch", format!("{error:?}")),
-                };
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        phase,
-                        message,
-                    )
-                    .await;
-                return;
-            }
-        }
-        let mut forwarded = ForwardedUploadStatus::default();
-        let own_stage = self.own_stage_ended();
-        tokio::pin!(own_stage);
-        let (failed, stage_ended) = loop {
-            self.forward_upload_status(&fabric.upload_status, &mut forwarded)
-                .await;
-            if fabric.terminated.load(std::sync::atomic::Ordering::Acquire) {
-                self.forward_upload_status(&fabric.upload_status, &mut forwarded)
-                    .await;
-                break (true, false);
-            }
-            tokio::select! {
-                _ = self.registration.cancel_token.cancelled() => break (false, false),
-                () = &mut own_stage => break (false, true),
-                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
-            }
-        };
-        // A rejection was already reported with its status and object.
-        if failed && forwarded.failures == 0 {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "hls_put_fabric_leaf",
-                    "HLS ingest rejected the upload or the leaf failed",
-                )
-                .await;
-        }
-        // The leaf sends its end playlist after a remove. A stage that ended
-        // under the output is no intentional stop: abandon the session, so
-        // the destination keeps the stream open for the retry.
-        let command = if stage_ended {
-            EgressCommand::Abandon(fabric.spec.id)
-        } else {
-            EgressCommand::Remove(fabric.spec.id)
-        };
-        let _ = self
-            .engine
-            .dispatch_hls_put_fabric_command(&feed_id, command)
-            .await;
-        let _ = self.engine.release_hls_put_fabric_runtime(&feed_id).await;
+        self.run_fabric(HlsPutRun::new(self, fabric, store)).await;
     }
 
     /// Pass the leaf's new failures and retry changes to the engine, as the
