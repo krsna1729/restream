@@ -18,7 +18,9 @@
 //!   `selected_inputs` -> `active` (`ingests.active` is read inside egress
 //!   unregistration with `try_read` only). A MoQ origin's per-pipeline
 //!   attach lock comes before that pipeline's `selection`;
-//! - egress: `retry` -> `cancel_tokens` -> `active`;
+//! - egress: `retry` -> `cancel_tokens` -> `active` -> `recent` (a settled
+//!   outcome is written under the same `active` guard that removes its
+//!   attempt, so a late settlement cannot follow a replacement);
 //! - stage: `runtimes` -> `metrics` -> `lifecycles`;
 //! - file ingest: `ingests.sessions` -> `children` -> `active` -> `positions`
 //!   (any subsequence); `active` is never held while taking `children`.

@@ -127,6 +127,57 @@ async fn repeated_egress_unregister_keeps_settled_outcome_stable() {
 }
 
 #[tokio::test]
+async fn late_attempt_settlement_cannot_overwrite_replacement_outcome() {
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(
+        crate::config::EngineConfig {
+            srt_egress_muxer_max_outputs_per_shard: 1,
+            srt_egress_muxer_max_shards: 1,
+            ..crate::config::EngineConfig::default()
+        },
+    )));
+    engine
+        .register_egress("out-race", "pipe-1", "srt://example.com:10080")
+        .await;
+    engine.record_egress_progress("out-race", 1024).await;
+    engine
+        .record_egress_error("out-race", "send", "old attempt failed")
+        .await;
+
+    // Hold the SRT muxer shard registry so the old settlement pauses inside
+    // unregister_egress after it removes the active attempt.
+    let shard_guard = engine.stages.srt_muxer_shards.write().await;
+    let settling = {
+        let engine = Arc::clone(&engine);
+        tokio::spawn(async move {
+            engine.unregister_egress("out-race").await;
+        })
+    };
+    tokio::task::yield_now().await;
+
+    engine
+        .register_egress("out-race", "pipe-1", "rtmp://example.com/live/key")
+        .await;
+    engine.record_egress_progress("out-race", 2048).await;
+    engine
+        .record_egress_error("out-race", "send", "new attempt failed")
+        .await;
+    engine.unregister_egress("out-race").await;
+
+    drop(shard_guard);
+    settling.await.expect("settlement task");
+
+    let recent = engine
+        .recent_egress_outcome("out-race")
+        .await
+        .expect("recent outcome");
+    assert_eq!(
+        recent.bytes_sent, 2048,
+        "late settlement from the older attempt must not overwrite the newer outcome"
+    );
+    assert_eq!(recent.last_error.as_deref(), Some("new attempt failed"));
+}
+
+#[tokio::test]
 async fn egress_registration_stores_terminal_stage_key() {
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));

@@ -197,11 +197,10 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `cancel_tokens` -> `active` (module docs of `engine_registries`); both are released before the muxer and `recent` awaits"
+        reason = "lock order `cancel_tokens` -> `active` -> `recent` (module docs of `engine_registries`); all are released before the muxer await"
     )]
     pub async fn unregister_egress(&self, output_id: &str) {
-        let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let (release_srt_muxer, pipeline_id, recent_outcome) = {
+        let (release_srt_muxer, pipeline_id) = {
             let mut tokens = self.egresses.cancel_tokens.write().await;
             if let Some(token) = tokens.remove(output_id) {
                 token.cancel();
@@ -221,35 +220,30 @@ impl MediaEngine {
                 .get(output_id)
                 .map(|e| e.pipeline_id.clone())
                 .unwrap_or_default();
-            let recent_outcome = egresses.get(output_id).map(|egress| {
+            if let Some(egress) = egresses.get(output_id) {
                 let has_ingest = self
                     .ingests
                     .active
                     .try_read()
                     .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
                     .unwrap_or(false);
-                Self::build_recent_egress_outcome(
+                let mut recent = self.egresses.recent.write().await;
+                let previous_recent = recent.get(output_id).cloned();
+                let outcome = Self::build_recent_egress_outcome(
                     previous_recent.as_ref(),
                     egress,
                     has_ingest,
                     true,
-                )
-            });
+                );
+                recent.insert(output_id.to_string(), outcome);
+            }
             egresses.remove(output_id);
-            (release_srt_muxer, pipeline_id, recent_outcome)
+            (release_srt_muxer, pipeline_id)
         };
 
         if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
             self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
                 .await;
-        }
-
-        if let Some(outcome) = recent_outcome {
-            self.egresses
-                .recent
-                .write()
-                .await
-                .insert(output_id.to_string(), outcome);
         }
 
         if !pipeline_id.is_empty() {
@@ -264,15 +258,14 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `cancel_tokens` -> `active` (module docs of `engine_registries`); both are released before the muxer and `recent` awaits"
+        reason = "lock order `cancel_tokens` -> `active` -> `recent` (module docs of `engine_registries`); all are released before the muxer await"
     )]
     pub async fn unregister_egress_if_current(
         &self,
         output_id: &str,
         registration: &EgressRegistration,
     ) -> bool {
-        let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let (release_srt_muxer, pipeline_id, outcome) = {
+        let (release_srt_muxer, pipeline_id) = {
             let mut tokens = self.egresses.cancel_tokens.write().await;
             let mut egresses = self.egresses.active.write().await;
             let Some(active) = egresses.get(output_id) else {
@@ -300,26 +293,23 @@ impl MediaEngine {
                 .try_read()
                 .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
                 .unwrap_or(false);
+            let mut recent = self.egresses.recent.write().await;
+            let previous_recent = recent.get(output_id).cloned();
             let outcome = Self::build_recent_egress_outcome(
                 previous_recent.as_ref(),
                 active,
                 has_ingest,
                 registration.cancel_token.is_cancelled(),
             );
+            recent.insert(output_id.to_string(), outcome);
             egresses.remove(output_id);
-            (release_srt_muxer, pipeline_id, outcome)
+            (release_srt_muxer, pipeline_id)
         };
 
         if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
             self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
                 .await;
         }
-
-        self.egresses
-            .recent
-            .write()
-            .await
-            .insert(output_id.to_string(), outcome);
 
         if !pipeline_id.is_empty() {
             self.runtime
