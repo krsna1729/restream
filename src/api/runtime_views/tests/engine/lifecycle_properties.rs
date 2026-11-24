@@ -150,6 +150,10 @@ proptest! {
                             last_error: None,
                             retry_attempts: None,
                             retry_backoff_ms: None,
+                            recent_failure_count: model.recent_failure_count,
+                            recent_status: model.recent_status,
+                            recent_raw_status: model.recent_raw_status,
+                            recent_phase: model.recent_phase,
                         };
                     }
                     EgressLifecycleAction::RecordError { phase, message } => {
@@ -170,8 +174,19 @@ proptest! {
                     EgressLifecycleAction::Unregister => {
                         engine.unregister_egress("out-1").await;
                         if model.active {
+                            let had_error = model.last_error.is_some();
                             model.active = false;
                             model.recent_visible = true;
+                            model.recent_status = Some(if had_error { "failed" } else { "stopped" });
+                            model.recent_raw_status =
+                                Some(if had_error { "running" } else { "stopped" });
+                            model.recent_phase =
+                                Some(if had_error { model.phase } else { "stopped" });
+                            model.recent_failure_count = if had_error {
+                                model.recent_failure_count.saturating_add(1).max(1)
+                            } else {
+                                0
+                            };
                         }
                     }
                     EgressLifecycleAction::RetryState {
@@ -264,6 +279,12 @@ struct EgressLifecycleModel {
     last_error: Option<(&'static str, &'static str)>,
     retry_attempts: Option<u32>,
     retry_backoff_ms: Option<u64>,
+    /// Failures inside the flap window, as settled by the last outcome.
+    recent_failure_count: u32,
+    /// Status, raw status and phase of the last ended attempt.
+    recent_status: Option<&'static str>,
+    recent_raw_status: Option<&'static str>,
+    recent_phase: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -327,10 +348,6 @@ fn ingest_lifecycle_action_strategy() -> impl Strategy<Value = IngestLifecycleAc
     ]
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 fn assert_egress_lifecycle_invariants(
     model: &EgressLifecycleModel,
     status: Option<&serde_json::Value>,
@@ -349,38 +366,11 @@ fn assert_egress_lifecycle_invariants(
         "retry visibility drifted from the lifecycle model"
     );
 
-    let status = status.cloned();
-    let snapshot_output = snapshot_output.cloned();
-
     if model.active {
         let status = status.expect("active egress must have a runtime status");
         let snapshot_output =
             snapshot_output.expect("active egress must appear in the health snapshot");
-        assert!(
-            retry.is_none(),
-            "active egress must not retain retry metadata from older attempts"
-        );
-        assert_eq!(status["retrying"], false);
-        assert_eq!(snapshot_output["retrying"], false);
-        assert_eq!(status["bytesOut"], model.bytes_sent);
-        assert_eq!(snapshot_output["bytesOut"], model.bytes_sent);
-        assert_eq!(status["phase"], model.phase);
-        assert_eq!(snapshot_output["phase"], model.phase);
-
-        match model.last_error {
-            Some((phase, message)) => {
-                assert_eq!(status["lastError"], message);
-                assert_eq!(status["failurePhase"], phase);
-                assert_eq!(snapshot_output["lastError"], message);
-                assert_eq!(snapshot_output["failurePhase"], phase);
-            }
-            None => {
-                assert!(status["lastError"].is_null());
-                assert!(status["failurePhase"].is_null());
-                assert!(snapshot_output["lastError"].is_null());
-                assert!(snapshot_output["failurePhase"].is_null());
-            }
-        }
+        assert_active_egress_invariants(model, status, snapshot_output, retry);
         return;
     }
 
@@ -390,50 +380,175 @@ fn assert_egress_lifecycle_invariants(
             panic!("without an active or recent egress, runtime status should disappear")
         }
         (true, Some(status), Some(snapshot_output)) => {
-            if model.retry_visible {
-                let attempts = model.retry_attempts.expect("retry attempts tracked");
-                let backoff_ms = model.retry_backoff_ms.expect("retry backoff tracked");
-                assert_eq!(status["status"], "retrying");
-                assert_eq!(snapshot_output["status"], "retrying");
-                assert_eq!(status["retrying"], true);
-                assert_eq!(snapshot_output["retrying"], true);
-                assert_eq!(status["retryAttempts"], attempts);
-                assert_eq!(snapshot_output["retryAttempts"], attempts);
-                assert_eq!(status["retryBackoffMs"], backoff_ms);
-                assert_eq!(snapshot_output["retryBackoffMs"], backoff_ms);
-                assert!(
-                    status["retryRemainingMs"].as_u64().unwrap_or(0) > 0,
-                    "retrying outputs must expose remaining retry delay"
-                );
-                assert!(
-                    snapshot_output["retryRemainingMs"].as_u64().unwrap_or(0) > 0,
-                    "health snapshot must expose remaining retry delay"
-                );
-            } else {
-                assert_eq!(status["retrying"], false);
-                assert_eq!(snapshot_output["retrying"], false);
-                assert!(status["retryAttempts"].is_null());
-                assert!(snapshot_output["retryAttempts"].is_null());
-                assert!(status["retryBackoffMs"].is_null());
-                assert!(snapshot_output["retryBackoffMs"].is_null());
-            }
-
-            match model.last_error {
-                Some((phase, message)) => {
-                    assert_eq!(status["phase"], "failed");
-                    assert_eq!(snapshot_output["phase"], "failed");
-                    assert_eq!(status["failurePhase"], phase);
-                    assert_eq!(snapshot_output["failurePhase"], phase);
-                    assert_eq!(status["lastError"], message);
-                    assert_eq!(snapshot_output["lastError"], message);
-                }
-                None => {
-                    assert!(status["lastError"].is_null());
-                    assert!(snapshot_output["lastError"].is_null());
-                }
-            }
+            assert_recent_egress_invariants(model, status, snapshot_output, retry);
         }
         (true, _, _) => panic!("recent egress must stay visible in both status and health"),
+    }
+}
+
+fn assert_active_egress_invariants(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+    retry: Option<&EgressRetryState>,
+) {
+    assert!(
+        retry.is_none(),
+        "active egress must not retain retry metadata from older attempts"
+    );
+    let expected_status = if model.last_error.is_some() {
+        "failed"
+    } else {
+        "running"
+    };
+    assert_eq!(status["status"], expected_status);
+    assert_eq!(snapshot_output["status"], expected_status);
+    assert_eq!(status["retrying"], false);
+    assert_eq!(snapshot_output["retrying"], false);
+    assert_eq!(status["bytesOut"], model.bytes_sent);
+    assert_eq!(snapshot_output["bytesOut"], model.bytes_sent);
+    assert_eq!(status["phase"], model.phase);
+    assert_eq!(snapshot_output["phase"], model.phase);
+    assert!(status["endedAt"].is_null());
+    assert!(snapshot_output["endedAt"].is_null());
+    assert!(status["endedAgeMs"].is_null());
+    assert!(snapshot_output["endedAgeMs"].is_null());
+    assert_recent_flap_fields(model, status, snapshot_output);
+
+    match model.last_error {
+        Some((phase, message)) => {
+            assert_eq!(status["lastError"], message);
+            assert_eq!(status["failurePhase"], phase);
+            assert_eq!(snapshot_output["lastError"], message);
+            assert_eq!(snapshot_output["failurePhase"], phase);
+        }
+        None => {
+            assert!(status["lastError"].is_null());
+            assert!(status["failurePhase"].is_null());
+            assert!(snapshot_output["lastError"].is_null());
+            assert!(snapshot_output["failurePhase"].is_null());
+        }
+    }
+}
+
+fn assert_recent_egress_invariants(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+    retry: Option<&EgressRetryState>,
+) {
+    assert_recent_retry_fields(model, status, snapshot_output, retry);
+    assert_recent_settlement_fields(model, status, snapshot_output);
+    assert_recent_error_fields(model, status, snapshot_output);
+}
+
+fn assert_recent_settlement_fields(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+) {
+    let expected_status = if model.retry_visible {
+        "retrying"
+    } else {
+        model
+            .recent_status
+            .expect("ended attempt must track its settled status")
+    };
+    assert_eq!(status["status"], expected_status);
+    assert_eq!(snapshot_output["status"], expected_status);
+
+    let expected_raw_status = model
+        .recent_raw_status
+        .expect("ended attempt must track its settled raw status");
+    let expected_phase = model
+        .recent_phase
+        .expect("ended attempt must track its settled phase");
+    assert_eq!(status["rawStatus"], expected_raw_status);
+    assert_eq!(snapshot_output["rawStatus"], expected_raw_status);
+    assert_eq!(status["phase"], expected_phase);
+    assert_eq!(snapshot_output["phase"], expected_phase);
+
+    assert!(status["endedAt"].is_string());
+    assert!(snapshot_output["endedAt"].is_string());
+    assert!(status["endedAgeMs"].as_u64().is_some());
+    assert!(snapshot_output["endedAgeMs"].as_u64().is_some());
+    assert_eq!(status["bytesOut"], model.bytes_sent);
+    assert_eq!(snapshot_output["bytesOut"], model.bytes_sent);
+    assert_eq!(status["totalSize"], model.bytes_sent);
+    assert_eq!(snapshot_output["totalSize"], model.bytes_sent);
+    assert_recent_flap_fields(model, status, snapshot_output);
+}
+
+fn assert_recent_error_fields(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+) {
+    match model.last_error {
+        Some((phase, message)) => {
+            assert_eq!(status["failurePhase"], phase);
+            assert_eq!(snapshot_output["failurePhase"], phase);
+            assert_eq!(status["lastError"], message);
+            assert_eq!(snapshot_output["lastError"], message);
+            assert!(status["lastErrorAt"].is_string());
+            assert!(snapshot_output["lastErrorAt"].is_string());
+        }
+        None => {
+            assert!(status["lastError"].is_null());
+            assert!(snapshot_output["lastError"].is_null());
+            assert!(status["lastErrorAt"].is_null());
+            assert!(snapshot_output["lastErrorAt"].is_null());
+        }
+    }
+}
+
+fn assert_recent_flap_fields(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+) {
+    let expected_flapping = model.recent_failure_count >= 2;
+    assert_eq!(status["recentFailureCount"], model.recent_failure_count);
+    assert_eq!(
+        snapshot_output["recentFailureCount"],
+        model.recent_failure_count
+    );
+    assert_eq!(status["flapping"], expected_flapping);
+    assert_eq!(snapshot_output["flapping"], expected_flapping);
+}
+
+fn assert_recent_retry_fields(
+    model: &EgressLifecycleModel,
+    status: &serde_json::Value,
+    snapshot_output: &serde_json::Value,
+    retry: Option<&EgressRetryState>,
+) {
+    if model.retry_visible {
+        let attempts = model.retry_attempts.expect("retry attempts tracked");
+        let backoff_ms = model.retry_backoff_ms.expect("retry backoff tracked");
+        assert_eq!(retry.map(|retry| retry.attempts), Some(attempts));
+        assert_eq!(status["retrying"], true);
+        assert_eq!(snapshot_output["retrying"], true);
+        assert_eq!(status["retryAttempts"], attempts);
+        assert_eq!(snapshot_output["retryAttempts"], attempts);
+        assert_eq!(status["retryBackoffMs"], backoff_ms);
+        assert_eq!(snapshot_output["retryBackoffMs"], backoff_ms);
+        assert!(
+            status["retryRemainingMs"].as_u64().unwrap_or(0) > 0,
+            "retrying outputs must expose remaining retry delay"
+        );
+        assert!(
+            snapshot_output["retryRemainingMs"].as_u64().unwrap_or(0) > 0,
+            "health snapshot must expose remaining retry delay"
+        );
+    } else {
+        assert!(retry.is_none());
+        assert_eq!(status["retrying"], false);
+        assert_eq!(snapshot_output["retrying"], false);
+        assert!(status["retryAttempts"].is_null());
+        assert!(snapshot_output["retryAttempts"].is_null());
+        assert!(status["retryBackoffMs"].is_null());
+        assert!(snapshot_output["retryBackoffMs"].is_null());
     }
 }
 
