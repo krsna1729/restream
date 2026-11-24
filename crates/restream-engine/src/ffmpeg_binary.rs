@@ -74,44 +74,62 @@ pub fn init(configured: Option<String>) {
 
 /// The resolved FFmpeg executable. Falls back to the bare name `ffmpeg` when
 /// nothing was found, so a spawn fails with a clear "not found" error.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub fn ffmpeg_bin_path() -> &'static Path {
     FFMPEG_BIN_PATH.get_or_init(|| {
-        let configured = CONFIGURED_FFMPEG_PATH
-            .get_or_init(|| None)
-            .clone()
-            .or_else(|| std::env::var("FFMPEG_BIN_PATH").ok());
         let resolution = resolve(
-            configured,
+            configured_ffmpeg_path(),
             &Path::new(FETCH_DIR).join("ffmpeg"),
             std::env::var_os("PATH"),
         );
+        log_resolution(&resolution);
         match resolution {
-            Resolution::Configured(path) => {
-                info!(path = %path.display(), "[startup] configured FFmpeg executable");
+            Resolution::Configured(path) | Resolution::Fetched(path) | Resolution::System(path) => {
                 path
             }
-            Resolution::Fetched(path) => {
-                info!(path = %path.display(), "[startup] FFmpeg executable installed by `restream ffmpeg-fetch`");
-                path
-            }
-            Resolution::System(path) => {
-                info!(path = %path.display(), "[startup] system FFmpeg executable");
-                path
-            }
-            Resolution::Missing(configured) => {
-                warn!(
-                    configured = configured.as_deref().unwrap_or(""),
-                    "no FFmpeg executable found: external transcodes, subprocess file ingest \
-                     and recording remux will fail; install ffmpeg or run `restream ffmpeg-fetch`",
-                );
-                PathBuf::from("ffmpeg")
-            }
+            Resolution::Missing(_) => PathBuf::from("ffmpeg"),
         }
     })
+}
+
+fn configured_ffmpeg_path() -> Option<String> {
+    CONFIGURED_FFMPEG_PATH
+        .get_or_init(|| None)
+        .clone()
+        .or_else(|| std::env::var("FFMPEG_BIN_PATH").ok())
+}
+
+#[cold]
+fn log_resolution(resolution: &Resolution) {
+    match resolution {
+        Resolution::Configured(path) => log_configured_executable(path),
+        Resolution::Fetched(path) => log_fetched_executable(path),
+        Resolution::System(path) => log_system_executable(path),
+        Resolution::Missing(configured) => log_missing_executable(configured.as_deref()),
+    }
+}
+
+#[cold]
+fn log_configured_executable(path: &Path) {
+    info!(path = %path.display(), "[startup] configured FFmpeg executable");
+}
+
+#[cold]
+fn log_fetched_executable(path: &Path) {
+    info!(path = %path.display(), "[startup] FFmpeg executable installed by `restream ffmpeg-fetch`");
+}
+
+#[cold]
+fn log_system_executable(path: &Path) {
+    info!(path = %path.display(), "[startup] system FFmpeg executable");
+}
+
+#[cold]
+fn log_missing_executable(configured: Option<&str>) {
+    warn!(
+        configured = configured.unwrap_or(""),
+        "no FFmpeg executable found: external transcodes, subprocess file ingest \
+         and recording remux will fail; install ffmpeg or run `restream ffmpeg-fetch`",
+    );
 }
 
 /// The resolved `ffprobe`: `FFPROBE_BIN_PATH`, else the one beside the
