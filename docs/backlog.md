@@ -9,6 +9,7 @@ the [assurance roadmap](assurance-roadmap.md).
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
+- [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -35,6 +36,18 @@ the [assurance roadmap](assurance-roadmap.md).
   cases, ported to Restream tests against the public API. Then delete
   `vendor/<crate>` and its `[patch.crates-io]` entries in the root and
   `fuzz/` manifests, and the `moq_ingest` fuzz smoke stays clean.
+
+### Q-120 [performance] [opus] Split the last two complexity baselines
+- Goal: `SrtOwners::drain_events` (22) and `KtlsConnection::read_records` (21)
+  leave `crates/xtask/reportcard-baseline.json`, so the reportcard ratchet has
+  no engine entries left.
+- Why still open: both are hot paths, so a split needs before/after numbers
+  from a benchmark that drives the real path. `drain_events` needs a live SRT
+  owner set; `read_records` needs a kernel-TLS socket and the engine's private
+  connection type. No existing Criterion suite covers either.
+- Gates: a production-path benchmark for each, then the split with numbers
+  showing no regression on a named host, then delete the entry with
+  `cargo xtask reportcard --update-baseline`.
 
 ## Not planned
 
