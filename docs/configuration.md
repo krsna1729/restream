@@ -148,7 +148,11 @@ the output fails. There is no userspace-TLS fallback.
 Both HLS PUT transports follow the same upload policy and report the same
 status. HTTPS on the shards needs kernel TLS. If the host's kTLS probe does
 not pass every TLS 1.2/1.3 AES-GCM pair the client offers, HTTPS outputs stay
-on Reqwest (logged once). Transport comparison:
+on Reqwest (logged once). The Reqwest uploader stays until a shard-owned
+userspace-TLS transport exists: it is the supported path for no-kTLS HTTPS,
+not a fallback to delete. `hls_put_uses_fabric` pins the selection:
+HTTP uses the fabric, kTLS HTTPS uses the fabric, no-kTLS HTTPS uses Reqwest,
+and `RESTREAM_HLS_PUT_FABRIC=0` uses Reqwest for both. Transport comparison:
 [capacity ramp](capacity-ramp.md#hls-put-transports).
 
 ### MoQ
