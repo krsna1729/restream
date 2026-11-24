@@ -627,10 +627,6 @@ async fn run_resource_ingest_only(
     Ok(aggregate)
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_resource_ingest_growth(
     env: &ResourceSweepEnv,
     stack: &mut Option<ResourceSweepStack>,
@@ -669,79 +665,15 @@ async fn run_resource_ingest_growth(
         } else {
             same_growth
         };
-        let stream_key = format!("resource-growth-{index}-{}", config.name);
-        let pipeline_id = create_resource_pipeline(
-            &active.api,
-            &format!("{}-{index}", config.name),
-            &stream_key,
-        )
-        .await?;
-        let publisher = spawn_resource_publisher(env, config, &stream_key)?;
-        wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
+        let (publisher, pipeline_id, output_ids) =
+            start_growth_feed(env, &active.api, index, config, outputs_per_feed).await?;
         publishers.push(publisher);
-        let kind = env.ingest_output_kind;
-        let mut output_ids = Vec::with_capacity(outputs_per_feed);
-        for output in 1..=outputs_per_feed {
-            let name = format!("{stream_key}-{}-{output}", kind.label());
-            let (url, encoding) = resource_output_url(env, config, kind, &name);
-            let output_id = create_output_with_rtmp_mode(
-                &active.api,
-                &pipeline_id,
-                &name,
-                &url,
-                &encoding,
-                kind.rtmp_mode(),
-            )
-            .await?;
-            start_output(&active.api, &pipeline_id, &output_id).await?;
-            output_ids.push(output_id);
-        }
         feed_outputs.push((pipeline_id.clone(), output_ids));
         pipeline_ids.push(pipeline_id);
         if env.ingest_counts.contains(&index) {
-            let total_outputs = feed_outputs.iter().map(|(_, ids)| ids.len()).sum::<usize>();
-            for (pipeline_id, output_ids) in &feed_outputs {
-                wait_for_outputs_progress(
-                    &active.api,
-                    pipeline_id,
-                    output_ids,
-                    resource_output_progress_timeout(total_outputs),
-                )
-                .await?;
-            }
-            let ingest_types = if mixed {
-                sweep_configs()
-                    .iter()
-                    .take(index)
-                    .map(|cfg| cfg.name)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            } else {
-                same_growth.name.to_string()
-            };
             out.push(
-                sample_resource_window(
-                    env,
-                    active,
-                    ResourceScenarioMeta {
-                        scenario: if mixed {
-                            "ingest-growth-mixed"
-                        } else {
-                            "ingest-growth-same"
-                        },
-                        label: format!("{index}-pipelines"),
-                        pipelines: index,
-                        outputs: total_outputs,
-                        ingest_types,
-                        egress_mix: if total_outputs == 0 {
-                            "none".to_string()
-                        } else {
-                            env.ingest_output_kind.label().to_string()
-                        },
-                        transcode: "none",
-                    },
-                )
-                .await?,
+                sample_ingest_checkpoint(env, active, index, mixed, same_growth, &feed_outputs)
+                    .await?,
             );
         }
     }
@@ -756,17 +688,11 @@ async fn run_resource_ingest_growth(
         }
     }
     if local_only {
-        stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
-        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
+        stop_isolated_stack(&mut local_stack).await;
     }
     Ok(out)
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_resource_egress_growth(
     env: &ResourceSweepEnv,
     stack: &mut Option<ResourceSweepStack>,
@@ -795,99 +721,39 @@ async fn run_resource_egress_growth(
     let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
     let planned = catalog::plan_outputs(scenario_name, output_kinds, max_outputs);
-    let mut out = Vec::new();
     let burst_mode = burst::burst_enabled();
     if burst_mode {
-        let specs: Vec<burst::BurstSpec> = planned
-            .iter()
-            .map(|(_, kind, name)| {
-                let (url, encoding) = resource_output_url(env, config, *kind, name);
-                (name.clone(), url, encoding, kind.rtmp_mode())
-            })
-            .collect();
-        for (id, at) in burst::create_and_start_all(&active.api, &pipeline_id, &specs).await? {
-            output_ids.push(id.clone());
-            output_starts.push((id, at));
-        }
+        output_starts =
+            start_egress_burst(env, &active.api, &pipeline_id, config, &planned).await?;
+        output_ids = output_starts.iter().map(|(id, _)| id.clone()).collect();
     }
+    let mut out = Vec::new();
     for index in 1..=max_outputs {
-        let created_now = planned
-            .iter()
-            .filter(|(planned_index, ..)| !burst_mode && *planned_index == index);
-        for (_, kind, name) in created_now {
-            let (url, encoding) = resource_output_url(env, config, *kind, name);
-            let output_id = create_output_with_rtmp_mode(
-                &active.api,
-                &pipeline_id,
-                name,
-                &url,
-                &encoding,
-                kind.rtmp_mode(),
-            )
-            .await?;
-            start_output(&active.api, &pipeline_id, &output_id).await?;
-            output_starts.push((output_id.clone(), Instant::now()));
-            output_ids.push(output_id);
+        if !burst_mode {
+            let started =
+                start_egress_outputs(env, &active.api, &pipeline_id, config, &planned, index)
+                    .await?;
+            output_ids.extend(started.iter().map(|(id, _)| id.clone()));
+            output_starts.extend(started);
         }
         if env.egress_counts.contains(&index) {
-            let progress_timeout = resource_output_progress_timeout(output_ids.len());
-            first_progress::record_first_progress(
-                &active.api,
-                &pipeline_id,
-                &output_starts,
-                progress_timeout,
-                &env.work_dir
-                    .join(format!("first-progress-{}.json", output_ids.len())),
-            )
-            .await;
-            wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout)
-                .await?;
-            // Which peer is expected to receive how many outputs of this rung,
-            // so the contract can check delivered payload against the workload
-            // instead of trusting it.
-            let mut expected_per_host = vec![0_usize; env.srt_peer_hosts.len()];
-            for name in catalog::live_output_names(&planned, index, burst_mode) {
-                if let Some(host) = env.srt_peer_host_for(name)
-                    && let Some(index) = env.srt_peer_hosts.iter().position(|peer| peer == host)
-                {
-                    expected_per_host[index] += 1;
-                }
-            }
-            packet_contract::set_peer_expected_outputs(expected_per_host);
-            out.push(
-                sample_resource_window(
+            sample_egress_checkpoint(
+                EgressCheckpoint {
                     env,
-                    active,
-                    ResourceScenarioMeta {
-                        scenario: scenario_name,
-                        label: format!("{index}-per-group"),
-                        pipelines: 1,
-                        outputs: output_ids.len(),
-                        ingest_types: config.name.to_string(),
-                        egress_mix: output_kinds
-                            .iter()
-                            .map(|kind| kind.label())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                        transcode: if output_kinds.iter().any(|kind| {
-                            matches!(
-                                kind,
-                                SweepOutputKind::Rtmp720p
-                                    | SweepOutputKind::Srt720p
-                                    | SweepOutputKind::Rtmp1080p
-                                    | SweepOutputKind::Srt1080p
-                                    | SweepOutputKind::RtmpSourceDownmix
-                                    | SweepOutputKind::SrtSourceDownmix
-                            )
-                        }) {
-                            "yes"
-                        } else {
-                            "no"
-                        },
-                    },
-                )
-                .await?,
-            );
+                    stack: active,
+                    pipeline_id: &pipeline_id,
+                    scenario_name,
+                    config,
+                    output_kinds,
+                    planned: &planned,
+                    index,
+                    output_ids: &output_ids,
+                    output_starts: &output_starts,
+                    burst_mode,
+                },
+                &mut out,
+            )
+            .await?;
         }
     }
     if env.lifecycle == ResourceSweepLifecycle::Cumulative {
@@ -897,11 +763,237 @@ async fn run_resource_egress_growth(
         delete_resource_pipeline(&active.api, &pipeline_id).await;
     }
     if local_only {
-        stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
-        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
+        stop_isolated_stack(&mut local_stack).await;
     }
     Ok(out)
+}
+
+/// Create one ingest feed and its outputs; waits for the input to go live.
+async fn start_growth_feed(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    index: usize,
+    config: SweepConfig,
+    outputs_per_feed: usize,
+) -> Result<(Child, String, Vec<String>), String> {
+    let stream_key = format!("resource-growth-{index}-{}", config.name);
+    let pipeline_id =
+        create_resource_pipeline(api, &format!("{}-{index}", config.name), &stream_key).await?;
+    let publisher = spawn_resource_publisher(env, config, &stream_key)?;
+    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
+    let kind = env.ingest_output_kind;
+    let mut output_ids = Vec::with_capacity(outputs_per_feed);
+    for output in 1..=outputs_per_feed {
+        let name = format!("{stream_key}-{}-{output}", kind.label());
+        let (url, encoding) = resource_output_url(env, config, kind, &name);
+        let output_id = create_output_with_rtmp_mode(
+            api,
+            &pipeline_id,
+            &name,
+            &url,
+            &encoding,
+            kind.rtmp_mode(),
+        )
+        .await?;
+        start_output(api, &pipeline_id, &output_id).await?;
+        output_ids.push(output_id);
+    }
+    Ok((publisher, pipeline_id, output_ids))
+}
+
+/// Wait for every feed's progress and sample one ingest-growth checkpoint.
+async fn sample_ingest_checkpoint(
+    env: &ResourceSweepEnv,
+    stack: &mut ResourceSweepStack,
+    index: usize,
+    mixed: bool,
+    same_growth: SweepConfig,
+    feed_outputs: &[(String, Vec<String>)],
+) -> Result<ResourceAggregate, String> {
+    let total_outputs = feed_outputs.iter().map(|(_, ids)| ids.len()).sum::<usize>();
+    for (pipeline_id, output_ids) in feed_outputs {
+        wait_for_outputs_progress(
+            &stack.api,
+            pipeline_id,
+            output_ids,
+            resource_output_progress_timeout(total_outputs),
+        )
+        .await?;
+    }
+    let ingest_types = if mixed {
+        sweep_configs()
+            .iter()
+            .take(index)
+            .map(|cfg| cfg.name)
+            .collect::<Vec<_>>()
+            .join(",")
+    } else {
+        same_growth.name.to_string()
+    };
+    sample_resource_window(
+        env,
+        stack,
+        ResourceScenarioMeta {
+            scenario: if mixed {
+                "ingest-growth-mixed"
+            } else {
+                "ingest-growth-same"
+            },
+            label: format!("{index}-pipelines"),
+            pipelines: index,
+            outputs: total_outputs,
+            ingest_types,
+            egress_mix: if total_outputs == 0 {
+                "none".to_string()
+            } else {
+                env.ingest_output_kind.label().to_string()
+            },
+            transcode: "none",
+        },
+    )
+    .await
+}
+
+/// Start every planned output in one burst and return their start times.
+async fn start_egress_burst(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    pipeline_id: &str,
+    config: SweepConfig,
+    planned: &[catalog::PlannedOutput],
+) -> Result<Vec<(String, Instant)>, String> {
+    let specs: Vec<burst::BurstSpec> = planned
+        .iter()
+        .map(|(_, kind, name)| {
+            let (url, encoding) = resource_output_url(env, config, *kind, name);
+            (name.clone(), url, encoding, kind.rtmp_mode())
+        })
+        .collect();
+    burst::create_and_start_all(api, pipeline_id, &specs).await
+}
+
+/// Start the outputs planned for one egress rung.
+async fn start_egress_outputs(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    pipeline_id: &str,
+    config: SweepConfig,
+    planned: &[catalog::PlannedOutput],
+    index: usize,
+) -> Result<Vec<(String, Instant)>, String> {
+    let mut starts = Vec::new();
+    for (_, kind, name) in planned
+        .iter()
+        .filter(|(planned_index, ..)| *planned_index == index)
+    {
+        let (url, encoding) = resource_output_url(env, config, *kind, name);
+        let output_id =
+            create_output_with_rtmp_mode(api, pipeline_id, name, &url, &encoding, kind.rtmp_mode())
+                .await?;
+        start_output(api, pipeline_id, &output_id).await?;
+        starts.push((output_id, Instant::now()));
+    }
+    Ok(starts)
+}
+
+/// One egress-growth checkpoint: first-progress, progress wait, packet
+/// contract peers and the resource sample.
+struct EgressCheckpoint<'a> {
+    env: &'a ResourceSweepEnv,
+    stack: &'a mut ResourceSweepStack,
+    pipeline_id: &'a str,
+    scenario_name: &'a str,
+    config: SweepConfig,
+    output_kinds: &'a [SweepOutputKind],
+    planned: &'a [catalog::PlannedOutput],
+    index: usize,
+    output_ids: &'a [String],
+    output_starts: &'a [(String, Instant)],
+    burst_mode: bool,
+}
+
+async fn sample_egress_checkpoint(
+    checkpoint: EgressCheckpoint<'_>,
+    out: &mut Vec<ResourceAggregate>,
+) -> Result<(), String> {
+    let EgressCheckpoint {
+        env,
+        stack,
+        pipeline_id,
+        scenario_name,
+        config,
+        output_kinds,
+        planned,
+        index,
+        output_ids,
+        output_starts,
+        burst_mode,
+    } = checkpoint;
+    let api = &stack.api;
+    let progress_timeout = resource_output_progress_timeout(output_ids.len());
+    first_progress::record_first_progress(
+        api,
+        pipeline_id,
+        output_starts,
+        progress_timeout,
+        &env.work_dir
+            .join(format!("first-progress-{}.json", output_ids.len())),
+    )
+    .await;
+    wait_for_outputs_progress(api, pipeline_id, output_ids, progress_timeout).await?;
+    let mut expected_per_host = vec![0_usize; env.srt_peer_hosts.len()];
+    for name in catalog::live_output_names(planned, index, burst_mode) {
+        if let Some(host) = env.srt_peer_host_for(name)
+            && let Some(index) = env.srt_peer_hosts.iter().position(|peer| peer == host)
+        {
+            expected_per_host[index] += 1;
+        }
+    }
+    packet_contract::set_peer_expected_outputs(expected_per_host);
+    out.push(
+        sample_resource_window(
+            env,
+            stack,
+            ResourceScenarioMeta {
+                scenario: scenario_name,
+                label: format!("{index}-per-group"),
+                pipelines: 1,
+                outputs: output_ids.len(),
+                ingest_types: config.name.to_string(),
+                egress_mix: output_kinds
+                    .iter()
+                    .map(|kind| kind.label())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                transcode: if output_kinds.iter().any(|kind| {
+                    matches!(
+                        kind,
+                        SweepOutputKind::Rtmp720p
+                            | SweepOutputKind::Srt720p
+                            | SweepOutputKind::Rtmp1080p
+                            | SweepOutputKind::Srt1080p
+                            | SweepOutputKind::RtmpSourceDownmix
+                            | SweepOutputKind::SrtSourceDownmix
+                    )
+                }) {
+                    "yes"
+                } else {
+                    "no"
+                },
+            },
+        )
+        .await?,
+    );
+    Ok(())
+}
+
+/// Stop an isolated run's local restream, MediaMTX and sink peers.
+async fn stop_isolated_stack(local_stack: &mut Option<ResourceSweepStack>) {
+    if let Some(local) = local_stack.as_mut() {
+        stop_child(&mut local.restream).await;
+        stop_children(&mut local.mediamtx).await;
+        stop_harness_sink_peers(&mut local.sink_peers).await;
+    }
 }
 
 pub(crate) async fn create_resource_pipeline(

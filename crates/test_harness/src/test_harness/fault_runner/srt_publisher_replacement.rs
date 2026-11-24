@@ -3,21 +3,26 @@
 
 use super::super::*;
 
-/// Stops an SRT publisher and reconnects at once, so the old ingest's late
-/// disconnect cleanup races the replacement. Expects the output to keep its
-/// sink connection, stay running without retry, and progress from the new
-/// publisher once its disconnect state clears.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-pub(crate) async fn rapid_srt_replacement_preserves_egress(
-    api: &mut RampApi,
+/// Started pipeline, sink and baseline state for the replacement proof.
+struct ReplacementRun {
+    pid: String,
+    oid: String,
+    metrics: Arc<GeneralizedSinkMetrics>,
+    sink_server: GeneralizedSinkServer,
+    baseline_video: u64,
+    baseline_connections: usize,
+    original_publisher: Value,
+    replacement_url: String,
+}
+
+/// Start the pipeline, its sink, output and initial publisher.
+async fn start_replacement_run(
+    api: &RampApi,
     ports: &TestPorts,
     fixture_h264: &Path,
     sink_port: u16,
     timeout: Duration,
-) -> Result<Value, String> {
+) -> Result<ReplacementRun, String> {
     let pid = create_pipeline_with_stream_key(
         api,
         "fault-srt-replacement-race",
@@ -76,8 +81,38 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
         HarnessSrtMode::Publish,
         None,
     );
+    Ok(ReplacementRun {
+        pid,
+        oid,
+        metrics,
+        sink_server,
+        baseline_video,
+        baseline_connections,
+        original_publisher,
+        replacement_url,
+    })
+}
+
+/// Outcome of the replacement race observation window.
+struct ReplacementWatch {
+    replacement_child: Option<Child>,
+    attempts: u64,
+    saw_gap_grace: bool,
+    saw_recent_disconnect: bool,
+    saw_output_retrying: bool,
+    saw_output_missing: bool,
+    saw_output_nonrunning: bool,
+    recovered: bool,
+}
+
+/// Race a replacement publisher against the old ingest's late cleanup.
+async fn watch_replacement_recovery(
+    api: &RampApi,
+    run: &ReplacementRun,
+    fixture_h264: &Path,
+) -> Result<ReplacementWatch, String> {
     let mut replacement_child =
-        Some(spawn_publisher(fixture_h264, &replacement_url, "mpegts", true).await?);
+        Some(spawn_publisher(fixture_h264, &run.replacement_url, "mpegts", true).await?);
     let mut replacement_attempts = 1u64;
     let recovery_deadline = Instant::now() + Duration::from_secs(30);
     let mut saw_gap_grace = false;
@@ -91,21 +126,21 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
             && child.try_wait().map_err(|e| e.to_string())?.is_some()
         {
             replacement_child =
-                Some(spawn_publisher(fixture_h264, &replacement_url, "mpegts", true).await?);
+                Some(spawn_publisher(fixture_h264, &run.replacement_url, "mpegts", true).await?);
             replacement_attempts += 1;
         }
 
         let health = api.get_json("/api/v1/engine/health").await.ok();
         let input = health
             .as_ref()
-            .map(|snapshot| snapshot["pipelines"][&pid]["input"].clone())
+            .map(|snapshot| snapshot["pipelines"][&run.pid]["input"].clone())
             .unwrap_or(Value::Null);
         saw_gap_grace |= input["disconnectGraceActive"] == true;
         saw_recent_disconnect |= input["recentDisconnectCount"]
             .as_u64()
             .is_some_and(|count| count >= 1);
 
-        let status = api.get_output_status(&pid, &oid).await;
+        let status = api.get_output_status(&run.pid, &run.oid).await;
         match status {
             Ok((status, _)) => {
                 saw_output_retrying |= status.retrying;
@@ -117,7 +152,7 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
         }
 
         let publisher = &input["publisher"]["remoteAddr"];
-        let replacement_live = publisher.is_string() && *publisher != original_publisher;
+        let replacement_live = publisher.is_string() && *publisher != run.original_publisher;
         let disconnect_cleared = replacement_live
             && input["status"] == "on"
             && input["probeStatus"] == "ready"
@@ -125,7 +160,8 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
             && input["lastDisconnectReason"].is_null()
             && input["lastFailurePhase"].is_null()
             && input["recentDisconnectError"] == false;
-        let output_progressed = metrics.video_count.load(Ordering::Relaxed) > baseline_video + 10;
+        let output_progressed =
+            run.metrics.video_count.load(Ordering::Relaxed) > run.baseline_video + 10;
         if disconnect_cleared && output_progressed {
             recovered = true;
             break;
@@ -133,9 +169,34 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
 
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    Ok(ReplacementWatch {
+        replacement_child,
+        attempts: replacement_attempts,
+        saw_gap_grace,
+        saw_recent_disconnect,
+        saw_output_retrying,
+        saw_output_missing,
+        saw_output_nonrunning,
+        recovered,
+    })
+}
 
-    let final_connections = metrics.connections.load(Ordering::Relaxed);
-    let final_status = api.get_output_status(&pid, &oid).await.ok();
+/// Stops an SRT publisher and reconnects at once, so the old ingest's late
+/// disconnect cleanup races the replacement. Expects the output to keep its
+/// sink connection, stay running without retry, and progress from the new
+/// publisher once its disconnect state clears.
+pub(crate) async fn rapid_srt_replacement_preserves_egress(
+    api: &mut RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    sink_port: u16,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let run = start_replacement_run(api, ports, fixture_h264, sink_port, timeout).await?;
+    let mut watch = watch_replacement_recovery(api, &run, fixture_h264).await?;
+
+    let final_connections = run.metrics.connections.load(Ordering::Relaxed);
+    let final_status = api.get_output_status(&run.pid, &run.oid).await.ok();
     let final_status_running = final_status
         .as_ref()
         .map(|(status, _)| status.status.as_str())
@@ -146,7 +207,7 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
     let final_health = api.get_json("/api/v1/engine/health").await.ok();
     let final_input = final_health
         .as_ref()
-        .map(|health| health["pipelines"][&pid]["input"].clone())
+        .map(|health| health["pipelines"][&run.pid]["input"].clone())
         .unwrap_or(Value::Null);
     let final_disconnect_cleared = final_input["status"] == "on"
         && final_input["probeStatus"] == "ready"
@@ -155,28 +216,28 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
         && final_input["lastFailurePhase"].is_null()
         && final_input["recentDisconnectError"] == false;
     let final_recent_disconnect_count = final_input["recentDisconnectCount"].as_u64().unwrap_or(0);
-    let passed = baseline_video >= RECOVERY_WARM_VIDEO_MIN
-        && original_publisher.is_string()
-        && baseline_connections == 1
-        && recovered
-        && final_connections == baseline_connections
+    let passed = run.baseline_video >= RECOVERY_WARM_VIDEO_MIN
+        && run.original_publisher.is_string()
+        && run.baseline_connections == 1
+        && watch.recovered
+        && final_connections == run.baseline_connections
         && final_status_running
         && !final_retrying
         && final_disconnect_cleared
-        && !saw_output_retrying
-        && !saw_output_missing
-        && !saw_output_nonrunning;
+        && !watch.saw_output_retrying
+        && !watch.saw_output_missing
+        && !watch.saw_output_nonrunning;
     println!(
         "[fault] Rapid SRT publisher replacement preserves egress: {} (connections={} recovered={} attempts={} sawGapGrace={} sawRecentDisconnect={} sawRetrying={} sawMissing={} sawNonRunning={} finalRetrying={} disconnectCleared={} recentDisconnectCount={})",
         if passed { "PASS" } else { "FAIL" },
         final_connections,
-        recovered,
-        replacement_attempts,
-        saw_gap_grace,
-        saw_recent_disconnect,
-        saw_output_retrying,
-        saw_output_missing,
-        saw_output_nonrunning,
+        watch.recovered,
+        watch.attempts,
+        watch.saw_gap_grace,
+        watch.saw_recent_disconnect,
+        watch.saw_output_retrying,
+        watch.saw_output_missing,
+        watch.saw_output_nonrunning,
         final_retrying,
         final_disconnect_cleared,
         final_recent_disconnect_count,
@@ -184,16 +245,16 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
     let result = json!({
         "test": "rapid-srt-replacement-preserves-egress",
         "passed": passed,
-        "baselineVideo": baseline_video,
-        "baselineConnections": baseline_connections,
-        "originalPublisher": original_publisher,
-        "recovered": recovered,
-        "replacementAttempts": replacement_attempts,
-        "sawGapGrace": saw_gap_grace,
-        "sawRecentDisconnect": saw_recent_disconnect,
-        "sawOutputRetrying": saw_output_retrying,
-        "sawOutputMissing": saw_output_missing,
-        "sawOutputNonRunning": saw_output_nonrunning,
+        "baselineVideo": run.baseline_video,
+        "baselineConnections": run.baseline_connections,
+        "originalPublisher": run.original_publisher,
+        "recovered": watch.recovered,
+        "replacementAttempts": watch.attempts,
+        "sawGapGrace": watch.saw_gap_grace,
+        "sawRecentDisconnect": watch.saw_recent_disconnect,
+        "sawOutputRetrying": watch.saw_output_retrying,
+        "sawOutputMissing": watch.saw_output_missing,
+        "sawOutputNonRunning": watch.saw_output_nonrunning,
         "finalConnections": final_connections,
         "finalStatusRunning": final_status_running,
         "finalRetrying": final_retrying,
@@ -202,11 +263,11 @@ pub(crate) async fn rapid_srt_replacement_preserves_egress(
         "finalInputSnapshot": final_input,
     });
 
-    stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
-    if let Some(child) = replacement_child.as_mut() {
+    stop_mixed_outputs(api, &run.pid, std::slice::from_ref(&run.oid)).await;
+    if let Some(child) = watch.replacement_child.as_mut() {
         stop_child(child).await;
     }
-    stop_generalized_sink_server(sink_server);
+    stop_generalized_sink_server(run.sink_server);
 
     Ok(result)
 }

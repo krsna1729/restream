@@ -293,11 +293,17 @@ impl Session {
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     async fn execute(&mut self) -> Result<(), String> {
+        let publish_ready_unix_ms = self.start_egress().await?;
+        self.apply_netem()?;
+        let report = self.run_subscriber(publish_ready_unix_ms).await?;
+        self.record_subscriber(&report);
+        Ok(())
+    }
+
+    /// Relay, Restream, the MoQ output, the RTMP publisher, and the relay's
+    /// catalog: all the egress-side setup before impairment.
+    async fn start_egress(&mut self) -> Result<u64, String> {
         let relay_bin = pinned_bin(&MOQ_RELAY).await?;
         let mut relay = DevRelay::new(
             relay_bin,
@@ -350,7 +356,11 @@ impl Session {
             true,
             json!({"broadcast": BROADCAST, "catalog": catalog, "publishReadyUnixMs": publish_ready_unix_ms}),
         );
+        Ok(publish_ready_unix_ms)
+    }
 
+    /// Impair the loopback path to the relay with `tc netem`.
+    fn apply_netem(&mut self) -> Result<(), String> {
         let netem = NetemGuard::apply(self.dev_ports.relay)?;
         let rules = json!({
             "device": "lo",
@@ -362,7 +372,11 @@ impl Session {
         });
         println!("[{MODE}] {}", json!({"phase": "netem", "rules": rules}));
         self.netem = Some(netem);
+        Ok(())
+    }
 
+    /// Spawn the subscriber under impairment and return its JSON report.
+    async fn run_subscriber(&mut self, publish_ready_unix_ms: u64) -> Result<Value, String> {
         let bin = subscriber_bin()?;
         let stderr = std::fs::File::create(self.work_dir.join("subscriber.log"))
             .map_err(|error| error.to_string())?;
@@ -422,6 +436,11 @@ impl Session {
             exit_ok,
             json!({"code": output.status.code(), "stderr": stderr, "report": report}),
         );
+        Ok(report)
+    }
+
+    /// Record the subscriber's delivery, skew and startup checks.
+    fn record_subscriber(&mut self, report: &Value) {
         let error = report["error"].as_str();
         self.record(
             "subscriberNoProtocolError",
@@ -473,7 +492,6 @@ impl Session {
             report["alpn"].as_str() == Some(LITE_VERSION),
             json!({"alpn": report["alpn"], "expected": LITE_VERSION}),
         );
-        Ok(())
     }
 
     async fn shutdown(&mut self) {

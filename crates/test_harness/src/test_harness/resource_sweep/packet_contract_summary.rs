@@ -17,14 +17,6 @@ use super::packet_contract_verdict::{
 /// Aggregate one rung's samples: mean/peak rates, peak gauges, cost proxies,
 /// the workload dimensions, and the worst validity verdict with the union of
 /// its reasons.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) fn rung_summary(
     scenario: &str,
     outputs: u64,
@@ -32,59 +24,126 @@ pub(super) fn rung_summary(
     run: &Value,
     samples: &[&Value],
 ) -> Value {
-    let mean_peak = |keys: &[&str]| -> serde_json::Map<String, Value> {
-        let mut out = serde_json::Map::new();
-        for key in keys {
-            let values: Vec<f64> = samples
-                .iter()
-                .filter_map(|sample| sample[key].as_f64())
-                .collect();
-            if values.is_empty() {
-                continue;
-            }
-            out.insert(
-                key.to_string(),
-                json!({
-                    "mean": round2(values.iter().sum::<f64>() / values.len() as f64),
-                    "peak": round2(values.iter().copied().fold(f64::MIN, f64::max)),
-                    "samples": values.len(),
-                }),
-            );
+    let last = samples.last().copied().unwrap_or(&Value::Null);
+    let (mut status, mut reasons, rated, rated_window_secs) = validity_summary(samples, outputs);
+    let (workload, workload_reasons, peer_delivery) =
+        workload_summary(samples, last, outputs, rated_window_secs);
+    if !workload_reasons.is_empty() {
+        if status == "healthy" {
+            status = "contaminated";
         }
-        out
-    };
-    let rate_keys = [
-        "srtTxDatagramsPerSec",
-        "srtDataFirstPps",
-        "srtDataRetransmitPps",
-        "srtControlPps",
-        "srtRetransmitShare",
-        "srtTxCompletedPerSec",
-        "srtRxDatagramsPerSec",
-        "srtServiceVisitsPerSec",
-        "srtServiceActionsPerSec",
-        "srtMaintenanceActionsPerSec",
-        "shardLoopIterationsPerSec",
-        "shardMediaTicksPerSec",
-        "shardReadyVisitsPerSec",
-        "udpInErrorsPerSec",
-        "udpRcvbufErrorsPerSec",
-        "udpSndbufErrorsPerSec",
-        "nicRxDroppedPerSec",
-        "nicTxDroppedPerSec",
-    ];
-    let gauge_keys = [
-        "shardReadyDepthMax",
-        "shardReadyDepthHwmMax",
-        "shardUnhealthyCount",
-        "shardBudgetExhaustions",
-        "ownerTxInFlightMax",
-        "ownerTxCapacityMax",
-        "ownerCallerInFlightHwm",
-        "ownerCallerQueuedHwm",
-    ];
+        reasons.extend(workload_reasons);
+    }
+    let topology = topology_summary(run, last);
+    let baseline = baseline_eligibility(
+        run,
+        scenario,
+        outputs,
+        rated_window_secs,
+        if rated == 0 {
+            "no-rated-samples"
+        } else {
+            status
+        },
+        rated,
+        samples.len(),
+        &workload,
+        &topology,
+    );
+
+    json!({
+        "scenario": scenario,
+        "label": last["label"],
+        "outputs": outputs,
+        "samples": samples.len(),
+        "ratedSamples": rated,
+        "runSamples": run_samples,
+        "workload": workload,
+        "commonRatedWindowSecs": round2(rated_window_secs),
+        "baselineEligible": baseline,
+        "validity": { "status": if rated == 0 { "no-rated-samples" } else { status }, "reasons": reasons },
+        "ratesPerSec": mean_peak(samples, RATE_KEYS),
+        "countsPerWindow": mean_peak(samples, COUNT_KEYS),
+        "peerDelivery": peer_delivery,
+        "topology": topology,
+        "gaugesPeak": gauge_peaks(samples),
+        "cost": mean_peak(samples, COST_KEYS),
+    })
+}
+
+const RATE_KEYS: &[&str] = &[
+    "srtTxDatagramsPerSec",
+    "srtDataFirstPps",
+    "srtDataRetransmitPps",
+    "srtControlPps",
+    "srtRetransmitShare",
+    "srtTxCompletedPerSec",
+    "srtRxDatagramsPerSec",
+    "srtServiceVisitsPerSec",
+    "srtServiceActionsPerSec",
+    "srtMaintenanceActionsPerSec",
+    "shardLoopIterationsPerSec",
+    "shardMediaTicksPerSec",
+    "shardReadyVisitsPerSec",
+    "udpInErrorsPerSec",
+    "udpRcvbufErrorsPerSec",
+    "udpSndbufErrorsPerSec",
+    "nicRxDroppedPerSec",
+    "nicTxDroppedPerSec",
+];
+
+const COUNT_KEYS: &[&str] = &[
+    "ownerTxFailedSendsDelta",
+    "ownerTxExhaustionsDelta",
+    "ownerServiceBudgetExhaustedDelta",
+    "ownerRxRingDroppedDelta",
+    "ownerRxTruncatedDelta",
+    "shardFeedResyncsDelta",
+    "shardQueueOverflowsDelta",
+];
+
+const COST_KEYS: &[&str] = &[
+    "cpuMicrosPerSrtPacket",
+    "srtTxDatagramsPerOutputPerSec",
+    "srtDataFirstPpsPerOutput",
+];
+
+const GAUGE_KEYS: &[&str] = &[
+    "shardReadyDepthMax",
+    "shardReadyDepthHwmMax",
+    "shardUnhealthyCount",
+    "shardBudgetExhaustions",
+    "ownerTxInFlightMax",
+    "ownerTxCapacityMax",
+    "ownerCallerInFlightHwm",
+    "ownerCallerQueuedHwm",
+];
+
+fn mean_peak(samples: &[&Value], keys: &[&str]) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for key in keys {
+        let values: Vec<f64> = samples
+            .iter()
+            .filter_map(|sample| sample[key].as_f64())
+            .collect();
+        if values.is_empty() {
+            continue;
+        }
+        out.insert(
+            key.to_string(),
+            json!({
+                "mean": round2(values.iter().sum::<f64>() / values.len() as f64),
+                "peak": round2(values.iter().copied().fold(f64::MIN, f64::max)),
+                "samples": values.len(),
+            }),
+        );
+    }
+    out
+}
+
+fn gauge_peaks(samples: &[&Value]) -> serde_json::Map<String, Value> {
     let mut gauges = serde_json::Map::new();
-    for key in gauge_keys {
+    for key in GAUGE_KEYS {
         gauges.insert(
             key.to_string(),
             json!(
@@ -95,9 +154,12 @@ pub(super) fn rung_summary(
             ),
         );
     }
+    gauges
+}
 
-    // Verdict: the worst status any rated sample reached, with each distinct
-    // reason and how many samples reported it.
+/// The worst status any rated sample reached, with each distinct reason and
+/// how many samples reported it, plus the rated window.
+fn validity_summary(samples: &[&Value], outputs: u64) -> (&'static str, Vec<String>, usize, f64) {
     let mut status = "healthy";
     let mut reason_counts: Vec<(String, usize)> = Vec::new();
     let mut rated = 0_usize;
@@ -122,7 +184,6 @@ pub(super) fn rung_summary(
         .into_iter()
         .map(|(reason, count)| format!("{reason} (in {count}/{rated} rated samples)"))
         .collect();
-    let last = samples.last().copied().unwrap_or(&Value::Null);
     // The rated window is the span the packet counters actually cover: from
     // the prime to the last rated sample. Configuration is not evidence.
     let rated_window_secs = samples
@@ -137,17 +198,24 @@ pub(super) fn rung_summary(
             "rated window {rated_window_secs:.1}s is shorter than the {MIN_RATED_WINDOW_SECS:.0}s contract minimum"
         ));
     }
+    (status, reasons, rated, rated_window_secs)
+}
 
-    // Baseline eligibility is deliberately separate from runtime validity:
-    // `healthy` describes the datapath, this describes whether the artifact
-    // may be recorded as a contractual baseline at all.
-    // Workload conformance over each peer's own observed window: the peer
-    // reports a payload delta with its own observation interval, so bytes are
-    // integrated as `payloadBytesDelta` (never `rate × the measuring host's
-    // interval`, which is a different span) and compared against
-    // `expectedOutputs × 1 MB/s × observedSecs`. The observed seconds are
-    // recorded and must cover the contract minimum, so a rung cannot be judged
-    // on a window the peer barely observed.
+/// Workload dimensions plus delivery conformance reasons.
+///
+/// Workload conformance is measured over each peer's own observed window: the
+/// peer reports a payload delta with its own observation interval, so bytes
+/// are integrated as `payloadBytesDelta` (never `rate × the measuring host's
+/// interval`, which is a different span) and compared against
+/// `expectedOutputs × 1 MB/s × observedSecs`. The observed seconds are
+/// recorded and must cover the contract minimum, so a rung cannot be judged
+/// on a window the peer barely observed.
+fn workload_summary(
+    samples: &[&Value],
+    last: &Value,
+    outputs: u64,
+    rated_window_secs: f64,
+) -> (Value, Vec<String>, serde_json::Map<String, Value>) {
     let mut workload_reasons: Vec<String> = Vec::new();
     let mut peer_delivery = serde_json::Map::new();
     let mut data_first_total = 0.0_f64;
@@ -255,16 +323,19 @@ pub(super) fn rung_summary(
             ));
         }
     }
-    if !workload_reasons.is_empty() {
-        if status == "healthy" {
-            status = "contaminated";
-        }
-        reasons.extend(workload_reasons);
-    }
+    let workload = json!({
+        "ingestTypes": last["ingestTypes"],
+        "egressMix": last["egressMix"],
+        "configuredOutputs": last["outputs"],
+        "transcode": last["transcode"],
+    });
+    (workload, workload_reasons, peer_delivery)
+}
 
-    // Topology and the *observed* CPU masks: what ran where, not what was asked
-    // for. A same-host topology (veth/loopback) is only baseline-eligible when
-    // the measured datapath and the receivers have disjoint CPUs.
+/// Topology and the *observed* CPU masks: what ran where, not what was asked
+/// for. A same-host topology (veth/loopback) is only baseline-eligible when
+/// the measured datapath and the receivers have disjoint CPUs.
+fn topology_summary(run: &Value, last: &Value) -> Value {
     let restream_cpus = last["restreamCpusAllowed"].as_str().map(str::to_string);
     let mut peer_cpus = serde_json::Map::new();
     let mut disjoint = None;
@@ -288,7 +359,7 @@ pub(super) fn rung_summary(
         .unwrap_or("unknown")
         .to_string();
     let same_host = topology_kind != "remote";
-    let topology = json!({
+    json!({
         "kind": topology_kind,
         "netns": run["topologyNetns"],
         "peerHosts": run["peerTargets"],
@@ -296,59 +367,6 @@ pub(super) fn rung_summary(
         "peerCpusAllowed": peer_cpus,
         "cpuPartitioned": disjoint,
         "sameHost": same_host,
-    });
-
-    let workload = json!({
-        "ingestTypes": last["ingestTypes"],
-        "egressMix": last["egressMix"],
-        "configuredOutputs": last["outputs"],
-        "transcode": last["transcode"],
-    });
-    let baseline = baseline_eligibility(
-        run,
-        scenario,
-        outputs,
-        rated_window_secs,
-        if rated == 0 {
-            "no-rated-samples"
-        } else {
-            status
-        },
-        rated,
-        samples.len(),
-        &workload,
-        &topology,
-    );
-
-    json!({
-        "scenario": scenario,
-        "label": last["label"],
-        "outputs": outputs,
-        "samples": samples.len(),
-        "ratedSamples": rated,
-        "runSamples": run_samples,
-        "workload": workload,
-        "commonRatedWindowSecs": round2(rated_window_secs),
-        "baselineEligible": baseline,
-        "validity": { "status": if rated == 0 { "no-rated-samples" } else { status }, "reasons": reasons },
-        "ratesPerSec": mean_peak(&rate_keys),
-        "countsPerWindow": mean_peak(&[
-            "ownerTxFailedSendsDelta",
-            "ownerTxExhaustionsDelta",
-            "ownerServiceBudgetExhaustedDelta",
-            "ownerRxRingDroppedDelta",
-            "ownerRxTruncatedDelta",
-            "shardFeedResyncsDelta",
-            "shardQueueOverflowsDelta",
-        ]),
-        "peerDelivery": peer_delivery,
-        "topology": topology,
-        "gaugesPeak": gauges,
-        "cost": mean_peak(&[
-            "cpuMicrosPerSrtPacket",
-            "srtTxDatagramsPerOutputPerSec",
-            "srtDataFirstPpsPerOutput",
-        ]),
     })
 }
 
@@ -357,10 +375,6 @@ pub(super) fn rung_summary(
 /// impossible: a `healthy` datapath on a dirty tree, a non-canonical workload,
 /// an off-ladder output count or a short window is still not a baseline.
 #[allow(clippy::too_many_arguments)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(super) fn baseline_eligibility(
     run: &Value,
     scenario: &str,
@@ -374,6 +388,50 @@ pub(super) fn baseline_eligibility(
 ) -> Value {
     let mut reasons = Vec::new();
     let sha = run["gitSha"].as_str();
+    reasons.extend(provenance_reasons(run, sha));
+    reasons.extend(config_reasons(run, outputs, scenario));
+    let (peer_reasons, remote_peers, peer_hosts) = remote_peer_reasons(run, outputs, topology);
+    reasons.extend(peer_reasons);
+    reasons.extend(contract_workload_reasons(workload));
+    reasons.extend(cpu_partition_reasons(topology));
+    reasons.extend(window_and_sample_reasons(
+        run,
+        common_window_secs,
+        runtime_status,
+        rated_samples,
+        total_samples,
+    ));
+    json!({
+        "eligible": reasons.is_empty(),
+        "reasons": reasons,
+        "checks": {
+            "gitSha": sha,
+            "gitDirty": run["gitDirty"],
+            "buildProvenance": run["buildProvenance"],
+            "lifecycle": run["lifecycle"],
+            "peerMode": run["peerMode"],
+            "bitrateLabel": run["bitrateLabel"],
+            "egressCounts": configured_egress_counts(run),
+            "scenarioFilter": scenario_filter(run),
+            "settleSecs": run["settleSecs"],
+            "scenario": scenario,
+            "outputs": outputs,
+            "commonRatedWindowSecs": round2(common_window_secs),
+            "runtimeValidity": runtime_status,
+            "ratedSamples": rated_samples,
+            "totalSamples": total_samples,
+            "restreamBinExplicit": run["restreamBinExplicit"],
+            "remotePeers": remote_peers,
+            "peerHosts": peer_hosts,
+            "topologyKind": topology["kind"],
+            "cpuPartitioned": topology["cpuPartitioned"],
+            "workload": workload.clone(),
+        }
+    })
+}
+
+fn provenance_reasons(run: &Value, sha: Option<&str>) -> Vec<String> {
+    let mut reasons = Vec::new();
     if sha.is_none() {
         reasons.push("the artifact records no git SHA".to_string());
     }
@@ -401,6 +459,31 @@ pub(super) fn baseline_eligibility(
                 .to_string(),
         ),
     }
+    reasons
+}
+
+fn configured_egress_counts(run: &Value) -> Vec<u64> {
+    run["egressCounts"]
+        .as_array()
+        .map(|counts| counts.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default()
+}
+
+fn scenario_filter(run: &Value) -> Vec<String> {
+    run["scenarioFilter"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn config_reasons(run: &Value, outputs: u64, scenario: &str) -> Vec<String> {
+    let mut reasons = Vec::new();
     if run["lifecycle"].as_str() != Some("isolated") {
         reasons.push(format!(
             "lifecycle is {:?}, not the isolated rung lifecycle",
@@ -419,25 +502,13 @@ pub(super) fn baseline_eligibility(
             run["bitrateLabel"]
         ));
     }
-    let configured: Vec<u64> = run["egressCounts"]
-        .as_array()
-        .map(|counts| counts.iter().filter_map(Value::as_u64).collect())
-        .unwrap_or_default();
+    let configured = configured_egress_counts(run);
     if configured != vec![outputs] {
         reasons.push(format!(
             "the invocation configured egress rungs {configured:?}, not exactly [{outputs}]"
         ));
     }
-    let filter: Vec<String> = run["scenarioFilter"]
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    let filter = scenario_filter(run);
     if filter != vec!["egress-growth-source-srt".to_string()] {
         reasons.push(format!(
             "the scenario filter is {filter:?}, not exactly the canonical SRT fanout"
@@ -457,10 +528,11 @@ pub(super) fn baseline_eligibility(
     if !matches!(outputs, 100 | 300 | 500 | 1000) {
         reasons.push(format!("output count {outputs} is not a ladder rung"));
     }
-    // 300/500/1000 need peers that are actually remote: a loopback target is
-    // the same host's sink, which the 100-output shakedown already showed
-    // cannot carry the workload losslessly.
-    let peer_hosts: Vec<String> = run["peerStateEndpoint"]["hosts"]
+    reasons
+}
+
+fn peer_host_list(run: &Value) -> Vec<String> {
+    run["peerStateEndpoint"]["hosts"]
         .as_array()
         .map(|hosts| {
             hosts
@@ -469,20 +541,39 @@ pub(super) fn baseline_eligibility(
                 .map(str::to_string)
                 .collect()
         })
-        .unwrap_or_default();
-    let is_loopback = |host: &str| {
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "0.0.0.0"
-    };
-    let remote_peers = !peer_hosts.is_empty() && peer_hosts.iter().all(|host| !is_loopback(host));
+        .unwrap_or_default()
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "0.0.0.0"
+}
+
+fn remote_peer_reasons(
+    run: &Value,
+    outputs: u64,
+    topology: &Value,
+) -> (Vec<String>, bool, Vec<String>) {
+    let mut reasons = Vec::new();
+    let peer_hosts = peer_host_list(run);
+    let remote_peers =
+        !peer_hosts.is_empty() && peer_hosts.iter().all(|host| !is_loopback_host(host));
     // "Remote" must mean another machine, not just a non-loopback address: a
     // same-host netns/veth peer is still this host's CPU and kernel.
+    // 300/500/1000 need peers that are actually remote: a loopback target is
+    // the same host's sink, which the 100-output shakedown already showed
+    // cannot carry the workload losslessly.
     if outputs >= 300 && (!remote_peers || topology["sameHost"] != false) {
         reasons.push(format!(
             "{outputs}-output rungs need a second host: peers {peer_hosts:?} in topology {:?}",
             topology["kind"]
         ));
     }
+    (reasons, remote_peers, peer_hosts)
+}
+
+fn contract_workload_reasons(workload: &Value) -> Vec<String> {
+    let mut reasons = Vec::new();
     for (key, expected) in [
         ("ingestTypes", "h264-srt"),
         ("egressMix", "srt-source"),
@@ -495,7 +586,12 @@ pub(super) fn baseline_eligibility(
             ));
         }
     }
-    // Same-host lanes must prove the receiver is not on the measured CPUs.
+    reasons
+}
+
+/// Same-host lanes must prove the receiver is not on the measured CPUs.
+fn cpu_partition_reasons(topology: &Value) -> Vec<String> {
+    let mut reasons = Vec::new();
     if topology["sameHost"] != false {
         match topology["cpuPartitioned"].as_bool() {
             Some(true) => {}
@@ -509,6 +605,17 @@ pub(super) fn baseline_eligibility(
             ),
         }
     }
+    reasons
+}
+
+fn window_and_sample_reasons(
+    run: &Value,
+    common_window_secs: f64,
+    runtime_status: &str,
+    rated_samples: usize,
+    total_samples: usize,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
     if common_window_secs < MIN_RATED_WINDOW_SECS {
         reasons.push(format!(
             "common rated window {common_window_secs:.1}s is shorter than {MIN_RATED_WINDOW_SECS:.0}s"
@@ -530,31 +637,5 @@ pub(super) fn baseline_eligibility(
                 .to_string(),
         );
     }
-    json!({
-        "eligible": reasons.is_empty(),
-        "reasons": reasons,
-        "checks": {
-            "gitSha": sha,
-            "gitDirty": run["gitDirty"],
-            "buildProvenance": run["buildProvenance"],
-            "lifecycle": run["lifecycle"],
-            "peerMode": run["peerMode"],
-            "bitrateLabel": run["bitrateLabel"],
-            "egressCounts": configured,
-            "scenarioFilter": filter,
-            "settleSecs": run["settleSecs"],
-            "scenario": scenario,
-            "outputs": outputs,
-            "commonRatedWindowSecs": round2(common_window_secs),
-            "runtimeValidity": runtime_status,
-            "ratedSamples": rated_samples,
-            "totalSamples": total_samples,
-            "restreamBinExplicit": run["restreamBinExplicit"],
-            "remotePeers": remote_peers,
-            "peerHosts": peer_hosts,
-            "topologyKind": topology["kind"],
-            "cpuPartitioned": topology["cpuPartitioned"],
-            "workload": workload.clone(),
-        }
-    })
+    reasons
 }

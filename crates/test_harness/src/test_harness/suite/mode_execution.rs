@@ -131,31 +131,35 @@ async fn suite_run_parallel_batch(
     Ok(outcomes)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-pub(crate) async fn suite_run() -> Result<Value, String> {
-    let raw: Vec<String> = std::env::args().skip(2).collect();
-    let (modes, preflight_only) = suite_selected_modes(&raw)?;
-    let mut continue_on_fail = false;
-    let mut use_host_net = std::env::var("TEST_HARNESS_USE_HOST_NET")
-        .ok()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let mut run_id = jiff::Timestamp::now()
-        .strftime("%Y%m%dT%H%M%SZ")
-        .to_string();
-    let mut work_root: Option<PathBuf> = std::env::var_os("WORK_ROOT").map(PathBuf::from);
-    let mut mode_timeout_secs = std::env::var("TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS")
-        .ok()
-        .map(|value| {
-            value.parse::<u64>().map_err(|_| {
-                "TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS must be a positive integer".to_string()
-            })
-        })
-        .transpose()?
-        .unwrap_or(DEFAULT_SUITE_MODE_TIMEOUT_SECS);
+/// Command-line options for one suite run.
+struct SuiteOptions {
+    continue_on_fail: bool,
+    use_host_net: bool,
+    run_id: String,
+    work_root: Option<PathBuf>,
+    mode_timeout_secs: u64,
+}
 
+fn parse_suite_options(raw: &[String]) -> Result<SuiteOptions, String> {
+    let mut options = SuiteOptions {
+        continue_on_fail: false,
+        use_host_net: std::env::var("TEST_HARNESS_USE_HOST_NET")
+            .ok()
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
+        run_id: jiff::Timestamp::now()
+            .strftime("%Y%m%dT%H%M%SZ")
+            .to_string(),
+        work_root: std::env::var_os("WORK_ROOT").map(PathBuf::from),
+        mode_timeout_secs: std::env::var("TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS")
+            .ok()
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    "TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS must be a positive integer".to_string()
+                })
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_SUITE_MODE_TIMEOUT_SECS),
+    };
     let mut i = 0;
     while i < raw.len() {
         match raw[i].as_str() {
@@ -165,47 +169,195 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
             }
             "--run-id" => {
                 i += 1;
-                run_id = raw.get(i).ok_or("--run-id requires a value")?.clone();
+                options.run_id = raw.get(i).ok_or("--run-id requires a value")?.clone();
             }
             "--work-root" => {
                 i += 1;
-                work_root = Some(PathBuf::from(
+                options.work_root = Some(PathBuf::from(
                     raw.get(i).ok_or("--work-root requires a value")?,
                 ));
             }
             "--mode-timeout-secs" => {
                 i += 1;
-                mode_timeout_secs = raw
+                options.mode_timeout_secs = raw
                     .get(i)
                     .ok_or("--mode-timeout-secs requires a value")?
                     .parse()
                     .map_err(|_| "--mode-timeout-secs must be a positive integer".to_string())?;
             }
-            "--no-netns" => use_host_net = true,
-            "--continue-on-fail" => continue_on_fail = true,
+            "--no-netns" => options.use_host_net = true,
+            "--continue-on-fail" => options.continue_on_fail = true,
             "--preflight-only" => {}
             other => return Err(format!("unknown suite option: {other}")),
         }
         i += 1;
     }
+    Ok(options)
+}
 
+/// Resolve `WORK_ROOT` (or the run-id default) against the current directory
+/// and create it.
+fn suite_work_root(run_id: &str, requested: Option<PathBuf>) -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let root = requested.unwrap_or_else(|| cwd.join(".local/artifacts").join(run_id));
+    let root = if root.is_absolute() {
+        root
+    } else {
+        cwd.join(root)
+    };
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    Ok(root)
+}
+
+/// Per-run paths and policy shared by the batch and serial executors.
+struct SuiteExecutor<'a> {
+    exe: &'a Path,
+    work_root: &'a Path,
+    results_jsonl: &'a Path,
+    preflight_only: bool,
+    has_unshare: bool,
+    use_host_net: bool,
+    mode_timeout_secs: u64,
+}
+
+impl SuiteExecutor<'_> {
+    fn parallelizable(&self, mode: &str) -> bool {
+        self.has_unshare && suite_mode_is_parallelizable(mode, self.preflight_only)
+    }
+
+    async fn run_parallel_batch(&self, modes: &[String]) -> Result<bool, String> {
+        let outcomes = suite_run_parallel_batch(
+            self.exe,
+            modes,
+            self.work_root,
+            self.preflight_only,
+            self.has_unshare,
+            self.use_host_net,
+            self.mode_timeout_secs,
+        )
+        .await?;
+        report_parallel_outcomes(outcomes, self.results_jsonl, self.preflight_only)
+    }
+
+    async fn run_serial_mode(&self, mode: &str) -> Result<bool, String> {
+        let mode_dir = self.work_root.join(mode);
+        std::fs::create_dir_all(&mode_dir).map_err(|e| e.to_string())?;
+        let mode_started = now_rfc3339();
+        let command = if self.preflight_only {
+            "preflight"
+        } else {
+            mode
+        };
+        println!(
+            "[suite] {} {mode}",
+            if self.preflight_only {
+                "preflight"
+            } else {
+                "run"
+            }
+        );
+        let mode_timeout_secs = suite_mode_timeout_secs(mode, self.mode_timeout_secs);
+        let mode_timeout = Duration::from_secs(mode_timeout_secs);
+        let mode_started_instant = Instant::now();
+        let outcome = suite_spawn_mode(
+            self.exe,
+            mode,
+            command,
+            &mode_dir,
+            self.has_unshare,
+            self.use_host_net,
+            mode_timeout,
+        )?;
+        let mode_status = suite_mode_status(
+            outcome.exit_ok,
+            outcome.timed_out,
+            outcome.child_reported_timeout,
+        );
+        let mode_elapsed = mode_started_instant.elapsed();
+        let mode_finished = now_rfc3339();
+        suite_append_result(
+            self.results_jsonl,
+            mode,
+            mode_status,
+            &mode_started,
+            &mode_finished,
+            &mode_dir,
+            self.preflight_only,
+            outcome.timed_out,
+            outcome.child_reported_timeout,
+            mode_timeout_secs,
+            mode_elapsed,
+        )?;
+        println!(
+            "{}",
+            suite_status_line(
+                mode,
+                mode_status,
+                mode_elapsed,
+                outcome.timed_out,
+                outcome.child_reported_timeout,
+                mode_timeout_secs,
+            )
+        );
+        Ok(outcome.exit_ok)
+    }
+}
+
+/// Append and print every outcome of one parallel batch; `false` if any failed.
+fn report_parallel_outcomes(
+    outcomes: Vec<SuiteModeOutcome>,
+    results_jsonl: &Path,
+    preflight_only: bool,
+) -> Result<bool, String> {
+    let mut ok = true;
+    for outcome in outcomes {
+        let mode_status = suite_mode_status(
+            outcome.exit_ok,
+            outcome.suite_timed_out,
+            outcome.child_reported_timeout,
+        );
+        if !outcome.exit_ok {
+            ok = false;
+        }
+        suite_append_result(
+            results_jsonl,
+            &outcome.mode,
+            mode_status,
+            &outcome.started_at,
+            &outcome.finished_at,
+            &outcome.mode_dir,
+            preflight_only,
+            outcome.suite_timed_out,
+            outcome.child_reported_timeout,
+            outcome.timeout_secs,
+            outcome.elapsed,
+        )?;
+        println!(
+            "{}",
+            suite_status_line(
+                &outcome.mode,
+                mode_status,
+                outcome.elapsed,
+                outcome.suite_timed_out,
+                outcome.child_reported_timeout,
+                outcome.timeout_secs,
+            )
+        );
+    }
+    Ok(ok)
+}
+
+pub(crate) async fn suite_run() -> Result<Value, String> {
+    let raw: Vec<String> = std::env::args().skip(2).collect();
+    let (modes, preflight_only) = suite_selected_modes(&raw)?;
+    let options = parse_suite_options(&raw)?;
     if modes.is_empty() {
         return Err("--only-modes produced an empty mode list".to_string());
     }
-    if mode_timeout_secs == 0 {
+    if options.mode_timeout_secs == 0 {
         return Err("suite mode timeout must be greater than zero".to_string());
     }
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let work_root = {
-        let root = work_root.unwrap_or_else(|| cwd.join(".local/artifacts").join(&run_id));
-        if root.is_absolute() {
-            root
-        } else {
-            cwd.join(root)
-        }
-    };
-    std::fs::create_dir_all(&work_root).map_err(|e| e.to_string())?;
-
+    let work_root = suite_work_root(&options.run_id, options.work_root.clone())?;
     let results_jsonl = work_root.join("results.jsonl");
     let manifest_path = work_root.join("manifest.json");
     std::fs::File::create(&results_jsonl).map_err(|e| e.to_string())?;
@@ -216,138 +368,45 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
         "RUNNING",
         &started_at,
         None,
-        &run_id,
+        &options.run_id,
         &modes,
         &work_root,
         &results_jsonl,
         preflight_only,
-        mode_timeout_secs,
+        options.mode_timeout_secs,
     )?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let has_unshare = !use_host_net && netns_available();
+    let executor = SuiteExecutor {
+        exe: &exe,
+        work_root: &work_root,
+        results_jsonl: &results_jsonl,
+        preflight_only,
+        has_unshare: !options.use_host_net && netns_available(),
+        use_host_net: options.use_host_net,
+        mode_timeout_secs: options.mode_timeout_secs,
+    };
     let mut overall_ok = true;
-
     let mut index = 0usize;
     while index < modes.len() {
-        if suite_mode_is_parallelizable(&modes[index], preflight_only) && has_unshare {
+        let (ok, next) = if executor.parallelizable(&modes[index]) {
             let batch_end = modes[index..]
                 .iter()
-                .take_while(|mode| suite_mode_is_parallelizable(mode, preflight_only))
+                .take_while(|mode| executor.parallelizable(mode))
                 .count()
                 + index;
-            let outcomes = suite_run_parallel_batch(
-                &exe,
-                &modes[index..batch_end],
-                &work_root,
-                preflight_only,
-                has_unshare,
-                use_host_net,
-                mode_timeout_secs,
+            (
+                executor
+                    .run_parallel_batch(&modes[index..batch_end])
+                    .await?,
+                batch_end,
             )
-            .await?;
-            for outcome in outcomes {
-                let mode_status = suite_mode_status(
-                    outcome.exit_ok,
-                    outcome.suite_timed_out,
-                    outcome.child_reported_timeout,
-                );
-                if !outcome.exit_ok {
-                    overall_ok = false;
-                }
-                suite_append_result(
-                    &results_jsonl,
-                    &outcome.mode,
-                    mode_status,
-                    &outcome.started_at,
-                    &outcome.finished_at,
-                    &outcome.mode_dir,
-                    preflight_only,
-                    outcome.suite_timed_out,
-                    outcome.child_reported_timeout,
-                    outcome.timeout_secs,
-                    outcome.elapsed,
-                )?;
-                println!(
-                    "{}",
-                    suite_status_line(
-                        &outcome.mode,
-                        mode_status,
-                        outcome.elapsed,
-                        outcome.suite_timed_out,
-                        outcome.child_reported_timeout,
-                        outcome.timeout_secs,
-                    )
-                );
-            }
-            index = batch_end;
         } else {
-            let mode = &modes[index];
-            let mode_dir = work_root.join(mode);
-            std::fs::create_dir_all(&mode_dir).map_err(|e| e.to_string())?;
-            let mode_started = now_rfc3339();
-
-            let command = if preflight_only {
-                "preflight"
-            } else {
-                mode.as_str()
-            };
-            println!(
-                "[suite] {} {mode}",
-                if preflight_only { "preflight" } else { "run" }
-            );
-            let mode_timeout_secs = suite_mode_timeout_secs(mode, mode_timeout_secs);
-            let mode_timeout = Duration::from_secs(mode_timeout_secs);
-
-            let mode_started_instant = Instant::now();
-            let outcome = suite_spawn_mode(
-                &exe,
-                mode,
-                command,
-                &mode_dir,
-                has_unshare,
-                use_host_net,
-                mode_timeout,
-            )?;
-            let mode_status = suite_mode_status(
-                outcome.exit_ok,
-                outcome.timed_out,
-                outcome.child_reported_timeout,
-            );
-            if !outcome.exit_ok {
-                overall_ok = false;
-            }
-
-            let mode_elapsed = mode_started_instant.elapsed();
-            let mode_finished = now_rfc3339();
-            suite_append_result(
-                &results_jsonl,
-                mode,
-                mode_status,
-                &mode_started,
-                &mode_finished,
-                &mode_dir,
-                preflight_only,
-                outcome.timed_out,
-                outcome.child_reported_timeout,
-                mode_timeout_secs,
-                mode_elapsed,
-            )?;
-            println!(
-                "{}",
-                suite_status_line(
-                    mode,
-                    mode_status,
-                    mode_elapsed,
-                    outcome.timed_out,
-                    outcome.child_reported_timeout,
-                    mode_timeout_secs,
-                )
-            );
-            index += 1;
-        }
-
-        if !overall_ok && !continue_on_fail {
+            (executor.run_serial_mode(&modes[index]).await?, index + 1)
+        };
+        overall_ok &= ok;
+        index = next;
+        if !overall_ok && !options.continue_on_fail {
             break;
         }
     }
@@ -359,12 +418,12 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
         final_status,
         &started_at,
         Some(&finished_at),
-        &run_id,
+        &options.run_id,
         &modes,
         &work_root,
         &results_jsonl,
         preflight_only,
-        mode_timeout_secs,
+        options.mode_timeout_secs,
     )?;
     println!("[suite] manifest={}", manifest_path.display());
 

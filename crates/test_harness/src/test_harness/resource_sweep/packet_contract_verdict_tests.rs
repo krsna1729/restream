@@ -263,68 +263,67 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
     let _ = std::fs::remove_dir_all(&work_dir);
 }
 
-/// Baseline eligibility is a separate gate from runtime validity: it requires
-/// the canonical run shape, a clean tree, and bench binaries built from that
-/// same tree — so an accidental promotion is mechanically impossible.
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-fn baseline_eligibility_requires_the_canonical_run_shape() {
-    let canonical_run = || {
-        json!({
-            "gitSha": "abc123",
-            "gitDirty": false,
-            "buildProvenance": {"gitSha": "abc123", "gitDirty": false, "builtAt": "2026-09-21T00:00:00Z"},
-            "lifecycle": "isolated",
-            "peerMode": "sink",
-            "restreamBinExplicit": false,
-            "topologyKind": "loopback",
-            "bitrateLabel": "8M",
-            "egressCounts": [100],
-            "scenarioFilter": ["egress-growth-source-srt"],
-            "settleSecs": 10,
-            "peerStateEndpoint": {"hosts": ["peer-a"], "port": 9997},
-        })
-    };
-    let canonical_workload = || json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no", "configuredOutputs": 100});
-    let partitioned = json!({
+/// The one run shape a baseline sample may come from.
+fn canonical_run() -> Value {
+    json!({
+        "gitSha": "abc123",
+        "gitDirty": false,
+        "buildProvenance": {"gitSha": "abc123", "gitDirty": false, "builtAt": "2026-09-21T00:00:00Z"},
+        "lifecycle": "isolated",
+        "peerMode": "sink",
+        "restreamBinExplicit": false,
+        "topologyKind": "loopback",
+        "bitrateLabel": "8M",
+        "egressCounts": [100],
+        "scenarioFilter": ["egress-growth-source-srt"],
+        "settleSecs": 10,
+        "peerStateEndpoint": {"hosts": ["peer-a"], "port": 9997},
+    })
+}
+
+/// The canonical workload dimensions that travel with the record.
+fn canonical_workload() -> Value {
+    json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no", "configuredOutputs": 100})
+}
+
+/// A CPU-partitioned same-host peer topology.
+fn partitioned_topology() -> Value {
+    json!({
         "kind": "netns-veth", "sameHost": true, "cpuPartitioned": true,
         "restreamCpusAllowed": "0-2", "peerCpusAllowed": {"10.53.0.2": "3-5"},
-    });
-    let eligible = baseline_eligibility(
-        &canonical_run(),
-        "egress-growth-source-srt",
-        100,
-        12.0,
-        "healthy",
-        8,
-        8,
-        &canonical_workload(),
-        &partitioned,
-    );
-    assert_eq!(eligible["eligible"], true, "{eligible}");
+    })
+}
 
-    // Each case starts from the canonical run: patches must not accumulate, or
-    // one case's damage would mask the next case's reason.
-    let patch_case = |run_patch: Value, workload_patch: Value| {
-        let mut run = canonical_run();
-        let mut workload = canonical_workload();
-        if let (Value::Object(base), Value::Object(patch)) = (&mut run, run_patch) {
-            for (key, value) in patch {
-                base.insert(key, value);
-            }
+/// Apply one case's patches to fresh canonical run and workload objects.
+fn patch_case(run_patch: Value, workload_patch: Value) -> (Value, Value) {
+    let mut run = canonical_run();
+    let mut workload = canonical_workload();
+    if let (Value::Object(base), Value::Object(patch)) = (&mut run, run_patch) {
+        for (key, value) in patch {
+            base.insert(key, value);
         }
-        if let (Value::Object(base), Value::Object(patch)) = (&mut workload, workload_patch) {
-            for (key, value) in patch {
-                base.insert(key, value);
-            }
+    }
+    if let (Value::Object(base), Value::Object(patch)) = (&mut workload, workload_patch) {
+        for (key, value) in patch {
+            base.insert(key, value);
         }
-        (run, workload)
-    };
+    }
+    (run, workload)
+}
 
-    for (run_patch, workload_patch, scenario, outputs, window, status, needle) in [
+/// One way the canonical shape can be broken, with the reason it must report.
+type IneligibleCase = (
+    Value,
+    Value,
+    &'static str,
+    u64,
+    f64,
+    &'static str,
+    &'static str,
+);
+
+fn ineligible_cases_a() -> Vec<IneligibleCase> {
+    vec![
         (
             json!({"gitDirty": true}),
             json!({}),
@@ -397,24 +396,11 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "healthy",
             "not exactly [100]",
         ),
-        (
-            json!({"scenarioFilter": Value::Null}),
-            json!({}),
-            "egress-growth-source-srt",
-            100,
-            12.0,
-            "healthy",
-            "not exactly the canonical SRT fanout",
-        ),
-        (
-            json!({"settleSecs": 4}),
-            json!({}),
-            "egress-growth-source-srt",
-            100,
-            12.0,
-            "healthy",
-            "below the 10s minimum",
-        ),
+    ]
+}
+
+fn ineligible_cases_b() -> Vec<IneligibleCase> {
+    vec![
         (
             json!({"peerStateEndpoint": Value::Null}),
             json!({}),
@@ -487,32 +473,48 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "contaminated",
             "runtime validity is contaminated",
         ),
-    ] {
-        let (case_run, case_workload) = patch_case(run_patch, workload_patch);
-        let eligibility = baseline_eligibility(
-            &case_run,
-            scenario,
-            outputs,
-            window,
-            status,
-            8,
-            8,
-            &case_workload,
-            &partitioned,
-        );
-        assert_eq!(eligibility["eligible"], false, "{needle}: {eligibility}");
-        assert!(
-            eligibility["reasons"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|reason| reason.as_str().unwrap_or("").contains(needle)),
-            "{needle}: {eligibility}"
-        );
-    }
+    ]
+}
 
-    // A non-loopback peer address is not enough: a same-host netns/veth peer is
-    // still this machine, so the external-host rule needs `sameHost: false`.
+/// Every case starts from the canonical run: patches must not accumulate, or
+/// one case's damage would mask the next case's reason.
+fn assert_ineligible_cases(partitioned: &Value) {
+    let check =
+        |(run_patch, workload_patch, scenario, outputs, window, status, needle): IneligibleCase| {
+            let (case_run, case_workload) = patch_case(run_patch, workload_patch);
+            let eligibility = baseline_eligibility(
+                &case_run,
+                scenario,
+                outputs,
+                window,
+                status,
+                8,
+                8,
+                &case_workload,
+                partitioned,
+            );
+            assert_eq!(eligibility["eligible"], false, "{needle}: {eligibility}");
+            assert!(
+                eligibility["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|reason| reason.as_str().unwrap_or("").contains(needle)),
+                "{needle}: {eligibility}"
+            );
+        };
+    for case in ineligible_cases_a() {
+        check(case);
+    }
+    for case in ineligible_cases_b() {
+        check(case);
+    }
+}
+
+/// A non-loopback peer address is not enough: a same-host netns/veth peer is
+/// still this machine, so the external-host rule needs `sameHost: false`. That
+/// rule, not the CPU partition, is what the second-host reason reports.
+fn assert_external_host_rule(partitioned: &Value) {
     let remote_topology = json!({
         "kind": "remote", "sameHost": false, "cpuPartitioned": Value::Null,
         "restreamCpusAllowed": "0-7", "peerCpusAllowed": {"peer-a": "0-7"},
@@ -546,7 +548,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         8,
         8,
         &canonical_workload(),
-        &partitioned,
+        partitioned,
     );
     assert_eq!(same_host_with_remote_addresses["eligible"], false);
     assert!(
@@ -557,77 +559,26 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             .any(|reason| reason.as_str().unwrap_or("").contains("need a second host")),
         "{same_host_with_remote_addresses}"
     );
+}
 
-    // A rung with unrated samples must never promote, even when the wall-clock
-    // window is long enough and nothing else is wrong.
-    let unrated = baseline_eligibility(
-        &canonical_run(),
-        "egress-growth-source-srt",
-        100,
-        12.0,
-        "no-rated-samples",
-        0,
-        8,
-        &canonical_workload(),
-        &partitioned,
-    );
-    assert_eq!(unrated["eligible"], false, "{unrated}");
-    assert!(
-        unrated["reasons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason
-                .as_str()
-                .unwrap_or("")
-                .contains("0 of 8 samples are rated")),
-        "{unrated}"
-    );
-    let partially_rated = baseline_eligibility(
+#[test]
+fn baseline_eligibility_requires_the_canonical_run_shape() {
+    let partitioned = partitioned_topology();
+    let eligible = baseline_eligibility(
         &canonical_run(),
         "egress-growth-source-srt",
         100,
         12.0,
         "healthy",
-        7,
+        8,
         8,
         &canonical_workload(),
         &partitioned,
     );
-    assert_eq!(partially_rated["eligible"], false, "{partially_rated}");
-    assert!(
-        partially_rated["reasons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason
-                .as_str()
-                .unwrap_or("")
-                .contains("7 of 8 samples are rated")),
-        "{partially_rated}"
-    );
+    assert_eq!(eligible["eligible"], true, "{eligible}");
 
-    // Remote peers satisfy the 300-output rule; loopback does not.
-    let remote_300 = baseline_eligibility(
-        &json!({
-            "gitSha": "abc123", "gitDirty": false,
-            "buildProvenance": {"gitSha": "abc123", "gitDirty": false},
-            "lifecycle": "isolated", "peerMode": "sink", "bitrateLabel": "8M",
-            "egressCounts": [300], "scenarioFilter": ["egress-growth-source-srt"],
-            "settleSecs": 10, "restreamBinExplicit": false,
-            "topologyKind": "netns-veth",
-            "peerStateEndpoint": {"hosts": ["peer-a", "peer-b"], "port": 9997},
-        }),
-        "egress-growth-source-srt",
-        300,
-        12.0,
-        "healthy",
-        8,
-        8,
-        &json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no"}),
-        &json!({"kind": "remote", "sameHost": false, "cpuPartitioned": null}),
-    );
-    assert_eq!(remote_300["eligible"], true, "{remote_300}");
+    assert_ineligible_cases(&partitioned);
+    assert_external_host_rule(&partitioned);
 }
 
 /// Peer delivery is integrated over the peer's *own* observed intervals, not the

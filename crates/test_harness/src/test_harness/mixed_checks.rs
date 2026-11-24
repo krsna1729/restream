@@ -121,10 +121,6 @@ pub(crate) async fn verify_mixed_output_dimensions(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) async fn verify_mixed_output_cases_inner(
     env: &MixedEnv,
     api: &RampApi,
@@ -147,195 +143,21 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     let input_case = mixed_input_case_for_command(cfg)
         .ok_or_else(|| format!("{cfg} is not a known mixed input case"))?;
     for case in cases {
-        let cell_started_at = SystemTime::now();
-        let cell_started = Instant::now();
-        let cell_failures_before = failures.len();
-        let mut selected_checks = Vec::new();
-        if skip_direct_srt_sinks
-            && env.ffmpeg_srt_sink
-            && matches!(case.protocol(), MixedOutputProtocol::Srt)
-        {
-            continue;
-        }
-        let url = mixed_output_read_url(env, cfg, case, index);
-        let label = format!("{} out{index}", case.id());
-        let cell = env.output_cell(case.id(), index);
-        let mediamtx_publish_probe = matches!(
-            case.protocol(),
-            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
-        ) && case.expected_video_codec_for_input(input_case) == "hevc";
-        let mut output_failed = false;
-        if env.check_selected("ffprobe") {
-            selected_checks.push("ffprobe");
-            let ffprobe_id = mixed_output_check_id(cfg, case.id(), "ffprobe");
-            let ffprobe_result = verify_mixed_stream(
-                env,
-                api,
-                MixedProbeSpec {
-                    cfg,
-                    id: ffprobe_id,
-                    label: &label,
-                    url: &url,
-                    expected: case.expected_dimensions(),
-                    expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
-                    mediamtx_api: matches!(
-                        case.protocol(),
-                        MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
-                    )
-                    .then_some(env.mtx_api),
-                    cookie: None,
-                    cell: cell.clone(),
-                },
-                resume,
-            )
-            .await;
-            if let Err(error) = ffprobe_result {
-                if env.collect_failures {
-                    output_failed = true;
-                    failures.push(error);
-                } else {
-                    emit_mixed_output_cell_timing(
-                        env,
-                        cfg,
-                        case,
-                        &label,
-                        index,
-                        &selected_checks,
-                        1,
-                        cell_started_at,
-                        cell_started,
-                        "fail",
-                    )?;
-                    return Err(error);
-                }
-            }
-        }
-        if env.check_selected("audio-route") && !output_failed && !mediamtx_publish_probe {
-            selected_checks.push("audio_route");
-            let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
-            let audio_result = verify_mixed_audio_route(
-                env,
-                api,
-                cfg,
-                &audio_id,
-                &label,
-                &url,
-                case.expected_dimensions(),
-                case.expected_audio_tracks(),
-                cell.clone(),
-                resume,
-            )
-            .await;
-            if let Err(error) = audio_result {
-                if env.collect_failures {
-                    output_failed = true;
-                    failures.push(error);
-                } else {
-                    emit_mixed_output_cell_timing(
-                        env,
-                        cfg,
-                        case,
-                        &label,
-                        index,
-                        &selected_checks,
-                        1,
-                        cell_started_at,
-                        cell_started,
-                        "fail",
-                    )?;
-                    return Err(error);
-                }
-            }
-        }
-        if env.check_selected("decode-scan")
-            && decode_scan
-            && !output_failed
-            && !mediamtx_publish_probe
-        {
-            selected_checks.push("decode_scan");
-            let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
-            let decode_result = verify_mixed_decode_scan(
-                env,
-                api,
-                MixedProbeSpec {
-                    cfg,
-                    id: decode_id,
-                    label: &label,
-                    url: &url,
-                    expected: case.expected_dimensions(),
-                    expected_video_codec: None,
-                    mediamtx_api: None,
-                    cookie: None,
-                    cell,
-                },
-                resume,
-            )
-            .await;
-            if let Err(error) = decode_result {
-                if env.collect_failures {
-                    failures.push(error);
-                } else {
-                    emit_mixed_output_cell_timing(
-                        env,
-                        cfg,
-                        case,
-                        &label,
-                        index,
-                        &selected_checks,
-                        1,
-                        cell_started_at,
-                        cell_started,
-                        "fail",
-                    )?;
-                    return Err(error);
-                }
-            }
-        }
-        if env.check_selected("signal")
-            && !env.direct_signal_sink(case.protocol())
-            && !mediamtx_publish_probe
-        {
-            selected_checks.push("signal");
-            let signal_id = mixed_output_check_id(cfg, case.id(), "signal");
-            let signal_result =
-                verify_mixed_signal_quality(env, cfg, &signal_id, &label, &url, resume).await;
-            if let Err(error) = signal_result {
-                if env.collect_failures {
-                    failures.push(error);
-                } else {
-                    emit_mixed_output_cell_timing(
-                        env,
-                        cfg,
-                        case,
-                        &label,
-                        index,
-                        &selected_checks,
-                        1,
-                        cell_started_at,
-                        cell_started,
-                        "fail",
-                    )?;
-                    return Err(error);
-                }
-            }
-        }
-        let cell_failure_count = failures.len().saturating_sub(cell_failures_before);
-        emit_mixed_output_cell_timing(
+        let cell_failures = verify_output_case(OutputCaseRun {
             env,
+            api,
             cfg,
             case,
-            &label,
+            input_case,
+            resume,
             index,
-            &selected_checks,
-            cell_failure_count,
-            cell_started_at,
-            cell_started,
-            if cell_failure_count == 0 {
-                "pass"
-            } else {
-                "fail"
-            },
-        )?;
+            skip_direct_srt_sinks,
+            decode_scan,
+        })
+        .await?;
+        if let Some(cell_failures) = cell_failures {
+            failures.extend(cell_failures);
+        }
     }
     let status = if failures.is_empty() { "pass" } else { "fail" };
     emit_mixed_timing(
@@ -363,6 +185,228 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     }
     Ok(())
 }
+
+/// One output cell of [`verify_mixed_output_cases_inner`].
+struct OutputCaseRun<'a> {
+    env: &'a MixedEnv,
+    api: &'a RampApi,
+    cfg: &'a str,
+    case: &'a MixedOutputCase,
+    input_case: MixedInputCase,
+    resume: &'a mut MixedResume,
+    index: usize,
+    skip_direct_srt_sinks: bool,
+    decode_scan: bool,
+}
+
+/// Run the selected checks for one output cell; `None` when the cell is
+/// skipped. Returned failures are the cell's collected failures.
+async fn verify_output_case(run: OutputCaseRun<'_>) -> Result<Option<Vec<String>>, String> {
+    let OutputCaseRun {
+        env,
+        api,
+        cfg,
+        case,
+        input_case,
+        resume,
+        index,
+        skip_direct_srt_sinks,
+        decode_scan,
+    } = run;
+    if skip_direct_srt_sinks
+        && env.ffmpeg_srt_sink
+        && matches!(case.protocol(), MixedOutputProtocol::Srt)
+    {
+        return Ok(None);
+    }
+    let cell_started_at = SystemTime::now();
+    let cell_started = Instant::now();
+    let url = mixed_output_read_url(env, cfg, case, index);
+    let label = format!("{} out{index}", case.id());
+    let cell = env.output_cell(case.id(), index);
+    let mediamtx_publish_probe = matches!(
+        case.protocol(),
+        MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+    ) && case.expected_video_codec_for_input(input_case) == "hevc";
+    let mut output_failed = false;
+    let mut checks = CellChecks::default();
+    let cell_ctx = CellCheckContext {
+        env,
+        cfg,
+        case,
+        label: &label,
+        index,
+        cell_started_at,
+        cell_started,
+    };
+    if env.check_selected("ffprobe") {
+        let ffprobe_id = mixed_output_check_id(cfg, case.id(), "ffprobe");
+        output_failed |= run_cell_check(
+            &cell_ctx,
+            &mut checks,
+            "ffprobe",
+            true,
+            verify_mixed_stream(
+                env,
+                api,
+                MixedProbeSpec {
+                    cfg,
+                    id: ffprobe_id,
+                    label: &label,
+                    url: &url,
+                    expected: case.expected_dimensions(),
+                    expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
+                    mediamtx_api: matches!(
+                        case.protocol(),
+                        MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+                    )
+                    .then_some(env.mtx_api),
+                    cookie: None,
+                    cell: cell.clone(),
+                },
+                resume,
+            ),
+        )
+        .await?;
+    }
+    if env.check_selected("audio-route") && !output_failed && !mediamtx_publish_probe {
+        let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
+        output_failed |= run_cell_check(
+            &cell_ctx,
+            &mut checks,
+            "audio_route",
+            true,
+            verify_mixed_audio_route(
+                env,
+                api,
+                cfg,
+                &audio_id,
+                &label,
+                &url,
+                case.expected_dimensions(),
+                case.expected_audio_tracks(),
+                cell.clone(),
+                resume,
+            ),
+        )
+        .await?;
+    }
+    if env.check_selected("decode-scan") && decode_scan && !output_failed && !mediamtx_publish_probe
+    {
+        let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
+        let _ = run_cell_check(
+            &cell_ctx,
+            &mut checks,
+            "decode_scan",
+            false,
+            verify_mixed_decode_scan(
+                env,
+                api,
+                MixedProbeSpec {
+                    cfg,
+                    id: decode_id,
+                    label: &label,
+                    url: &url,
+                    expected: case.expected_dimensions(),
+                    expected_video_codec: None,
+                    mediamtx_api: None,
+                    cookie: None,
+                    cell,
+                },
+                resume,
+            ),
+        )
+        .await?;
+    }
+    if env.check_selected("signal")
+        && !env.direct_signal_sink(case.protocol())
+        && !mediamtx_publish_probe
+    {
+        let signal_id = mixed_output_check_id(cfg, case.id(), "signal");
+        let _ = run_cell_check(
+            &cell_ctx,
+            &mut checks,
+            "signal",
+            false,
+            verify_mixed_signal_quality(env, cfg, &signal_id, &label, &url, resume),
+        )
+        .await?;
+    }
+    emit_output_cell_timing(&cell_ctx, &checks)?;
+    Ok(Some(checks.failures))
+}
+
+/// Emit the per-cell timing row, with the cell's checks and failure count.
+fn emit_output_cell_timing(ctx: &CellCheckContext<'_>, checks: &CellChecks) -> Result<(), String> {
+    let cell_failure_count = checks.failures.len();
+    emit_mixed_output_cell_timing(
+        ctx.env,
+        ctx.cfg,
+        ctx.case,
+        ctx.label,
+        ctx.index,
+        &checks.selected_checks,
+        cell_failure_count,
+        ctx.cell_started_at,
+        ctx.cell_started,
+        if cell_failure_count == 0 {
+            "pass"
+        } else {
+            "fail"
+        },
+    )
+}
+
+/// Per-cell check bookkeeping, shared by the four optional checks.
+#[derive(Default)]
+struct CellChecks {
+    selected_checks: Vec<&'static str>,
+    failures: Vec<String>,
+}
+
+struct CellCheckContext<'a> {
+    env: &'a MixedEnv,
+    cfg: &'a str,
+    case: &'a MixedOutputCase,
+    label: &'a str,
+    index: usize,
+    cell_started_at: SystemTime,
+    cell_started: Instant,
+}
+
+/// Record and run one output check for a cell, applying the shared
+/// collect-or-fail policy.
+async fn run_cell_check(
+    ctx: &CellCheckContext<'_>,
+    checks: &mut CellChecks,
+    check: &'static str,
+    invalidating: bool,
+    result: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<bool, String> {
+    checks.selected_checks.push(check);
+    if let Err(error) = result.await {
+        if ctx.env.collect_failures {
+            checks.failures.push(error);
+            return Ok(invalidating);
+        } else {
+            emit_mixed_output_cell_timing(
+                ctx.env,
+                ctx.cfg,
+                ctx.case,
+                ctx.label,
+                ctx.index,
+                &checks.selected_checks,
+                1,
+                ctx.cell_started_at,
+                ctx.cell_started,
+                "fail",
+            )?;
+            return Err(error);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

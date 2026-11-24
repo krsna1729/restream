@@ -116,12 +116,56 @@ struct Session {
     report: serde_json::Map<String, Value>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, String> {
     let started = Instant::now();
+    let work_dir = moq_work_dir(options)?;
+    let MoqSessionStart {
+        mut session,
+        ports,
+        relay_bin,
+    } = start_moq_session(options, &work_dir).await?;
+    let outcome = session.execute().await;
+    session.shutdown().await;
+    let relay_sessions = std::fs::read_to_string(session.relay.log_path())
+        .map(|log| relay_sessions(&log))
+        .unwrap_or_default();
+
+    let passed = outcome.is_ok() && session.checks.failures.is_empty();
+    let mut failures = std::mem::take(&mut session.checks.failures);
+    if let Err(error) = &outcome {
+        failures.push(format!("aborted: {error}"));
+    }
+    let report = json!({
+        "passed": passed,
+        "mode": MODE,
+        "wireProfile": match options.ietf {
+            Some(draft) => format!("{} + MSF/LOC", draft.alpn()),
+            None => format!("{LITE_VERSION} + hang"),
+        },
+        "environment": {
+            "moq": session.moq.display().to_string(),
+            "moqVersion": MOQ_CLI.version,
+            "moqRelay": relay_bin.display().to_string(),
+            "moqRelayVersion": MOQ_RELAY.version,
+            "restreamBin": default_restream_bin().display().to_string(),
+            "fixture": session.fixture.display().to_string(),
+            "inputFps": session.input_fps,
+            "leafSha256": session.tls.leaf_sha256,
+            "ports": {"http": ports.http, "rtmp": ports.rtmp, "sink": session.sink_port},
+            "devPorts": session.ports.to_json(),
+        },
+        "relaySessions": relay_sessions.iter().map(RelaySession::to_json).collect::<Vec<_>>(),
+        "phases": Value::Object(std::mem::take(&mut session.report)),
+        "checks": std::mem::take(&mut session.checks.rows),
+        "failedChecks": failures,
+        "wallClockSecs": round3(started.elapsed().as_secs_f64()),
+    });
+    let report_path = work_dir.join("report.json");
+    finish_mode_report(MODE, &report_path, passed, report)
+}
+
+/// Resolve `WORK_DIR` (or the IETF/default artifact directory) and create it.
+fn moq_work_dir(options: DevOptions) -> Result<PathBuf, String> {
     let work_dir = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| match options.ietf {
@@ -132,8 +176,22 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
             None => PathBuf::from(".local/artifacts/moq-dev-interop"),
         });
     std::fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
-    let work_dir = absolute_path(&work_dir)?;
+    absolute_path(&work_dir)
+}
 
+/// One started run: the session, the test ports, and the relay binary the
+/// report names.
+struct MoqSessionStart {
+    session: Session,
+    ports: TestPorts,
+    relay_bin: PathBuf,
+}
+
+/// Binaries, TLS, relays, Restream and the API handle for one run.
+async fn start_moq_session(
+    options: DevOptions,
+    work_dir: &Path,
+) -> Result<MoqSessionStart, String> {
     let moq = pinned_bin(&MOQ_CLI).await?;
     let relay_bin = pinned_bin(&MOQ_RELAY).await?;
     let fixture = restream_engine::test_fixtures::checked_in_fixture(FIXTURE)?;
@@ -189,7 +247,7 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
     let restream = match start_restream_child_with_env(
         &default_restream_bin(),
         &ports,
-        &default_work_db_path(&work_dir, "moq-dev-interop.sqlite"),
+        &default_work_db_path(work_dir, "moq-dev-interop.sqlite"),
         &work_dir.join("restream.log"),
         &env_overrides,
     )
@@ -217,66 +275,32 @@ pub(crate) async fn run_moq_dev_interop(options: DevOptions) -> Result<Value, St
         &tls,
         work_dir.join("moq-relay-ingest.log"),
     );
-    let mut session = Session {
-        options,
-        work_dir: work_dir.clone(),
-        ffmpeg,
-        moq: moq.clone(),
-        fixture,
-        input_fps,
-        tls,
-        ports: dev_ports,
-        relay,
-        ingest_relay,
-        restream,
-        api,
-        sink: None,
-        sink_metrics: Arc::new(GeneralizedSinkMetrics::default()),
-        sink_port,
-        restream_rtmp: ports.rtmp,
-        children: Vec::new(),
-        outputs: Vec::new(),
-        checks: Checks::new(MODE),
-        report: serde_json::Map::new(),
-    };
-    let outcome = session.execute().await;
-    session.shutdown().await;
-    let relay_sessions = std::fs::read_to_string(session.relay.log_path())
-        .map(|log| relay_sessions(&log))
-        .unwrap_or_default();
-
-    let passed = outcome.is_ok() && session.checks.failures.is_empty();
-    let mut failures = std::mem::take(&mut session.checks.failures);
-    if let Err(error) = &outcome {
-        failures.push(format!("aborted: {error}"));
-    }
-    let report = json!({
-        "passed": passed,
-        "mode": MODE,
-        "wireProfile": match options.ietf {
-            Some(draft) => format!("{} + MSF/LOC", draft.alpn()),
-            None => format!("{LITE_VERSION} + hang"),
+    Ok(MoqSessionStart {
+        session: Session {
+            options,
+            work_dir: work_dir.to_path_buf(),
+            ffmpeg,
+            moq,
+            fixture,
+            input_fps,
+            tls,
+            ports: dev_ports,
+            relay,
+            ingest_relay,
+            restream,
+            api,
+            sink: None,
+            sink_metrics: Arc::new(GeneralizedSinkMetrics::default()),
+            sink_port,
+            restream_rtmp: ports.rtmp,
+            children: Vec::new(),
+            outputs: Vec::new(),
+            checks: Checks::new(MODE),
+            report: serde_json::Map::new(),
         },
-        "environment": {
-            "moq": moq.display().to_string(),
-            "moqVersion": MOQ_CLI.version,
-            "moqRelay": relay_bin.display().to_string(),
-            "moqRelayVersion": MOQ_RELAY.version,
-            "restreamBin": default_restream_bin().display().to_string(),
-            "fixture": session.fixture.display().to_string(),
-            "inputFps": session.input_fps,
-            "leafSha256": session.tls.leaf_sha256,
-            "ports": {"http": ports.http, "rtmp": ports.rtmp, "sink": sink_port},
-            "devPorts": dev_ports.to_json(),
-        },
-        "relaySessions": relay_sessions.iter().map(RelaySession::to_json).collect::<Vec<_>>(),
-        "phases": Value::Object(std::mem::take(&mut session.report)),
-        "checks": std::mem::take(&mut session.checks.rows),
-        "failedChecks": failures,
-        "wallClockSecs": round3(started.elapsed().as_secs_f64()),
-    });
-    let report_path = work_dir.join("report.json");
-    finish_mode_report(MODE, &report_path, passed, report)
+        ports,
+        relay_bin,
+    })
 }
 
 impl Session {

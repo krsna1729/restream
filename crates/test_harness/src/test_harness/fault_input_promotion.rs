@@ -78,18 +78,29 @@ async fn wait_for_input_preview(
     Err(format!("input {input_id} preview did not become ready"))
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
-pub(crate) async fn run_input_promotion_case(
+/// Started resources for one input-promotion case.
+struct InputPromotionSetup {
+    pipeline_id: String,
+    backup: HarnessInput,
+    metrics: Arc<GeneralizedSinkMetrics>,
+    sink: GeneralizedSinkServer,
+    output_id: String,
+    standby: Child,
+    standby_before: Value,
+    warm: bool,
+    baseline_video: u64,
+    baseline_connections: usize,
+}
+
+/// Start the pipeline, both publishers and the output, and warm the sink.
+async fn start_input_promotion(
     api: &RampApi,
     ports: &TestPorts,
     fixture: &Path,
     sink_port: u16,
     timeout: Duration,
     case: &InputPromotionCase,
-) -> Result<Value, String> {
+) -> Result<InputPromotionSetup, String> {
     let pipeline_id = create_pipeline_with_stream_key(api, &case.pipeline, &case.pipeline).await?;
     let backup = create_backup_input(api, &pipeline_id).await?;
     let metrics = Arc::new(GeneralizedSinkMetrics::default());
@@ -111,7 +122,7 @@ pub(crate) async fn run_input_promotion_case(
     )
     .await?;
     wait_for_api_input_live(api, &pipeline_id, timeout).await?;
-    let mut standby = spawn_long_gop_publisher(
+    let standby = spawn_long_gop_publisher(
         fixture,
         &case.protocol.publish_url(ports, &backup.stream_key),
         case.protocol.ffmpeg_format(),
@@ -134,10 +145,41 @@ pub(crate) async fn run_input_promotion_case(
     let baseline_connections = metrics.connections.load(Ordering::Relaxed);
 
     stop_child(&mut primary).await;
+    Ok(InputPromotionSetup {
+        pipeline_id,
+        backup,
+        metrics,
+        sink,
+        output_id,
+        standby,
+        standby_before,
+        warm,
+        baseline_video,
+        baseline_connections,
+    })
+}
+
+/// The promote poll's settlement flags, plus when the poll started.
+struct PromotionObservation {
+    promotion_started: Instant,
+    progressed: bool,
+    saw_retrying: bool,
+    saw_missing: bool,
+    saw_non_running: bool,
+}
+
+/// Promote the standby input and poll until the output progresses or settles.
+async fn promote_standby_input(
+    api: &RampApi,
+    pipeline_id: &str,
+    backup_id: &str,
+    output_id: &str,
+    metrics: &GeneralizedSinkMetrics,
+    baseline_video: u64,
+) -> Result<(Value, PromotionObservation), String> {
     let promotion = api
         .post_empty(&format!(
-            "/api/v1/pipelines/{pipeline_id}/inputs/{}/promote",
-            backup.id
+            "/api/v1/pipelines/{pipeline_id}/inputs/{backup_id}/promote"
         ))
         .await?;
 
@@ -148,7 +190,7 @@ pub(crate) async fn run_input_promotion_case(
     let mut saw_missing = false;
     let mut saw_non_running = false;
     while Instant::now() < deadline {
-        match api.get_output_status(&pipeline_id, &output_id).await {
+        match api.get_output_status(pipeline_id, output_id).await {
             Ok((status, _)) => {
                 saw_retrying |= status.retrying;
                 saw_non_running |= status.status != "running";
@@ -161,32 +203,65 @@ pub(crate) async fn run_input_promotion_case(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    Ok((
+        promotion,
+        PromotionObservation {
+            promotion_started,
+            progressed,
+            saw_retrying,
+            saw_missing,
+            saw_non_running,
+        },
+    ))
+}
+
+pub(crate) async fn run_input_promotion_case(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture: &Path,
+    sink_port: u16,
+    timeout: Duration,
+    case: &InputPromotionCase,
+) -> Result<Value, String> {
+    let mut setup = start_input_promotion(api, ports, fixture, sink_port, timeout, case).await?;
+    let (promotion, observation) = promote_standby_input(
+        api,
+        &setup.pipeline_id,
+        &setup.backup.id,
+        &setup.output_id,
+        &setup.metrics,
+        setup.baseline_video,
+    )
+    .await?;
 
     let standby_after = wait_for_input_state(
         api,
-        &pipeline_id,
-        &backup.id,
+        &setup.pipeline_id,
+        &setup.backup.id,
         "active",
         Duration::from_secs(5),
     )
     .await?;
     let inputs = api
-        .get_json(&format!("/api/v1/pipelines/{pipeline_id}/inputs"))
+        .get_json(&format!("/api/v1/pipelines/{}/inputs", setup.pipeline_id))
         .await?;
-    let final_status = api.get_output_status(&pipeline_id, &output_id).await.ok();
-    let final_connections = metrics.connections.load(Ordering::Relaxed);
-    let promotion_elapsed_ms = promotion_started.elapsed().as_millis() as u64;
-    let passed = warm
-        && standby_before["runtime"]["forwardingState"] == "standby"
+    let final_status = api
+        .get_output_status(&setup.pipeline_id, &setup.output_id)
+        .await
+        .ok();
+    let final_connections = setup.metrics.connections.load(Ordering::Relaxed);
+    let promotion_elapsed_ms = observation.promotion_started.elapsed().as_millis() as u64;
+    let passed = setup.warm
+        && setup.standby_before["runtime"]["forwardingState"] == "standby"
         && promotion["connected"] == true
         && standby_after["selected"] == true
-        && inputs["selectedInputId"].as_str() == Some(backup.id.as_str())
-        && progressed
-        && baseline_connections == 1
-        && final_connections == baseline_connections
-        && !saw_retrying
-        && !saw_missing
-        && !saw_non_running
+        && inputs["selectedInputId"].as_str() == Some(setup.backup.id.as_str())
+        && observation.progressed
+        && setup.baseline_connections == 1
+        && final_connections == setup.baseline_connections
+        && !observation.saw_retrying
+        && !observation.saw_missing
+        && !observation.saw_non_running
         && final_status
             .as_ref()
             .is_some_and(|(status, _)| status.status == "running" && !status.retrying);
@@ -195,31 +270,36 @@ pub(crate) async fn run_input_promotion_case(
         "[fault] {}: {} (progressed={} connections={} retrying={} missing={} nonRunning={})",
         case.test_name,
         if passed { "PASS" } else { "FAIL" },
-        progressed,
+        observation.progressed,
         final_connections,
-        saw_retrying,
-        saw_missing,
-        saw_non_running,
+        observation.saw_retrying,
+        observation.saw_missing,
+        observation.saw_non_running,
     );
 
-    stop_mixed_outputs(api, &pipeline_id, std::slice::from_ref(&output_id)).await;
-    stop_child(&mut standby).await;
-    stop_generalized_sink_server(sink);
+    stop_mixed_outputs(
+        api,
+        &setup.pipeline_id,
+        std::slice::from_ref(&setup.output_id),
+    )
+    .await;
+    stop_child(&mut setup.standby).await;
+    stop_generalized_sink_server(setup.sink);
 
     Ok(json!({
         "test": case.test_name,
         "passed": passed,
         "protocol": case.protocol.as_str(),
         "standbyPreviewReady": true,
-        "baselineVideo": baseline_video,
-        "progressed": progressed,
+        "baselineVideo": setup.baseline_video,
+        "progressed": observation.progressed,
         "promotionElapsedMs": promotion_elapsed_ms,
         "promotionDeadlineMs": 5_000,
-        "baselineConnections": baseline_connections,
+        "baselineConnections": setup.baseline_connections,
         "finalConnections": final_connections,
-        "sawRetrying": saw_retrying,
-        "sawMissing": saw_missing,
-        "sawNonRunning": saw_non_running,
+        "sawRetrying": observation.saw_retrying,
+        "sawMissing": observation.saw_missing,
+        "sawNonRunning": observation.saw_non_running,
         "selectedInputId": inputs["selectedInputId"],
         "promotedInput": standby_after,
     }))

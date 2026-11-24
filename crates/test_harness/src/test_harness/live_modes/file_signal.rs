@@ -146,10 +146,6 @@ fn parse_hls_playlist_snapshot(body: &str) -> HlsPlaylistSnapshot {
     }
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_file_live_edge_case(
     api: &mut RampApi,
     ports: &TestPorts,
@@ -159,6 +155,81 @@ async fn run_file_live_edge_case(
     live_optimized: bool,
     target_gop_seconds: u32,
 ) -> Result<Value, String> {
+    let ingest = start_file_live_edge_ingest(
+        api,
+        media_dir,
+        fixture,
+        case_id,
+        live_optimized,
+        target_gop_seconds,
+    )
+    .await?;
+    let hls = observe_file_live_edge_hls(api, ports, &ingest.pipeline_id).await?;
+    let capture = capture_file_live_edge_recording(api, media_dir, &ingest.pipeline_id).await?;
+    stop_file_live_edge_ingest(api, &ingest.pipeline_id, &ingest.ingest_id).await?;
+
+    let recorded_duration_secs = capture.recorded_analysis.duration_sec.ok_or_else(|| {
+        format!(
+            "recorded output {} has no duration",
+            capture.recording_mp4.display()
+        )
+    })?;
+    let duration_delta_secs =
+        absolute_delta_secs(recorded_duration_secs, capture.capture_elapsed_secs);
+    let max_duration_drift_secs = file_live_edge_max_duration_drift_secs(target_gop_seconds);
+    let duration_ok = duration_delta_secs <= max_duration_drift_secs;
+    let hls_ok = hls.playlist_body.contains("#EXTM3U")
+        && hls.hls_probe.is_ok()
+        && hls.hls_playlist_progress["passed"] == true;
+    let live_optimized_gop_ok = if live_optimized {
+        capture
+            .recorded_analysis
+            .max_keyframe_interval_sec
+            .is_some_and(|value| value <= target_gop_seconds as f64 + 0.6)
+    } else {
+        true
+    };
+
+    Ok(json!({
+        "case": case_id,
+        "passed": duration_ok && hls_ok && live_optimized_gop_ok && !capture.source_retained,
+        "liveOptimized": live_optimized,
+        "targetGopSeconds": target_gop_seconds,
+        "captureElapsedSecs": capture.capture_elapsed_secs,
+        "recordedDurationSecs": recorded_duration_secs,
+        "durationDeltaSecs": duration_delta_secs,
+        "maxAllowedDurationDriftSecs": max_duration_drift_secs,
+        "durationOk": duration_ok,
+        "sourceAnalysis": ingest.source_analysis,
+        "recordedAnalysis": capture.recorded_analysis,
+        "hlsPreview": hls.hls_preview,
+        "hlsPlaylistReady": hls.playlist_body.contains("#EXTM3U"),
+        "hlsProbe": match hls.hls_probe {
+            Ok(dimensions) => json!({"passed": true, "dimensions": dimensions}),
+            Err(error) => json!({"passed": false, "error": error}),
+        },
+        "hlsPlaylistProgress": hls.hls_playlist_progress,
+        "liveOptimizedGopOk": live_optimized_gop_ok,
+        "sourceRetained": capture.source_retained,
+        "recordingFile": capture.recording_mp4,
+    }))
+}
+
+struct FileLiveEdgeIngest {
+    pipeline_id: String,
+    ingest_id: String,
+    source_analysis: Value,
+}
+
+/// Creates the pipeline and starts the looping file ingest.
+async fn start_file_live_edge_ingest(
+    api: &RampApi,
+    media_dir: &Path,
+    fixture: &Path,
+    case_id: &str,
+    live_optimized: bool,
+    target_gop_seconds: u32,
+) -> Result<FileLiveEdgeIngest, String> {
     let fixture_name = format!(
         "{case_id}-{}",
         fixture
@@ -209,14 +280,34 @@ async fn run_file_live_edge_case(
     wait_for_pipeline_file_ingest_running_state(api, &pipeline_id, true, Duration::from_secs(10))
         .await?;
 
+    Ok(FileLiveEdgeIngest {
+        pipeline_id,
+        ingest_id,
+        source_analysis,
+    })
+}
+
+struct FileLiveEdgeHls {
+    playlist_body: String,
+    hls_preview: Value,
+    hls_probe: Result<String, String>,
+    hls_playlist_progress: Value,
+}
+
+/// Waits for HLS readiness and samples two playlists to prove segment progress.
+async fn observe_file_live_edge_hls(
+    api: &RampApi,
+    ports: &TestPorts,
+    pipeline_id: &str,
+) -> Result<FileLiveEdgeHls, String> {
     let playlist_url = format!(
         "http://127.0.0.1:{}/hls/{pipeline_id}/master.m3u8",
         ports.http
     );
     let (_playlist_status, playlist_body) =
-        wait_for_hls_playlist_ready(api, &pipeline_id, Duration::from_secs(20)).await?;
+        wait_for_hls_playlist_ready(api, pipeline_id, Duration::from_secs(20)).await?;
     let hls_preview =
-        wait_for_api_hls_preview_state(api, &pipeline_id, true, Duration::from_secs(10)).await?;
+        wait_for_api_hls_preview_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
     let hls_probe = probe_dims_ramp_with_cookie(&playlist_url, api.cookie.as_deref()).await;
     let hls_progress_wait_secs = 5.0;
     let hls_playlist_progress = {
@@ -250,10 +341,31 @@ async fn run_file_live_edge_case(
         })
     };
 
+    Ok(FileLiveEdgeHls {
+        playlist_body,
+        hls_preview,
+        hls_probe,
+        hls_playlist_progress,
+    })
+}
+
+struct FileLiveEdgeCapture {
+    recording_mp4: PathBuf,
+    recorded_analysis: restream_engine::file_analysis::MediaFileAnalysis,
+    capture_elapsed_secs: f64,
+    source_retained: bool,
+}
+
+/// Records a fixed capture window and analyzes the produced mp4.
+async fn capture_file_live_edge_recording(
+    api: &RampApi,
+    media_dir: &Path,
+    pipeline_id: &str,
+) -> Result<FileLiveEdgeCapture, String> {
     let before_files = media_dir_entries(media_dir)?;
     api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
         .await?;
-    wait_for_api_recording_state(api, &pipeline_id, true, Duration::from_secs(10)).await?;
+    wait_for_api_recording_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
 
     // capture_target_secs (8.0s) is close to the passthrough fixture's duration
     // (correctness-h264.ts, 8.021334s per ffprobe) — each capture window roughly
@@ -267,7 +379,7 @@ async fn run_file_live_edge_case(
     api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
         .await?;
     let capture_elapsed_secs = recording_started.elapsed().as_secs_f64();
-    wait_for_api_recording_state(api, &pipeline_id, false, Duration::from_secs(20)).await?;
+    wait_for_api_recording_state(api, pipeline_id, false, Duration::from_secs(20)).await?;
 
     let recording_mp4 =
         wait_for_new_media_file(media_dir, &before_files, ".mp4", Duration::from_secs(30)).await?;
@@ -277,55 +389,26 @@ async fn run_file_live_edge_case(
     let expected_source_ts = recording_mp4.with_extension("ts");
     let source_retained = expected_source_ts.exists();
 
+    Ok(FileLiveEdgeCapture {
+        recording_mp4,
+        recorded_analysis,
+        capture_elapsed_secs,
+        source_retained,
+    })
+}
+
+/// Stops the looping ingest and waits for the pipeline input to go off.
+async fn stop_file_live_edge_ingest(
+    api: &RampApi,
+    pipeline_id: &str,
+    ingest_id: &str,
+) -> Result<(), String> {
     api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
         .await?;
-    wait_for_pipeline_file_ingest_running_state(api, &pipeline_id, false, Duration::from_secs(10))
+    wait_for_pipeline_file_ingest_running_state(api, pipeline_id, false, Duration::from_secs(10))
         .await?;
-    wait_for_api_input_off(api, &pipeline_id, Duration::from_secs(20)).await?;
-
-    let recorded_duration_secs = recorded_analysis.duration_sec.ok_or_else(|| {
-        format!(
-            "recorded output {} has no duration",
-            recording_mp4.display()
-        )
-    })?;
-    let duration_delta_secs = absolute_delta_secs(recorded_duration_secs, capture_elapsed_secs);
-    let max_duration_drift_secs = file_live_edge_max_duration_drift_secs(target_gop_seconds);
-    let duration_ok = duration_delta_secs <= max_duration_drift_secs;
-    let hls_ok = playlist_body.contains("#EXTM3U")
-        && hls_probe.is_ok()
-        && hls_playlist_progress["passed"] == true;
-    let live_optimized_gop_ok = if live_optimized {
-        recorded_analysis
-            .max_keyframe_interval_sec
-            .is_some_and(|value| value <= target_gop_seconds as f64 + 0.6)
-    } else {
-        true
-    };
-
-    Ok(json!({
-        "case": case_id,
-        "passed": duration_ok && hls_ok && live_optimized_gop_ok && !source_retained,
-        "liveOptimized": live_optimized,
-        "targetGopSeconds": target_gop_seconds,
-        "captureElapsedSecs": capture_elapsed_secs,
-        "recordedDurationSecs": recorded_duration_secs,
-        "durationDeltaSecs": duration_delta_secs,
-        "maxAllowedDurationDriftSecs": max_duration_drift_secs,
-        "durationOk": duration_ok,
-        "sourceAnalysis": source_analysis,
-        "recordedAnalysis": recorded_analysis,
-        "hlsPreview": hls_preview,
-        "hlsPlaylistReady": playlist_body.contains("#EXTM3U"),
-        "hlsProbe": match hls_probe {
-            Ok(dimensions) => json!({"passed": true, "dimensions": dimensions}),
-            Err(error) => json!({"passed": false, "error": error}),
-        },
-        "hlsPlaylistProgress": hls_playlist_progress,
-        "liveOptimizedGopOk": live_optimized_gop_ok,
-        "sourceRetained": source_retained,
-        "recordingFile": recording_mp4,
-    }))
+    wait_for_api_input_off(api, pipeline_id, Duration::from_secs(20)).await?;
+    Ok(())
 }
 
 pub(crate) async fn file_live_edge() -> Result<Value, String> {

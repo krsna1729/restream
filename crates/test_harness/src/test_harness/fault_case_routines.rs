@@ -9,14 +9,15 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::process::Child;
 
 use super::{
-    GeneralizedSinkMetrics, RampApi, RecoveryTransientCase, RetryBudgetCase, TestPorts,
-    create_output, create_pipeline_with_stream_key, disconnect_grace_remaining_bounded,
-    health_input_snapshot, input_disconnect_cleared, spawn_publisher,
-    start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
-    stop_mixed_outputs, wait_for_api_input_live, wait_for_api_input_media_ready,
-    wait_for_api_input_off, wait_for_sink_video_above,
+    GeneralizedSinkMetrics, HarnessPublisherProtocol, RampApi, RecoveryTransientCase,
+    RetryBudgetCase, TestPorts, create_output, create_pipeline_with_stream_key,
+    disconnect_grace_remaining_bounded, health_input_snapshot, input_disconnect_cleared,
+    spawn_publisher, start_generalized_sink_server, start_output, stop_child,
+    stop_generalized_sink_server, stop_mixed_outputs, wait_for_api_input_live,
+    wait_for_api_input_media_ready, wait_for_api_input_off, wait_for_sink_video_above,
 };
 
 /// Adds the verdict of `checks` to `result`: `passed` is true only when every
@@ -180,16 +181,169 @@ pub(super) async fn run_retry_budget_case(
     Ok(result)
 }
 
+/// Handles shared by the transient-recovery phases of one case.
+struct TransientRecovery<'a> {
+    api: &'a RampApi,
+    pipeline_id: &'a str,
+    output_id: &'a str,
+    fixture_h264: &'a Path,
+    publish_url: &'a str,
+    protocol: HarnessPublisherProtocol,
+    metrics: &'a GeneralizedSinkMetrics,
+    case: &'a RecoveryTransientCase,
+}
+
+impl TransientRecovery<'_> {
+    /// Spawn the case's publisher against the case's publish URL.
+    async fn spawn(&self) -> Result<Child, String> {
+        spawn_publisher(
+            self.fixture_h264,
+            self.publish_url,
+            self.protocol.ffmpeg_format(),
+            self.protocol.map_all_streams(),
+        )
+        .await
+    }
+}
+
+/// The publisher-down gap: input snapshot, output status and connection count.
+struct TransientGap {
+    input: Value,
+    off_error: Option<String>,
+    status_exists: bool,
+    connections: usize,
+    status_running: bool,
+    retrying: bool,
+    has_error: bool,
+    grace_active: bool,
+    grace_remaining: bool,
+    input_off: bool,
+}
+
+/// Observe the input and output while the publisher is down.
+async fn observe_transient_gap(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_id: &str,
+    metrics: &GeneralizedSinkMetrics,
+    case: &RecoveryTransientCase,
+) -> TransientGap {
+    let (input, off_error) = if case.wait_input_off_after_drop {
+        let off_error = wait_for_api_input_off(api, pipeline_id, Duration::from_secs(10))
+            .await
+            .err();
+        let health = api.get_json("/api/v1/engine/health").await.ok();
+        (
+            health_input_snapshot(health.as_ref(), pipeline_id),
+            off_error,
+        )
+    } else {
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        let health = api.get_json("/api/v1/engine/health").await.ok();
+        (health_input_snapshot(health.as_ref(), pipeline_id), None)
+    };
+    let status = api.get_output_status(pipeline_id, output_id).await.ok();
+    let connections = metrics.connections.load(Ordering::Relaxed);
+    let status_running = status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
+    let retrying = status.as_ref().is_some_and(|(s, _)| s.retrying);
+    let has_error = status
+        .as_ref()
+        .and_then(|(s, _)| s.last_error.as_deref())
+        .is_some_and(|m| !m.is_empty());
+    let grace_active = input["disconnectGraceActive"] == true;
+    let grace_remaining = disconnect_grace_remaining_bounded(&input);
+    let input_off =
+        !case.wait_input_off_after_drop || (off_error.is_none() && input["status"] == "off");
+    TransientGap {
+        input,
+        off_error,
+        status_exists: status.is_some(),
+        connections,
+        status_running,
+        retrying,
+        has_error,
+        grace_active,
+        grace_remaining,
+        input_off,
+    }
+}
+
+/// Wait for the returning publisher to revive the input and the sink feed.
+async fn resume_transient_publisher(
+    run: &TransientRecovery<'_>,
+    baseline_video: u64,
+) -> Result<(Child, bool, bool), String> {
+    let publisher = run.spawn().await?;
+    let timeout = Duration::from_secs(30);
+    let media_ready_ok = if run.case.require_media_ready_on_resume {
+        wait_for_api_input_media_ready(run.api, run.pipeline_id, timeout)
+            .await
+            .is_ok()
+    } else {
+        wait_for_api_input_live(run.api, run.pipeline_id, timeout).await?;
+        true
+    };
+    let resumed_ok =
+        wait_for_sink_video_above(run.metrics, baseline_video + 10, Duration::from_secs(15)).await;
+    Ok((publisher, media_ready_ok, resumed_ok))
+}
+
+/// A second drop inside the flap window must mark the input flapping.
+async fn observe_second_transient_drop(
+    run: &TransientRecovery<'_>,
+    publisher: &mut Child,
+    baseline_video: u64,
+) -> Result<Option<(bool, bool, bool)>, String> {
+    if !run.case.second_reconnect_checks_flapping {
+        return Ok(None);
+    }
+    stop_child(publisher).await;
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    let health = run.api.get_json("/api/v1/engine/health").await.ok();
+    let input = health_input_snapshot(health.as_ref(), run.pipeline_id);
+    let grace_active = input["disconnectGraceActive"] == true;
+    let grace_remaining = disconnect_grace_remaining_bounded(&input);
+    *publisher = run.spawn().await?;
+    wait_for_api_input_live(run.api, run.pipeline_id, Duration::from_secs(30)).await?;
+    let resumed =
+        wait_for_sink_video_above(run.metrics, baseline_video + 20, Duration::from_secs(15)).await;
+    Ok(Some((grace_active, grace_remaining, resumed)))
+}
+
+/// The output and input state recorded once the case has settled.
+struct TransientFinal {
+    connections: usize,
+    status_running: bool,
+    retrying: bool,
+    disconnect_cleared: bool,
+    flapping: bool,
+    recent_disconnect_count: u64,
+}
+
+/// Read the settled output status and input health for the verdict.
+async fn observe_transient_final(run: &TransientRecovery<'_>) -> TransientFinal {
+    let connections = run.metrics.connections.load(Ordering::Relaxed);
+    let status = run
+        .api
+        .get_output_status(run.pipeline_id, run.output_id)
+        .await
+        .ok();
+    let status_running = status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
+    let retrying = status.as_ref().is_some_and(|(s, _)| s.retrying);
+    let health = run.api.get_json("/api/v1/engine/health").await.ok();
+    let input = health_input_snapshot(health.as_ref(), run.pipeline_id);
+    TransientFinal {
+        connections,
+        status_running,
+        retrying,
+        disconnect_cleared: input_disconnect_cleared(&input),
+        flapping: input["flapping"] == true,
+        recent_disconnect_count: input["recentDisconnectCount"].as_u64().unwrap_or(0),
+    }
+}
+
 /// A brief publisher drop must keep the egress connection running through the
 /// disconnect grace and resume delivery when the publisher returns.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) async fn run_recovery_transient_case(
     api: &RampApi,
     ports: &TestPorts,
@@ -199,14 +353,6 @@ pub(super) async fn run_recovery_transient_case(
 ) -> Result<Value, String> {
     let protocol = case.protocol;
     let publish_url = protocol.publish_url(ports, &case.pipeline);
-    let spawn = || {
-        spawn_publisher(
-            fixture_h264,
-            &publish_url,
-            protocol.ffmpeg_format(),
-            protocol.map_all_streams(),
-        )
-    };
     let pipeline_id = create_pipeline_with_stream_key(api, &case.pipeline, &case.pipeline).await?;
     let metrics = Arc::new(GeneralizedSinkMetrics::default());
     let sink = start_generalized_sink_server(sink_port, metrics.clone()).await?;
@@ -218,7 +364,17 @@ pub(super) async fn run_recovery_transient_case(
         "source",
     )
     .await?;
-    let mut publisher = spawn().await?;
+    let run = TransientRecovery {
+        api,
+        pipeline_id: &pipeline_id,
+        output_id: &output_id,
+        fixture_h264,
+        publish_url: &publish_url,
+        protocol,
+        metrics: &metrics,
+        case,
+    };
+    let mut publisher = run.spawn().await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(15)).await?;
     start_output(api, &pipeline_id, &output_id).await?;
     let _ = wait_for_sink_video_above(&metrics, 9, Duration::from_secs(15)).await;
@@ -227,105 +383,51 @@ pub(super) async fn run_recovery_transient_case(
     stop_child(&mut publisher).await;
 
     // The input-drop gap: egress must stay connected and running.
-    let (gap_input, gap_off_error) = if case.wait_input_off_after_drop {
-        let gap_off_error = wait_for_api_input_off(api, &pipeline_id, Duration::from_secs(10))
-            .await
-            .err();
-        let health = api.get_json("/api/v1/engine/health").await.ok();
-        (
-            health_input_snapshot(health.as_ref(), &pipeline_id),
-            gap_off_error,
-        )
-    } else {
-        tokio::time::sleep(Duration::from_millis(2_500)).await;
-        let health = api.get_json("/api/v1/engine/health").await.ok();
-        (health_input_snapshot(health.as_ref(), &pipeline_id), None)
-    };
-    let gap_status = api.get_output_status(&pipeline_id, &output_id).await.ok();
-    let gap_connections = metrics.connections.load(Ordering::Relaxed);
-    let gap_status_running = gap_status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
-    let gap_retrying = gap_status.as_ref().is_some_and(|(s, _)| s.retrying);
-    let gap_has_error = gap_status
-        .as_ref()
-        .and_then(|(s, _)| s.last_error.as_deref())
-        .is_some_and(|m| !m.is_empty());
-    let gap_grace_active = gap_input["disconnectGraceActive"] == true;
-    let gap_grace_remaining = disconnect_grace_remaining_bounded(&gap_input);
-    let gap_input_off = !case.wait_input_off_after_drop
-        || (gap_off_error.is_none() && gap_input["status"] == "off");
+    let gap = observe_transient_gap(api, &pipeline_id, &output_id, &metrics, case).await;
 
-    let mut publisher = spawn().await?;
-    let timeout = Duration::from_secs(30);
-    let media_ready_ok = if case.require_media_ready_on_resume {
-        wait_for_api_input_media_ready(api, &pipeline_id, timeout)
-            .await
-            .is_ok()
-    } else {
-        wait_for_api_input_live(api, &pipeline_id, timeout).await?;
-        true
-    };
-    let resumed_ok =
-        wait_for_sink_video_above(&metrics, baseline_video + 10, Duration::from_secs(15)).await;
+    let (mut publisher, media_ready_ok, resumed_ok) =
+        resume_transient_publisher(&run, baseline_video).await?;
 
     // A second drop inside the flap window must mark the input flapping.
-    let second_reconnect = if case.second_reconnect_checks_flapping {
-        stop_child(&mut publisher).await;
-        tokio::time::sleep(Duration::from_millis(2_500)).await;
-        let health = api.get_json("/api/v1/engine/health").await.ok();
-        let input = health_input_snapshot(health.as_ref(), &pipeline_id);
-        let grace_active = input["disconnectGraceActive"] == true;
-        let grace_remaining = disconnect_grace_remaining_bounded(&input);
-        publisher = spawn().await?;
-        wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(30)).await?;
-        let resumed =
-            wait_for_sink_video_above(&metrics, baseline_video + 20, Duration::from_secs(15)).await;
-        Some((grace_active, grace_remaining, resumed))
-    } else {
-        None
-    };
+    let second_reconnect =
+        observe_second_transient_drop(&run, &mut publisher, baseline_video).await?;
 
-    let final_connections = metrics.connections.load(Ordering::Relaxed);
-    let final_status = api.get_output_status(&pipeline_id, &output_id).await.ok();
-    let final_status_running =
-        final_status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
-    let final_retrying = final_status.as_ref().is_some_and(|(s, _)| s.retrying);
-    let final_health = api.get_json("/api/v1/engine/health").await.ok();
-    let final_input = health_input_snapshot(final_health.as_ref(), &pipeline_id);
-    let final_disconnect_cleared = input_disconnect_cleared(&final_input);
-    let final_flapping = final_input["flapping"] == true;
-    let final_recent_disconnect_count = final_input["recentDisconnectCount"].as_u64().unwrap_or(0);
+    let final_obs = observe_transient_final(&run).await;
 
     let checks = [
         ("baseline.video >= 10", baseline_video >= 10),
         ("baseline.connections == 1", baseline_connections == 1),
-        ("gap.inputOff == true", gap_input_off),
-        ("gap.statusExists == true", gap_status.is_some()),
+        ("gap.inputOff == true", gap.input_off),
+        ("gap.statusExists == true", gap.status_exists),
         (
             "gap.connections == baseline.connections",
-            gap_connections == baseline_connections,
+            gap.connections == baseline_connections,
         ),
-        ("gap.statusRunning == true", gap_status_running),
-        ("gap.retrying == false", !gap_retrying),
-        ("gap.hasError == false", !gap_has_error),
-        ("gap.graceActive == true", gap_grace_active),
-        ("gap.graceRemainingBounded == true", gap_grace_remaining),
+        ("gap.statusRunning == true", gap.status_running),
+        ("gap.retrying == false", !gap.retrying),
+        ("gap.hasError == false", !gap.has_error),
+        ("gap.graceActive == true", gap.grace_active),
+        ("gap.graceRemainingBounded == true", gap.grace_remaining),
         ("resumed.ok == true", resumed_ok),
         ("resumed.mediaReadyOk == true", media_ready_ok),
         (
             "final.connections == baseline.connections",
-            final_connections == baseline_connections,
+            final_obs.connections == baseline_connections,
         ),
-        ("final.statusRunning == true", final_status_running),
-        ("final.retrying == false", !final_retrying),
-        ("final.disconnectCleared == true", final_disconnect_cleared),
+        ("final.statusRunning == true", final_obs.status_running),
+        ("final.retrying == false", !final_obs.retrying),
+        (
+            "final.disconnectCleared == true",
+            final_obs.disconnect_cleared,
+        ),
         (
             "!case.secondReconnectChecksFlapping || (secondReconnect.graceActive == true && secondReconnect.graceRemainingBounded == true && secondReconnect.resumed == true && final.flapping == true && final.recentDisconnectCount >= 2)",
             second_reconnect.is_none_or(|(grace_active, grace_remaining, resumed)| {
                 grace_active
                     && grace_remaining
                     && resumed
-                    && final_flapping
-                    && final_recent_disconnect_count >= 2
+                    && final_obs.flapping
+                    && final_obs.recent_disconnect_count >= 2
             }),
         ),
     ];
@@ -335,25 +437,25 @@ pub(super) async fn run_recovery_transient_case(
         "pipeline": { "id": pipeline_id },
         "output": { "id": output_id },
         "baseline": { "video": baseline_video, "connections": baseline_connections },
-        "gapWait": { "gapInput": gap_input, "gapOffError": gap_off_error },
+        "gapWait": { "gapInput": gap.input, "gapOffError": gap.off_error },
         "gap": {
-            "inputOff": gap_input_off,
-            "statusExists": gap_status.is_some(),
-            "connections": gap_connections,
-            "statusRunning": gap_status_running,
-            "retrying": gap_retrying,
-            "hasError": gap_has_error,
-            "graceActive": gap_grace_active,
-            "graceRemainingBounded": gap_grace_remaining,
+            "inputOff": gap.input_off,
+            "statusExists": gap.status_exists,
+            "connections": gap.connections,
+            "statusRunning": gap.status_running,
+            "retrying": gap.retrying,
+            "hasError": gap.has_error,
+            "graceActive": gap.grace_active,
+            "graceRemainingBounded": gap.grace_remaining,
         },
         "resumed": { "ok": resumed_ok, "mediaReadyOk": media_ready_ok },
         "final": {
-            "connections": final_connections,
-            "statusRunning": final_status_running,
-            "retrying": final_retrying,
-            "disconnectCleared": final_disconnect_cleared,
-            "flapping": final_flapping,
-            "recentDisconnectCount": final_recent_disconnect_count,
+            "connections": final_obs.connections,
+            "statusRunning": final_obs.status_running,
+            "retrying": final_obs.retrying,
+            "disconnectCleared": final_obs.disconnect_cleared,
+            "flapping": final_obs.flapping,
+            "recentDisconnectCount": final_obs.recent_disconnect_count,
         },
     });
     if let Some((grace_active, grace_remaining, resumed)) = second_reconnect {

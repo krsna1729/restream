@@ -458,10 +458,6 @@ pub(super) async fn record(
 }
 
 /// [`record`] with an explicit observation time (tests drive the clock).
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(super) async fn record_at(
     system: &Value,
     elapsed_secs: f64,
@@ -487,8 +483,8 @@ pub(super) async fn record_at(
             sampler.peer_fold.clear();
             sampler.previous_key = Some(key);
         }
-        // Packet rates cover the interval since the last counter reading —
-        // the prime for the first rated sample — falling back to the caller's
+        // Packet rates cover the interval since the last counter reading -
+        // the prime for the first rated sample - falling back to the caller's
         // sampling interval when no prime happened.
         let elapsed_secs = sampler
             .previous_at
@@ -502,368 +498,46 @@ pub(super) async fn record_at(
         let counters = PacketCounters::read(system);
         let previous = sampler.previous;
         let previous_ref = previous.as_ref();
-        let previous_of = |get: fn(&PacketCounters) -> Option<u64>| previous_ref.and_then(get);
-        let rate = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
-            rate_per_sec(current, previous_of(get), elapsed_secs)
-        };
         let shards = srt_shards(system);
         let owners: Vec<&Value> = shards
             .iter()
             .flat_map(|shard| shard["srtOwners"].as_array().into_iter().flatten())
             .collect();
-        let max_field = |array: &[&Value], key: &str| -> Option<u64> {
-            array.iter().filter_map(|entry| u64_field(entry, key)).max()
-        };
-        let sum_field = |array: &[&Value], key: &str| -> Option<u64> {
-            sum_all(array.iter().map(|entry| u64_field(entry, key)))
-        };
-        let unhealthy_shards = |shards: &[&Value]| -> Option<u64> {
-            (!shards.is_empty()).then(|| {
-                shards
-                    .iter()
-                    .filter(|shard| shard[SHARD_HEALTH_FIELD] != "healthy")
-                    .count() as u64
-            })
-        };
         let capacity = &system["capacity"];
         let flow = &capacity["flow"];
-        let delta = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
-            counter_delta(current, previous_ref.and_then(get))
-        };
-        let tx_datagrams_rate = rate(counters.srt_tx_datagrams, |c| c.srt_tx_datagrams);
-        let data_first_rate = rate(counters.srt_data_first, |c| c.srt_data_first);
-        let data_retx_rate = rate(counters.srt_data_retx, |c| c.srt_data_retx);
-        let cpu_seconds = cpu_pct / 100.0 * elapsed_secs;
         let mut record = serde_json::Map::new();
-        // SRT TX datagram taxonomy: first-transmission DATA, retransmitted
-        // DATA, control, and their sum. Retransmissions are reported apart
-        // from DATA because §9.3's DATA-pps target counts first transmissions;
-        // RX and timer/maintenance work stay separately named below.
-        // Derived cost signals (the portable stand-in for cycles/packet:
-        // no PMU is available on the reference hosts).
-        // Scheduler and owner gauges at sample time.
-        // Capacity projection and flow view.
-        record.insert("scenario".to_string(), json!(meta.scenario));
-        record.insert("label".to_string(), json!(meta.label));
-        record.insert("outputs".to_string(), json!(meta.outputs));
-        // Workload dimensions travel with the contract record so baseline
-        // eligibility can check them from the artifact alone.
-        record.insert("restreamCpusAllowed".to_string(), json!(restream_cpus));
-        record.insert("ingestTypes".to_string(), json!(meta.ingest_types));
-        record.insert("egressMix".to_string(), json!(meta.egress_mix));
-        record.insert("transcode".to_string(), json!(meta.transcode));
-        record.insert("intervalSecs".to_string(), json!(round2(elapsed_secs)));
-        record.insert(
-            "ratedSecs".to_string(),
-            json!(sampler.rated_started.map(|started| {
-                round2(observed_at.saturating_duration_since(started).as_secs_f64())
-            })),
+        insert_identity(
+            &mut record,
+            meta,
+            restream_cpus,
+            elapsed_secs,
+            sampler.rated_started,
+            observed_at,
+            cpu_pct,
         );
-        record.insert("cpuPct".to_string(), json!(round2(cpu_pct)));
-        record.insert(
-            "srtTxDatagramsPerSec".to_string(),
-            json!(tx_datagrams_rate.map(round2)),
+        let (tx_datagrams_rate, data_first_rate, data_retx_rate) =
+            insert_srt_rates(&mut record, counters, previous_ref, elapsed_secs);
+        insert_derived_rates(
+            &mut record,
+            counters,
+            previous_ref,
+            elapsed_secs,
+            data_first_rate,
+            data_retx_rate,
         );
-        record.insert(
-            "srtTxCompletedPerSec".to_string(),
-            json!(rate(counters.srt_tx_completed, |c| c.srt_tx_completed).map(round2)),
+        insert_counter_deltas(&mut record, counters, previous_ref);
+        insert_lifetime_totals(&mut record, &owners, &shards);
+        insert_udp_rates(&mut record, counters, previous_ref, elapsed_secs);
+        insert_cost_rates(
+            &mut record,
+            tx_datagrams_rate,
+            data_first_rate,
+            cpu_pct,
+            elapsed_secs,
+            meta.outputs,
         );
-        record.insert(
-            "srtRxDatagramsPerSec".to_string(),
-            json!(rate(counters.srt_rx_datagrams, |c| c.srt_rx_datagrams).map(round2)),
-        );
-        record.insert(
-            "srtDataFirstPps".to_string(),
-            json!(data_first_rate.map(round2)),
-        );
-        record.insert(
-            "srtDataRetransmitPps".to_string(),
-            json!(data_retx_rate.map(round2)),
-        );
-        record.insert(
-            "srtControlPps".to_string(),
-            json!(rate(counters.srt_control, |c| c.srt_control).map(round2)),
-        );
-        // Informational: retransmissions as a share of first-transmission
-        // DATA. A no-loss rung is ~0; a material share means the path (or the
-        // peer) is dropping, which the validity block also reports.
-        record.insert(
-            "srtRetransmitShare".to_string(),
-            json!(match (data_retx_rate, data_first_rate) {
-                (Some(retx), Some(first)) if first > 0.0 => {
-                    Some(round2(retx / first))
-                }
-                _ => None,
-            }),
-        );
-        record.insert(
-            "srtServiceVisitsPerSec".to_string(),
-            json!(rate(counters.srt_service_visits, |c| c.srt_service_visits).map(round2)),
-        );
-        record.insert(
-            "srtServiceActionsPerSec".to_string(),
-            json!(rate(counters.srt_service_actions, |c| c.srt_service_actions).map(round2)),
-        );
-        record.insert(
-            "srtMaintenanceActionsPerSec".to_string(),
-            json!(
-                rate(counters.srt_maintenance_actions, |c| c
-                    .srt_maintenance_actions)
-                .map(round2)
-            ),
-        );
-        record.insert(
-            "shardLoopIterationsPerSec".to_string(),
-            json!(rate(counters.shard_loop_iterations, |c| c.shard_loop_iterations).map(round2)),
-        );
-        record.insert(
-            "shardMediaTicksPerSec".to_string(),
-            json!(rate(counters.shard_media_ticks, |c| c.shard_media_ticks).map(round2)),
-        );
-        record.insert(
-            "shardReadyVisitsPerSec".to_string(),
-            json!(rate(counters.shard_ready_visits, |c| c.shard_ready_visits).map(round2)),
-        );
-        record.insert(
-            "shardUnhealthyCount".to_string(),
-            json!(unhealthy_shards(&shards)),
-        );
-        // Rated-window deltas for the monotonic fault/pressure counters: the
-        // verdict judges these, never the lifetime totals.
-        for (key, value) in [
-            (
-                "ownerTxFailedSendsDelta",
-                delta(counters.owner_tx_failed_sends, |c| c.owner_tx_failed_sends),
-            ),
-            (
-                "ownerTxExhaustionsDelta",
-                delta(counters.owner_tx_exhaustions, |c| c.owner_tx_exhaustions),
-            ),
-            (
-                "ownerServiceBudgetExhaustedDelta",
-                delta(counters.owner_service_budget_exhausted, |c| {
-                    c.owner_service_budget_exhausted
-                }),
-            ),
-            (
-                "ownerRxRingDroppedDelta",
-                delta(counters.owner_rx_ring_dropped, |c| c.owner_rx_ring_dropped),
-            ),
-            (
-                "ownerRxTruncatedDelta",
-                delta(counters.owner_rx_truncated, |c| c.owner_rx_truncated),
-            ),
-            (
-                "shardFeedResyncsDelta",
-                delta(counters.shard_feed_resyncs, |c| c.shard_feed_resyncs),
-            ),
-            (
-                "shardQueueOverflowsDelta",
-                delta(counters.shard_queue_overflows, |c| c.shard_queue_overflows),
-            ),
-        ] {
-            record.insert(key.to_string(), json!(value));
-        }
-        // Lifetime totals stay for context only.
-        for (key, value) in [
-            (
-                "ownerTxFailedSendsTotal",
-                sum_field(&owners, "txFailedSends"),
-            ),
-            (
-                "ownerTxExhaustionsTotal",
-                sum_field(&owners, "txExhaustions"),
-            ),
-            (
-                "ownerServiceBudgetExhaustedTotal",
-                sum_field(&owners, "serviceBudgetExhausted"),
-            ),
-            (
-                "ownerRxRingDroppedTotal",
-                sum_field(&owners, "rxRingDropped"),
-            ),
-            ("ownerRxTruncatedTotal", sum_field(&owners, "rxTruncated")),
-            (
-                "ownerTxBatchedSendsTotal",
-                sum_field(&owners, "txBatchedSends"),
-            ),
-            (
-                "ownerTxCoalescedDatagramsTotal",
-                sum_field(&owners, "txCoalescedDatagrams"),
-            ),
-            ("shardFeedResyncsTotal", sum_field(&shards, "resyncCount")),
-            (
-                "shardQueueOverflowsTotal",
-                sum_field(&shards, "queueOverflows"),
-            ),
-        ] {
-            record.insert(key.to_string(), json!(value));
-        }
-        record.insert(
-            "udpInErrorsPerSec".to_string(),
-            json!(rate(counters.udp_in_errors, |c| c.udp_in_errors).map(round2)),
-        );
-        record.insert(
-            "udpRcvbufErrorsPerSec".to_string(),
-            json!(rate(counters.udp_rcvbuf_errors, |c| c.udp_rcvbuf_errors).map(round2)),
-        );
-        record.insert(
-            "udpSndbufErrorsPerSec".to_string(),
-            json!(rate(counters.udp_sndbuf_errors, |c| c.udp_sndbuf_errors).map(round2)),
-        );
-        record.insert(
-            "nicRxDroppedPerSec".to_string(),
-            json!(rate(counters.nic_rx_dropped, |c| c.nic_rx_dropped).map(round2)),
-        );
-        record.insert(
-            "nicTxDroppedPerSec".to_string(),
-            json!(rate(counters.nic_tx_dropped, |c| c.nic_tx_dropped).map(round2)),
-        );
-        record.insert(
-            "cpuMicrosPerSrtPacket".to_string(),
-            json!(
-                tx_datagrams_rate
-                    .filter(|rate| *rate > 0.0)
-                    .map(|rate| round2(cpu_seconds / (rate * elapsed_secs) * 1e6))
-            ),
-        );
-        record.insert(
-            "srtTxDatagramsPerOutputPerSec".to_string(),
-            json!(
-                tx_datagrams_rate
-                    .filter(|_| meta.outputs > 0)
-                    .map(|rate| round2(rate / meta.outputs as f64))
-            ),
-        );
-        // The number to compare against the roadmap's ~760 DATA packets/s per
-        // destination: first transmissions only, retransmissions excluded.
-        record.insert(
-            "srtDataFirstPpsPerOutput".to_string(),
-            json!(
-                data_first_rate
-                    .filter(|_| meta.outputs > 0)
-                    .map(|rate| round2(rate / meta.outputs as f64))
-            ),
-        );
-        record.insert("egressShardCount".to_string(), json!(shards.len()));
-        record.insert(
-            "srtOwnerCount".to_string(),
-            json!(
-                owners
-                    .iter()
-                    .filter(|owner| owner["present"] == true)
-                    .count()
-            ),
-        );
-        record.insert(
-            "shardReadyDepthMax".to_string(),
-            json!(max_field(&shards, "readyDepth")),
-        );
-        record.insert(
-            "shardReadyDepthHwmMax".to_string(),
-            json!(max_field(&shards, "readyDepthHwm")),
-        );
-        record.insert(
-            "shardBudgetExhaustions".to_string(),
-            json!(sum_field(&shards, "budgetExhaustions")),
-        );
-        record.insert(
-            "ownerTxInFlightMax".to_string(),
-            json!(max_field(&owners, "txInFlight")),
-        );
-        record.insert(
-            "ownerTxCapacityMax".to_string(),
-            json!(max_field(&owners, "txCapacity")),
-        );
-        record.insert(
-            "ownerCallerInFlightHwm".to_string(),
-            json!(max_field(&owners, "callerInFlightHwm")),
-        );
-        record.insert(
-            "ownerCallerQueuedHwm".to_string(),
-            json!(max_field(&owners, "callerQueuedHwm")),
-        );
-        record.insert(
-            "ownerRxRingDropped".to_string(),
-            json!(sum_field(&owners, "rxRingDropped")),
-        );
-        record.insert(
-            "ownerRxTruncated".to_string(),
-            json!(sum_field(&owners, "rxTruncated")),
-        );
-        record.insert(
-            "ownerFaulted".to_string(),
-            json!(owners.iter().any(|owner| owner["faulted"] == true)),
-        );
-        record.insert(
-            "srtRuntimeIoUring".to_string(),
-            json!(
-                system["egressShards"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|shard| shard["srtRuntimeIoUring"] == true)
-            ),
-        );
-        record.insert(
-            "srtManagedRxAvailable".to_string(),
-            json!(
-                system["egressShards"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|shard| shard["srtManagedRxAvailable"] == true)
-            ),
-        );
-        record.insert(
-            "capacityIngressPps".to_string(),
-            json!(f64_field(capacity, "ingressPps").map(round2)),
-        );
-        record.insert(
-            "capacityEgressPps".to_string(),
-            json!(f64_field(capacity, "egressPps").map(round2)),
-        );
-        record.insert(
-            "capacityMediaBps".to_string(),
-            json!(f64_field(capacity, "mediaBps").map(round2)),
-        );
-        record.insert(
-            "capacityActiveLeaves".to_string(),
-            json!(u64_field(capacity, "activeLeaves")),
-        );
-        record.insert(
-            "hottestShardUtil".to_string(),
-            json!(f64_field(capacity, "hottestShardUtil").map(round2)),
-        );
-        record.insert(
-            "hottestCenter".to_string(),
-            json!(capacity["hottestCenter"].clone()),
-        );
-        record.insert(
-            "flowQueue".to_string(),
-            json!(f64_field(flow, "queue").map(round2)),
-        );
-        record.insert(
-            "flowBacklogSlope".to_string(),
-            json!(f64_field(flow, "backlogSlope").map(round2)),
-        );
-        record.insert(
-            "flowDeadlineSlackMs".to_string(),
-            json!(f64_field(flow, "deadlineSlackMs").map(round2)),
-        );
-        record.insert(
-            "flowDelayMs".to_string(),
-            json!(f64_field(flow, "delayMs").map(round2)),
-        );
-        record.insert(
-            "flowErrors".to_string(),
-            json!(f64_field(flow, "errors").map(round2)),
-        );
-        record.insert(
-            "flowAmplification".to_string(),
-            json!(f64_field(flow, "amplification").map(round2)),
-        );
-        record.insert("flowStatus".to_string(), json!(flow["status"].clone()));
+        insert_owner_gauges(&mut record, &shards, &owners, system);
+        insert_capacity_flow(&mut record, capacity, flow);
         if let Some(config) = &peer_config {
             record.insert("expectedPeers".to_string(), json!(config.hosts.len()));
             record.insert(
@@ -891,6 +565,448 @@ pub(super) async fn record_at(
         &jsonl,
         &format!("{}\n", serde_json::to_string(&record).unwrap()),
     )
+}
+
+/// Scenario identity, workload dimensions and the rated clock.
+fn insert_identity(
+    record: &mut serde_json::Map<String, Value>,
+    meta: &ResourceScenarioMeta<'_>,
+    restream_cpus: Option<&str>,
+    elapsed_secs: f64,
+    rated_started: Option<Instant>,
+    observed_at: Instant,
+    cpu_pct: f64,
+) {
+    record.insert("scenario".to_string(), json!(meta.scenario));
+    record.insert("label".to_string(), json!(meta.label));
+    record.insert("outputs".to_string(), json!(meta.outputs));
+    // Workload dimensions travel with the contract record so baseline
+    // eligibility can check them from the artifact alone.
+    record.insert("restreamCpusAllowed".to_string(), json!(restream_cpus));
+    record.insert("ingestTypes".to_string(), json!(meta.ingest_types));
+    record.insert("egressMix".to_string(), json!(meta.egress_mix));
+    record.insert("transcode".to_string(), json!(meta.transcode));
+    record.insert("intervalSecs".to_string(), json!(round2(elapsed_secs)));
+    record.insert(
+        "ratedSecs".to_string(),
+        json!(rated_started.map(|started| {
+            round2(observed_at.saturating_duration_since(started).as_secs_f64())
+        })),
+    );
+    record.insert("cpuPct".to_string(), json!(round2(cpu_pct)));
+}
+
+/// SRT TX datagram taxonomy and RX/control rates. Returns the TX datagram,
+/// first-transmission DATA and retransmitted DATA rates.
+fn insert_srt_rates(
+    record: &mut serde_json::Map<String, Value>,
+    counters: PacketCounters,
+    previous: Option<&PacketCounters>,
+    elapsed_secs: f64,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    // SRT TX datagram taxonomy: first-transmission DATA, retransmitted DATA,
+    // control, and their sum. Retransmissions are reported apart from DATA
+    // because §9.3's DATA-pps target counts first transmissions; RX and
+    // timer/maintenance work stay separately named below.
+    let rate = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
+        rate_per_sec(current, previous.and_then(get), elapsed_secs)
+    };
+    let tx_datagrams_rate = rate(counters.srt_tx_datagrams, |c| c.srt_tx_datagrams);
+    let data_first_rate = rate(counters.srt_data_first, |c| c.srt_data_first);
+    let data_retx_rate = rate(counters.srt_data_retx, |c| c.srt_data_retx);
+    record.insert(
+        "srtTxDatagramsPerSec".to_string(),
+        json!(tx_datagrams_rate.map(round2)),
+    );
+    record.insert(
+        "srtTxCompletedPerSec".to_string(),
+        json!(rate(counters.srt_tx_completed, |c| c.srt_tx_completed).map(round2)),
+    );
+    record.insert(
+        "srtRxDatagramsPerSec".to_string(),
+        json!(rate(counters.srt_rx_datagrams, |c| c.srt_rx_datagrams).map(round2)),
+    );
+    record.insert(
+        "srtDataFirstPps".to_string(),
+        json!(data_first_rate.map(round2)),
+    );
+    record.insert(
+        "srtDataRetransmitPps".to_string(),
+        json!(data_retx_rate.map(round2)),
+    );
+    record.insert(
+        "srtControlPps".to_string(),
+        json!(rate(counters.srt_control, |c| c.srt_control).map(round2)),
+    );
+    (tx_datagrams_rate, data_first_rate, data_retx_rate)
+}
+
+/// Retransmit share, scheduler rates and the unhealthy-shard count.
+fn insert_derived_rates(
+    record: &mut serde_json::Map<String, Value>,
+    counters: PacketCounters,
+    previous: Option<&PacketCounters>,
+    elapsed_secs: f64,
+    data_first_rate: Option<f64>,
+    data_retx_rate: Option<f64>,
+) {
+    let rate = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
+        rate_per_sec(current, previous.and_then(get), elapsed_secs)
+    };
+    // Informational: retransmissions as a share of first-transmission DATA. A
+    // no-loss rung is ~0; a material share means the path (or the peer) is
+    // dropping, which the validity block also reports.
+    record.insert(
+        "srtRetransmitShare".to_string(),
+        json!(match (data_retx_rate, data_first_rate) {
+            (Some(retx), Some(first)) if first > 0.0 => Some(round2(retx / first)),
+            _ => None,
+        }),
+    );
+    record.insert(
+        "srtServiceVisitsPerSec".to_string(),
+        json!(rate(counters.srt_service_visits, |c| c.srt_service_visits).map(round2)),
+    );
+    record.insert(
+        "srtServiceActionsPerSec".to_string(),
+        json!(rate(counters.srt_service_actions, |c| c.srt_service_actions).map(round2)),
+    );
+    record.insert(
+        "srtMaintenanceActionsPerSec".to_string(),
+        json!(
+            rate(counters.srt_maintenance_actions, |c| c
+                .srt_maintenance_actions)
+            .map(round2)
+        ),
+    );
+    record.insert(
+        "shardLoopIterationsPerSec".to_string(),
+        json!(rate(counters.shard_loop_iterations, |c| c.shard_loop_iterations).map(round2)),
+    );
+    record.insert(
+        "shardMediaTicksPerSec".to_string(),
+        json!(rate(counters.shard_media_ticks, |c| c.shard_media_ticks).map(round2)),
+    );
+    record.insert(
+        "shardReadyVisitsPerSec".to_string(),
+        json!(rate(counters.shard_ready_visits, |c| c.shard_ready_visits).map(round2)),
+    );
+}
+
+/// Rated-window deltas for the monotonic fault/pressure counters: the verdict
+/// judges these, never the lifetime totals.
+fn insert_counter_deltas(
+    record: &mut serde_json::Map<String, Value>,
+    counters: PacketCounters,
+    previous: Option<&PacketCounters>,
+) {
+    let delta = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
+        counter_delta(current, previous.and_then(get))
+    };
+    for (key, value) in [
+        (
+            "ownerTxFailedSendsDelta",
+            delta(counters.owner_tx_failed_sends, |c| c.owner_tx_failed_sends),
+        ),
+        (
+            "ownerTxExhaustionsDelta",
+            delta(counters.owner_tx_exhaustions, |c| c.owner_tx_exhaustions),
+        ),
+        (
+            "ownerServiceBudgetExhaustedDelta",
+            delta(counters.owner_service_budget_exhausted, |c| {
+                c.owner_service_budget_exhausted
+            }),
+        ),
+        (
+            "ownerRxRingDroppedDelta",
+            delta(counters.owner_rx_ring_dropped, |c| c.owner_rx_ring_dropped),
+        ),
+        (
+            "ownerRxTruncatedDelta",
+            delta(counters.owner_rx_truncated, |c| c.owner_rx_truncated),
+        ),
+        (
+            "shardFeedResyncsDelta",
+            delta(counters.shard_feed_resyncs, |c| c.shard_feed_resyncs),
+        ),
+        (
+            "shardQueueOverflowsDelta",
+            delta(counters.shard_queue_overflows, |c| c.shard_queue_overflows),
+        ),
+    ] {
+        record.insert(key.to_string(), json!(value));
+    }
+}
+
+/// Lifetime owner and shard totals, kept for context only.
+fn insert_lifetime_totals(
+    record: &mut serde_json::Map<String, Value>,
+    owners: &[&Value],
+    shards: &[&Value],
+) {
+    let sum_field = |array: &[&Value], key: &str| -> Option<u64> {
+        sum_all(array.iter().map(|entry| u64_field(entry, key)))
+    };
+    for (key, value) in [
+        (
+            "ownerTxFailedSendsTotal",
+            sum_field(owners, "txFailedSends"),
+        ),
+        (
+            "ownerTxExhaustionsTotal",
+            sum_field(owners, "txExhaustions"),
+        ),
+        (
+            "ownerServiceBudgetExhaustedTotal",
+            sum_field(owners, "serviceBudgetExhausted"),
+        ),
+        (
+            "ownerRxRingDroppedTotal",
+            sum_field(owners, "rxRingDropped"),
+        ),
+        ("ownerRxTruncatedTotal", sum_field(owners, "rxTruncated")),
+        (
+            "ownerTxBatchedSendsTotal",
+            sum_field(owners, "txBatchedSends"),
+        ),
+        (
+            "ownerTxCoalescedDatagramsTotal",
+            sum_field(owners, "txCoalescedDatagrams"),
+        ),
+        ("shardFeedResyncsTotal", sum_field(shards, "resyncCount")),
+        (
+            "shardQueueOverflowsTotal",
+            sum_field(shards, "queueOverflows"),
+        ),
+    ] {
+        record.insert(key.to_string(), json!(value));
+    }
+}
+
+/// UDP socket and NIC drop rates.
+fn insert_udp_rates(
+    record: &mut serde_json::Map<String, Value>,
+    counters: PacketCounters,
+    previous: Option<&PacketCounters>,
+    elapsed_secs: f64,
+) {
+    let rate = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
+        rate_per_sec(current, previous.and_then(get), elapsed_secs)
+    };
+    record.insert(
+        "udpInErrorsPerSec".to_string(),
+        json!(rate(counters.udp_in_errors, |c| c.udp_in_errors).map(round2)),
+    );
+    record.insert(
+        "udpRcvbufErrorsPerSec".to_string(),
+        json!(rate(counters.udp_rcvbuf_errors, |c| c.udp_rcvbuf_errors).map(round2)),
+    );
+    record.insert(
+        "udpSndbufErrorsPerSec".to_string(),
+        json!(rate(counters.udp_sndbuf_errors, |c| c.udp_sndbuf_errors).map(round2)),
+    );
+    record.insert(
+        "nicRxDroppedPerSec".to_string(),
+        json!(rate(counters.nic_rx_dropped, |c| c.nic_rx_dropped).map(round2)),
+    );
+    record.insert(
+        "nicTxDroppedPerSec".to_string(),
+        json!(rate(counters.nic_tx_dropped, |c| c.nic_tx_dropped).map(round2)),
+    );
+}
+
+/// Derived cost signals: the portable stand-in for cycles/packet (no PMU is
+/// available on the reference hosts) and per-output normalisation.
+fn insert_cost_rates(
+    record: &mut serde_json::Map<String, Value>,
+    tx_datagrams_rate: Option<f64>,
+    data_first_rate: Option<f64>,
+    cpu_pct: f64,
+    elapsed_secs: f64,
+    outputs: usize,
+) {
+    let cpu_seconds = cpu_pct / 100.0 * elapsed_secs;
+    record.insert(
+        "cpuMicrosPerSrtPacket".to_string(),
+        json!(
+            tx_datagrams_rate
+                .filter(|rate| *rate > 0.0)
+                .map(|rate| round2(cpu_seconds / (rate * elapsed_secs) * 1e6))
+        ),
+    );
+    record.insert(
+        "srtTxDatagramsPerOutputPerSec".to_string(),
+        json!(
+            tx_datagrams_rate
+                .filter(|_| outputs > 0)
+                .map(|rate| round2(rate / outputs as f64))
+        ),
+    );
+    // The number to compare against the roadmap's ~760 DATA packets/s per
+    // destination: first transmissions only, retransmissions excluded.
+    record.insert(
+        "srtDataFirstPpsPerOutput".to_string(),
+        json!(
+            data_first_rate
+                .filter(|_| outputs > 0)
+                .map(|rate| round2(rate / outputs as f64))
+        ),
+    );
+}
+
+/// Scheduler and owner gauges at sample time.
+fn insert_owner_gauges(
+    record: &mut serde_json::Map<String, Value>,
+    shards: &[&Value],
+    owners: &[&Value],
+    system: &Value,
+) {
+    let max_field = |array: &[&Value], key: &str| -> Option<u64> {
+        array.iter().filter_map(|entry| u64_field(entry, key)).max()
+    };
+    let sum_field = |array: &[&Value], key: &str| -> Option<u64> {
+        sum_all(array.iter().map(|entry| u64_field(entry, key)))
+    };
+    let unhealthy_shards = |shards: &[&Value]| -> Option<u64> {
+        (!shards.is_empty()).then(|| {
+            shards
+                .iter()
+                .filter(|shard| shard[SHARD_HEALTH_FIELD] != "healthy")
+                .count() as u64
+        })
+    };
+    record.insert(
+        "shardUnhealthyCount".to_string(),
+        json!(unhealthy_shards(shards)),
+    );
+    record.insert("egressShardCount".to_string(), json!(shards.len()));
+    record.insert(
+        "srtOwnerCount".to_string(),
+        json!(
+            owners
+                .iter()
+                .filter(|owner| owner["present"] == true)
+                .count()
+        ),
+    );
+    record.insert(
+        "shardReadyDepthMax".to_string(),
+        json!(max_field(shards, "readyDepth")),
+    );
+    record.insert(
+        "shardReadyDepthHwmMax".to_string(),
+        json!(max_field(shards, "readyDepthHwm")),
+    );
+    record.insert(
+        "shardBudgetExhaustions".to_string(),
+        json!(sum_field(shards, "budgetExhaustions")),
+    );
+    record.insert(
+        "ownerTxInFlightMax".to_string(),
+        json!(max_field(owners, "txInFlight")),
+    );
+    record.insert(
+        "ownerTxCapacityMax".to_string(),
+        json!(max_field(owners, "txCapacity")),
+    );
+    record.insert(
+        "ownerCallerInFlightHwm".to_string(),
+        json!(max_field(owners, "callerInFlightHwm")),
+    );
+    record.insert(
+        "ownerCallerQueuedHwm".to_string(),
+        json!(max_field(owners, "callerQueuedHwm")),
+    );
+    record.insert(
+        "ownerRxRingDropped".to_string(),
+        json!(sum_field(owners, "rxRingDropped")),
+    );
+    record.insert(
+        "ownerRxTruncated".to_string(),
+        json!(sum_field(owners, "rxTruncated")),
+    );
+    record.insert(
+        "ownerFaulted".to_string(),
+        json!(owners.iter().any(|owner| owner["faulted"] == true)),
+    );
+    record.insert(
+        "srtRuntimeIoUring".to_string(),
+        json!(
+            system["egressShards"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|shard| shard["srtRuntimeIoUring"] == true)
+        ),
+    );
+    record.insert(
+        "srtManagedRxAvailable".to_string(),
+        json!(
+            system["egressShards"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|shard| shard["srtManagedRxAvailable"] == true)
+        ),
+    );
+}
+
+/// Capacity projection and flow view.
+fn insert_capacity_flow(
+    record: &mut serde_json::Map<String, Value>,
+    capacity: &Value,
+    flow: &Value,
+) {
+    record.insert(
+        "capacityIngressPps".to_string(),
+        json!(f64_field(capacity, "ingressPps").map(round2)),
+    );
+    record.insert(
+        "capacityEgressPps".to_string(),
+        json!(f64_field(capacity, "egressPps").map(round2)),
+    );
+    record.insert(
+        "capacityMediaBps".to_string(),
+        json!(f64_field(capacity, "mediaBps").map(round2)),
+    );
+    record.insert(
+        "capacityActiveLeaves".to_string(),
+        json!(u64_field(capacity, "activeLeaves")),
+    );
+    record.insert(
+        "hottestShardUtil".to_string(),
+        json!(f64_field(capacity, "hottestShardUtil").map(round2)),
+    );
+    record.insert(
+        "hottestCenter".to_string(),
+        json!(capacity["hottestCenter"].clone()),
+    );
+    record.insert(
+        "flowQueue".to_string(),
+        json!(f64_field(flow, "queue").map(round2)),
+    );
+    record.insert(
+        "flowBacklogSlope".to_string(),
+        json!(f64_field(flow, "backlogSlope").map(round2)),
+    );
+    record.insert(
+        "flowDeadlineSlackMs".to_string(),
+        json!(f64_field(flow, "deadlineSlackMs").map(round2)),
+    );
+    record.insert(
+        "flowDelayMs".to_string(),
+        json!(f64_field(flow, "delayMs").map(round2)),
+    );
+    record.insert(
+        "flowErrors".to_string(),
+        json!(f64_field(flow, "errors").map(round2)),
+    );
+    record.insert(
+        "flowAmplification".to_string(),
+        json!(f64_field(flow, "amplification").map(round2)),
+    );
+    record.insert("flowStatus".to_string(), json!(flow["status"].clone()));
 }
 
 /// Write the per-rung summary (means/peaks plus the validity verdict) and

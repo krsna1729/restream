@@ -120,23 +120,24 @@ async fn wait_for_recording_file(media_root: &Path, pipeline_name: &str) -> bool
     recording_file_exists(media_root, pipeline_name)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
-pub(crate) async fn run_ingest_lifecycle_case(
+/// One HLS playlist probe captured for the HLS-preview case.
+#[derive(Default)]
+struct HlsPlaylistProbe {
+    status: Option<reqwest::StatusCode>,
+    ok: Option<bool>,
+    error: Option<String>,
+}
+
+/// Create the case pipeline and start its file ingest or publisher.
+async fn start_ingest_lifecycle(
     api: &RampApi,
     ports: &TestPorts,
     fixture_h264: &Path,
     case: &IngestLifecycleCase,
-) -> Result<Value, String> {
+) -> Result<(String, Option<Child>, Option<String>), String> {
     let pid = create_pipeline(api, &case.pipeline).await?;
-    let file_eof_restart = matches!(case.file_completion, Some(FileIngestCompletion::EofRestart));
-    let (mut publisher, mut file_ingest_id): (Option<Child>, Option<String>) = (None, None);
+    let mut publisher = None;
+    let mut file_ingest_id = None;
 
     match case.kind {
         IngestLifecycleKind::FileIngest => {
@@ -159,46 +160,66 @@ pub(crate) async fn run_ingest_lifecycle_case(
         }
     }
     wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await?;
+    Ok((pid, publisher, file_ingest_id))
+}
 
-    let (mut hls_playlist_status, mut hls_playlist_ok, mut hls_playlist_error) = (None, None, None);
-    let active_result = match case.kind {
+/// Observe the feature's active state after its ingest starts.
+async fn observe_active_lifecycle(
+    api: &RampApi,
+    pid: &str,
+    case: &IngestLifecycleCase,
+    probe: &mut HlsPlaylistProbe,
+) -> Result<Option<Result<Value, String>>, String> {
+    match case.kind {
         IngestLifecycleKind::FileIngest => match case.file_completion {
-            Some(FileIngestCompletion::EofRestart) => Some(
+            Some(FileIngestCompletion::EofRestart) => Ok(Some(
                 wait_for_pipeline_file_ingest_running_state(
                     api,
-                    &pid,
+                    pid,
                     true,
                     Duration::from_secs(10),
                 )
                 .await,
-            ),
+            )),
             Some(FileIngestCompletion::Stop) => {
                 println!("[fault] File ingest live");
-                None
+                Ok(None)
             }
-            None => return Err(format!("{} missing fileCompletion", case.test_name)),
+            None => Err(format!("{} missing fileCompletion", case.test_name)),
         },
         IngestLifecycleKind::HlsPreview => {
-            match wait_for_hls_playlist_ready(api, &pid, Duration::from_secs(15)).await {
+            match wait_for_hls_playlist_ready(api, pid, Duration::from_secs(15)).await {
                 Ok((status, body)) => {
-                    hls_playlist_status = Some(status);
-                    hls_playlist_ok = Some(body.contains("#EXTM3U"));
+                    probe.status = Some(status);
+                    probe.ok = Some(body.contains("#EXTM3U"));
                 }
                 Err(error) => {
-                    hls_playlist_status = Some(reqwest::StatusCode::NOT_FOUND);
-                    hls_playlist_ok = Some(false);
-                    hls_playlist_error = Some(error);
+                    probe.status = Some(reqwest::StatusCode::NOT_FOUND);
+                    probe.ok = Some(false);
+                    probe.error = Some(error);
                 }
             }
-            Some(wait_for_api_hls_preview_state(api, &pid, true, Duration::from_secs(10)).await)
+            Ok(Some(
+                wait_for_api_hls_preview_state(api, pid, true, Duration::from_secs(10)).await,
+            ))
         }
         IngestLifecycleKind::Recording => {
             api.post_empty(&format!("/api/v1/pipelines/{pid}/recording/start"))
                 .await?;
-            Some(wait_for_api_recording_state(api, &pid, true, Duration::from_secs(10)).await)
+            Ok(Some(
+                wait_for_api_recording_state(api, pid, true, Duration::from_secs(10)).await,
+            ))
         }
-    };
+    }
+}
 
+/// Stop the file ingest, or the publisher, once the active state is recorded.
+async fn stop_lifecycle_ingest(
+    api: &RampApi,
+    case: &IngestLifecycleCase,
+    publisher: &mut Option<Child>,
+    file_ingest_id: &Option<String>,
+) -> Result<(), String> {
     match case.kind {
         IngestLifecycleKind::FileIngest => {
             if matches!(case.file_completion, Some(FileIngestCompletion::Stop)) {
@@ -216,53 +237,80 @@ pub(crate) async fn run_ingest_lifecycle_case(
             }
         }
     }
+    Ok(())
+}
 
-    let started = Instant::now();
+/// Observe the feature's inactive state once its input is off.
+async fn observe_inactive_lifecycle(
+    api: &RampApi,
+    pid: &str,
+    case: &IngestLifecycleCase,
+    file_eof_restart: bool,
+) -> Result<(Result<(), String>, Option<Result<Value, String>>), String> {
     let off_result =
-        wait_for_api_input_off(api, &pid, Duration::from_secs(case.input_off_timeout_secs)).await;
+        wait_for_api_input_off(api, pid, Duration::from_secs(case.input_off_timeout_secs)).await;
     let inactive_result = match case.kind {
         IngestLifecycleKind::FileIngest if file_eof_restart => Some(
-            wait_for_pipeline_file_ingest_running_state(api, &pid, false, Duration::from_secs(10))
+            wait_for_pipeline_file_ingest_running_state(api, pid, false, Duration::from_secs(10))
                 .await,
         ),
         IngestLifecycleKind::HlsPreview => {
-            Some(wait_for_api_hls_preview_state(api, &pid, false, Duration::from_secs(15)).await)
+            Some(wait_for_api_hls_preview_state(api, pid, false, Duration::from_secs(15)).await)
         }
         IngestLifecycleKind::Recording => {
-            Some(wait_for_api_recording_state(api, &pid, false, Duration::from_secs(10)).await)
+            Some(wait_for_api_recording_state(api, pid, false, Duration::from_secs(10)).await)
         }
         IngestLifecycleKind::FileIngest => None,
     };
+    Ok((off_result, inactive_result))
+}
 
-    let active_ok = active_result.as_ref().is_none_or(Result::is_ok);
-    let inactive_ok = inactive_result.as_ref().is_none_or(Result::is_ok);
-    let restart_result = if file_eof_restart {
-        if off_result.is_ok() && inactive_ok {
-            let ingest_id = file_ingest_id.as_ref().ok_or("file ingest id missing")?;
-            match api
-                .post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
-                .await
-            {
-                Ok(_) => {
-                    if let Err(error) =
-                        wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await
-                    {
-                        Err(error)
-                    } else {
-                        api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
-                            .await
-                            .map(|_| ())
-                    }
+/// Restart the file ingest after EOF cleanup and stop it again.
+async fn restart_file_ingest(
+    api: &RampApi,
+    pid: &str,
+    file_ingest_id: &Option<String>,
+    off_ok: bool,
+    inactive_ok: bool,
+    file_eof_restart: bool,
+) -> Result<Result<(), String>, String> {
+    if !file_eof_restart {
+        return Ok(Ok(()));
+    }
+    if !off_ok || !inactive_ok {
+        return Ok(Err(
+            "skipped restart because EOF cleanup did not complete".to_string()
+        ));
+    }
+    let ingest_id = file_ingest_id.as_ref().ok_or("file ingest id missing")?;
+    Ok(
+        match api
+            .post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
+            .await
+        {
+            Ok(_) => {
+                if let Err(error) = wait_for_api_input_live(api, pid, Duration::from_secs(30)).await
+                {
+                    Err(error)
+                } else {
+                    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
+                        .await
+                        .map(|_| ())
                 }
-                Err(error) => Err(error),
             }
-        } else {
-            Err("skipped restart because EOF cleanup did not complete".to_string())
-        }
-    } else {
-        Ok(())
-    };
-    let feature_result = match case.kind {
+            Err(error) => Err(error),
+        },
+    )
+}
+
+/// Collect the case-kind-specific feature evidence.
+async fn ingest_lifecycle_feature(
+    api: &RampApi,
+    pid: &str,
+    case: &IngestLifecycleCase,
+    inactive_result: &Option<Result<Value, String>>,
+) -> Result<Value, String> {
+    Ok(match case.kind {
         IngestLifecycleKind::FileIngest => json!({}),
         IngestLifecycleKind::HlsPreview => {
             let mut final_status = reqwest::StatusCode::OK;
@@ -296,12 +344,45 @@ pub(crate) async fn run_ingest_lifecycle_case(
                 "recordingFileFound": recording_file_found,
             })
         }
-    };
+    })
+}
+
+pub(crate) async fn run_ingest_lifecycle_case(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    case: &IngestLifecycleCase,
+) -> Result<Value, String> {
+    let file_eof_restart = matches!(case.file_completion, Some(FileIngestCompletion::EofRestart));
+    let (pid, mut publisher, file_ingest_id) =
+        start_ingest_lifecycle(api, ports, fixture_h264, case).await?;
+
+    let mut probe = HlsPlaylistProbe::default();
+    let active_result = observe_active_lifecycle(api, &pid, case, &mut probe).await?;
+
+    stop_lifecycle_ingest(api, case, &mut publisher, &file_ingest_id).await?;
+
+    let started = Instant::now();
+    let (off_result, inactive_result) =
+        observe_inactive_lifecycle(api, &pid, case, file_eof_restart).await?;
+
+    let active_ok = active_result.as_ref().is_none_or(Result::is_ok);
+    let inactive_ok = inactive_result.as_ref().is_none_or(Result::is_ok);
+    let restart_result = restart_file_ingest(
+        api,
+        &pid,
+        &file_ingest_id,
+        off_result.is_ok(),
+        inactive_ok,
+        file_eof_restart,
+    )
+    .await?;
+    let feature_result = ingest_lifecycle_feature(api, &pid, case, &inactive_result).await?;
     let elapsed = started.elapsed();
     let feature_ok = match case.kind {
         IngestLifecycleKind::FileIngest => true,
         IngestLifecycleKind::HlsPreview => {
-            hls_playlist_ok == Some(true) && feature_result["finalPlaylistGone"] == true
+            probe.ok == Some(true) && feature_result["finalPlaylistGone"] == true
         }
         IngestLifecycleKind::Recording => {
             feature_result["recordingEnabled"] == true
@@ -333,9 +414,9 @@ pub(crate) async fn run_ingest_lifecycle_case(
     } else {
         result["inputOffError"] = json!(off_result.err());
         if matches!(case.kind, IngestLifecycleKind::HlsPreview) {
-            result["playlistStatus"] = json!(hls_playlist_status.map(|status| status.as_u16()));
-            result["playlistOk"] = json!(hls_playlist_ok);
-            result["playlistError"] = json!(hls_playlist_error);
+            result["playlistStatus"] = json!(probe.status.map(|status| status.as_u16()));
+            result["playlistOk"] = json!(probe.ok);
+            result["playlistError"] = json!(probe.error);
             result["hlsPreviewActiveError"] = json!(active_result.and_then(Result::err));
             result["hlsPreviewInactiveError"] = json!(inactive_result.and_then(Result::err));
         } else {

@@ -252,14 +252,6 @@ async fn create_srt_policy_pipeline_with_key(
         .ok_or_else(|| format!("{name} pipeline id missing"))
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
     let work_dir = artifact_path("srt.policy");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -275,52 +267,115 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
 
     let mut results = serde_json::Map::new();
 
+    results.insert(
+        "globalPlaintextInherit".to_string(),
+        srt_policy_plaintext_inherit(&api, &fixture, &ports, &work_dir).await?,
+    );
+    results.insert(
+        "globalEncrypted16Inherit".to_string(),
+        srt_policy_global_encrypted_inherit(&api, &fixture, &ports).await?,
+    );
+    results.insert(
+        "globalEncrypted16PipelinePlaintext".to_string(),
+        srt_policy_plaintext_override(&api, &fixture, &ports).await?,
+    );
+
+    api.patch_json(
+        "/api/v1/settings",
+        json!({"srtIngest": {"mode": "plaintext", "pbkeylen": 16, "passphrase": null}}),
+    )
+    .await?;
+    for case in [
+        SrtPolicyEncryptedCase {
+            label: "pipelineEncrypted24",
+            stream_key: "policy-enc-24",
+            passphrase: "pipepass1234",
+            pbkeylen: 24,
+        },
+        SrtPolicyEncryptedCase {
+            label: "pipelineEncrypted32",
+            stream_key: "policy-enc-32",
+            passphrase: "pipepass12345",
+            pbkeylen: 32,
+        },
+    ] {
+        results.insert(
+            case.label.to_string(),
+            srt_policy_encrypted_pipeline(&api, &fixture, &ports, &work_dir, case).await?,
+        );
+    }
+
+    stop_child(&mut child).await;
+    let value = Value::Object(results);
+    let path = work_dir.join("results.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).map_err(|e| e.to_string())?;
+    println!("{}", serde_json::to_string_pretty(&value).unwrap());
+    Ok(value)
+}
+
+struct SrtPolicyEncryptedCase<'a> {
+    label: &'a str,
+    stream_key: &'a str,
+    passphrase: &'a str,
+    pbkeylen: u32,
+}
+
+/// Global plaintext settings with an `inherit` pipeline policy.
+async fn srt_policy_plaintext_inherit(
+    api: &RampApi,
+    fixture: &Path,
+    ports: &TestPorts,
+    work_dir: &Path,
+) -> Result<Value, String> {
     api.patch_json(
         "/api/v1/settings",
         json!({"srtIngest": {"mode": "plaintext", "pbkeylen": 16, "passphrase": null}}),
     )
     .await?;
     let plain_inherit_id =
-        create_srt_policy_pipeline(&api, "policy-plain-inherit", json!({"mode": "inherit"}))
-            .await?;
+        create_srt_policy_pipeline(api, "policy-plain-inherit", json!({"mode": "inherit"})).await?;
     let mut plain_pub = spawn_publisher(
-        &fixture,
+        fixture,
         &srt_publish_url(ports.srt, "policy-plain-inherit", None),
         "mpegts",
         true,
     )
     .await?;
-    wait_for_api_input_live(&api, &plain_inherit_id, Duration::from_secs(15)).await?;
+    wait_for_api_input_live(api, &plain_inherit_id, Duration::from_secs(15)).await?;
     let plain_read_probe = ffprobe(&srt_read_url(ports.srt, "policy-plain-inherit", None)).await?;
     assert_media_only(&plain_read_probe, "plain inherit read")?;
     let plain_read_decode = assert_direct_play_decodes(
         "plain inherit read",
         &srt_read_url(ports.srt, "policy-plain-inherit", None),
-        &work_dir,
+        work_dir,
     )
     .await?;
     stop_child(&mut plain_pub).await;
-    wait_for_api_input_off(&api, &plain_inherit_id, Duration::from_secs(10)).await?;
-    results.insert(
-        "globalPlaintextInherit".to_string(),
-        json!({"passed": true, "readProbe": plain_read_probe, "readDecode": plain_read_decode}),
-    );
+    wait_for_api_input_off(api, &plain_inherit_id, Duration::from_secs(10)).await?;
+    Ok(json!({"passed": true, "readProbe": plain_read_probe, "readDecode": plain_read_decode}))
+}
 
+/// Global encrypted settings with an `inherit` policy rejects plaintext reads and publishes.
+async fn srt_policy_global_encrypted_inherit(
+    api: &RampApi,
+    fixture: &Path,
+    ports: &TestPorts,
+) -> Result<Value, String> {
     api.patch_json(
         "/api/v1/settings",
         json!({"srtIngest": {"mode": "encrypted", "passphrase": "globalpass123", "pbkeylen": 16}}),
     )
     .await?;
     let global_enc_id =
-        create_srt_policy_pipeline(&api, "policy-global-enc", json!({"mode": "inherit"})).await?;
+        create_srt_policy_pipeline(api, "policy-global-enc", json!({"mode": "inherit"})).await?;
     let mut global_enc_pub = spawn_publisher(
-        &fixture,
+        fixture,
         &srt_publish_url(ports.srt, "policy-global-enc", Some(("globalpass123", 16))),
         "mpegts",
         true,
     )
     .await?;
-    wait_for_api_input_live(&api, &global_enc_id, Duration::from_secs(15)).await?;
+    wait_for_api_input_live(api, &global_enc_id, Duration::from_secs(15)).await?;
     let global_enc_read = ffprobe(&srt_read_url(
         ports.srt,
         "policy-global-enc",
@@ -334,138 +389,120 @@ pub(crate) async fn srt_policy_correctness() -> Result<Value, String> {
     )
     .await?;
     stop_child(&mut global_enc_pub).await;
-    wait_for_api_input_off(&api, &global_enc_id, Duration::from_secs(10)).await?;
+    wait_for_api_input_off(api, &global_enc_id, Duration::from_secs(10)).await?;
     let global_enc_publish_fail = expect_ingest_rejected(
-        &api,
+        api,
         &global_enc_id,
-        &fixture,
+        fixture,
         &srt_publish_url(ports.srt, "policy-global-enc", None),
         "global encrypted plaintext publish",
     )
     .await?;
-    results.insert(
-        "globalEncrypted16Inherit".to_string(),
-        json!({
-            "passed": true,
-            "readProbe": global_enc_read,
-            "plaintextReadRejected": global_enc_read_fail,
-            "plaintextPublishRejected": global_enc_publish_fail,
-        }),
-    );
+    Ok(json!({
+        "passed": true,
+        "readProbe": global_enc_read,
+        "plaintextReadRejected": global_enc_read_fail,
+        "plaintextPublishRejected": global_enc_publish_fail,
+    }))
+}
 
+/// Global encrypted settings with a `plaintext` pipeline policy overrides for reads.
+async fn srt_policy_plaintext_override(
+    api: &RampApi,
+    fixture: &Path,
+    ports: &TestPorts,
+) -> Result<Value, String> {
     let plain_override_id =
-        create_srt_policy_pipeline(&api, "policy-plain-override", json!({"mode": "plaintext"}))
+        create_srt_policy_pipeline(api, "policy-plain-override", json!({"mode": "plaintext"}))
             .await?;
     let mut plain_override_pub = spawn_publisher(
-        &fixture,
+        fixture,
         &srt_publish_url(ports.srt, "policy-plain-override", None),
         "mpegts",
         true,
     )
     .await?;
-    wait_for_api_input_live(&api, &plain_override_id, Duration::from_secs(15)).await?;
+    wait_for_api_input_live(api, &plain_override_id, Duration::from_secs(15)).await?;
     let plain_override_read =
         ffprobe(&srt_read_url(ports.srt, "policy-plain-override", None)).await?;
     assert_media_only(&plain_override_read, "plain override read")?;
     stop_child(&mut plain_override_pub).await;
-    wait_for_api_input_off(&api, &plain_override_id, Duration::from_secs(10)).await?;
-    results.insert(
-        "globalEncrypted16PipelinePlaintext".to_string(),
-        json!({"passed": true, "readProbe": plain_override_read}),
-    );
-
-    api.patch_json(
-        "/api/v1/settings",
-        json!({"srtIngest": {"mode": "plaintext", "pbkeylen": 16, "passphrase": null}}),
-    )
-    .await?;
-    for (label, stream_key, passphrase, pbkeylen) in [
-        (
-            "pipelineEncrypted24",
-            "policy-enc-24",
-            "pipepass1234",
-            24u32,
-        ),
-        (
-            "pipelineEncrypted32",
-            "policy-enc-32",
-            "pipepass12345",
-            32u32,
-        ),
-    ] {
-        let pipeline_id = create_srt_policy_pipeline_with_key(
-            &api,
-            label,
-            stream_key,
-            json!({"mode": "encrypted", "passphrase": passphrase, "pbkeylen": pbkeylen}),
-        )
-        .await?;
-        let mut pub_ok = spawn_publisher(
-            &fixture,
-            &srt_publish_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
-            "mpegts",
-            true,
-        )
-        .await?;
-        wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-        let read_ok = ffprobe(&srt_read_url(
-            ports.srt,
-            stream_key,
-            Some((passphrase, pbkeylen)),
-        ))
-        .await?;
-        assert_media_only(&read_ok, label)?;
-        let read_decode = assert_direct_play_decodes(
-            label,
-            &srt_read_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
-            &work_dir,
-        )
-        .await?;
-        let read_plain_fail = expect_srt_read_failure(
-            &srt_read_url(ports.srt, stream_key, None),
-            &format!("{label} plaintext read"),
-        )
-        .await?;
-        let read_wrong_pass_fail = expect_srt_read_failure(
-            &srt_read_url(ports.srt, stream_key, Some(("wrongpass123", pbkeylen))),
-            &format!("{label} wrong passphrase read"),
-        )
-        .await?;
-        stop_child(&mut pub_ok).await;
-        wait_for_api_input_off(&api, &pipeline_id, Duration::from_secs(10)).await?;
-        let publish_plain_fail = expect_ingest_rejected(
-            &api,
-            &pipeline_id,
-            &fixture,
-            &srt_publish_url(ports.srt, stream_key, None),
-            &format!("{label} plaintext publish"),
-        )
-        .await?;
-        results.insert(
-            label.to_string(),
-            json!({
-                "passed": true,
-                "readProbe": read_ok,
-                "readDecode": read_decode,
-                "plaintextReadRejected": read_plain_fail,
-                "wrongPassphraseReadRejected": read_wrong_pass_fail,
-                "plaintextPublishRejected": publish_plain_fail,
-            }),
-        );
-    }
-
-    stop_child(&mut child).await;
-    let value = Value::Object(results);
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&value).unwrap());
-    Ok(value)
+    wait_for_api_input_off(api, &plain_override_id, Duration::from_secs(10)).await?;
+    Ok(json!({"passed": true, "readProbe": plain_override_read}))
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
+/// Pipeline-level encrypted policy: correct key reads, wrong keys and plaintext are rejected.
+async fn srt_policy_encrypted_pipeline(
+    api: &RampApi,
+    fixture: &Path,
+    ports: &TestPorts,
+    work_dir: &Path,
+    case: SrtPolicyEncryptedCase<'_>,
+) -> Result<Value, String> {
+    let SrtPolicyEncryptedCase {
+        label,
+        stream_key,
+        passphrase,
+        pbkeylen,
+    } = case;
+    let pipeline_id = create_srt_policy_pipeline_with_key(
+        api,
+        label,
+        stream_key,
+        json!({"mode": "encrypted", "passphrase": passphrase, "pbkeylen": pbkeylen}),
+    )
+    .await?;
+    let mut pub_ok = spawn_publisher(
+        fixture,
+        &srt_publish_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
+        "mpegts",
+        true,
+    )
+    .await?;
+    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(15)).await?;
+    let read_ok = ffprobe(&srt_read_url(
+        ports.srt,
+        stream_key,
+        Some((passphrase, pbkeylen)),
+    ))
+    .await?;
+    assert_media_only(&read_ok, label)?;
+    let read_decode = assert_direct_play_decodes(
+        label,
+        &srt_read_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
+        work_dir,
+    )
+    .await?;
+    let read_plain_fail = expect_srt_read_failure(
+        &srt_read_url(ports.srt, stream_key, None),
+        &format!("{label} plaintext read"),
+    )
+    .await?;
+    let read_wrong_pass_fail = expect_srt_read_failure(
+        &srt_read_url(ports.srt, stream_key, Some(("wrongpass123", pbkeylen))),
+        &format!("{label} wrong passphrase read"),
+    )
+    .await?;
+    stop_child(&mut pub_ok).await;
+    wait_for_api_input_off(api, &pipeline_id, Duration::from_secs(10)).await?;
+    let publish_plain_fail = expect_ingest_rejected(
+        api,
+        &pipeline_id,
+        fixture,
+        &srt_publish_url(ports.srt, stream_key, None),
+        &format!("{label} plaintext publish"),
+    )
+    .await?;
+    Ok(json!({
+        "passed": true,
+        "readProbe": read_ok,
+        "readDecode": read_decode,
+        "plaintextReadRejected": read_plain_fail,
+        "wrongPassphraseReadRejected": read_wrong_pass_fail,
+        "plaintextPublishRejected": publish_plain_fail,
+    }))
+}
+
 pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let work_dir = artifact_path("timestamp.bframe");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -503,7 +540,61 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
     println!("[timestamp.bframe] Source ingest established");
 
-    start_output(&api, &pipeline_id, &output_id).await?;
+    let source = probe_bframe_source_passthrough(
+        &api,
+        ports.rtmp,
+        &pipeline_id,
+        &output_id,
+        &sink_metrics,
+        &work_dir,
+    )
+    .await?;
+
+    install_bframe_transcode_profiles(&api).await?;
+    let transcode_bframes_0 = run_transcode_bframe_probe_case(
+        &api,
+        &pipeline_id,
+        &work_dir,
+        all_ports.mtx_rtmp,
+        "h264-bf0",
+        "h264_bf0",
+        ExpectedBframeSignal::None,
+    )
+    .await?;
+    let transcode_bframes_2 = run_transcode_bframe_probe_case(
+        &api,
+        &pipeline_id,
+        &work_dir,
+        all_ports.mtx_rtmp,
+        "h264-bf2",
+        "h264_bf2",
+        ExpectedBframeSignal::Present,
+    )
+    .await?;
+
+    stop_child(&mut publisher).await;
+    stop_generalized_sink_server(sink_server);
+    stop_child(&mut child).await;
+    stop_child(&mut mediamtx).await;
+
+    bframe_rtmp_results(source, transcode_bframes_0, transcode_bframes_2, &work_dir)
+}
+
+struct BframeSourcePassthrough {
+    passed: bool,
+    results: Value,
+}
+
+/// Measures the source passthrough egress: packet shape, sink DTS, and direct-play decode.
+async fn probe_bframe_source_passthrough(
+    api: &RampApi,
+    rtmp_port: u16,
+    pipeline_id: &str,
+    output_id: &str,
+    sink_metrics: &GeneralizedSinkMetrics,
+    work_dir: &Path,
+) -> Result<BframeSourcePassthrough, String> {
+    start_output(api, pipeline_id, output_id).await?;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     while sink_metrics.video_count.load(Ordering::Relaxed) < 30 {
@@ -515,7 +606,7 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let packets_path = work_dir.join("bframe-packets.json");
-    let read_url = format!("rtmp://127.0.0.1:{}/live/e2e-bframe-src", ports.rtmp);
+    let read_url = format!("rtmp://127.0.0.1:{rtmp_port}/live/e2e-bframe-src");
     let packet_probe = ffprobe_video_packets(&read_url, &packets_path).await?;
     let packet_count = count_video_packets(&packet_probe);
     let bframe_count = count_bframe_packets(&packet_probe);
@@ -528,7 +619,7 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
     // `read_url` plays Restream's own RTMP ingest (direct play), so this is
     // also that path's player check.
     let (play_decodes, play_decode) =
-        match assert_direct_play_decodes("rtmp direct play", &read_url, &work_dir).await {
+        match assert_direct_play_decodes("rtmp direct play", &read_url, work_dir).await {
             Ok(result) => (true, result),
             Err(error) => (false, json!({"passed": false, "error": error})),
         };
@@ -559,39 +650,25 @@ pub(crate) async fn bframe_rtmp_correctness() -> Result<Value, String> {
         source_results["error"] = json!("RTMP direct play did not decode cleanly");
     }
 
-    install_bframe_transcode_profiles(&api).await?;
-    let transcode_bframes_0 = run_transcode_bframe_probe_case(
-        &api,
-        &pipeline_id,
-        &work_dir,
-        all_ports.mtx_rtmp,
-        "h264-bf0",
-        "h264_bf0",
-        ExpectedBframeSignal::None,
-    )
-    .await?;
-    let transcode_bframes_2 = run_transcode_bframe_probe_case(
-        &api,
-        &pipeline_id,
-        &work_dir,
-        all_ports.mtx_rtmp,
-        "h264-bf2",
-        "h264_bf2",
-        ExpectedBframeSignal::Present,
-    )
-    .await?;
+    Ok(BframeSourcePassthrough {
+        passed: source_passed,
+        results: source_results,
+    })
+}
 
-    stop_child(&mut publisher).await;
-    stop_generalized_sink_server(sink_server);
-    stop_child(&mut child).await;
-    stop_child(&mut mediamtx).await;
-
-    let passed = source_passed
+/// Combines the passthrough and transcode probes and writes the result artifact.
+fn bframe_rtmp_results(
+    source: BframeSourcePassthrough,
+    transcode_bframes_0: Value,
+    transcode_bframes_2: Value,
+    work_dir: &Path,
+) -> Result<Value, String> {
+    let passed = source.passed
         && transcode_bframes_0["passed"].as_bool().unwrap_or(false)
         && transcode_bframes_2["passed"].as_bool().unwrap_or(false);
     let results = json!({
         "passed": passed,
-        "sourcePassthrough": source_results,
+        "sourcePassthrough": source.results,
         "transcodeBframes0": transcode_bframes_0,
         "transcodeBframes2": transcode_bframes_2,
     });
