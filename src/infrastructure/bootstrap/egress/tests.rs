@@ -22,6 +22,35 @@ fn egress(engine: &Arc<MediaEngine>, db: DeadlineDb) -> EgressReconciler {
     )
 }
 
+/// A pipeline URL that fails to parse keeps the same attempt error path:
+/// the attempt records `recirculation_target_parse` and ends for retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invalid_pipeline_url_records_the_recirculation_parse_error() {
+    let (api, lifecycle, dir) = file_pools("bad-pipeline-url").await;
+    let engine = Arc::new(MediaEngine::new());
+    let _ingest = live_output(&engine, &api, "pipe", "pipeline://target-only").await;
+    let egress = egress(
+        &engine,
+        DeadlineDb::new(lifecycle, Duration::from_millis(200)),
+    );
+    egress.reconcile(&outputs(&api).await).await;
+
+    let error = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(recent) = engine.recent_egress_outcome(OUTPUT).await
+                && let Some(error) = recent.last_error
+            {
+                break error;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the invalid pipeline attempt settles");
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(error, "recirculation URL must include a target input");
+}
+
 /// The output used up its retries: what `EgressTask` records after its last
 /// failed attempt.
 async fn exhaust(egress: &EgressReconciler) {

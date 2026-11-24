@@ -1,21 +1,13 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
 
-use crate::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::egress::backend::{
     CloseReason, EngineProgress, ProtocolEngine, Readiness, RecoveryCapability, WaitCondition,
 };
 use crate::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
-use crate::egress::journal::{FeedEpoch, RingFeed};
 use crate::egress::policy::WorkBudget;
-use crate::egress::visit::live_start_cursor;
-use crate::engine::{EgressRegistration, MediaEngine};
 use bytes::Bytes;
 use restream_core::MediaPacket;
-use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
-
-const SINK_VISIT_BUDGET: Duration = Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SinkDiscardStats {
@@ -113,85 +105,6 @@ impl SinkDiscardUnit for Bytes {
 impl SinkDiscardUnit for Arc<MediaPacket> {
     fn discard_len(&self) -> usize {
         self.payload.len()
-    }
-}
-
-pub async fn start_sink_egress(
-    output_id: String,
-    ring: Arc<RingBuffer>,
-    engine: Arc<MediaEngine>,
-    registration: EgressRegistration,
-) {
-    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
-    let mut cursor = FeedCursor::new(feed.epoch(), feed.head_sequence());
-    let mut discard_engine = SinkEngine::<RingFeed>::default();
-    let mut transport = SinkTransport::default();
-    let mut wake_reader = Reader::new_live(format!("sink_egress:{output_id}"), ring);
-
-    engine
-        .update_egress_phase_if_current(
-            &output_id,
-            &registration,
-            restream_domain::domain::state::EgressPhase::Discarding,
-        )
-        .await;
-
-    loop {
-        tokio::select! {
-            _ = registration.cancel_token.cancelled() => break,
-            _ = wake_reader.wait_for_data() => {
-                drive_sink_until_blocked(
-                    &output_id,
-                    &registration,
-                    &engine,
-                    &feed,
-                    &mut cursor,
-                    &mut discard_engine,
-                    &mut transport,
-                )
-                .await;
-                wake_reader.sync_read_idx(cursor.next_sequence as usize);
-            }
-        }
-    }
-
-    discard_engine.close(&mut transport, CloseReason::Removed);
-}
-
-async fn drive_sink_until_blocked(
-    output_id: &str,
-    registration: &EgressRegistration,
-    engine: &MediaEngine,
-    feed: &RingFeed,
-    cursor: &mut FeedCursor,
-    discard_engine: &mut SinkEngine<RingFeed>,
-    transport: &mut SinkTransport,
-) {
-    loop {
-        match discard_engine.advance(
-            transport,
-            Readiness::WRITABLE,
-            feed,
-            cursor,
-            WorkBudget::new(
-                MEDIA_PULL_BURST_PACKETS,
-                MEDIA_TS_BATCH_TARGET_BYTES,
-                SINK_VISIT_BUDGET,
-            ),
-        ) {
-            EngineProgress::Progress { units, .. } if units > 0 => {
-                if !engine
-                    .record_egress_discard_progress_if_current(output_id, registration)
-                    .await
-                {
-                    break;
-                }
-            }
-            EngineProgress::Progress { .. } | EngineProgress::Needs(_) => break,
-            EngineProgress::FeedOverrun => *cursor = live_start_cursor(feed),
-            EngineProgress::PeerClosed | EngineProgress::Failed(_) => break,
-            EngineProgress::HandshakeComplete | EngineProgress::Yield => break,
-        }
     }
 }
 
