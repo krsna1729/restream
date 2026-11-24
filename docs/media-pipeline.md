@@ -1025,8 +1025,8 @@ The diagram shows a publisher connection from QUIC accept to the ring.
   A missing profile falls back; malformed catalogs fail promptly. The
   upstream MSF consumer maps to the shared hang model before selection.
   Local `moq-msf` deserializer bounds apply before shared initialization data
-  expands: 32 MiB serialized input, 64 tracks/init entries and 32 MiB aggregate
-  resolved init strings. No second hand-written catalog parser is used.
+  expands: 32 MiB serialized input and 32 MiB aggregate resolved init strings.
+  No second hand-written catalog parser is used.
 - **Tracks.** The first ranked H.264 or H.265 rendition becomes video; up to
   eight AAC renditions become audio tracks in catalog order. Others are logged
   as `restream.moq.ingest.track_rejected`. A catalog with no usable track ends
