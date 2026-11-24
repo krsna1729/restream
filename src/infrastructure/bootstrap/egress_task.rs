@@ -74,6 +74,13 @@ pub(super) struct PipelineFabricTask {
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[derive(Clone)]
+pub(super) enum PipelineStart {
+    Ready(Box<PipelineFabricTask>),
+    /// The URL did not parse; the attempt records this error and ends.
+    Invalid(&'static str),
+}
+
 /// An HTTP/HTTPS HLS output uploaded from the HLS PUT fabric. The store it
 /// reads is known only once `EgressTask::run` has started the segmenter.
 #[derive(Clone)]
@@ -114,7 +121,7 @@ pub(super) struct EgressTask {
     pub(super) srt_fabric: Option<SrtFabricTask>,
     pub(super) rtmp_fabric: Option<RtmpFabricTask>,
     pub(super) sink_fabric: Option<SinkFabricTask>,
-    pub(super) pipeline_fabric: Option<PipelineFabricTask>,
+    pub(super) pipeline_fabric: Option<PipelineStart>,
     pub(super) hls_put_fabric: Option<HlsPutFabricTask>,
     pub(super) moq_fabric: Option<MoqFabricTask>,
 }
@@ -206,28 +213,31 @@ impl EgressTask {
                 }
             }
             OutputUrlScheme::Sink => {
+                // Sink preparation always makes a fabric task for this
+                // scheme; there is no non-fabric discard path.
                 if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
                     self.run_sink_fabric(fabric).await;
-                } else {
-                    restream_engine::egress::backends::sink::start_sink_egress(
-                        self.output_id.clone(),
-                        self.ring.clone(),
-                        self.engine.clone(),
-                        self.registration.clone(),
-                    )
-                    .await;
                 }
             }
             OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
                 self.run_hls(url_scheme, hls_lease).await;
             }
-            OutputUrlScheme::Pipeline => {
-                if let Some(fabric) = self.pipeline_fabric.as_ref().cloned() {
-                    self.run_pipeline_fabric(fabric).await;
-                } else {
-                    self.run_pipeline_recirculation().await;
+            OutputUrlScheme::Pipeline => match self.pipeline_fabric.as_ref() {
+                Some(PipelineStart::Ready(fabric)) => {
+                    self.run_pipeline_fabric(fabric.as_ref().clone()).await;
                 }
-            }
+                Some(PipelineStart::Invalid(message)) => {
+                    self.engine
+                        .record_egress_error_if_current(
+                            &self.output_id,
+                            &self.registration,
+                            "recirculation_target_parse",
+                            *message,
+                        )
+                        .await;
+                }
+                None => {}
+            },
             OutputUrlScheme::Moqt => {
                 if let Some(fabric) = self.moq_fabric.as_ref().cloned() {
                     self.run_moq_fabric(fabric).await;
@@ -296,33 +306,6 @@ impl EgressTask {
             tokio::select! {
                 _ = self.registration.cancel_token.cancelled() => {}
                 () = self.own_stage_ended() => {}
-            }
-        }
-    }
-
-    /// The non-fabric recirculation path into another pipeline's input.
-    async fn run_pipeline_recirculation(&self) {
-        match restream_domain::domain::output_spec::RecirculationTarget::parse(&self.url) {
-            Ok(target) => {
-                restream_engine::recirculation::start_pipeline_recirculation(
-                    self.output_id.clone(),
-                    self.ring.clone(),
-                    target.pipeline_id().to_string(),
-                    target.input_id().to_string(),
-                    self.engine.clone(),
-                    self.registration.clone(),
-                )
-                .await;
-            }
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "recirculation_target_parse",
-                        error.message(),
-                    )
-                    .await;
             }
         }
     }

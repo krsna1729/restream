@@ -11,7 +11,8 @@ use tracing::warn;
 
 use super::EgressStarter;
 use super::egress_task::{
-    HlsPutFabricTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask, SrtFabricTask,
+    HlsPutFabricTask, PipelineFabricTask, PipelineStart, RtmpFabricTask, SinkFabricTask,
+    SrtFabricTask,
 };
 use crate::application::egress::PreparedOutput;
 
@@ -172,58 +173,46 @@ impl EgressStarter {
         output: &Output,
         prepared: &PreparedOutput,
         registration: &EgressRegistration,
-    ) -> Option<PipelineFabricTask> {
+    ) -> Option<PipelineStart> {
         if !matches!(scheme, OutputUrlScheme::Pipeline) {
             return None;
         }
-        // A parse failure here just leaves `pipeline_fabric` `None` —
-        // `EgressTask::run`'s `OutputUrlScheme::Pipeline` arm re-parses
-        // the same `output.url` itself (pure function, identical input)
-        // and records the same error there, so nothing is lost by not
-        // duplicating that here. That arm's `Ok` branch is otherwise
-        // unreachable given this parse already succeeded whenever
-        // `pipeline_fabric` is `Some` — kept as a defensive fallback
-        // rather than an `unwrap_err()`, so a future refactor that
-        // breaks this coupling degrades to the working (if
-        // non-fabric) recirculation path instead of a panic.
-        match RecirculationTarget::parse(&output.url) {
-            Ok(target) => {
-                let feed =
-                    crate::application::egress::prepare_recirculation_fabric_feed(output, prepared);
-                let mut spec = crate::application::egress::recirculation_fabric_output_spec(
-                    output,
-                    registration.attempt_id,
-                    feed.feed_id.clone(),
-                    &target,
-                );
-                let terminated = Arc::new(AtomicBool::new(false));
-                if let Some(sink) = self
-                    .engine
-                    .with_active_egress(&output.id, |egress| EgressProgressSink {
-                        bytes_sent: Some(egress.bytes_sent.clone()),
-                        metrics: Some(egress.metrics.clone()),
-                        last_progress_ms: Some(egress.last_progress_ms.clone()),
-                        resync_count: Some(egress.resync_count.clone()),
-                        feed_lag_units: Some(egress.feed_lag_units.clone()),
-                        backpressure_reason: Some(egress.backpressure_reason.clone()),
-                        terminated_unexpectedly: Some(terminated.clone()),
-                        ..Default::default()
-                    })
-                    .await
-                {
-                    spec.progress = sink;
-                }
-                Some(PipelineFabricTask {
-                    spec,
-                    feed_id: feed.feed_id,
-                    feed: feed.feed,
-                    target_pipeline_id: target.pipeline_id().to_string(),
-                    target_input_id: target.input_id().to_string(),
-                    terminated,
-                })
-            }
-            Err(_) => None,
+        let target = match RecirculationTarget::parse(&output.url) {
+            Ok(target) => target,
+            Err(error) => return Some(PipelineStart::Invalid(error.message())),
+        };
+        let feed = crate::application::egress::prepare_recirculation_fabric_feed(output, prepared);
+        let mut spec = crate::application::egress::recirculation_fabric_output_spec(
+            output,
+            registration.attempt_id,
+            feed.feed_id.clone(),
+            &target,
+        );
+        let terminated = Arc::new(AtomicBool::new(false));
+        if let Some(sink) = self
+            .engine
+            .with_active_egress(&output.id, |egress| EgressProgressSink {
+                bytes_sent: Some(egress.bytes_sent.clone()),
+                metrics: Some(egress.metrics.clone()),
+                last_progress_ms: Some(egress.last_progress_ms.clone()),
+                resync_count: Some(egress.resync_count.clone()),
+                feed_lag_units: Some(egress.feed_lag_units.clone()),
+                backpressure_reason: Some(egress.backpressure_reason.clone()),
+                terminated_unexpectedly: Some(terminated.clone()),
+                ..Default::default()
+            })
+            .await
+        {
+            spec.progress = sink;
         }
+        Some(PipelineStart::Ready(Box::new(PipelineFabricTask {
+            spec,
+            feed_id: feed.feed_id,
+            feed: feed.feed,
+            target_pipeline_id: target.pipeline_id().to_string(),
+            target_input_id: target.input_id().to_string(),
+            terminated,
+        })))
     }
 
     pub(super) async fn prepare_hls_put_fabric(
