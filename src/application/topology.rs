@@ -178,14 +178,17 @@ pub async fn converge_topology(db: &DeadlineDb, engine: &MediaEngine, outputs: &
     let wanted = outputs
         .iter()
         .filter(|output| pipelines.contains(&output.pipeline_id))
-        .map(|output| output.id.as_str())
+        .map(|output| output.id.clone())
         .collect::<HashSet<_>>();
     for output_id in engine.registered_egress_output_ids().await {
-        if !wanted.contains(output_id.as_str()) {
+        if !wanted.contains(&output_id) {
             engine.unregister_egress(&output_id).await;
             engine.clear_egress_retry_state(&output_id).await;
         }
     }
+    // Deleted outputs and pipelines take their settled status with them; a
+    // stopped but still configured output keeps it.
+    engine.retain_egress_records(&wanted).await;
 
     for pipeline_id in runtime_pipelines.difference(&pipelines) {
         engine.teardown_pipeline_runtime(pipeline_id).await;

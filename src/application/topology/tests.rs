@@ -203,13 +203,22 @@ async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
         .unwrap();
     create_output(&pool, "out-deleted", "pipe").await;
     create_output(&pool, "out-kept", "pipe").await;
+    create_output(&pool, "out-retry-deleted", "pipe").await;
     let deleted = engine
         .register_egress("out-deleted", "pipe", "rtmp://a")
         .await;
     let kept = engine.register_egress("out-kept", "pipe", "rtmp://b").await;
+    engine
+        .update_egress_retry_state("out-retry-deleted", 2, 5_000, 4_000)
+        .await;
 
     assert!(
         crate::db::delete_output(&pool, "pipe", "out-deleted")
+            .await
+            .unwrap()
+    );
+    assert!(
+        crate::db::delete_output(&pool, "pipe", "out-retry-deleted")
             .await
             .unwrap()
     );
@@ -220,6 +229,17 @@ async fn a_deleted_output_loses_its_egress_and_its_sibling_keeps_running() {
     assert_eq!(
         engine.registered_egress_output_ids().await,
         vec!["out-kept".to_string()]
+    );
+    assert!(
+        engine.recent_egress_outcome("out-deleted").await.is_none(),
+        "a deleted output must not leave a settled status behind"
+    );
+    assert!(
+        engine
+            .egress_retry_state("out-retry-deleted")
+            .await
+            .is_none(),
+        "a deleted output must not leave retry state behind"
     );
 }
 
@@ -258,6 +278,10 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
 
     assert!(gone_ingest.registration().cancel_token.is_cancelled());
     assert!(egress.is_cancelled(), "the output row cascaded away");
+    assert!(
+        engine.recent_egress_outcome("out-gone").await.is_none(),
+        "a deleted pipeline must not leave settled output records behind"
+    );
     assert!(!kept_ingest.registration().cancel_token.is_cancelled());
     assert_eq!(
         engine.runtime_pipeline_ids().await,

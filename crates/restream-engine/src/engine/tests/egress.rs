@@ -178,6 +178,31 @@ async fn late_attempt_settlement_cannot_overwrite_replacement_outcome() {
 }
 
 #[tokio::test]
+async fn retained_egress_records_keep_configured_outputs_only() {
+    let engine = Arc::new(MediaEngine::new());
+    for output_id in ["out-kept", "out-gone"] {
+        engine
+            .register_egress(output_id, "pipe-1", "rtmp://example.com/live/key")
+            .await;
+        engine
+            .record_egress_error(output_id, "send", "connection reset by peer")
+            .await;
+        engine.unregister_egress(output_id).await;
+        engine
+            .update_egress_retry_state(output_id, 2, 5_000, 4_000)
+            .await;
+    }
+
+    let keep = std::collections::HashSet::from(["out-kept".to_string()]);
+    engine.retain_egress_records(&keep).await;
+
+    assert!(engine.recent_egress_outcome("out-kept").await.is_some());
+    assert!(engine.egress_retry_state("out-kept").await.is_some());
+    assert!(engine.recent_egress_outcome("out-gone").await.is_none());
+    assert!(engine.egress_retry_state("out-gone").await.is_none());
+}
+
+#[tokio::test]
 async fn egress_registration_stores_terminal_stage_key() {
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));

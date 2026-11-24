@@ -687,8 +687,10 @@ Live egress status while the egress runs. After it ends, the last classified
 snapshot stays: `status`, `phase`, `lastError`, `failurePhase`, `endedAt` and
 retry fields (`retrying`, `nextRetryAt`). `recentFailureCount` counts
 failures inside the flap window, and `flapping` turns `true` after repeated
-failures even if the output is running again. Returns `404`
-`{"error": "output not active"}` when there is no active or recent state.
+failures even if the output is running again. Stopping the output keeps the
+snapshot; deleting the output, or its pipeline, clears it on the next
+topology pass. Returns `404` `{"error": "output not active"}` when there is no
+active or recent state.
 
 ## Process logs
 
