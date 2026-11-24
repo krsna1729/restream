@@ -707,6 +707,7 @@ impl Shared {
 
 #[derive(Clone)]
 pub struct ControlStreamAdapter<S: crate::transport::poll::Session> {
+	stats: crate::stats::Session,
 	inner: S,
 	shared: Arc<Shared>,
 	control: Control,
@@ -718,12 +719,19 @@ pub struct ControlStreamAdapter<S: crate::transport::poll::Session> {
 impl<S: crate::transport::poll::Session> ControlStreamAdapter<S> {
 	pub fn new(inner: S, control: Control, version: Version) -> Self {
 		Self {
+			stats: Default::default(),
 			inner,
 			shared: Arc::new(Shared::default()),
 			control,
 			version,
 			park: kio::Park::default(),
 		}
+	}
+
+	/// Count the control messages multiplexed here under `stats`.
+	pub(super) fn with_stats(mut self, stats: &crate::stats::Session) -> Self {
+		self.stats = stats.clone();
+		self
 	}
 
 	/// Open a real (non-virtual) bidi stream, bypassing control stream multiplexing.
@@ -799,6 +807,7 @@ impl<S: crate::transport::poll::Session> ControlStreamAdapter<S> {
 			return;
 		}
 		raw.extend_from_slice(&body);
+		self.stats.control(crate::stats::Control::Goaway, body.len() + 2, false);
 
 		if !self.shared.control.push(raw.freeze()) {
 			tracing::debug!("control stream closed; goaway not sent");
@@ -829,6 +838,10 @@ impl<S: crate::transport::poll::Session> ControlStreamAdapter<S> {
 			let size: u16 = reader.decode::<u16>().await?;
 
 			let body = reader.read_exact(size as usize).await?;
+
+			// Counted once here rather than again by the virtual stream's reader.
+			self.stats
+				.control(super::message::control(type_id, self.version), body.len() + 2, true);
 
 			// Reconstruct raw message bytes: [type_id][size][body]
 			let raw = encode_raw(type_id, size, &body, self.version);
@@ -1413,6 +1426,69 @@ mod tests {
 	fn encode_msg<M: Message>(msg: &M, version: Version) -> Bytes {
 		let body = encode_body(msg, version);
 		encode_raw(M::ID, body.len() as u16, &body, version)
+	}
+
+	/// A legacy control body counts once: a typed write at its virtual stream (not again
+	/// when the multiplexer forwards it), and a receive at the physical reader (not again
+	/// when the virtual stream decodes it).
+	#[tokio::test]
+	async fn legacy_multiplexing_counts_a_control_body_once() {
+		use crate::{
+			coding::Stream,
+			lite::test_transport::{Log, ScriptedSession, SinkSend},
+			stats::{Bytes, Control as Class, Registry, Tier},
+		};
+		for version in [Version::Draft14, Version::Draft15, Version::Draft16] {
+			let registry = Registry::new(Default::default());
+			let stats = registry.tier(Tier::default()).session("");
+			let msg = ietf::FetchCancel {
+				request_id: RequestId(0),
+			};
+			let size = msg.encode_bytes(version).unwrap().len() as u64;
+			let mut session = ScriptedSession::new(encode_msg(&msg, version).to_vec());
+			let (_, recv) = crate::transport::poll::Session::open_bi(&mut session).await.unwrap();
+			let adapter = ControlStreamAdapter::new(session, Control::new(None, true), version).with_stats(&stats);
+			let mut virtual_stream = super::super::request_stream::with_stats(
+				Stream::open(&mut adapter.clone(), version).await.unwrap(),
+				&stats,
+				version,
+			);
+			virtual_stream.writer.encode(&ietf::FetchCancel::ID).await.unwrap();
+			virtual_stream.writer.encode(&msg).await.unwrap();
+			let raw = adapter.shared.control.pop().await.unwrap();
+			// Forwarding the already-encoded bytes onto the control stream is a raw write.
+			let mut physical = Writer::new(SinkSend::new(Log::default()), version).with_stats(&stats);
+			physical.write_all(&mut raw.clone()).await.unwrap();
+			assert_eq!(
+				registry.snapshot().control(),
+				vec![(Tier::default(), Class::Fetch, Bytes { tx: size, rx: 0 })],
+				"{version:?}"
+			);
+
+			let (_, goaway) = crate::goaway::Handle::new(false);
+			let mut reading = std::pin::pin!(adapter.run_read(Reader::new(recv, version), goaway));
+			assert!(futures::poll!(reading.as_mut()).is_pending());
+			assert_eq!(
+				virtual_stream.reader.decode::<u64>().await.unwrap(),
+				ietf::FetchCancel::ID
+			);
+			virtual_stream.reader.decode::<ietf::FetchCancel>().await.unwrap();
+			assert_eq!(
+				registry.snapshot().control(),
+				vec![(Tier::default(), Class::Fetch, Bytes { tx: size, rx: size })],
+				"virtual decode counted a physical frame twice: {version:?}"
+			);
+
+			adapter.send_goaway("", 0, version);
+			assert!(
+				registry
+					.snapshot()
+					.control()
+					.iter()
+					.any(|(_, class, bytes)| *class == Class::Goaway && bytes.tx > 0),
+				"adapter-generated messages bypassed the counters"
+			);
+		}
 	}
 
 	fn publish_namespace(request_id: RequestId, namespace: &str) -> ietf::PublishNamespace<'_> {

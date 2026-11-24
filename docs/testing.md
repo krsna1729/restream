@@ -457,7 +457,7 @@ spinning windows. A probe startup, clock or join failure invalidates the run.
 
 `moq-dev-interop` proves moq-lite-06 with hang by default, and MOQT with
 MSF/LOC on one IETF draft under `--ietf 16`, `--ietf 18` or `--ietf 19`
-(CI runs all three), using `moq-net` 0.3.15 and the
+(CI runs all three), using `moq-net` 0.3.24 and the
 tools from commit `e2c5b505`: `moq` (moq-cli 0.14.7), `moq-relay` 0.17.7 and
 the GStreamer plugin `moq-gst` 0.4.16 (`moqsink`, released the same morning).
 `cargo xtask fetch moq-dev` downloads them, checks the SHA256 and

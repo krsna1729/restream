@@ -23,7 +23,6 @@ members = ["."]
 
 # Same patched crates as the root workspace (a [patch] is not inherited).
 [patch.crates-io]
-hang = { path = "../vendor/hang" }
 rml_rtmp = { path = "../vendor/rml_rtmp" }
 moq-net = { path = "../vendor/moq-net" }
 

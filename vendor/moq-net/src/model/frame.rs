@@ -147,15 +147,11 @@ impl Budget {
 	}
 
 	/// Take `size` bytes of the budget, or `None` if that is more than remains.
+	#[allow(deprecated)] // `try_update` is newer than the pinned toolchain; see PATCH.md.
 	pub(crate) fn reserve(&self, size: usize) -> Option<Reservation> {
-		// Newer toolchains renamed this to `try_update` (the nightly fuzz and
-		// Kani jobs run with `-D warnings`); the pinned toolchain has only the
-		// old name, so allow the deprecation here.
-		#[allow(deprecated)]
-		let updated = self
-			.0
-			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(size));
-		updated.ok()?;
+		self.0
+			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(size))
+			.ok()?;
 		Some(Reservation {
 			budget: self.clone(),
 			size,

@@ -23,6 +23,8 @@ pub(super) fn decode_size<B: Buf>(buf: &mut B, version: Version) -> Result<usize
 ///
 /// Lite messages use a varint size prefix.
 pub trait Message: Sized + std::fmt::Debug {
+	/// The control metric class, or none for media headers.
+	const CONTROL: Option<crate::stats::Control> = None;
 	/// The largest body this receiver accepts for this message.
 	const MAX_SIZE: usize = MAX_MESSAGE_SIZE;
 
@@ -45,9 +47,17 @@ impl<T: Message> Encode<Version> for T {
 		sizer.size.encode(w, version)?;
 		self.encode_msg(w, version)
 	}
+
+	fn control(&self, _: Version) -> Option<crate::stats::Control> {
+		T::CONTROL
+	}
 }
 
 impl<T: Message> Decode<Version> for T {
+	fn control(&self, _: Version) -> Option<crate::stats::Control> {
+		T::CONTROL
+	}
+
 	fn decode<B: Buf>(buf: &mut B, version: Version) -> Result<Self, DecodeError> {
 		let size = decode_size(buf, version)?;
 		if size > Self::MAX_SIZE {
@@ -72,7 +82,8 @@ impl<T: Message> Decode<Version> for T {
 					Ok(result)
 				}
 				Err(e) => {
-					tracing::warn!(%e, ?raw, "decode failed");
+					// A malformed message can contain credentials too.
+					tracing::warn!(%e, "decode failed");
 					Err(e)
 				}
 			}

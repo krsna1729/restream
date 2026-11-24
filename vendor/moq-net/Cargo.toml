@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.91"
 name = "moq-net"
-version = "0.3.15"
+version = "0.3.24"
 authors = ["Luke Curley"]
 build = false
 autolib = false
@@ -61,10 +61,10 @@ version = "1"
 version = "0.3"
 
 [dependencies.kio]
-version = "0.6.2"
+version = "0.6.4"
 
 [dependencies.moq-pattern]
-version = "0.1.2"
+version = "0.1.4"
 features = ["serde"]
 
 [dependencies.num_enum]

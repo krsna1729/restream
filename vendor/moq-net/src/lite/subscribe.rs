@@ -44,6 +44,7 @@ impl Version {
 }
 
 impl Message for Subscribe<'_> {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		let id = u64::decode(r, version)?;
 		let broadcast = Path::decode(r, version)?;
@@ -232,6 +233,7 @@ pub struct SubscribeOk {
 }
 
 impl Message for SubscribeOk {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn encode_msg<W: bytes::BufMut>(&self, w: &mut W, version: Version) -> Result<(), EncodeError> {
 		match version {
 			Version::Lite01 => {
@@ -298,6 +300,7 @@ pub struct SubscribeStart {
 }
 
 impl Message for SubscribeStart {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		if !version.has_track_stream() {
 			return Err(DecodeError::Version);
@@ -328,6 +331,7 @@ pub struct SubscribeEnd {
 }
 
 impl Message for SubscribeEnd {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		if !version.has_track_stream() {
 			return Err(DecodeError::Version);
@@ -369,6 +373,7 @@ pub struct SubscribeUpdate {
 }
 
 impl Message for SubscribeUpdate {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		match version {
 			Version::Lite01 | Version::Lite02 => {
@@ -454,6 +459,7 @@ pub struct SubscribeDrop {
 }
 
 impl Message for SubscribeDrop {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Subscribe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		match version {
 			Version::Lite01 | Version::Lite02 => {
@@ -518,6 +524,10 @@ fn encode_typed<W: bytes::BufMut, M: Message>(
 }
 
 impl Encode<Version> for SubscribeResponse {
+	fn control(&self, _: Version) -> Option<crate::stats::Control> {
+		Some(crate::stats::Control::Subscribe)
+	}
+
 	fn encode<W: bytes::BufMut>(&self, w: &mut W, version: Version) -> Result<(), EncodeError> {
 		match version {
 			Version::Lite01 | Version::Lite02 => match self {
@@ -548,6 +558,10 @@ impl Encode<Version> for SubscribeResponse {
 }
 
 impl Decode<Version> for SubscribeResponse {
+	fn control(&self, _: Version) -> Option<crate::stats::Control> {
+		Some(crate::stats::Control::Subscribe)
+	}
+
 	fn decode<B: bytes::Buf>(buf: &mut B, version: Version) -> Result<Self, DecodeError> {
 		match version {
 			Version::Lite01 | Version::Lite02 => Ok(Self::Ok(SubscribeOk::decode(buf, version)?)),

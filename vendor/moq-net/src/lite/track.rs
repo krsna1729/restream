@@ -18,6 +18,7 @@ pub struct Track<'a> {
 }
 
 impl Message for Track<'_> {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::TrackInfo);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		if !version.has_track_stream() {
 			return Err(DecodeError::Version);
@@ -58,6 +59,7 @@ pub struct TrackInfo {
 }
 
 impl Message for TrackInfo {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::TrackInfo);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		if !version.has_track_stream() {
 			return Err(DecodeError::Version);

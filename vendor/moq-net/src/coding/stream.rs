@@ -74,6 +74,14 @@ impl<S: crate::transport::poll::Session, V: StreamCodes> Stream<S, V> {
 		}
 	}
 
+	/// Count control messages sent and received on this stream under `stats`.
+	pub(crate) fn with_stats(self, stats: &crate::stats::Session) -> Self {
+		Self {
+			writer: self.writer.with_stats(stats),
+			reader: self.reader.with_stats(stats),
+		}
+	}
+
 	/// Cast the stream to a different version, used during version negotiation.
 	pub fn with_version<V2: Clone>(self, version: V2) -> Stream<S, V2> {
 		Stream {

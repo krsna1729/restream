@@ -112,6 +112,7 @@ impl Server {
 
 		let start = lite::start(lite::Config {
 			runtime: runtime.clone(),
+			stats: self.stats.clone(),
 			session: session.clone(),
 			setup_stream: None,
 			publish,
@@ -180,7 +181,7 @@ impl Server {
 				// caller can scope by the advertised path. Seeded back into
 				// `start` on `ok()` so PROBE gating resolves without
 				// re-reading the (consumed) Setup Stream.
-				let client_setup = lite::accept_setup(&mut session, version).await?;
+				let (client_setup, client_setup_size) = lite::accept_setup(&mut session, version).await?;
 				(
 					client_setup.path.clone(),
 					client_setup.role,
@@ -189,6 +190,7 @@ impl Server {
 						session,
 						version,
 						client_setup,
+						client_setup_size,
 					},
 				)
 			}
@@ -335,8 +337,9 @@ impl Server {
 
 		// Legacy bidi SETUP exchange (IETF 14-16, lite 01/02). Read the client's
 		// SETUP to choose the version; `ok()` sends the server SETUP and starts.
+		// Stats attach in `ok()`: a caller may still replace them on the handshake.
 		let mut stream = Stream::accept(&mut session, encoding).await?;
-		let mut client: setup::Client = stream.reader.decode().await?;
+		let (mut client, client_setup_size) = stream.reader.decode_sized::<setup::Client>().await?;
 
 		let version = client
 			.versions
@@ -388,6 +391,7 @@ impl Server {
 					version,
 					request_id_max,
 					peer_declared,
+					client_setup_size,
 				})),
 			}),
 		})
@@ -467,6 +471,8 @@ enum PausedHandshake<S: crate::transport::poll::Session> {
 		session: S,
 		version: lite::Version,
 		client_setup: lite::Setup,
+		/// The client SETUP's encoded size, counted under the final stats.
+		client_setup_size: usize,
 	},
 	/// An IETF (or legacy bidi-SETUP) handshake, boxed where its
 	/// thread-affinity bounds held. The boxing is what keeps [`Handshake`] and
@@ -516,12 +522,14 @@ where
 				version,
 				peer_setup,
 			} = *self;
+			server.stats.control(stats::Control::Session, peer_setup.size, true);
 			let (publish, subscribe) = server.stat_tagged_origins();
 
 			// The client's SETUP was read at the pause; hand the stream back
 			// for GOAWAY. A server never advertises a path, hence `None`.
 			let (protocol, goaway) = ietf::start(ietf::Config {
 				runtime: runtime.clone(),
+				stats: server.stats.clone(),
 				session: session.clone(),
 				setup: None,
 				request_id_max: None,
@@ -567,6 +575,8 @@ struct PausedLegacy<S: crate::transport::poll::Session> {
 	request_id_max: Option<ietf::RequestId>,
 	/// What the client's SETUP declared, for the options `ok` acts on.
 	peer_declared: ietf::peer::Peer,
+	/// The client SETUP's encoded size, counted under the final stats.
+	client_setup_size: usize,
 }
 
 impl<S> Paused<S> for PausedLegacy<S>
@@ -580,11 +590,14 @@ where
 		async move {
 			let Self {
 				session,
-				mut stream,
+				stream,
 				version,
 				request_id_max,
 				peer_declared,
+				client_setup_size,
 			} = *self;
+			let mut stream = stream.with_stats(&server.stats);
+			server.stats.control(stats::Control::Session, client_setup_size, true);
 			let (publish, subscribe) = server.stat_tagged_origins();
 
 			// Encode parameters using the version-appropriate type.
@@ -612,6 +625,7 @@ where
 					// Pre-lite-05: no Setup Stream, so nothing to advertise or seed.
 					let start = lite::start(lite::Config {
 						runtime: runtime.clone(),
+						stats: server.stats.clone(),
 						session: session.clone(),
 						setup_stream: Some(stream),
 						publish,
@@ -633,6 +647,7 @@ where
 					// Draft 14-16: path came in the bidi SETUP, no uni SETUP to hand back.
 					let (protocol, goaway) = ietf::start(ietf::Config {
 						runtime: runtime.clone(),
+						stats: server.stats.clone(),
 						session: session.clone(),
 						setup: Some(stream),
 						request_id_max,
@@ -770,7 +785,11 @@ where
 				session,
 				version,
 				client_setup,
-			} => server.start_lite(runtime, session, version, Some(client_setup), peer_hop),
+				client_setup_size,
+			} => {
+				server.stats.control(stats::Control::Session, client_setup_size, true);
+				server.start_lite(runtime, session, version, Some(client_setup), peer_hop)
+			}
 			PausedHandshake::Boxed(paused) => paused.ok(server, runtime, peer_hop).await,
 		}
 	}
@@ -1273,6 +1292,7 @@ mod tests {
 							crate::lite::test_transport::PendingRecv,
 							Version::Ietf(version),
 						),
+						size: 0,
 						path: None,
 						token: None,
 						declared: ietf::peer::Peer::default(),

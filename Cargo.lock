@@ -1578,7 +1578,9 @@ dependencies = [
 
 [[package]]
 name = "hang"
-version = "0.21.16"
+version = "0.21.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1769a1a52c4fb2a2006ee80ced890b9f005ec2a9442f1ca7c228bf6f7f08662"
 dependencies = [
  "bytes",
  "derive_more",
@@ -2382,9 +2384,9 @@ dependencies = [
 
 [[package]]
 name = "moq-json"
-version = "0.5.13"
+version = "0.5.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f0fdcf016728ed6c7b03c2c7d0d27fa0efe0b49a3e5489cef0b7defe6fa6b63"
+checksum = "77f9e16d3455afd004eb83b5a6662cb65fa6325b65d7daeae702f71cbad08a27"
 dependencies = [
  "bytes",
  "kio",
@@ -2456,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "moq-net"
-version = "0.3.15"
+version = "0.3.24"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -2475,9 +2477,9 @@ dependencies = [
 
 [[package]]
 name = "moq-pattern"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fc361de827f05fa2a1dfb6489cb73575a16ed5c56f3b1d218be9925176c7521"
+checksum = "e9a68d297c549061a17f8d2c53310421064a7198a6c275c6d38afd83f5ea8649"
 dependencies = [
  "serde",
 ]

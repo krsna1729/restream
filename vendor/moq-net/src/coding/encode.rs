@@ -50,6 +50,11 @@ pub trait Encode<V>: Sized {
 	/// Encode the value to the given writer.
 	fn encode<W: bytes::BufMut>(&self, w: &mut W, version: V) -> Result<(), EncodeError>;
 
+	/// The control metric class of this value, or `None` for selectors and media headers.
+	fn control(&self, _version: V) -> Option<crate::stats::Control> {
+		None
+	}
+
 	/// Encode the value into a [Bytes] buffer.
 	///
 	/// NOTE: This will allocate.
