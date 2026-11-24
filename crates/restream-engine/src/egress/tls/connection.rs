@@ -101,50 +101,82 @@ impl KtlsConnection {
             }
             match record_type {
                 ktls::RECORD_TYPE_DATA => return Ok(count),
-                ktls::RECORD_TYPE_HANDSHAKE if version == ProtocolVersion::TLSv1_3 => {
-                    if handshake_buffer.len().saturating_add(count) > (1 << 20) + 4 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "oversized TLS 1.3 post-handshake data",
-                        ));
-                    }
-                    handshake_buffer.extend_from_slice(&buffer[..count]);
-                    Self::process_handshake_buffer(handshake_buffer)?;
+                ktls::RECORD_TYPE_HANDSHAKE => {
+                    Self::record_handshake(version, buffer, count, handshake_buffer)?;
                 }
                 ktls::RECORD_TYPE_ALERT => {
-                    let (level, description) = match (pending_alert_level.take(), count) {
-                        (None, 1) => {
-                            *pending_alert_level = Some(buffer[0]);
-                            continue;
-                        }
-                        (Some(level), 1) => (level, buffer[0]),
-                        (None, 2) => (buffer[0], buffer[1]),
-                        _ => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "invalid TLS alert record",
-                            ));
-                        }
-                    };
-                    if description == 0 {
-                        *peer_closed = true;
+                    if Self::record_alert(buffer, count, pending_alert_level, peer_closed)? {
                         return Ok(0);
-                    }
-                    if level == 2 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            format!("peer sent TLS fatal alert {description}"),
-                        ));
                     }
                 }
                 _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "unsupported post-handshake TLS record type",
-                    ));
+                    return Err(Self::unsupported_record());
                 }
             }
         }
+    }
+
+    /// Buffer one TLS 1.3 post-handshake message and process every complete
+    /// message. Another protocol version has no post-handshake record type.
+    fn record_handshake(
+        version: ProtocolVersion,
+        buffer: &[u8],
+        count: usize,
+        handshake_buffer: &mut Vec<u8>,
+    ) -> io::Result<()> {
+        if version != ProtocolVersion::TLSv1_3 {
+            return Err(Self::unsupported_record());
+        }
+        if handshake_buffer.len().saturating_add(count) > (1 << 20) + 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversized TLS 1.3 post-handshake data",
+            ));
+        }
+        handshake_buffer.extend_from_slice(&buffer[..count]);
+        Self::process_handshake_buffer(handshake_buffer)
+    }
+
+    /// Report whether an alert record closed the peer. A fatal alert fails
+    /// the read; a close-notify (description 0) is a clean end of stream.
+    fn record_alert(
+        buffer: &[u8],
+        count: usize,
+        pending_alert_level: &mut Option<u8>,
+        peer_closed: &mut bool,
+    ) -> io::Result<bool> {
+        let (level, description) = match (pending_alert_level.take(), count) {
+            (None, 1) => {
+                *pending_alert_level = Some(buffer[0]);
+                return Ok(false);
+            }
+            (Some(level), 1) => (level, buffer[0]),
+            (None, 2) => (buffer[0], buffer[1]),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid TLS alert record",
+                ));
+            }
+        };
+        if description == 0 {
+            *peer_closed = true;
+            return Ok(true);
+        }
+        if level == 2 {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                format!("peer sent TLS fatal alert {description}"),
+            ));
+        }
+        Ok(false)
+    }
+
+    fn unsupported_record() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported post-handshake TLS record type",
+        )
     }
 
     fn process_handshake_buffer(buffer: &mut Vec<u8>) -> io::Result<()> {
