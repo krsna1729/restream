@@ -105,16 +105,57 @@ fn env_number(key: &str, default: u64) -> Result<u64, String> {
         .map_err(|_| format!("capacity-ramp: {key} must be a whole number"))
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
+    let Some(plan) = ramp_plan(args)? else {
+        return Ok(());
+    };
+    write_provenance(&plan)?;
+    println!(
+        "capacity-ramp: artifacts in {} (restream cpus {}, harness cpus {})",
+        plan.root.display(),
+        plan.restream_cpus,
+        plan.harness_cpus
+    );
+    let rung_env = ramp_rung_env(&plan);
+    run_ladders(&plan, &rung_env)?;
+    summarize(&plan.root)?;
+    println!(
+        "capacity-ramp: summary at {}",
+        plan.root.join("summary.md").display()
+    );
+    Ok(())
+}
+
+/// One ramp's resolved environment, CPU split, ports and build.
+struct RampPlan {
+    protocols: Vec<String>,
+    ladders: BTreeMap<String, String>,
+    arena_max: Option<String>,
+    egress_shards: Option<String>,
+    bitrate: String,
+    window_secs: u64,
+    settle_secs: u64,
+    repeats: u64,
+    stop_after_fail: bool,
+    root: PathBuf,
+    online_cpus: usize,
+    restream_cpus: String,
+    harness_cpus: String,
+    peer_count: u64,
+    sink_ports_per_peer: u64,
+    port_base: u64,
+    bin_dir: PathBuf,
+    build_profile: String,
+}
+
+/// Parse the environment, split the CPUs, run preflight and build the binaries.
+/// `None` means help was printed.
+fn ramp_plan(args: &[&str]) -> Result<Option<RampPlan>, String> {
     match args {
         [] => {}
         ["-h" | "--help"] => {
             eprintln!("{USAGE}");
-            return Ok(());
+            return Ok(None);
         }
         _ => return Err(USAGE.into()),
     }
@@ -124,7 +165,7 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         .collect();
     let mut ladders = BTreeMap::new();
     for (protocol, variable, default, _) in PROTOCOLS {
-        ladders.insert(*protocol, env_or(variable, default));
+        ladders.insert((*protocol).to_string(), env_or(variable, default));
     }
     for protocol in &protocols {
         if !ladders.contains_key(protocol.as_str()) {
@@ -219,20 +260,6 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
     } else {
         11_000
     };
-    let mut rung_env: Vec<(String, String)> = [
-        ("RESTREAM_HTTP", 0),
-        ("RESTREAM_RTMP", 1),
-        ("RESTREAM_SRT", 2),
-        ("MTX_API", 10),
-        ("MTX_HLS", 11),
-        ("MTX_RTMP", 100),
-        ("MTX_RTMPS", 200),
-        ("MTX_SRT", 300),
-        ("HLS_PUT_PORT", 400),
-    ]
-    .into_iter()
-    .map(|(key, offset)| (key.to_owned(), (port_base + offset).to_string()))
-    .collect();
 
     fs::create_dir_all(&root)
         .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
@@ -260,14 +287,37 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
             bin_dir.display()
         ));
     }
+    Ok(Some(RampPlan {
+        protocols,
+        ladders,
+        arena_max,
+        egress_shards,
+        bitrate,
+        window_secs,
+        settle_secs,
+        repeats,
+        stop_after_fail,
+        root,
+        online_cpus: cpus.len(),
+        restream_cpus,
+        harness_cpus,
+        peer_count,
+        sink_ports_per_peer,
+        port_base,
+        bin_dir,
+        build_profile,
+    }))
+}
 
+/// Probe host jitter and write `provenance.json`.
+fn write_provenance(plan: &RampPlan) -> Result<(), String> {
     // --- Host jitter -------------------------------------------------------
     // Gaps a CPU loses with nothing else scheduled on it (on a VM: the
     // hypervisor descheduling the vCPU, often with zero reported steal).
     let jitter_secs = env_or("CAPACITY_JITTER_SECS", "10");
     let mut host_jitter = serde_json::Map::new();
     if jitter_secs != "0" {
-        for cpu in restream_cpus.split(',') {
+        for cpu in plan.restream_cpus.split(',') {
             host_jitter.insert(cpu.to_owned(), pinned_jitter_probe(cpu, &jitter_secs)?);
         }
         println!(
@@ -285,38 +335,53 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         "dirty": git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()),
         "kernel": fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim(),
         "cpu_model": lscpu.get("Model name").cloned().unwrap_or_default(),
-        "online_cpus": cpus.len(),
+        "online_cpus": plan.online_cpus,
         "numa_nodes": lscpu.get("NUMA node(s)").cloned().unwrap_or_default(),
         "hypervisor": lscpu.get("Hypervisor vendor").cloned().unwrap_or_else(|| "bare-metal?".into()),
         "memory": fs::read_to_string("/proc/meminfo").unwrap_or_default().lines().next().unwrap_or_default(),
         "rustc": first_output_line("rustc", &["--version"]),
         "ffmpeg": first_output_line("ffmpeg", &["-version"]),
-        "restream_cpus": restream_cpus,
-        "harness_cpus": harness_cpus,
-        "build_profile": build_profile,
-        "egress_shards": egress_shards.clone().unwrap_or_else(|| "default".into()),
-        "malloc_arena_max": arena_max.clone().unwrap_or_else(|| "restream provisional default".into()),
-        "sink_ports_per_peer": sink_ports_per_peer,
+        "restream_cpus": plan.restream_cpus,
+        "harness_cpus": plan.harness_cpus,
+        "build_profile": plan.build_profile,
+        "egress_shards": plan.egress_shards.clone().unwrap_or_else(|| "default".into()),
+        "malloc_arena_max": plan.arena_max.clone().unwrap_or_else(|| "restream provisional default".into()),
+        "sink_ports_per_peer": plan.sink_ports_per_peer,
         "host_jitter": host_jitter,
-        "peer_count": peer_count,
-        "bitrate": bitrate,
-        "window_secs": window_secs,
-        "settle_secs": settle_secs,
-        "repeats": repeats,
-        "ladders": ladders,
+        "peer_count": plan.peer_count,
+        "bitrate": plan.bitrate,
+        "window_secs": plan.window_secs,
+        "settle_secs": plan.settle_secs,
+        "repeats": plan.repeats,
+        "ladders": plan.ladders,
     });
-    fs::write(root.join("provenance.json"), format!("{provenance:#}\n"))
-        .map_err(|error| format!("cannot write provenance: {error}"))?;
-    println!(
-        "capacity-ramp: artifacts in {} (restream cpus {restream_cpus}, harness cpus {harness_cpus})",
-        root.display()
-    );
+    fs::write(
+        plan.root.join("provenance.json"),
+        format!("{provenance:#}\n"),
+    )
+    .map_err(|error| format!("cannot write provenance: {error}"))
+}
 
-    // --- Ramp --------------------------------------------------------------
-    if let Some(shards) = &egress_shards {
+/// The environment every rung's harness inherits.
+fn ramp_rung_env(plan: &RampPlan) -> Vec<(String, String)> {
+    let mut rung_env: Vec<(String, String)> = [
+        ("RESTREAM_HTTP", 0),
+        ("RESTREAM_RTMP", 1),
+        ("RESTREAM_SRT", 2),
+        ("MTX_API", 10),
+        ("MTX_HLS", 11),
+        ("MTX_RTMP", 100),
+        ("MTX_RTMPS", 200),
+        ("MTX_SRT", 300),
+        ("HLS_PUT_PORT", 400),
+    ]
+    .into_iter()
+    .map(|(key, offset)| (key.to_owned(), (plan.port_base + offset).to_string()))
+    .collect();
+    if let Some(shards) = &plan.egress_shards {
         rung_env.push(("RESTREAM_EGRESS_SHARDS".into(), shards.clone()));
     }
-    if let Some(arena_max) = &arena_max {
+    if let Some(arena_max) = &plan.arena_max {
         rung_env.push(("RESTREAM_MALLOC_ARENA_MAX".into(), arena_max.clone()));
     }
     let fixtures = std::env::current_dir()
@@ -331,40 +396,50 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
         .display()
         .to_string();
     for (key, value) in [
-        ("RESTREAM_CPUSET", restream_cpus.clone()),
+        ("RESTREAM_CPUSET", plan.restream_cpus.clone()),
         ("MSR_PEER", "sink".into()),
-        ("PEER_COUNT", peer_count.to_string()),
+        ("PEER_COUNT", plan.peer_count.to_string()),
         (
             "HARNESS_SRT_SINK_PORTS_PER_PEER",
-            sink_ports_per_peer.to_string(),
+            plan.sink_ports_per_peer.to_string(),
         ),
         (
             "RESTREAM_BIN",
-            bin_dir.join("restream").display().to_string(),
+            plan.bin_dir.join("restream").display().to_string(),
         ),
         ("RESOURCE_SWEEP_INGEST_COUNTS", "1".into()),
-        ("RESOURCE_SWEEP_BITRATE", bitrate.clone()),
+        ("RESOURCE_SWEEP_BITRATE", plan.bitrate.clone()),
         ("RESOURCE_SWEEP_RTMPS_CERT", tls_cert.clone()),
         ("RESOURCE_SWEEP_RTMPS_KEY", tls_key),
         ("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM", tls_cert),
-        ("RESOURCE_SWEEP_SETTLE_SECS", settle_secs.to_string()),
-        ("RESOURCE_SWEEP_SAMPLE_SECS", window_secs.to_string()),
+        ("RESOURCE_SWEEP_SETTLE_SECS", plan.settle_secs.to_string()),
+        ("RESOURCE_SWEEP_SAMPLE_SECS", plan.window_secs.to_string()),
     ] {
         rung_env.push((key.into(), value));
     }
-    for protocol in &protocols {
+    rung_env
+}
+
+/// Walk every protocol ladder and repeated rung, then report pass counts.
+fn run_ladders(plan: &RampPlan, rung_env: &[(String, String)]) -> StepResult {
+    for protocol in &plan.protocols {
         let (_, _, _, scenario) = PROTOCOLS
             .iter()
             .find(|(name, ..)| name == protocol)
             .expect("validated above");
-        for outputs in ladders[protocol.as_str()].split(',') {
+        let ladder = plan
+            .ladders
+            .get(protocol.as_str())
+            .expect("validated above");
+        for outputs in ladder.split(',') {
             let outputs: u64 = outputs
                 .trim()
                 .parse()
                 .map_err(|_| format!("capacity-ramp: bad {protocol} ladder entry '{outputs}'"))?;
             let mut passes = 0;
-            for rep in 1..=repeats {
-                let dir = root
+            for rep in 1..=plan.repeats {
+                let dir = plan
+                    .root
                     .join(protocol)
                     .join(outputs.to_string())
                     .join(format!("rep{rep}"));
@@ -372,7 +447,14 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
                     "[capacity-ramp] {protocol} outputs={outputs} rep={rep} start {}",
                     &utc_timestamp(SystemTime::now())[11..19]
                 );
-                let ran = run_rung(&bin_dir, &harness_cpus, &rung_env, scenario, outputs, &dir);
+                let ran = run_rung(
+                    &plan.bin_dir,
+                    &plan.harness_cpus,
+                    rung_env,
+                    scenario,
+                    outputs,
+                    &dir,
+                );
                 if !ran {
                     println!(
                         "[capacity-ramp] {protocol} outputs={outputs} rep={rep} harness failed (see {}/harness.log)",
@@ -384,8 +466,11 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
                 }
                 sleep(Duration::from_secs(5)); // let this rung's sockets drain before the next binds
             }
-            println!("[capacity-ramp] {protocol} outputs={outputs} passed {passes}/{repeats}");
-            if stop_after_fail && passes == 0 {
+            println!(
+                "[capacity-ramp] {protocol} outputs={outputs} passed {passes}/{}",
+                plan.repeats
+            );
+            if plan.stop_after_fail && passes == 0 {
                 println!(
                     "[capacity-ramp] {protocol}: stopping ladder after a rung with no passing repeat"
                 );
@@ -393,12 +478,6 @@ pub(crate) fn capacity_ramp(args: &[&str]) -> StepResult {
             }
         }
     }
-
-    summarize(&root)?;
-    println!(
-        "capacity-ramp: summary at {}",
-        root.join("summary.md").display()
-    );
     Ok(())
 }
 
