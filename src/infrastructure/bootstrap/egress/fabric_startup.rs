@@ -223,30 +223,25 @@ impl EgressStarter {
     ) -> Option<HlsPutFabricTask> {
         // HTTPS on the fabric needs kernel TLS (no userspace fallback);
         // without it HTTPS outputs stay on the Reqwest uploader.
-        let use_hls_put_fabric = self.engine.config.egress_fabric.hls_put_fabric
-            && match scheme {
-                OutputUrlScheme::Http => true,
-                OutputUrlScheme::Https => {
-                    // The first call probes the kernel (sockets, setsockopt):
-                    // keep it off the Tokio worker. Later calls hit the cache.
-                    let available = tokio::task::spawn_blocking(
-                        restream_engine::egress::tls::ktls::egress_available,
-                    )
+        let configured = self.engine.config.egress_fabric.hls_put_fabric;
+        let ktls_available = if configured && matches!(scheme, OutputUrlScheme::Https) {
+            // The first call probes the kernel (sockets, setsockopt): keep
+            // it off the Tokio worker. Later calls hit the cache.
+            let available =
+                tokio::task::spawn_blocking(restream_engine::egress::tls::ktls::egress_available)
                     .await
                     .unwrap_or(false);
-                    if !available {
-                        static LOGGED: std::sync::Once = std::sync::Once::new();
-                        LOGGED.call_once(|| {
-                            warn!(
-                                "kernel TLS unavailable; HTTPS HLS outputs use the Reqwest uploader"
-                            );
-                        });
-                    }
-                    available
-                }
-                _ => false,
-            };
-        if !use_hls_put_fabric {
+            if !available {
+                static LOGGED: std::sync::Once = std::sync::Once::new();
+                LOGGED.call_once(|| {
+                    warn!("kernel TLS unavailable; HTTPS HLS outputs use the Reqwest uploader");
+                });
+            }
+            available
+        } else {
+            false
+        };
+        if !hls_put_uses_fabric(configured, scheme, ktls_available) {
             return None;
         }
         let terminated = Arc::new(AtomicBool::new(false));
@@ -282,5 +277,35 @@ impl EgressStarter {
             terminated,
             upload_status,
         })
+    }
+}
+
+/// Which HLS PUT transport serves one attempt. HTTP always runs on the
+/// fabric; HTTPS needs kernel TLS, and no-kTLS HTTPS stays on Reqwest.
+fn hls_put_uses_fabric(configured: bool, scheme: OutputUrlScheme, ktls_available: bool) -> bool {
+    configured
+        && match scheme {
+            OutputUrlScheme::Http => true,
+            OutputUrlScheme::Https => ktls_available,
+            _ => false,
+        }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hls_put_transport_selection_covers_http_https_and_ktls() {
+        assert!(hls_put_uses_fabric(true, OutputUrlScheme::Http, false));
+        assert!(hls_put_uses_fabric(true, OutputUrlScheme::Https, true));
+        assert!(
+            !hls_put_uses_fabric(true, OutputUrlScheme::Https, false),
+            "HTTPS without kernel TLS must stay on the Reqwest uploader"
+        );
+        assert!(!hls_put_uses_fabric(false, OutputUrlScheme::Http, true));
+        assert!(!hls_put_uses_fabric(false, OutputUrlScheme::Https, true));
+        assert!(!hls_put_uses_fabric(true, OutputUrlScheme::Hls, true));
+        assert!(!hls_put_uses_fabric(true, OutputUrlScheme::Moqt, true));
     }
 }
