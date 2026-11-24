@@ -742,10 +742,6 @@ async fn receive_before_ktls(
     }
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn receive_ancillary_worker(
     stream: Rc<compio::net::TcpStream>,
     buffers: SharedIoBuffers,
@@ -754,7 +750,6 @@ async fn receive_ancillary_worker(
 ) {
     let owned_stream = Rc::clone(&stream);
     let mut stream = stream.as_ref();
-    use compio::io::ancillary::{AsyncReadAncillary, ReturnFlags};
 
     // Until kTLS is installed, receives never run in the kernel concurrently
     // with a protocol visit: an io_uring `recvmsg` in flight at the handoff
@@ -769,99 +764,153 @@ async fn receive_ancillary_worker(
     loop {
         let room = ReceiveRoom(buffers.clone()).await;
         ReceiveArm(buffers.clone()).await;
-        if !buffers.borrow().ktls_active {
-            match receive_before_ktls(&owned_stream, &buffers, room, &mut data).await {
-                None => {
-                    // Not readable after all, or handed off meanwhile: retry
-                    // without waiting for another protocol visit.
-                    buffers.borrow_mut().receive_armed = true;
-                }
-                Some(Ok(0)) => {
-                    buffers.borrow_mut().eof = true;
-                    let _ = notify_readable(&events, event).await;
-                    return;
-                }
-                Some(Ok(count)) => {
-                    {
-                        let mut state = buffers.borrow_mut();
-                        debug_assert!(count <= room);
-                        state.received.extend(&data[..count]);
-                        debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
-                    }
-                    data.clear();
-                    if !notify_readable(&events, event).await {
-                        return;
-                    }
-                }
-                Some(Err(error)) => {
-                    store_receive_error(&buffers, error);
-                    let _ = notify_readable(&events, event).await;
-                    return;
-                }
-            }
-            continue;
+        let step = if !buffers.borrow().ktls_active {
+            receive_before_ktls_step(&owned_stream, &buffers, &events, event, room, &mut data).await
+        } else {
+            receive_ktls_step(
+                &mut stream,
+                &buffers,
+                &events,
+                event,
+                room,
+                &mut data,
+                &mut control,
+            )
+            .await
+        };
+        if step == ReceiveStep::Stop {
+            return;
         }
-        if data.capacity() != room {
-            data = Vec::with_capacity(room);
+    }
+}
+
+/// Whether the receive loop continues after one staged read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReceiveStep {
+    Continue,
+    Stop,
+}
+
+/// One staged (pre-kTLS) receive round: wait for readiness, read synchronously,
+/// and stage the bytes for the next protocol visit.
+async fn receive_before_ktls_step(
+    owned_stream: &Rc<compio::net::TcpStream>,
+    buffers: &SharedIoBuffers,
+    events: &flume::Sender<TcpReadyLeaf>,
+    event: TcpReadyLeaf,
+    room: usize,
+    data: &mut Vec<u8>,
+) -> ReceiveStep {
+    match receive_before_ktls(owned_stream, buffers, room, data).await {
+        None => {
+            // Not readable after all, or handed off meanwhile: retry without
+            // waiting for another protocol visit.
+            buffers.borrow_mut().receive_armed = true;
+            ReceiveStep::Continue
         }
-        let compio::BufResult(result, (returned_data, returned_control)) =
-            (&mut stream).read_with_ancillary(data, control).await;
-        data = returned_data;
-        control = returned_control;
-        match result {
-            Ok((0, _, _)) => {
-                buffers.borrow_mut().eof = true;
-                let _ = notify_readable(&events, event).await;
-                return;
+        Some(Ok(0)) => {
+            buffers.borrow_mut().eof = true;
+            let _ = notify_readable(events, event).await;
+            ReceiveStep::Stop
+        }
+        Some(Ok(count)) => {
+            {
+                let mut state = buffers.borrow_mut();
+                debug_assert!(count <= room);
+                state.received.extend(&data[..count]);
+                debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
             }
-            Ok((count, control_len, flags)) => {
-                let ktls_active = buffers.borrow().ktls_active;
-                let record_type = if ktls_active {
-                    match crate::egress::tls::ktls::record_type_from_control(
-                        &control[..control_len],
-                        flags.contains(ReturnFlags::CTRUNC),
-                    ) {
-                        Ok(record_type) => Some(record_type),
-                        Err(error) => {
-                            store_receive_error(&buffers, error);
-                            let _ = notify_readable(&events, event).await;
-                            return;
-                        }
-                    }
-                } else if control_len != 0 || flags.contains(ReturnFlags::CTRUNC) {
-                    store_receive_error(
-                        &buffers,
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "unexpected RTMPS ancillary control data",
-                        ),
-                    );
-                    let _ = notify_readable(&events, event).await;
-                    return;
-                } else {
-                    None
-                };
-                {
-                    let mut state = buffers.borrow_mut();
-                    debug_assert!(count <= room);
-                    state.received.extend(&data[..count]);
-                    debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
-                    if let Some(record_type) = record_type {
-                        state.record_type = Some((count, record_type));
+            data.clear();
+            if notify_readable(events, event).await {
+                ReceiveStep::Continue
+            } else {
+                ReceiveStep::Stop
+            }
+        }
+        Some(Err(error)) => {
+            store_receive_error(buffers, error);
+            let _ = notify_readable(events, event).await;
+            ReceiveStep::Stop
+        }
+    }
+}
+
+/// One kTLS receive round: one `recvmsg` completion with its record type.
+async fn receive_ktls_step(
+    stream: &mut &compio::net::TcpStream,
+    buffers: &SharedIoBuffers,
+    events: &flume::Sender<TcpReadyLeaf>,
+    event: TcpReadyLeaf,
+    room: usize,
+    data: &mut Vec<u8>,
+    control: &mut Vec<u8>,
+) -> ReceiveStep {
+    use compio::io::ancillary::{AsyncReadAncillary, ReturnFlags};
+    if data.capacity() != room {
+        *data = Vec::with_capacity(room);
+    }
+    let owned_data = std::mem::take(data);
+    let owned_control = std::mem::take(control);
+    let compio::BufResult(result, (returned_data, returned_control)) = (&mut *stream)
+        .read_with_ancillary(owned_data, owned_control)
+        .await;
+    *data = returned_data;
+    *control = returned_control;
+    match result {
+        Ok((0, _, _)) => {
+            buffers.borrow_mut().eof = true;
+            let _ = notify_readable(events, event).await;
+            ReceiveStep::Stop
+        }
+        Ok((count, control_len, flags)) => {
+            let ktls_active = buffers.borrow().ktls_active;
+            let record_type = if ktls_active {
+                match crate::egress::tls::ktls::record_type_from_control(
+                    &control[..control_len],
+                    flags.contains(ReturnFlags::CTRUNC),
+                ) {
+                    Ok(record_type) => Some(record_type),
+                    Err(error) => {
+                        store_receive_error(buffers, error);
+                        let _ = notify_readable(events, event).await;
+                        return ReceiveStep::Stop;
                     }
                 }
-                data.clear();
-                control.clear();
-                control.resize(24, 0);
-                if !notify_readable(&events, event).await {
-                    return;
+            } else if control_len != 0 || flags.contains(ReturnFlags::CTRUNC) {
+                store_receive_error(
+                    buffers,
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unexpected RTMPS ancillary control data",
+                    ),
+                );
+                let _ = notify_readable(events, event).await;
+                return ReceiveStep::Stop;
+            } else {
+                None
+            };
+            {
+                let mut state = buffers.borrow_mut();
+                debug_assert!(count <= room);
+                state.received.extend(&data[..count]);
+                debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
+                if let Some(record_type) = record_type {
+                    state.record_type = Some((count, record_type));
                 }
             }
-            Err(error) => {
-                store_receive_error(&buffers, error);
-                let _ = notify_readable(&events, event).await;
-                return;
+            data.clear();
+            control.clear();
+            control.resize(24, 0);
+            if notify_readable(events, event).await {
+                ReceiveStep::Continue
+            } else {
+                ReceiveStep::Stop
             }
+        }
+        Err(error) => {
+            store_receive_error(buffers, error);
+            let _ = notify_readable(events, event).await;
+            ReceiveStep::Stop
         }
     }
 }
