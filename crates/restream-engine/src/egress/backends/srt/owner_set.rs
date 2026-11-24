@@ -270,6 +270,177 @@ struct FamilyOwner {
     retired_payloads: std::collections::VecDeque<PayloadRetirement>,
 }
 
+impl FamilyOwner {
+    /// Drain one family's bounded queues into `out`. Returns `true` when any
+    /// queue filled its cap or payload retirement remains, i.e. the backend
+    /// should schedule another ordinary ready visit.
+    #[allow(clippy::too_many_arguments)]
+    fn drain_events(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        pool_scratch: &mut Vec<PoolEvent>,
+        caller_scratch: &mut Vec<CallerEvent>,
+        failure_scratch: &mut Vec<TxFailureEvent>,
+        output_failure_scratch: &mut Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
+        group_fault_scratch: &mut Vec<CallerGroupFault>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        let pool_drained_fully = self.drain_pool_events(family, cap, pool_scratch, out);
+        let mut more = self.drain_retired_payloads(cap);
+        more |= self.drain_caller_events(family, cap, caller_scratch, out);
+        more |= self.drain_tx_failures(family, cap, failure_scratch, out);
+        more |= self.drain_output_failures(family, cap, output_failure_scratch, out);
+        // A peer-group fault names a LOGICAL CALLER, so it may only be
+        // delivered after every pool `Admitted` that could introduce that
+        // caller to the backend: they precede it in `out` when the pool
+        // queue drained fully this pass. If it did not, the (non-lossy)
+        // upstream fault queue simply waits for the next pass.
+        if pool_drained_fully {
+            more |= self.drain_group_faults(family, cap, group_fault_scratch, out);
+        }
+        !pool_drained_fully || more
+    }
+
+    fn drain_pool_events(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        scratch: &mut Vec<PoolEvent>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        self.owner.poll_caller_pool_events(scratch);
+        let drained_fully = scratch.len() < cap;
+        for event in scratch.drain(..) {
+            match event {
+                PoolEvent::Admitted {
+                    request_id,
+                    caller_id,
+                } => out.push(SrtOwnerEvent::Admitted {
+                    family,
+                    request_id,
+                    caller: caller_id,
+                }),
+                PoolEvent::Expired { caller_id, .. } => out.push(SrtOwnerEvent::Expired {
+                    family,
+                    caller: caller_id,
+                }),
+                PoolEvent::Failed { request_id, reason } => {
+                    out.push(SrtOwnerEvent::RequestFailed {
+                        family,
+                        request_id,
+                        reason,
+                    });
+                }
+                PoolEvent::Queued { .. } | PoolEvent::Cancelled { .. } => {}
+            }
+        }
+        drained_fully
+    }
+
+    fn drain_retired_payloads(&mut self, cap: usize) -> bool {
+        let mut reclaimed = 0;
+        while reclaimed < cap {
+            let Some(retired) = self.retired_payloads.front_mut() else {
+                break;
+            };
+            reclaimed += retired.reclaim(cap - reclaimed);
+            if retired.is_complete() {
+                self.retired_payloads.pop_front();
+            }
+        }
+        !self.retired_payloads.is_empty()
+    }
+
+    fn drain_caller_events(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        scratch: &mut Vec<CallerEvent>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        let available = cap.saturating_sub(self.retired_payloads.len());
+        self.owner.poll_caller_events_bounded(available, scratch);
+        let mut more = available != 0 && scratch.len() >= available;
+        for event in scratch.drain(..) {
+            match event.event {
+                srt_proto::ConnectionEvent::Connected => out.push(SrtOwnerEvent::Connected {
+                    family,
+                    caller: event.id,
+                }),
+                srt_proto::ConnectionEvent::Disconnected { .. } => {
+                    out.push(SrtOwnerEvent::Disconnected {
+                        family,
+                        caller: event.id,
+                    });
+                }
+                srt_proto::ConnectionEvent::DataReceived { payload, .. } => {
+                    let retired = payload.retire();
+                    if !retired.is_complete() {
+                        self.retired_payloads.push_back(retired);
+                        more = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        more
+    }
+
+    fn drain_tx_failures(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        scratch: &mut Vec<TxFailureEvent>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        self.owner.poll_tx_failures(cap, scratch);
+        let more = scratch.len() >= cap;
+        for failure in scratch.drain(..) {
+            out.push(SrtOwnerEvent::TxFailure {
+                family,
+                attribution: failure.attribution,
+                class: failure.class,
+            });
+        }
+        more
+    }
+
+    fn drain_output_failures(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        scratch: &mut Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        self.owner.poll_caller_output_failures(cap, scratch);
+        let more = scratch.len() >= cap;
+        for failure in scratch.drain(..) {
+            out.push(SrtOwnerEvent::OutputFailure {
+                family,
+                attribution: failure.attribution,
+            });
+        }
+        more
+    }
+
+    fn drain_group_faults(
+        &mut self,
+        family: AddressFamily,
+        cap: usize,
+        scratch: &mut Vec<CallerGroupFault>,
+        out: &mut Vec<SrtOwnerEvent>,
+    ) -> bool {
+        self.owner.poll_caller_group_faults(cap, scratch);
+        let more = scratch.len() >= cap;
+        self.counters.peer_group_collisions += scratch.len() as u64;
+        for fault in scratch.drain(..) {
+            out.push(SrtOwnerEvent::PeerGroupCollision { family, fault });
+        }
+        more
+    }
+}
+
 struct ClosingCaller {
     family: AddressFamily,
     id: LogicalCallerId,
@@ -687,101 +858,16 @@ impl SrtOwners {
             } else {
                 AddressFamily::V6
             };
-            let owner = &mut family_owner.owner;
-            owner.poll_caller_pool_events(&mut self.pool_scratch);
-            let pool_drained_fully = self.pool_scratch.len() < cap;
-            more |= !pool_drained_fully;
-            for event in self.pool_scratch.drain(..) {
-                match event {
-                    PoolEvent::Admitted {
-                        request_id,
-                        caller_id,
-                    } => out.push(SrtOwnerEvent::Admitted {
-                        family,
-                        request_id,
-                        caller: caller_id,
-                    }),
-                    PoolEvent::Expired { caller_id, .. } => out.push(SrtOwnerEvent::Expired {
-                        family,
-                        caller: caller_id,
-                    }),
-                    PoolEvent::Failed { request_id, reason } => {
-                        out.push(SrtOwnerEvent::RequestFailed {
-                            family,
-                            request_id,
-                            reason,
-                        });
-                    }
-                    PoolEvent::Queued { .. } | PoolEvent::Cancelled { .. } => {}
-                }
-            }
-            let mut reclaimed = 0;
-            while reclaimed < cap {
-                let Some(retired) = family_owner.retired_payloads.front_mut() else {
-                    break;
-                };
-                reclaimed += retired.reclaim(cap - reclaimed);
-                if retired.is_complete() {
-                    family_owner.retired_payloads.pop_front();
-                }
-            }
-            let available = cap.saturating_sub(family_owner.retired_payloads.len());
-            owner.poll_caller_events_bounded(available, &mut self.caller_scratch);
-            more |= !family_owner.retired_payloads.is_empty()
-                || (available != 0 && self.caller_scratch.len() >= available);
-            for event in self.caller_scratch.drain(..) {
-                match event.event {
-                    srt_proto::ConnectionEvent::Connected => out.push(SrtOwnerEvent::Connected {
-                        family,
-                        caller: event.id,
-                    }),
-                    srt_proto::ConnectionEvent::Disconnected { .. } => {
-                        out.push(SrtOwnerEvent::Disconnected {
-                            family,
-                            caller: event.id,
-                        });
-                    }
-                    srt_proto::ConnectionEvent::DataReceived { payload, .. } => {
-                        let retired = payload.retire();
-                        if !retired.is_complete() {
-                            family_owner.retired_payloads.push_back(retired);
-                            more = true;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            owner.poll_tx_failures(cap, &mut self.failure_scratch);
-            more |= self.failure_scratch.len() >= cap;
-            for failure in self.failure_scratch.drain(..) {
-                out.push(SrtOwnerEvent::TxFailure {
-                    family,
-                    attribution: failure.attribution,
-                    class: failure.class,
-                });
-            }
-            owner.poll_caller_output_failures(cap, &mut self.output_failure_scratch);
-            more |= self.output_failure_scratch.len() >= cap;
-            for failure in self.output_failure_scratch.drain(..) {
-                out.push(SrtOwnerEvent::OutputFailure {
-                    family,
-                    attribution: failure.attribution,
-                });
-            }
-            // A peer-group fault names a LOGICAL CALLER, so it may only be
-            // delivered after every pool `Admitted` that could introduce that
-            // caller to the backend: they precede it in `out` when the pool
-            // queue drained fully this pass. If it did not, the (non-lossy)
-            // upstream fault queue simply waits for the next pass.
-            if pool_drained_fully {
-                owner.poll_caller_group_faults(cap, &mut self.group_fault_scratch);
-                more |= self.group_fault_scratch.len() >= cap;
-                family_owner.counters.peer_group_collisions +=
-                    self.group_fault_scratch.len() as u64;
-                for fault in self.group_fault_scratch.drain(..) {
-                    out.push(SrtOwnerEvent::PeerGroupCollision { family, fault });
-                }
-            }
+            more |= family_owner.drain_events(
+                family,
+                cap,
+                &mut self.pool_scratch,
+                &mut self.caller_scratch,
+                &mut self.failure_scratch,
+                &mut self.output_failure_scratch,
+                &mut self.group_fault_scratch,
+                out,
+            );
         }
         more
     }
