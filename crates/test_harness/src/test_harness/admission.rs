@@ -107,14 +107,6 @@ async fn cause_codes(api: &RampApi) -> Result<HashMap<String, Value>, String> {
         .collect())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> {
     let mode = fabric.mode();
     let shards = env_u("ADMISSION_SHARDS", 1);
@@ -126,30 +118,12 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
     let work_dir = artifact_path(mode);
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
     let ports = TestPorts::from_env();
-    // SRT outputs need a receiver: one sink thread per 32 outputs, so the
-    // receiver is not what limits the outputs at a gigabit and more.
-    let sink_base = harness_port_defaults()
-        .ffmpeg_srt_sink_base
-        .checked_add(2002)
-        .ok_or("sink port overflow")?;
-    let srt_sink_ports = match fabric {
-        AdmissionFabric::Srt => (0..requested.div_ceil(32))
-            .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
-            .collect::<Option<Vec<u16>>>()
-            .ok_or("sink port overflow")?,
-        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => Vec::new(),
-    };
-    let srt_sink = match fabric {
-        AdmissionFabric::Srt => Some(HarnessSrtSinkPool::start(&srt_sink_ports, 8 * 1024 * 1024)?),
-        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => None,
-    };
-    let hls_put_port = harness_port_defaults().hls_put;
-    let hls_sink = match fabric {
-        AdmissionFabric::HlsPut => {
-            Some(crate::resource_sweep::hls_sink::HlsCountingSink::start(hls_put_port).await?)
-        }
-        AdmissionFabric::Srt | AdmissionFabric::Sink | AdmissionFabric::Pipeline => None,
-    };
+    let AdmissionSinks {
+        srt_sink_ports,
+        srt_sink,
+        hls_put_port,
+        hls_sink,
+    } = start_admission_sinks(fabric, requested).await?;
     let mut env = vec![
         ("RESTREAM_EGRESS_SHARDS", shards.to_string()),
         (
@@ -188,35 +162,18 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
 
     // Every pipeline output's target (pipeline, spare input), created before
     // the first output.
-    let mut pipeline_targets = Vec::new();
-    if matches!(fabric, AdmissionFabric::Pipeline) {
-        for index in 0..requested {
-            let target = create_pipeline(&api, &format!("adm-target-{index:03}")).await?;
-            let input = create_backup_input(&api, &target).await?;
-            pipeline_targets.push((target, input.id));
-        }
-    }
+    let pipeline_targets = create_pipeline_targets(&api, fabric, requested).await?;
 
-    let mut ids = Vec::with_capacity(requested);
-    for index in 0..requested {
-        let name = format!("adm-{index:03}");
-        let url = match fabric {
-            AdmissionFabric::Srt => {
-                harness_srt_output_url(srt_sink_ports[index / 32], &name, HarnessSrtMode::Publish)
-            }
-            AdmissionFabric::Sink => format!("sink://local/{name}"),
-            AdmissionFabric::Pipeline => {
-                let (target, input) = &pipeline_targets[index];
-                format!("pipeline://{target}/{input}")
-            }
-            AdmissionFabric::HlsPut => {
-                format!("http://127.0.0.1:{hls_put_port}/upload?cid={name}&copy=0&file=out.m3u8")
-            }
-        };
-        let oid = create_output(&api, &pid, &name, &url, "source").await?;
-        start_output(&api, &pid, &oid).await?;
-        ids.push(oid);
-    }
+    let ids = create_admission_outputs(
+        &api,
+        &pid,
+        fabric,
+        requested,
+        &srt_sink_ports,
+        hls_put_port,
+        &pipeline_targets,
+    )
+    .await?;
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let diagnoses = cause_codes(&api).await?;
@@ -236,59 +193,13 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
             .await?;
         }
     }
-    let admitted_live = if admitted.is_empty() {
-        Err("no output was admitted".to_string())
-    } else {
-        wait_for_outputs_live_and_progressing(&api, &pid, &admitted, Duration::from_secs(60)).await
-    };
-
-    // Watch: admitted outputs advance every 5 s; refused ones stay refused
-    // and send nothing; no shard thread reaches the degradation busy.
-    let mut stalls = Vec::new();
-    let mut unrefused = Vec::new();
-    let mut refused_sent = Vec::new();
-    let mut last: HashMap<String, u64> = HashMap::new();
-    let ticks_per_sec = clock_ticks_per_sec();
-    let mut peak_busy: BTreeMap<u32, f64> = BTreeMap::new();
-    let mut ticks = shard_ticks(restream_pid)?;
-    let mut ticks_at = Instant::now();
-    let started = Instant::now();
-    while admitted_live.is_ok() && started.elapsed() < watch {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let now_ticks = shard_ticks(restream_pid)?;
-        let elapsed = ticks_at.elapsed().as_secs_f64();
-        for (index, (tid, after)) in &now_ticks {
-            if let Some((before_tid, before)) = ticks.get(index)
-                && before_tid == tid
-                && let Some(secs) = cpu_secs_between(*before, *after, ticks_per_sec)
-            {
-                let busy = peak_busy.entry(*index).or_default();
-                *busy = busy.max(secs / elapsed);
-            }
-        }
-        (ticks, ticks_at) = (now_ticks, Instant::now());
-        let health = api.get_json("/api/v1/engine/health").await?;
-        let row = |oid: &str| &health["pipelines"][&pid]["outputs"][oid];
-        for oid in &admitted {
-            let status = ApiOutputStatus::from_value(oid, row(oid))?;
-            if status.retrying || status.bytes_out <= last.get(oid).copied().unwrap_or(0) {
-                stalls.push(format!("{oid}@{}s", started.elapsed().as_secs()));
-            }
-            last.insert(oid.clone(), status.bytes_out);
-        }
-        let diagnoses = cause_codes(&api).await?;
-        for oid in &refused {
-            let still_refused = diagnoses
-                .get(oid)
-                .is_some_and(|diagnosis| diagnosis["cause"]["code"] == "capacityRefused");
-            if !still_refused {
-                unrefused.push(oid.clone());
-            }
-            if ApiOutputStatus::from_value(oid, row(oid))?.bytes_out > 0 {
-                refused_sent.push(oid.clone());
-            }
-        }
-    }
+    let AdmissionWatch {
+        admitted_live,
+        stalls,
+        unrefused,
+        refused_sent,
+        peak_busy,
+    } = watch_admission(&api, &pid, &admitted, &refused, watch, restream_pid).await?;
     let overloaded: Vec<u32> = peak_busy
         .iter()
         .filter(|(_, busy)| **busy >= DEGRADED_BUSY)
@@ -340,4 +251,172 @@ pub(crate) async fn admission(fabric: AdmissionFabric) -> Result<Value, String> 
     } else {
         Err(format!("{mode}: overload gate failed: {result}"))
     }
+}
+
+struct AdmissionSinks {
+    srt_sink_ports: Vec<u16>,
+    srt_sink: Option<HarnessSrtSinkPool>,
+    hls_put_port: u16,
+    hls_sink: Option<crate::resource_sweep::hls_sink::HlsCountingSink>,
+}
+
+/// SRT outputs need a receiver: one sink thread per 32 outputs, so the
+/// receiver is not what limits the outputs at a gigabit and more.
+async fn start_admission_sinks(
+    fabric: AdmissionFabric,
+    requested: usize,
+) -> Result<AdmissionSinks, String> {
+    let sink_base = harness_port_defaults()
+        .ffmpeg_srt_sink_base
+        .checked_add(2002)
+        .ok_or("sink port overflow")?;
+    let srt_sink_ports = match fabric {
+        AdmissionFabric::Srt => (0..requested.div_ceil(32))
+            .map(|i| u16::try_from(i).ok().and_then(|i| sink_base.checked_add(i)))
+            .collect::<Option<Vec<u16>>>()
+            .ok_or("sink port overflow")?,
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => Vec::new(),
+    };
+    let srt_sink = match fabric {
+        AdmissionFabric::Srt => Some(HarnessSrtSinkPool::start(&srt_sink_ports, 8 * 1024 * 1024)?),
+        AdmissionFabric::Sink | AdmissionFabric::Pipeline | AdmissionFabric::HlsPut => None,
+    };
+    let hls_put_port = harness_port_defaults().hls_put;
+    let hls_sink = match fabric {
+        AdmissionFabric::HlsPut => {
+            Some(crate::resource_sweep::hls_sink::HlsCountingSink::start(hls_put_port).await?)
+        }
+        AdmissionFabric::Srt | AdmissionFabric::Sink | AdmissionFabric::Pipeline => None,
+    };
+    Ok(AdmissionSinks {
+        srt_sink_ports,
+        srt_sink,
+        hls_put_port,
+        hls_sink,
+    })
+}
+
+async fn create_pipeline_targets(
+    api: &RampApi,
+    fabric: AdmissionFabric,
+    requested: usize,
+) -> Result<Vec<(String, String)>, String> {
+    let mut pipeline_targets = Vec::new();
+    if matches!(fabric, AdmissionFabric::Pipeline) {
+        for index in 0..requested {
+            let target = create_pipeline(api, &format!("adm-target-{index:03}")).await?;
+            let input = create_backup_input(api, &target).await?;
+            pipeline_targets.push((target, input.id));
+        }
+    }
+    Ok(pipeline_targets)
+}
+
+async fn create_admission_outputs(
+    api: &RampApi,
+    pid: &str,
+    fabric: AdmissionFabric,
+    requested: usize,
+    srt_sink_ports: &[u16],
+    hls_put_port: u16,
+    pipeline_targets: &[(String, String)],
+) -> Result<Vec<String>, String> {
+    let mut ids = Vec::with_capacity(requested);
+    for index in 0..requested {
+        let name = format!("adm-{index:03}");
+        let url = match fabric {
+            AdmissionFabric::Srt => {
+                harness_srt_output_url(srt_sink_ports[index / 32], &name, HarnessSrtMode::Publish)
+            }
+            AdmissionFabric::Sink => format!("sink://local/{name}"),
+            AdmissionFabric::Pipeline => {
+                let (target, input) = &pipeline_targets[index];
+                format!("pipeline://{target}/{input}")
+            }
+            AdmissionFabric::HlsPut => {
+                format!("http://127.0.0.1:{hls_put_port}/upload?cid={name}&copy=0&file=out.m3u8")
+            }
+        };
+        let oid = create_output(api, pid, &name, &url, "source").await?;
+        start_output(api, pid, &oid).await?;
+        ids.push(oid);
+    }
+    Ok(ids)
+}
+
+struct AdmissionWatch {
+    admitted_live: Result<Value, String>,
+    stalls: Vec<String>,
+    unrefused: Vec<String>,
+    refused_sent: Vec<String>,
+    peak_busy: BTreeMap<u32, f64>,
+}
+
+/// Watch: admitted outputs advance every 5 s; refused ones stay refused and
+/// send nothing; no shard thread reaches the degradation busy.
+async fn watch_admission(
+    api: &RampApi,
+    pid: &str,
+    admitted: &[String],
+    refused: &[String],
+    watch: Duration,
+    restream_pid: u32,
+) -> Result<AdmissionWatch, String> {
+    let admitted_live = if admitted.is_empty() {
+        Err("no output was admitted".to_string())
+    } else {
+        wait_for_outputs_live_and_progressing(api, pid, admitted, Duration::from_secs(60)).await
+    };
+    let mut stalls = Vec::new();
+    let mut unrefused = Vec::new();
+    let mut refused_sent = Vec::new();
+    let mut last: HashMap<String, u64> = HashMap::new();
+    let ticks_per_sec = clock_ticks_per_sec();
+    let mut peak_busy: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut ticks = shard_ticks(restream_pid)?;
+    let mut ticks_at = Instant::now();
+    let started = Instant::now();
+    while admitted_live.is_ok() && started.elapsed() < watch {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let now_ticks = shard_ticks(restream_pid)?;
+        let elapsed = ticks_at.elapsed().as_secs_f64();
+        for (index, (tid, after)) in &now_ticks {
+            if let Some((before_tid, before)) = ticks.get(index)
+                && before_tid == tid
+                && let Some(secs) = cpu_secs_between(*before, *after, ticks_per_sec)
+            {
+                let busy = peak_busy.entry(*index).or_default();
+                *busy = busy.max(secs / elapsed);
+            }
+        }
+        (ticks, ticks_at) = (now_ticks, Instant::now());
+        let health = api.get_json("/api/v1/engine/health").await?;
+        let row = |oid: &str| &health["pipelines"][pid]["outputs"][oid];
+        for oid in admitted {
+            let status = ApiOutputStatus::from_value(oid, row(oid))?;
+            if status.retrying || status.bytes_out <= last.get(oid).copied().unwrap_or(0) {
+                stalls.push(format!("{oid}@{}s", started.elapsed().as_secs()));
+            }
+            last.insert(oid.clone(), status.bytes_out);
+        }
+        let diagnoses = cause_codes(api).await?;
+        for oid in refused {
+            let still_refused = diagnoses
+                .get(oid)
+                .is_some_and(|diagnosis| diagnosis["cause"]["code"] == "capacityRefused");
+            if !still_refused {
+                unrefused.push(oid.clone());
+            }
+            if ApiOutputStatus::from_value(oid, row(oid))?.bytes_out > 0 {
+                refused_sent.push(oid.clone());
+            }
+        }
+    }
+    Ok(AdmissionWatch {
+        admitted_live,
+        stalls,
+        unrefused,
+        refused_sent,
+        peak_busy,
+    })
 }

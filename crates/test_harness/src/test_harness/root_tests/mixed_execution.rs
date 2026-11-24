@@ -74,11 +74,18 @@ fn mixed_input_matrix_names_are_explicit_and_supported() {
 }
 
 #[test]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 fn mixed_fast_breadth_is_small_but_axis_rich() {
+    assert_fast_breadth_names();
+    let cases: Vec<_> = mixed_fast_breadth_cases()
+        .iter()
+        .map(|selected| selected.case)
+        .collect();
+    assert_axis_coverage(&cases);
+    assert_short_checks();
+    assert_cell_budget(&cases);
+}
+
+fn assert_fast_breadth_names() {
     let names: Vec<_> = mixed_fast_breadth_cases()
         .iter()
         .map(|selected| selected.case.scenario_id())
@@ -94,11 +101,9 @@ fn mixed_fast_breadth_is_small_but_axis_rich() {
             "mixed.live.srt.h265.a2.bf2",
         ]
     );
+}
 
-    let cases: Vec<_> = mixed_fast_breadth_cases()
-        .iter()
-        .map(|selected| selected.case)
-        .collect();
+fn assert_axis_coverage(cases: &[MixedInputCase]) {
     for protocol in [
         MixedInputProtocol::File,
         MixedInputProtocol::Rtmp,
@@ -135,6 +140,9 @@ fn mixed_fast_breadth_is_small_but_axis_rich() {
             "fast breadth must cover RTMP sender reorder mode {reorder:?}"
         );
     }
+}
+
+fn assert_short_checks() {
     for selected in mixed_fast_breadth_cases() {
         assert!(
             !selected.checks.contains(&MixedCheck::Recording)
@@ -166,7 +174,9 @@ fn mixed_fast_breadth_is_small_but_axis_rich() {
         2,
         "HLS is sampled on representative H.264 and HEVC rows, not every row"
     );
+}
 
+fn assert_cell_budget(cases: &[MixedInputCase]) {
     let selected_cells: usize = cases
         .iter()
         .map(|case| mixed_output_cases_for_input(*case).len())

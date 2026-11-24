@@ -224,14 +224,6 @@ struct MsrPhaseResult {
     signal_checks: Vec<Value>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 async fn run_msr_phase(
     env: ResourceSweepEnv,
     protocol_mix: MsrProtocolMix,
@@ -290,196 +282,32 @@ async fn run_msr_phase(
         output_ids.push(output_id);
 
         if checkpoints.binary_search(&output.ordinal).is_ok() {
-            wait_for_outputs_progress(
-                &stack.api,
-                &pipeline_id,
-                &output_ids,
-                msr_progress_timeout(output_ids.len()),
-            )
-            .await?;
-            let rtmp_count = plan
-                .iter()
-                .take(output.ordinal)
-                .filter(|spec| spec.protocol == MsrProtocol::Rtmp)
-                .count();
-            let srt_count = output.ordinal - rtmp_count;
-            let label = format!("{}-outputs", output.ordinal);
-
-            let (path_health, sink_verification) = match env.peer_mode {
-                ResourceSweepPeer::Mediamtx => {
-                    let health = verify_msr_grouped_path_health(
-                        &env,
-                        &plan[..output.ordinal],
-                        env_secs("MSR_SINK_SAMPLE_SECS", 3),
-                        Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
-                    )
-                    .await?;
-                    append_line(
-                        &env.samples_jsonl,
-                        &format!(
-                            "{}\n",
-                            serde_json::to_string(&mediamtx_path_health_json(
-                                MSR_MODE, &label, &health
-                            ))
-                            .unwrap()
-                        ),
-                    )?;
-                    (Some(health), None)
-                }
-                ResourceSweepPeer::Sink => {
-                    // 5s, not 2s: real video is delivered at GOP cadence
-                    // (bursts up to ~4.2s apart at this fixture's keyframe
-                    // interval), so a leaf just past its last burst can
-                    // show a genuinely flat 2s window with nothing wrong.
-                    // Live-evidenced: a 2s window false-failed 5/700 leaves
-                    // at the n=700 checkpoint of an otherwise-clean 1,200
-                    // -output ramp; 5s cleared the same ramp with zero
-                    // false positives end to end.
-                    let verification = verify_msr_sink_checkpoint(
-                        &stack.api,
-                        &pipeline_id,
-                        &output_ids,
-                        env_secs("MSR_SINK_ENGINE_SAMPLE_SECS", 5),
-                    )
-                    .await?;
-                    append_line(
-                        &env.samples_jsonl,
-                        &format!(
-                            "{}\n",
-                            serde_json::to_string(&msr_sink_verification_json(&verification))
-                                .unwrap()
-                        ),
-                    )?;
-                    (None, Some(verification))
-                }
-            };
-
-            // Sink peers discard data at the transport layer, so there is
-            // nothing for ffprobe/signal capture to read back from — force
-            // the skip regardless of MSR_SKIP_FFPROBE.
-            let skip_ffprobe = env.peer_mode == ResourceSweepPeer::Sink
-                || std::env::var("MSR_SKIP_FFPROBE")
-                    .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-                    .unwrap_or(false);
-            let ffprobe_checks = if skip_ffprobe {
-                Vec::new()
-            } else {
-                run_msr_ffprobe_checkpoint(&env, output.ordinal, &plan[..output.ordinal]).await?
-            };
-            if profile == MsrRunProfile::SignalCalibration
-                && env.peer_mode != ResourceSweepPeer::Sink
-            {
-                signal_checks.extend(
-                    run_msr_signal_checkpoint(&env, output.ordinal, &plan[..output.ordinal])
-                        .await?,
-                );
-            }
-            let resource = sample_resource_window(
+            let outcome = run_msr_checkpoint(
                 &env,
                 &mut stack,
-                ResourceScenarioMeta {
-                    scenario: MSR_MODE,
-                    label,
-                    pipelines: 1,
-                    outputs: output.ordinal,
-                    ingest_types: profile.ingest_types().to_string(),
-                    egress_mix: format!("rtmp:{rtmp_count},srt:{srt_count}"),
-                    transcode: "no",
-                },
+                &pipeline_id,
+                &output_ids,
+                &plan,
+                output.ordinal,
+                profile,
             )
             .await?;
-            let post_sample_path_health = match env.peer_mode {
-                ResourceSweepPeer::Mediamtx => {
-                    let health = verify_msr_grouped_path_health(
-                        &env,
-                        &plan[..output.ordinal],
-                        env_secs("MSR_SINK_POST_SAMPLE_SECS", 2),
-                        Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
-                    )
-                    .await?;
-                    append_line(
-                        &env.samples_jsonl,
-                        &format!(
-                            "{}\n",
-                            serde_json::to_string(&mediamtx_path_health_json(
-                                MSR_MODE,
-                                &format!("{}-post-sample", output.ordinal),
-                                &health
-                            ))
-                            .unwrap()
-                        ),
-                    )?;
-                    Some(health)
-                }
-                ResourceSweepPeer::Sink => None,
-            };
-            aggregates.push(MsrCheckpointAggregate {
-                resource,
-                path_health,
-                post_sample_path_health,
-                sink_verification,
-                ffprobe_checks,
-            });
+            aggregates.push(outcome.aggregate);
+            signal_checks.extend(outcome.signal_checks);
         }
     }
 
-    let resource_aggregates = aggregates
-        .iter()
-        .map(|aggregate| aggregate.resource.clone())
-        .collect::<Vec<_>>();
-    write_resource_sweep_csv(&env.summary_csv, &resource_aggregates)?;
-    let rtmp_outputs = plan
-        .iter()
-        .take(output_ids.len())
-        .filter(|output| output.protocol == MsrProtocol::Rtmp)
-        .count();
-    let enhanced_rtmp_outputs = plan
-        .iter()
-        .take(output_ids.len())
-        .filter(|output| output.protocol == MsrProtocol::Rtmp)
-        .filter(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
-        .count();
-    let srt_outputs = output_ids.len().saturating_sub(rtmp_outputs);
-    std::fs::write(
-        &report_md,
-        format_msr_report(
-            output_ids.len(),
-            profile.audio_tracks(),
-            rtmp_outputs,
-            enhanced_rtmp_outputs,
-            srt_outputs,
-            &aggregates,
-        ),
-    )
-    .map_err(|error| error.to_string())?;
-    let result = json!({
-        "mode": MSR_MODE,
-        "status": "PASS",
-        "profile": profile.label(),
-        "plan": plan_json.clone(),
-        "executedOutputs": output_ids.len(),
-        "bufferedStandby": {
-            "inputId": standby_input.id,
-            "connected": true,
-            "forwardingState": "standby",
-        },
-        "artifacts": {
-            "summaryJson": env.summary_json.clone(),
-            "summaryCsv": env.summary_csv.clone(),
-            "reportMd": report_md.clone(),
-            "samplesJsonl": env.samples_jsonl.clone(),
-            "publisherLog": env.work_dir.join(format!("publisher-{}.log", profile.output_prefix())),
-            "restreamLog": env.restream_log.clone(),
-            "mediamtxLog": env.mediamtx_log.clone(),
-        },
-        "aggregates": aggregates.iter().map(msr_checkpoint_aggregate_json).collect::<Vec<_>>(),
-        "signalChecks": signal_checks.clone(),
-    });
-    std::fs::write(
-        &env.summary_json,
-        serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    write_msr_run_summary(MsrRunSummary {
+        env: &env,
+        plan: &plan,
+        output_ids: &output_ids,
+        aggregates: &aggregates,
+        profile,
+        standby_input_id: &standby_input.id,
+        plan_json: &plan_json,
+        report_md: &report_md,
+        signal_checks: &signal_checks,
+    })?;
 
     if env.no_cleanup {
         println!("MSR no-cleanup: leaving the live stack running");
@@ -502,6 +330,279 @@ async fn run_msr_phase(
         aggregates,
         signal_checks,
     })
+}
+
+/// One checkpoint of a mixed SRT/RTMP run: sink verification, probe capture,
+/// resource sample and post-sample health.
+struct MsrCheckpointOutcome {
+    aggregate: MsrCheckpointAggregate,
+    signal_checks: Vec<Value>,
+}
+
+async fn run_msr_checkpoint(
+    env: &ResourceSweepEnv,
+    stack: &mut ResourceSweepStack,
+    pipeline_id: &str,
+    output_ids: &[String],
+    plan: &[MsrOutputSpec],
+    ordinal: usize,
+    profile: MsrRunProfile,
+) -> Result<MsrCheckpointOutcome, String> {
+    wait_for_outputs_progress(
+        &stack.api,
+        pipeline_id,
+        output_ids,
+        msr_progress_timeout(output_ids.len()),
+    )
+    .await?;
+    let rtmp_count = plan
+        .iter()
+        .take(ordinal)
+        .filter(|spec| spec.protocol == MsrProtocol::Rtmp)
+        .count();
+    let srt_count = ordinal - rtmp_count;
+    let label = format!("{ordinal}-outputs");
+
+    let (path_health, sink_verification) = checkpoint_verification(
+        env,
+        stack,
+        pipeline_id,
+        output_ids,
+        &plan[..ordinal],
+        &label,
+    )
+    .await?;
+
+    // Sink peers discard data at the transport layer, so there is nothing for
+    // ffprobe/signal capture to read back from - force the skip regardless of
+    // MSR_SKIP_FFPROBE.
+    let ffprobe_checks = if msr_skip_ffprobe(env) {
+        Vec::new()
+    } else {
+        run_msr_ffprobe_checkpoint(env, ordinal, &plan[..ordinal]).await?
+    };
+    let mut signal_checks = Vec::new();
+    if profile == MsrRunProfile::SignalCalibration && env.peer_mode != ResourceSweepPeer::Sink {
+        signal_checks.extend(run_msr_signal_checkpoint(env, ordinal, &plan[..ordinal]).await?);
+    }
+    let resource =
+        checkpoint_resource(env, stack, ordinal, rtmp_count, srt_count, profile, label).await?;
+    let post_sample_path_health = checkpoint_post_health(env, &plan[..ordinal], ordinal).await?;
+    Ok(MsrCheckpointOutcome {
+        aggregate: MsrCheckpointAggregate {
+            resource,
+            path_health,
+            post_sample_path_health,
+            sink_verification,
+            ffprobe_checks,
+        },
+        signal_checks,
+    })
+}
+
+/// Inputs for the final artifacts and summary of one mixed run.
+struct MsrRunSummary<'a> {
+    env: &'a ResourceSweepEnv,
+    plan: &'a [MsrOutputSpec],
+    output_ids: &'a [String],
+    aggregates: &'a [MsrCheckpointAggregate],
+    profile: MsrRunProfile,
+    standby_input_id: &'a str,
+    plan_json: &'a Value,
+    report_md: &'a Path,
+    signal_checks: &'a [Value],
+}
+
+fn write_msr_run_summary(summary: MsrRunSummary<'_>) -> Result<Value, String> {
+    let MsrRunSummary {
+        env,
+        plan,
+        output_ids,
+        aggregates,
+        profile,
+        standby_input_id,
+        plan_json,
+        report_md,
+        signal_checks,
+    } = summary;
+    let resource_aggregates = aggregates
+        .iter()
+        .map(|aggregate| aggregate.resource.clone())
+        .collect::<Vec<_>>();
+    write_resource_sweep_csv(&env.summary_csv, &resource_aggregates)?;
+    let rtmp_outputs = plan
+        .iter()
+        .take(output_ids.len())
+        .filter(|output| output.protocol == MsrProtocol::Rtmp)
+        .count();
+    let enhanced_rtmp_outputs = plan
+        .iter()
+        .take(output_ids.len())
+        .filter(|output| output.protocol == MsrProtocol::Rtmp)
+        .filter(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
+        .count();
+    let srt_outputs = output_ids.len().saturating_sub(rtmp_outputs);
+    std::fs::write(
+        report_md,
+        format_msr_report(
+            output_ids.len(),
+            profile.audio_tracks(),
+            rtmp_outputs,
+            enhanced_rtmp_outputs,
+            srt_outputs,
+            aggregates,
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    let result = json!({
+        "mode": MSR_MODE,
+        "status": "PASS",
+        "profile": profile.label(),
+        "plan": plan_json.clone(),
+        "executedOutputs": output_ids.len(),
+        "bufferedStandby": {
+            "inputId": standby_input_id,
+            "connected": true,
+            "forwardingState": "standby",
+        },
+        "artifacts": {
+            "summaryJson": env.summary_json.clone(),
+            "summaryCsv": env.summary_csv.clone(),
+            "reportMd": report_md.to_path_buf(),
+            "samplesJsonl": env.samples_jsonl.clone(),
+            "publisherLog": env.work_dir.join(format!("publisher-{}.log", profile.output_prefix())),
+            "restreamLog": env.restream_log.clone(),
+            "mediamtxLog": env.mediamtx_log.clone(),
+        },
+        "aggregates": aggregates.iter().map(msr_checkpoint_aggregate_json).collect::<Vec<_>>(),
+        "signalChecks": signal_checks,
+    });
+    std::fs::write(
+        &env.summary_json,
+        serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(result)
+}
+
+/// Peer verification for one checkpoint, recorded in the samples log.
+async fn checkpoint_verification(
+    env: &ResourceSweepEnv,
+    stack: &mut ResourceSweepStack,
+    pipeline_id: &str,
+    output_ids: &[String],
+    plan: &[MsrOutputSpec],
+    label: &str,
+) -> Result<(Option<MediaMtxPathHealth>, Option<MsrSinkVerification>), String> {
+    match env.peer_mode {
+        ResourceSweepPeer::Mediamtx => {
+            let health = verify_msr_grouped_path_health(
+                env,
+                plan,
+                env_secs("MSR_SINK_SAMPLE_SECS", 3),
+                Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
+            )
+            .await?;
+            append_line(
+                &env.samples_jsonl,
+                &format!(
+                    "{}\n",
+                    serde_json::to_string(&mediamtx_path_health_json(MSR_MODE, label, &health))
+                        .unwrap()
+                ),
+            )?;
+            Ok((Some(health), None))
+        }
+        ResourceSweepPeer::Sink => {
+            // 5s, not 2s: real video is delivered at GOP cadence (bursts up
+            // to ~4.2s apart at this fixture's keyframe interval), so a leaf
+            // just past its last burst can show a genuinely flat 2s window
+            // with nothing wrong. Live-evidenced: a 2s window false-failed
+            // 5/700 leaves at the n=700 checkpoint of an otherwise-clean
+            // 1,200-output ramp; 5s cleared the same ramp with zero false
+            // positives end to end.
+            let verification = verify_msr_sink_checkpoint(
+                &stack.api,
+                pipeline_id,
+                output_ids,
+                env_secs("MSR_SINK_ENGINE_SAMPLE_SECS", 5),
+            )
+            .await?;
+            append_line(
+                &env.samples_jsonl,
+                &format!(
+                    "{}\n",
+                    serde_json::to_string(&msr_sink_verification_json(&verification)).unwrap()
+                ),
+            )?;
+            Ok((None, Some(verification)))
+        }
+    }
+}
+
+/// Sink peers discard data at the transport layer, so there is nothing for
+/// ffprobe/signal capture to read back from — force the skip regardless of
+/// `MSR_SKIP_FFPROBE`.
+fn msr_skip_ffprobe(env: &ResourceSweepEnv) -> bool {
+    env.peer_mode == ResourceSweepPeer::Sink
+        || std::env::var("MSR_SKIP_FFPROBE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+}
+
+async fn checkpoint_resource(
+    env: &ResourceSweepEnv,
+    stack: &mut ResourceSweepStack,
+    ordinal: usize,
+    rtmp_count: usize,
+    srt_count: usize,
+    profile: MsrRunProfile,
+    label: String,
+) -> Result<ResourceAggregate, String> {
+    sample_resource_window(
+        env,
+        stack,
+        ResourceScenarioMeta {
+            scenario: MSR_MODE,
+            label,
+            pipelines: 1,
+            outputs: ordinal,
+            ingest_types: profile.ingest_types().to_string(),
+            egress_mix: format!("rtmp:{rtmp_count},srt:{srt_count}"),
+            transcode: "no",
+        },
+    )
+    .await
+}
+
+async fn checkpoint_post_health(
+    env: &ResourceSweepEnv,
+    plan: &[MsrOutputSpec],
+    ordinal: usize,
+) -> Result<Option<MediaMtxPathHealth>, String> {
+    if env.peer_mode != ResourceSweepPeer::Mediamtx {
+        return Ok(None);
+    }
+    let health = verify_msr_grouped_path_health(
+        env,
+        plan,
+        env_secs("MSR_SINK_POST_SAMPLE_SECS", 2),
+        Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
+    )
+    .await?;
+    append_line(
+        &env.samples_jsonl,
+        &format!(
+            "{}\n",
+            serde_json::to_string(&mediamtx_path_health_json(
+                MSR_MODE,
+                &format!("{ordinal}-post-sample"),
+                &health
+            ))
+            .unwrap()
+        ),
+    )?;
+    Ok(Some(health))
 }
 
 pub(crate) async fn msr() -> Result<Value, String> {

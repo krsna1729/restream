@@ -21,14 +21,6 @@ pub(super) const WORKLOAD_TOLERANCE: f64 = 0.05;
 /// broken); `contaminated` means the host or the peer dropped datagrams, so
 /// the path under test was not lossless; `healthy` means none of those fired.
 /// Only rated samples get a verdict — the first sample has no interval yet.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) fn sample_validity(
     sample: &Value,
     expected_outputs: u64,
@@ -36,32 +28,49 @@ pub(super) fn sample_validity(
     sample["srtTxDatagramsPerSec"].as_f64()?;
     let mut reasons = Vec::new();
     let mut invalid = false;
-    // `fired` is the failure condition: the reason is recorded only when it
-    // actually happened, so a clean sample produces an empty reason list.
-    let require = |invalid: &mut bool, reasons: &mut Vec<String>, fired: bool, reason: String| {
-        if fired {
-            *invalid = true;
-            reasons.push(reason);
-        }
-    };
+    reasons.extend(shard_reasons(sample, expected_outputs, &mut invalid));
+    let (peer_reasons, peer_invalid) = peer_telemetry_reasons(sample);
+    invalid |= peer_invalid;
+    reasons.extend(peer_reasons);
+    reasons.extend(host_pressure_reasons(sample));
+    let (delta_reasons, delta_invalid) = delta_pressure_reasons(sample);
+    invalid |= delta_invalid;
+    reasons.extend(delta_reasons);
+    let (rate_reasons, rate_invalid) = peer_rate_reasons(sample);
+    invalid |= rate_invalid;
+    reasons.extend(rate_reasons);
+    reasons.extend(retransmit_reasons(sample));
 
+    Some(if invalid {
+        ("invalid", reasons)
+    } else if reasons.is_empty() {
+        ("healthy", reasons)
+    } else {
+        ("contaminated", reasons)
+    })
+}
+
+/// Shard and output presence: no live owner, an unhealthy shard or an output
+/// count other than the declared one is an invalid rung.
+fn shard_reasons(sample: &Value, expected_outputs: u64, invalid: &mut bool) -> Vec<String> {
+    let mut reasons = Vec::new();
     let shards = sample["egressShardCount"].as_u64().unwrap_or(0);
     let owners = sample["srtOwnerCount"].as_u64().unwrap_or(0);
     if shards == 0 || owners == 0 {
-        invalid = true;
+        *invalid = true;
         reasons.push(format!(
             "no live SRT shard/owner to measure (shards={shards}, owners={owners})"
         ));
     }
     match sample["shardUnhealthyCount"].as_u64() {
-        Some(count) => require(
-            &mut invalid,
-            &mut reasons,
-            count > 0,
-            format!("{count} SRT shard(s) in a non-healthy state"),
-        ),
+        Some(count) => {
+            if count > 0 {
+                *invalid = true;
+                reasons.push(format!("{count} SRT shard(s) in a non-healthy state"));
+            }
+        }
         None => {
-            invalid = true;
+            *invalid = true;
             reasons.push("SRT shard health is not observable".to_string());
         }
     }
@@ -69,21 +78,28 @@ pub(super) fn sample_validity(
     // outputs it declares, so extra live leaves (leaked state, a stray output)
     // fail the rung just as missing ones do.
     match sample["capacityActiveLeaves"].as_u64() {
-        Some(active) => require(
-            &mut invalid,
-            &mut reasons,
-            active != expected_outputs,
-            format!("{active} of {expected_outputs} expected outputs active"),
-        ),
+        Some(active) => {
+            if active != expected_outputs {
+                *invalid = true;
+                reasons.push(format!(
+                    "{active} of {expected_outputs} expected outputs active"
+                ));
+            }
+        }
         None => {
-            invalid = true;
+            *invalid = true;
             reasons.push("active output count is not observable".to_string());
         }
     }
+    reasons
+}
 
-    // Remote rungs depend on the sink hosts' own drop counters, which only
-    // their state endpoints can report. Missing telemetry is a reason, and a
-    // restarted sink means the window is no longer one measurement.
+/// Remote rungs depend on the sink hosts' own drop counters, which only
+/// their state endpoints can report. Missing telemetry is a reason, and a
+/// restarted sink means the window is no longer one measurement.
+fn peer_telemetry_reasons(sample: &Value) -> (Vec<String>, bool) {
+    let mut reasons = Vec::new();
+    let mut invalid = false;
     let expected_peers = sample["expectedPeers"].as_u64().unwrap_or(0);
     if expected_peers > 0 {
         match sample["peers"].as_array() {
@@ -121,14 +137,17 @@ pub(super) fn sample_validity(
             )),
         }
     }
-    require(
-        &mut invalid,
-        &mut reasons,
-        sample["ownerFaulted"] == true,
-        "an SRT owner faulted".to_string(),
-    );
-    // Host and peer pressure: drops here mean the measured path lost
-    // datagrams, which is exactly what a no-loss contract rung must not have.
+    if sample["ownerFaulted"] == true {
+        invalid = true;
+        reasons.push("an SRT owner faulted".to_string());
+    }
+    (reasons, invalid)
+}
+
+/// Host and peer pressure: drops here mean the measured path lost datagrams,
+/// which is exactly what a no-loss contract rung must not have.
+fn host_pressure_reasons(sample: &Value) -> Vec<String> {
+    let mut reasons = Vec::new();
     for key in [
         "udpRcvbufErrorsPerSec",
         "udpSndbufErrorsPerSec",
@@ -145,10 +164,16 @@ pub(super) fn sample_validity(
             None => reasons.push(format!("{key} is not observable")),
         }
     }
-    // Monotonic fault/pressure counters are judged as rated-window deltas, so
-    // a ramp-up or settle-period event cannot condemn a steady-state window.
-    // `ownerTxFailedSends` and a feed resync are faults; the rest are pressure
-    // that still rules out a no-loss baseline.
+    reasons
+}
+
+/// Monotonic fault/pressure counters are judged as rated-window deltas, so a
+/// ramp-up or settle-period event cannot condemn a steady-state window.
+/// `ownerTxFailedSends` and a feed resync are faults; the rest are pressure
+/// that still rules out a no-loss baseline.
+fn delta_pressure_reasons(sample: &Value) -> (Vec<String>, bool) {
+    let mut reasons = Vec::new();
+    let mut invalid = false;
     for (key, invalidating) in [
         ("ownerTxFailedSendsDelta", true),
         ("shardFeedResyncsDelta", true),
@@ -174,11 +199,18 @@ pub(super) fn sample_validity(
             }
         }
     }
-    // Immediate workload failures only: a stall (zero delivery) is a per-sample
-    // fault, and connection churn means the steady state was not steady. The
-    // ±5% workload-conformance check runs over the whole common rated window in
-    // the rung summary, because the fixture is VBR and its tolerance is a
-    // whole-span average, not a per-second one.
+    (reasons, invalid)
+}
+
+/// Immediate workload failures only: a stall (zero delivery) is a per-sample
+/// fault, and connection churn means the steady state was not steady. The
+/// ±5% workload-conformance check runs over the whole common rated window in
+/// the rung summary, because the fixture is VBR and its tolerance is a
+/// whole-span average, not a per-second one.
+fn peer_rate_reasons(sample: &Value) -> (Vec<String>, bool) {
+    let mut reasons = Vec::new();
+    let mut invalid = false;
+    let expected_peers = sample["expectedPeers"].as_u64().unwrap_or(0);
     if expected_peers > 0 {
         if let Some(peers) = sample["peers"].as_array() {
             for peer in peers {
@@ -208,11 +240,15 @@ pub(super) fn sample_validity(
     } else if sample["srtDataFirstPps"].as_f64() == Some(0.0) {
         reasons.push("no first-transmission DATA sent in the sample".to_string());
     }
+    (reasons, invalid)
+}
 
-    // The roadmap's target is a healthy NO-LOSS path, so retransmissions in
-    // the rated window are end-to-end loss evidence: nonzero contaminates, and
-    // an unobservable retransmit counter is a missing sensor, not a pass. No
-    // percentage threshold is invented — zero is the no-loss condition.
+/// The roadmap's target is a healthy NO-LOSS path, so retransmissions in
+/// the rated window are end-to-end loss evidence: nonzero contaminates, and
+/// an unobservable retransmit counter is a missing sensor, not a pass. No
+/// percentage threshold is invented — zero is the no-loss condition.
+fn retransmit_reasons(sample: &Value) -> Vec<String> {
+    let mut reasons = Vec::new();
     match sample["srtDataRetransmitPps"].as_f64() {
         Some(0.0) => {}
         Some(rate) => reasons.push(format!(
@@ -220,12 +256,5 @@ pub(super) fn sample_validity(
         )),
         None => reasons.push("srtDataRetransmitPps is not observable".to_string()),
     }
-
-    Some(if invalid {
-        ("invalid", reasons)
-    } else if reasons.is_empty() {
-        ("healthy", reasons)
-    } else {
-        ("contaminated", reasons)
-    })
+    reasons
 }

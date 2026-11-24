@@ -61,24 +61,32 @@ pub(crate) async fn fault_sibling_isolation() -> Result<Value, String> {
     )
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
-async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
-    let api = login_api(ports).await?;
-    let fixture = checked_h264_fixture()?;
-    let base = harness_port_defaults().ffmpeg_srt_sink_base;
+/// Started publishers, sinks, victims and their shared fault target.
+struct IsolationSetup {
+    publishers: Vec<Child>,
+    sinks: Vec<HarnessSrtSinkPool>,
+    victims: Vec<Victim>,
+    doomed: HarnessInput,
+    target: String,
+}
+
+/// Create both pipelines, their publishers, real consumers and victims.
+async fn prepare_isolation_victims(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture: &Path,
+    base: u16,
+) -> Result<IsolationSetup, String> {
     let mut publishers = Vec::new();
     let mut sinks = Vec::new();
     let mut victims = Vec::new();
     for (index, name) in ["isolation-a", "isolation-b"].into_iter().enumerate() {
-        let pipeline = create_pipeline_with_stream_key(&api, name, name).await?;
-        let standby = create_backup_input(&api, &pipeline).await?;
+        let pipeline = create_pipeline_with_stream_key(api, name, name).await?;
+        let standby = create_backup_input(api, &pipeline).await?;
         for key in [name, &standby.stream_key] {
             publishers.push(
                 spawn_publisher(
-                    &fixture,
+                    fixture,
                     &format!("rtmp://127.0.0.1:{}/live/{key}", ports.rtmp),
                     "flv",
                     false,
@@ -86,9 +94,9 @@ async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
                 .await?,
             );
         }
-        wait_for_api_input_live(&api, &pipeline, Duration::from_secs(20)).await?;
+        wait_for_api_input_live(api, &pipeline, Duration::from_secs(20)).await?;
         wait_for_input_state(
-            &api,
+            api,
             &pipeline,
             &standby.id,
             "standby",
@@ -107,16 +115,16 @@ async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
             .ok_or("sink port overflow")?;
         let sink = HarnessSrtSinkPool::start(&[port], 0)?;
         let output = create_output(
-            &api,
+            api,
             &pipeline,
             "healthy",
             &harness_srt_output_url(port, name, HarnessSrtMode::Publish),
             "source",
         )
         .await?;
-        start_output(&api, &pipeline, &output).await?;
+        start_output(api, &pipeline, &output).await?;
         wait_for_outputs_progress(
-            &api,
+            api,
             &pipeline,
             std::slice::from_ref(&output),
             Duration::from_secs(20),
@@ -140,119 +148,242 @@ async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
         });
         sinks.push(sink);
     }
-    let a = &victims[0].pipeline;
-    let doomed = create_backup_input(&api, a).await?;
-    let mut tests = Vec::new();
-    tests.push(
-        watch(&api, &victims, async {
-            super::destination_stall::rtmp_destination_stalls(
-                &api,
-                a,
-                base.checked_add(3202).ok_or("stall port overflow")?,
-            )
-            .await
-        })
-        .await?,
-    );
-    tests.push(
-        watch(&api, &victims, async {
-            sibling_wire::malformed(ports.rtmp, &doomed.stream_key).await?;
-            Ok(json!({"case": "malformed-standby-input", "retiredWithinMs": 5000}))
-        })
-        .await?,
-    );
-    tests.push(
-        watch(&api, &victims, async {
-            let mut stalled = sibling_wire::peer(ports.rtmp, &doomed.stream_key, true).await?;
-            tokio::time::sleep(Duration::from_secs(8)).await;
-            let mut pending = [0; 4096];
-            loop {
-                match stalled.try_read(&mut pending) {
-                    Ok(0) => return Err("silent publisher disconnected before its 8 s hold".into()),
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(error) => {
-                        return Err(format!("silent publisher lost its connection: {error}"));
-                    }
-                }
+    let target = victims[0].pipeline.clone();
+    let doomed = create_backup_input(api, &target).await?;
+    Ok(IsolationSetup {
+        publishers,
+        sinks,
+        victims,
+        doomed,
+        target,
+    })
+}
+
+/// A real RTMP destination for a sibling pipeline stalls.
+async fn isolation_destination_stall(
+    api: &RampApi,
+    target: &str,
+    base: u16,
+) -> Result<Value, String> {
+    super::destination_stall::rtmp_destination_stalls(
+        api,
+        target,
+        base.checked_add(3202).ok_or("stall port overflow")?,
+    )
+    .await
+}
+
+/// A malformed RTMP publisher for the standby input must be retired.
+async fn isolation_malformed_standby(
+    ports: &TestPorts,
+    doomed: &HarnessInput,
+) -> Result<Value, String> {
+    sibling_wire::malformed(ports.rtmp, &doomed.stream_key).await?;
+    Ok(json!({"case": "malformed-standby-input", "retiredWithinMs": 5000}))
+}
+
+/// A silent publisher must keep its connection for its whole hold.
+async fn isolation_publisher_stall(
+    ports: &TestPorts,
+    doomed: &HarnessInput,
+) -> Result<Value, String> {
+    let mut stalled = sibling_wire::peer(ports.rtmp, &doomed.stream_key, true).await?;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let mut pending = [0; 4096];
+    loop {
+        match stalled.try_read(&mut pending) {
+            Ok(0) => return Err("silent publisher disconnected before its 8 s hold".into()),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => {
+                return Err(format!("silent publisher lost its connection: {error}"));
             }
-            stalled.shutdown().await.map_err(|e| e.to_string())?;
-            Ok(json!({"case": "publisher-stall", "heldMs": 8000}))
-        })
-        .await?,
+        }
+    }
+    stalled.shutdown().await.map_err(|e| e.to_string())?;
+    Ok(json!({"case": "publisher-stall", "heldMs": 8000}))
+}
+
+/// A peer that stops reading must leave its socket queued.
+async fn isolation_stopped_reader(ports: &TestPorts) -> Result<Value, String> {
+    let queued = sibling_wire::stopped_reader(ports.rtmp, "isolation-a").await?;
+    Ok(json!({"case": "stopped-reader", "heldMs": 20000, "unreadSocketBytes": queued}))
+}
+
+/// A held SQLite writer must stall writes without blocking admission.
+async fn isolation_sqlite_writer_stall(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture: &Path,
+    db: &Path,
+    target: &str,
+    doomed: &HarnessInput,
+) -> Result<Value, String> {
+    let mut connection = SqliteConnection::connect(&format!("sqlite:{}", db.display()))
+        .await
+        .map_err(|e| e.to_string())?;
+    let held = connection
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|e| e.to_string())?;
+    // A real write must remain pending, rather than calling a read-only
+    // endpoint and claiming that SQLite was stalled.
+    let update = api.post_json(
+        "/api/v1/pipelines",
+        json!({"name": "after-lock", "streamKey": "after-lock"}),
     );
-    tests.push(
-        watch(&api, &victims, async {
-            let queued = sibling_wire::stopped_reader(ports.rtmp, "isolation-a").await?;
-            Ok(json!({"case": "stopped-reader", "heldMs": 20000, "unreadSocketBytes": queued}))
-        })
-        .await?,
-    );
-    tests.push(watch(&api, &victims, async {
-        let mut connection = SqliteConnection::connect(&format!("sqlite:{}", db.display())).await.map_err(|e| e.to_string())?;
-        let held = connection.begin_with("BEGIN IMMEDIATE").await.map_err(|e| e.to_string())?;
-        // A real write must remain pending, rather than calling a read-only
-        // endpoint and claiming that SQLite was stalled.
-        let update = api.post_json("/api/v1/pipelines", json!({"name": "after-lock", "streamKey": "after-lock"}));
-        tokio::pin!(update);
-        tokio::select! {
-            result = &mut update => return Err(format!("write did not stall behind writer lock: {result:?}")),
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+    tokio::pin!(update);
+    tokio::select! {
+        result = &mut update => return Err(format!("write did not stall behind writer lock: {result:?}")),
+        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+    }
+    // Admission uses the immutable catalog snapshot while the real writer
+    // and the API's persistence operation are held.
+    let mut publisher = spawn_publisher(
+        fixture,
+        &harness_srt_ffmpeg_url(ports.srt, &doomed.stream_key, HarnessSrtMode::Publish, None),
+        "mpegts",
+        false,
+    )
+    .await?;
+    wait_for_input_state(api, target, &doomed.id, "standby", Duration::from_secs(5)).await?;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    stop_srt_publisher(&mut publisher).await?;
+    held.rollback().await.map_err(|e| e.to_string())?;
+    let converged = tokio::time::timeout(Duration::from_secs(10), update)
+        .await
+        .map_err(|_| "SQLite write did not converge after release")??;
+    if converged["pipeline"]["id"].as_str().is_none() {
+        return Err(format!(
+            "SQLite write did not return its persisted pipeline: {converged}"
+        ));
+    }
+    Ok(
+        json!({"case": "sqlite-writer-stall", "writeConverged": !converged["pipeline"]["id"].is_null(), "snapshotAdmission": true}),
+    )
+}
+
+/// Lifecycle logging must not block ingest or disconnect while stdout stalls.
+async fn isolation_stdout_stall(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture: &Path,
+    target: &str,
+    doomed: &HarnessInput,
+) -> Result<Value, String> {
+    let before = console_dropped(api).await?;
+    let mut connections = 0;
+    // Each accepted RTMP play/close emits only lifecycle events. No new
+    // logging flag, queue override, packet logs or synthetic production hook.
+    while console_dropped(api).await? <= before {
+        let mut peers = FuturesUnordered::new();
+        for _ in 0..16 {
+            peers.push(sibling_wire::peer(ports.rtmp, "isolation-a", false));
         }
-        // Admission uses the immutable catalog snapshot while the real writer
-        // and the API's persistence operation are held.
-        let mut publisher = spawn_publisher(&fixture, &harness_srt_ffmpeg_url(ports.srt, &doomed.stream_key, HarnessSrtMode::Publish, None), "mpegts", false).await?;
-        wait_for_input_state(&api, a, &doomed.id, "standby", Duration::from_secs(5)).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        stop_srt_publisher(&mut publisher).await?;
-        held.rollback().await.map_err(|e| e.to_string())?;
-        let converged = tokio::time::timeout(Duration::from_secs(10), update).await.map_err(|_| "SQLite write did not converge after release")??;
-        if converged["pipeline"]["id"].as_str().is_none() {
-            return Err(format!("SQLite write did not return its persisted pipeline: {converged}"));
+        while let Some(peer) = peers.next().await {
+            drop(peer?);
+            connections += 1;
         }
-        Ok(json!({"case": "sqlite-writer-stall", "writeConverged": !converged["pipeline"]["id"].is_null(), "snapshotAdmission": true}))
-    }).await?);
-    tests.push(watch(&api, &victims, async {
-        let before = console_dropped(&api).await?;
-        let mut connections = 0;
-        // Each accepted RTMP play/close emits only lifecycle events. No new
-        // logging flag, queue override, packet logs or synthetic production hook.
-        while console_dropped(&api).await? <= before {
-            let mut peers = FuturesUnordered::new();
-            for _ in 0..16 {
-                peers.push(sibling_wire::peer(ports.rtmp, "isolation-a", false));
-            }
-            while let Some(peer) = peers.next().await {
-                drop(peer?);
-                connections += 1;
-            }
-            if connections > 12000 { return Err("lifecycle load did not fill stdout pipe and logger queue".into()); }
+        if connections > 12000 {
+            return Err("lifecycle load did not fill stdout pipe and logger queue".into());
         }
-        let dropped_at_connect = console_dropped(&api).await?;
-        let started = Instant::now();
-        let mut publisher = spawn_publisher(&fixture, &harness_srt_ffmpeg_url(ports.srt, &doomed.stream_key, HarnessSrtMode::Publish, None), "mpegts", false).await?;
-        wait_for_input_state(&api, a, &doomed.id, "standby", Duration::from_secs(5)).await?;
-        let connect_ms = started.elapsed().as_millis();
-        if connect_ms > 5000 { return Err(format!("SRT connect took {connect_ms} ms with stdout stalled")); }
-        let disconnected = Instant::now();
-        stop_srt_publisher(&mut publisher).await?;
-        loop {
-            let inputs = api.get_json(&format!("/api/v1/pipelines/{a}/inputs")).await?;
-            if inputs["inputs"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == doomed.id && row["runtime"]["connected"] == false)) { break; }
-            if disconnected.elapsed() > Duration::from_secs(5) { return Err("SRT disconnect exceeded 5 s with stdout stalled".into()); }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let dropped_at_connect = console_dropped(api).await?;
+    let started = Instant::now();
+    let mut publisher = spawn_publisher(
+        fixture,
+        &harness_srt_ffmpeg_url(ports.srt, &doomed.stream_key, HarnessSrtMode::Publish, None),
+        "mpegts",
+        false,
+    )
+    .await?;
+    wait_for_input_state(api, target, &doomed.id, "standby", Duration::from_secs(5)).await?;
+    let connect_ms = started.elapsed().as_millis();
+    if connect_ms > 5000 {
+        return Err(format!(
+            "SRT connect took {connect_ms} ms with stdout stalled"
+        ));
+    }
+    let disconnected = Instant::now();
+    stop_srt_publisher(&mut publisher).await?;
+    loop {
+        let inputs = api
+            .get_json(&format!("/api/v1/pipelines/{target}/inputs"))
+            .await?;
+        if inputs["inputs"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["id"] == doomed.id && row["runtime"]["connected"] == false)
+        }) {
+            break;
         }
         if disconnected.elapsed() > Duration::from_secs(5) {
             return Err("SRT disconnect exceeded 5 s with stdout stalled".into());
         }
-        let after = console_dropped(&api).await?;
-        if after <= dropped_at_connect { return Err("console drops did not rise through SRT lifecycle".into()); }
-        Ok(json!({"case": "stdout-never-drained", "lifecycleConnections": connections, "consoleDroppedBefore": before, "consoleDroppedAtConnect": dropped_at_connect, "consoleDroppedAfter": after, "srtConnectMs": connect_ms, "srtDisconnectMs": disconnected.elapsed().as_millis()}))
-    }).await?);
-    for publisher in &mut publishers {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if disconnected.elapsed() > Duration::from_secs(5) {
+        return Err("SRT disconnect exceeded 5 s with stdout stalled".into());
+    }
+    let after = console_dropped(api).await?;
+    if after <= dropped_at_connect {
+        return Err("console drops did not rise through SRT lifecycle".into());
+    }
+    Ok(
+        json!({"case": "stdout-never-drained", "lifecycleConnections": connections, "consoleDroppedBefore": before, "consoleDroppedAtConnect": dropped_at_connect, "consoleDroppedAfter": after, "srtConnectMs": connect_ms, "srtDisconnectMs": disconnected.elapsed().as_millis()}),
+    )
+}
+
+async fn run(ports: &TestPorts, db: &Path) -> Result<Vec<Value>, String> {
+    let api = login_api(ports).await?;
+    let fixture = checked_h264_fixture()?;
+    let base = harness_port_defaults().ffmpeg_srt_sink_base;
+    let mut setup = prepare_isolation_victims(&api, ports, &fixture, base).await?;
+    let mut tests = Vec::new();
+    tests.push(
+        watch(
+            &api,
+            &setup.victims,
+            isolation_destination_stall(&api, &setup.target, base),
+        )
+        .await?,
+    );
+    tests.push(
+        watch(
+            &api,
+            &setup.victims,
+            isolation_malformed_standby(ports, &setup.doomed),
+        )
+        .await?,
+    );
+    tests.push(
+        watch(
+            &api,
+            &setup.victims,
+            isolation_publisher_stall(ports, &setup.doomed),
+        )
+        .await?,
+    );
+    tests.push(watch(&api, &setup.victims, isolation_stopped_reader(ports)).await?);
+    tests.push(
+        watch(
+            &api,
+            &setup.victims,
+            isolation_sqlite_writer_stall(&api, ports, &fixture, db, &setup.target, &setup.doomed),
+        )
+        .await?,
+    );
+    tests.push(
+        watch(
+            &api,
+            &setup.victims,
+            isolation_stdout_stall(&api, ports, &fixture, &setup.target, &setup.doomed),
+        )
+        .await?,
+    );
+    for publisher in &mut setup.publishers {
         stop_child(publisher).await;
     }
-    for sink in sinks {
+    for sink in setup.sinks {
         sink.stop();
     }
     Ok(tests)
