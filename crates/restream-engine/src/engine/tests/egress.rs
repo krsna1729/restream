@@ -203,6 +203,61 @@ async fn retained_egress_records_keep_configured_outputs_only() {
 }
 
 #[tokio::test]
+async fn stale_attempt_cannot_clear_or_replace_newer_retry_state() {
+    let engine = Arc::new(MediaEngine::new());
+    let first = engine
+        .register_egress_attempt("out-retry", "pipe-1", "rtmp://example.com/live/one", None)
+        .await;
+    assert!(
+        engine
+            .update_egress_retry_state_if_current("out-retry", &first, 2, 5_000, 4_000)
+            .await
+    );
+    assert!(
+        engine
+            .clear_egress_retry_state_if_current("out-retry", &first)
+            .await
+    );
+    assert!(engine.egress_retry_state("out-retry").await.is_none());
+
+    // A later attempt settled its retry state after its active registration
+    // was already gone (a stop/replacement removed it).
+    let second = engine
+        .register_egress_attempt("out-retry", "pipe-1", "rtmp://example.com/live/two", None)
+        .await;
+    engine.unregister_egress("out-retry").await;
+    engine
+        .update_egress_retry_state("out-retry", 3, 5_000, 4_000)
+        .await;
+
+    assert!(
+        !engine
+            .update_egress_retry_state_if_current("out-retry", &first, 9, 10_000, 9_000)
+            .await,
+        "a stale attempt must not replace the published retry state"
+    );
+    assert!(
+        !engine
+            .clear_egress_retry_state_if_current("out-retry", &first)
+            .await,
+        "a stale attempt must not clear the published retry state"
+    );
+    let kept = engine
+        .egress_retry_state("out-retry")
+        .await
+        .expect("newer retry state must survive a stale clear");
+    assert_eq!(kept.attempts, 3);
+    assert_eq!(kept.backoff_ms, 5_000);
+    assert!(
+        !engine
+            .clear_egress_retry_state_if_current("out-retry", &second)
+            .await,
+        "only an active attempt registration may clear retry state"
+    );
+    assert!(engine.egress_retry_state("out-retry").await.is_some());
+}
+
+#[tokio::test]
 async fn egress_registration_stores_terminal_stage_key() {
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));

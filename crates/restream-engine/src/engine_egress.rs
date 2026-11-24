@@ -511,10 +511,26 @@ impl MediaEngine {
         );
     }
 
+    /// Run `f` on the retry map only while `registration` is the current
+    /// attempt. The retry write lock is held across the current-attempt
+    /// check so a racing registration, whose first action clears retry
+    /// state, cannot slip between the check and the mutation.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `retry` -> `active` (module docs of `engine_registries`), held across the current-attempt check on purpose (below)"
+        reason = "lock order `retry` -> `active` (module docs of `engine_registries`), held across the current-attempt check on purpose"
     )]
+    async fn with_current_retry<R>(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        f: impl FnOnce(&mut std::collections::HashMap<String, EgressRetryState>) -> R,
+    ) -> Option<R> {
+        let mut retry = self.egresses.retry.write().await;
+        self.with_current_egress(output_id, registration, |_| {})
+            .await?;
+        Some(f(&mut retry))
+    }
+
     pub async fn update_egress_retry_state_if_current(
         &self,
         output_id: &str,
@@ -523,28 +539,38 @@ impl MediaEngine {
         backoff_ms: u64,
         remaining_ms: u64,
     ) -> bool {
-        // Same reasoning as update_egress_retry_state: hold the retry write
-        // lock across the current-attempt check so a racing registration
-        // (which clears `retry` as its own first action) cannot slip in
-        // between the check and this insert and leave a stale entry behind.
-        let mut retry = self.egresses.retry.write().await;
-        if self
-            .with_current_egress(output_id, registration, |_| {})
-            .await
-            .is_none()
-        {
-            return false;
-        }
+        // Holding the retry lock across the check closes the window where a
+        // late retry publish could land after a racing registration already
+        // cleared it, leaving a stale "retrying" entry next to an active
+        // egress.
         let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
-        retry.insert(
-            output_id.to_string(),
-            EgressRetryState {
-                attempts,
-                backoff_ms,
-                next_retry_at_ms,
-            },
-        );
-        true
+        self.with_current_retry(output_id, registration, |retry| {
+            retry.insert(
+                output_id.to_string(),
+                EgressRetryState {
+                    attempts,
+                    backoff_ms,
+                    next_retry_at_ms,
+                },
+            );
+        })
+        .await
+        .is_some()
+    }
+
+    /// Clear retry state only while `registration` is still this output's
+    /// current attempt. A stale task must not erase a newer attempt's retry
+    /// state after a stop/replacement removed its registration.
+    pub async fn clear_egress_retry_state_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+    ) -> bool {
+        self.with_current_retry(output_id, registration, |retry| {
+            retry.remove(output_id);
+        })
+        .await
+        .is_some()
     }
 
     pub async fn clear_egress_retry_state(&self, output_id: &str) {

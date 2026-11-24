@@ -356,7 +356,9 @@ impl Report<'_> {
         let kind = phase(&request.target);
         match effect {
             ResultEffect::Acknowledged { bytes } => {
-                self.engine.clear_egress_retry_state(self.output_id).await;
+                self.engine
+                    .clear_egress_retry_state_if_current(self.output_id, self.registration)
+                    .await;
                 self.engine
                     .record_egress_progress_if_current(self.output_id, self.registration, bytes)
                     .await;

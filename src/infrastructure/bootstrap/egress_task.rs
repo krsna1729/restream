@@ -343,7 +343,9 @@ impl EgressTask {
                 .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
                 .await;
         } else {
-            self.engine.clear_egress_retry_state(&self.output_id).await;
+            self.engine
+                .clear_egress_retry_state_if_current(&self.output_id, &self.registration)
+                .await;
         }
     }
 
@@ -695,7 +697,11 @@ impl EgressTask {
                         )
                         .await;
                 }
-                None => self.engine.clear_egress_retry_state(&self.output_id).await,
+                None => {
+                    self.engine
+                        .clear_egress_retry_state_if_current(&self.output_id, &self.registration)
+                        .await;
+                }
             }
         }
     }
@@ -955,7 +961,9 @@ impl EgressTask {
                 .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
                 .await;
         } else {
-            self.engine.clear_egress_retry_state(&self.output_id).await;
+            self.engine
+                .clear_egress_retry_state_if_current(&self.output_id, &self.registration)
+                .await;
         }
         error!(
             correlation_id = %self.correlation_id,
