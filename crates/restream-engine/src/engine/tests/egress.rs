@@ -55,7 +55,15 @@ async fn stale_egress_unregister_cannot_clobber_replacement_attempt() {
     let first = engine
         .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one", None)
         .await;
+    engine.record_egress_progress("out-race", 1024).await;
+    engine
+        .record_egress_error("out-race", "send", "old attempt failed")
+        .await;
     engine.unregister_egress("out-race").await;
+    let settled = engine
+        .recent_egress_outcome("out-race")
+        .await
+        .expect("first attempt must settle a recent outcome");
 
     let replacement = engine
         .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080", None)
@@ -74,6 +82,48 @@ async fn stale_egress_unregister_cannot_clobber_replacement_attempt() {
             .is_some_and(|attempt_id| attempt_id == replacement.attempt_id),
         "replacement egress must remain active after stale unregister"
     );
+    let after = engine
+        .recent_egress_outcome("out-race")
+        .await
+        .expect("recent outcome must survive stale unregister");
+    assert_eq!(after.ended_at_ms, settled.ended_at_ms);
+    assert_eq!(after.bytes_sent, settled.bytes_sent);
+    assert_eq!(after.failure_count, settled.failure_count);
+    assert_eq!(after.status, settled.status);
+    assert_eq!(after.raw_status, settled.raw_status);
+    assert!(
+        engine.egress_retry_state("out-race").await.is_none(),
+        "stale unregister must not publish retry state for the replacement"
+    );
+}
+
+#[tokio::test]
+async fn repeated_egress_unregister_keeps_settled_outcome_stable() {
+    let engine = Arc::new(MediaEngine::new());
+    engine
+        .register_egress("out-stable", "pipe-1", "rtmp://example.com/live/key")
+        .await;
+    engine.record_egress_progress("out-stable", 512).await;
+    engine
+        .record_egress_error("out-stable", "send", "connection reset by peer")
+        .await;
+    engine.unregister_egress("out-stable").await;
+    let first = engine
+        .recent_egress_outcome("out-stable")
+        .await
+        .expect("first unregister must settle a recent outcome");
+
+    engine.unregister_egress("out-stable").await;
+    let second = engine
+        .recent_egress_outcome("out-stable")
+        .await
+        .expect("repeated unregister must not clear the settled outcome");
+    assert_eq!(second.ended_at_ms, first.ended_at_ms);
+    assert_eq!(second.bytes_sent, first.bytes_sent);
+    assert_eq!(second.failure_count, first.failure_count);
+    assert_eq!(second.status, first.status);
+    assert_eq!(second.raw_status, first.raw_status);
+    assert_eq!(second.last_error, first.last_error);
 }
 
 #[tokio::test]
