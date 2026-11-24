@@ -295,10 +295,6 @@ impl SrtServer {
 
     /// The admission task: IP bans, the pipeline lookup (under its deadline),
     /// then publisher or reader registration, unless the peer is `gone`.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
     async fn admit(
         self: Arc<Self>,
         peer: SocketAddr,
@@ -306,19 +302,8 @@ impl SrtServer {
         gone: Arc<AtomicBool>,
     ) -> Admitted {
         let client_ip = peer.ip().to_string();
-        let access_mode = match parsed.mode {
-            SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
-            SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
-        };
-        if self
-            .security
-            .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
-            .or_else(|| {
-                self.security
-                    .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
-            })
-            .is_some()
-        {
+        let access_mode = access_mode_for(&parsed.mode);
+        if self.is_banned(&client_ip) {
             return Admitted::Rejected;
         }
         let lookup = self
@@ -327,15 +312,11 @@ impl SrtServer {
         let pipeline = match tokio::time::timeout(AUTH_DEADLINE, lookup).await {
             Ok(Ok(pipeline)) => pipeline,
             Ok(Err(error)) => {
-                warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
+                log_unauthorized(peer, &error);
                 return Admitted::Rejected;
             }
             Err(_) => {
-                warn!(
-                    peer = %peer,
-                    deadline_ms = AUTH_DEADLINE.as_millis() as u64,
-                    "rejecting SRT peer: pipeline lookup exceeded its deadline"
-                );
+                log_lookup_timeout(peer);
                 return Admitted::Rejected;
             }
         };
@@ -352,7 +333,7 @@ impl SrtServer {
                 {
                     Ok(admitted) => admitted,
                     Err(error) => {
-                        warn!(peer = %peer, %error, "rejecting SRT publisher");
+                        log_publisher_rejected(peer, &error);
                         Admitted::Rejected
                     }
                 }
@@ -363,11 +344,21 @@ impl SrtServer {
                     reader: Box::new(reader),
                 },
                 Err(error) => {
-                    warn!(peer = %peer, %error, "rejecting SRT reader");
+                    log_reader_rejected(peer, &error);
                     Admitted::Rejected
                 }
             },
         }
+    }
+
+    fn is_banned(&self, client_ip: &str) -> bool {
+        self.security
+            .is_ip_banned_for(RateLimitScope::SrtPublish, client_ip)
+            .or_else(|| {
+                self.security
+                    .is_ip_banned_for(RateLimitScope::SrtRead, client_ip)
+            })
+            .is_some()
     }
 
     /// Apply a finished admission to its still-connected peer, or finish what
@@ -438,4 +429,35 @@ impl SrtServer {
             peers.finish(self, session);
         }
     }
+}
+
+fn access_mode_for(mode: &SrtConnectionMode) -> PipelineAccessMode {
+    match mode {
+        SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
+        SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
+    }
+}
+
+#[cold]
+fn log_unauthorized(peer: SocketAddr, error: &impl std::fmt::Debug) {
+    warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
+}
+
+#[cold]
+fn log_lookup_timeout(peer: SocketAddr) {
+    warn!(
+        peer = %peer,
+        deadline_ms = AUTH_DEADLINE.as_millis() as u64,
+        "rejecting SRT peer: pipeline lookup exceeded its deadline"
+    );
+}
+
+#[cold]
+fn log_publisher_rejected(peer: SocketAddr, error: &impl std::fmt::Display) {
+    warn!(peer = %peer, %error, "rejecting SRT publisher");
+}
+
+#[cold]
+fn log_reader_rejected(peer: SocketAddr, error: &impl std::fmt::Display) {
+    warn!(peer = %peer, %error, "rejecting SRT reader");
 }
