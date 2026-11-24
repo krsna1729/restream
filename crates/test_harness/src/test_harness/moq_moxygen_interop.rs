@@ -218,10 +218,6 @@ fn moxygen_relay_bin() -> Result<PathBuf, String> {
 
 /// Entry point for the `moq-moxygen-interop` command; it takes no options
 /// beyond the harness's own `--no-netns`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String> {
     let args = strip_netns_opt(args);
     if let Some(unknown) = args.first() {
@@ -258,114 +254,18 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
             child: None,
         })
         .collect();
-
     let mut checks = Checks::new(MODE);
-    let mut children: Vec<Child> = Vec::new();
-    let mut restream: Option<Child> = None;
-    let outcome = async {
-        for relay in &mut relays {
-            relay.start(&relay_bin, &tls).await?;
-        }
-        let env_overrides = [(
-            "RESTREAM_MOQ_CA_DIR",
-            tls.ca_pem
-                .parent()
-                .expect("CA directory")
-                .display()
-                .to_string(),
-        )];
-        restream = Some(
-            start_restream_child_with_env(
-                &default_restream_bin(),
-                &ports,
-                &default_work_db_path(&work_dir, "moq-moxygen-interop.sqlite"),
-                &work_dir.join("restream.log"),
-                &env_overrides,
-            )
-            .await?,
-        );
-        let api = login_api(&ports).await?;
-        let pipeline = create_resource_pipeline(&api, "moq-moxygen-egress", STREAM_KEY).await?;
-        for relay in &relays {
-            let url = format!(
-                "moqt://127.0.0.1:{}{RELAY_ENDPOINT}?broadcast={}&version={}&ca=ca.pem",
-                relay.port,
-                relay.broadcast(),
-                relay.alpn()
-            );
-            let output = create_output(
-                &api,
-                &pipeline,
-                &format!("moxygen-d{}", relay.draft),
-                &url,
-                "source",
-            )
-            .await?;
-            start_output(&api, &pipeline, &output).await?;
-        }
-        let publish_url = format!("rtmp://127.0.0.1:{}/live/{STREAM_KEY}", ports.rtmp);
-        children.push(spawn_logged_ffmpeg(
-            &ffmpeg,
-            &crate::hls_push_duty::run::rtmp_publisher_args(&fixture, &publish_url),
-            &work_dir.join("publisher.log"),
-            "moq-moxygen-publisher",
-        )?);
-        wait_for_api_input_live(&api, &pipeline, INPUT_TIMEOUT).await?;
-        wait_for_api_input_media_ready(&api, &pipeline, INPUT_TIMEOUT).await?;
-
-        for relay in &mut relays {
-            let draft = relay.draft;
-            let (alpn, broadcast) = (relay.alpn(), relay.broadcast());
-            let published = relay
-                .wait_log(PUBLISH_TIMEOUT, |log| namespace_status(log, &broadcast).1)
-                .await;
-            let log = std::fs::read_to_string(&relay.log).unwrap_or_default();
-            let (ok, mut detail) = relay_verdict(&log, &alpn, &broadcast);
-            if let Err(tail) = &published {
-                detail["logTail"] = json!(tail);
-            }
-            checks.record(&format!("d{draft}RestreamPublish"), ok, detail);
-            if !ok {
-                continue;
-            }
-            let url = relay.connect_url();
-            let capture = work_dir.join(format!("d{draft}-readback.ts"));
-            let target = CliTarget {
-                url: &url,
-                ca: &tls.ca_pem,
-                broadcast: &broadcast,
-                version: relay.cli_version(),
-            };
-            let probe = match capture_export(&moq, &target, &capture, CAPTURE_SECS).await {
-                Ok(_) => {
-                    ffprobe_live_sample(
-                        &capture.display().to_string(),
-                        &capture.with_extension("probe.json"),
-                        CAPTURE_SECS + 10,
-                        "5M",
-                        "5M",
-                    )
-                    .await
-                }
-                Err(error) => Err(error),
-            };
-            checks.record_sample(
-                &format!("d{draft}ReadBack"),
-                probe,
-                input_fps,
-                MIN_SPAN_SECS,
-            );
-        }
-        Ok::<(), String>(())
-    }
-    .await;
-
-    for mut child in children.drain(..) {
-        stop_child(&mut child).await;
-    }
-    if let Some(mut child) = restream.take() {
-        stop_child(&mut child).await;
-    }
+    let environment = MoxygenEnvironment {
+        moq: &moq,
+        relay_bin: &relay_bin,
+        tls: &tls,
+        ports,
+        work_dir: &work_dir,
+        fixture: &fixture,
+        ffmpeg: &ffmpeg,
+        input_fps,
+    };
+    let outcome = run_moxygen_egress(&environment, &mut relays, &mut checks).await;
     for relay in &mut relays {
         relay.kill().await;
     }
@@ -395,6 +295,147 @@ pub(crate) async fn moq_moxygen_interop(args: &[String]) -> Result<Value, String
     });
     let report_path = work_dir.join("report.json");
     finish_mode_report(MODE, &report_path, passed, report)
+}
+
+/// Fixed inputs of one moxygen interop run.
+struct MoxygenEnvironment<'a> {
+    moq: &'a Path,
+    relay_bin: &'a Path,
+    tls: &'a InteropTls,
+    ports: TestPorts,
+    work_dir: &'a Path,
+    fixture: &'a Path,
+    ffmpeg: &'a Path,
+    input_fps: f64,
+}
+
+/// Start the relays, Restream and publisher, verify each draft, and tear the
+/// children down again.
+async fn run_moxygen_egress(
+    environment: &MoxygenEnvironment<'_>,
+    relays: &mut [MoxygenRelay],
+    checks: &mut Checks,
+) -> Result<(), String> {
+    let mut children: Vec<Child> = Vec::new();
+    let mut restream: Option<Child> = None;
+    let outcome = async {
+        for relay in relays.iter_mut() {
+            relay.start(environment.relay_bin, environment.tls).await?;
+        }
+        let tls = environment.tls;
+        let env_overrides = [(
+            "RESTREAM_MOQ_CA_DIR",
+            tls.ca_pem
+                .parent()
+                .expect("CA directory")
+                .display()
+                .to_string(),
+        )];
+        restream = Some(
+            start_restream_child_with_env(
+                &default_restream_bin(),
+                &environment.ports,
+                &default_work_db_path(environment.work_dir, "moq-moxygen-interop.sqlite"),
+                &environment.work_dir.join("restream.log"),
+                &env_overrides,
+            )
+            .await?,
+        );
+        let api = login_api(&environment.ports).await?;
+        let pipeline = create_resource_pipeline(&api, "moq-moxygen-egress", STREAM_KEY).await?;
+        for relay in relays.iter() {
+            let url = format!(
+                "moqt://127.0.0.1:{}{RELAY_ENDPOINT}?broadcast={}&version={}&ca=ca.pem",
+                relay.port,
+                relay.broadcast(),
+                relay.alpn()
+            );
+            let output = create_output(
+                &api,
+                &pipeline,
+                &format!("moxygen-d{}", relay.draft),
+                &url,
+                "source",
+            )
+            .await?;
+            start_output(&api, &pipeline, &output).await?;
+        }
+        let publish_url = format!(
+            "rtmp://127.0.0.1:{}/live/{STREAM_KEY}",
+            environment.ports.rtmp
+        );
+        children.push(spawn_logged_ffmpeg(
+            environment.ffmpeg,
+            &crate::hls_push_duty::run::rtmp_publisher_args(environment.fixture, &publish_url),
+            &environment.work_dir.join("publisher.log"),
+            "moq-moxygen-publisher",
+        )?);
+        wait_for_api_input_live(&api, &pipeline, INPUT_TIMEOUT).await?;
+        wait_for_api_input_media_ready(&api, &pipeline, INPUT_TIMEOUT).await?;
+
+        for relay in relays.iter_mut() {
+            verify_moxygen_relay(environment, relay, checks).await;
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    for mut child in children.drain(..) {
+        stop_child(&mut child).await;
+    }
+    if let Some(mut child) = restream.take() {
+        stop_child(&mut child).await;
+    }
+    outcome
+}
+
+/// Check one draft's publish acceptance and read-back capture.
+async fn verify_moxygen_relay(
+    environment: &MoxygenEnvironment<'_>,
+    relay: &mut MoxygenRelay,
+    checks: &mut Checks,
+) {
+    let draft = relay.draft;
+    let (alpn, broadcast) = (relay.alpn(), relay.broadcast());
+    let published = relay
+        .wait_log(PUBLISH_TIMEOUT, |log| namespace_status(log, &broadcast).1)
+        .await;
+    let log = std::fs::read_to_string(&relay.log).unwrap_or_default();
+    let (ok, mut detail) = relay_verdict(&log, &alpn, &broadcast);
+    if let Err(tail) = &published {
+        detail["logTail"] = json!(tail);
+    }
+    checks.record(&format!("d{draft}RestreamPublish"), ok, detail);
+    if !ok {
+        return;
+    }
+    let url = relay.connect_url();
+    let capture = environment.work_dir.join(format!("d{draft}-readback.ts"));
+    let target = CliTarget {
+        url: &url,
+        ca: &environment.tls.ca_pem,
+        broadcast: &broadcast,
+        version: relay.cli_version(),
+    };
+    let probe = match capture_export(environment.moq, &target, &capture, CAPTURE_SECS).await {
+        Ok(_) => {
+            ffprobe_live_sample(
+                &capture.display().to_string(),
+                &capture.with_extension("probe.json"),
+                CAPTURE_SECS + 10,
+                "5M",
+                "5M",
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    checks.record_sample(
+        &format!("d{draft}ReadBack"),
+        probe,
+        environment.input_fps,
+        MIN_SPAN_SECS,
+    );
 }
 
 #[cfg(test)]

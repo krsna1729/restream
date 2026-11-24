@@ -111,10 +111,6 @@ struct ProcMemRollup {
     swap_kb: u64,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the function-size limit (#147); split it before growing it"
-)]
 pub(super) async fn sample_resource_window(
     env: &ResourceSweepEnv,
     stack: &mut ResourceSweepStack,
@@ -131,11 +127,6 @@ pub(super) async fn sample_resource_window(
         &meta,
     )
     .await?;
-    let mut samples = Vec::new();
-    let mut prev_ticks = read_proc_stat_ticks(stack.restream_pid)?;
-    let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();
-    let mut prev_ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
-    let mut prev_instant = Instant::now();
     let srt_sink = stack
         .sink_peers
         .srt_pool
@@ -159,90 +150,14 @@ pub(super) async fn sample_resource_window(
             .collect();
     save_engine_health(env, api, &meta, "start").await;
     save_media_executor(env, api, &meta, "start").await;
+    let mut clocks = SampleClocks::new(stack.restream_pid)?;
     let rated_started = Instant::now();
     let srt_drops_start = srt_sink.as_ref().map(|sink| sink.drops());
     let thread_ticks_start = super::thread_cpu::thread_ticks(stack.restream_pid);
     let runqueue_start = super::thread_cpu::thread_runqueue_ns(stack.restream_pid);
+    let mut samples = Vec::new();
     while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
-        tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
-        let now = Instant::now();
-        let ticks = read_proc_stat_ticks(stack.restream_pid)?;
-        let ffmpeg = ffmpeg_children_stats(stack.restream_pid)?;
-        let interval_secs = prev_instant.elapsed().as_secs_f64().max(0.001);
-        let (restream_cpu_pct, ffmpeg_cpu_pct) = cpu_pcts(
-            ticks,
-            prev_ticks,
-            &ffmpeg.pids,
-            &mut prev_ffmpeg_ticks,
-            interval_secs,
-        );
-        let total_cpu_pct = restream_cpu_pct + ffmpeg_cpu_pct;
-        let ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
-        let voluntary_ctxt_switches_per_sec =
-            ctxt.voluntary.saturating_sub(prev_ctxt.voluntary) as f64 / interval_secs;
-        let nonvoluntary_ctxt_switches_per_sec =
-            ctxt.nonvoluntary.saturating_sub(prev_ctxt.nonvoluntary) as f64 / interval_secs;
-        prev_ticks = ticks;
-        prev_ctxt = ctxt;
-        prev_instant = now;
-        let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
-        let rss_kb = read_proc_status_kb_checked(stack.restream_pid, "VmRSS", &env.restream_log)?;
-        let rollup = read_smaps_rollup(stack.restream_pid)?;
-        // One fixed-shape snapshot per sample: the full telemetry and
-        // health payloads cost enough Restream CPU to bias the measurement.
-        let measure = stack.api.get_json("/api/v1/measure").await?;
-        let system = stack.api.get_json("/metrics/system?view=summary").await?;
-        let restream_cpus = read_proc_status_text(stack.restream_pid, "Cpus_allowed_list");
-        super::packet_contract::record(
-            &system,
-            interval_secs,
-            restream_cpu_pct,
-            &meta,
-            restream_cpus.as_deref(),
-        )
-        .await?;
-        let kb = |field: &str| measure[field].as_u64().unwrap_or(0) / 1024;
-        let retained_kb = kb("retainedPayloadBytes");
-        let source_ring_kb = kb("sourceRingPayloadBytes");
-        let transcoder_ring_kb = kb("transcoderRingPayloadBytes");
-        let tsmux_ring_kb = kb("tsMuxerRingPayloadBytes");
-        let count = |field: &str| measure[field].as_u64().unwrap_or(0) as usize;
-        let sample = ResourceSample {
-            scenario: meta.scenario.to_string(),
-            label: meta.label.clone(),
-            lifecycle: env.lifecycle.as_str().to_string(),
-            pipelines: meta.pipelines,
-            outputs: meta.outputs,
-            ingest_types: meta.ingest_types.clone(),
-            egress_mix: meta.egress_mix.clone(),
-            transcode: meta.transcode.to_string(),
-            restream_cpu_pct,
-            ffmpeg_cpu_pct,
-            total_cpu_pct,
-            voluntary_ctxt_switches_per_sec,
-            nonvoluntary_ctxt_switches_per_sec,
-            thread_count,
-            rss_kb,
-            ffmpeg_count: ffmpeg.count,
-            ffmpeg_rss_kb: ffmpeg.rss_kb,
-            anonymous_kb: rollup.anonymous_kb,
-            private_dirty_kb: rollup.private_dirty_kb,
-            private_clean_kb: rollup.private_clean_kb,
-            shared_clean_kb: rollup.shared_clean_kb,
-            shared_dirty_kb: rollup.shared_dirty_kb,
-            pss_kb: rollup.pss_kb,
-            swap_kb: rollup.swap_kb,
-            retained_kb,
-            source_ring_kb,
-            transcoder_ring_kb,
-            tsmux_ring_kb,
-            active_transcoder_buffers: measure["activeTranscoderBuffers"].as_u64().unwrap_or(0),
-            ingests: count("ingests"),
-            egresses: count("egresses"),
-            stages: count("stages"),
-            pipeline_count: count("pipelines"),
-            unattributed_kb: rss_kb.saturating_sub(retained_kb),
-        };
+        let (sample, measure) = collect_resource_sample(env, stack, &meta, &mut clocks).await?;
         append_line(
             &env.samples_jsonl,
             &format!(
@@ -276,6 +191,118 @@ pub(super) async fn sample_resource_window(
             .add_hls(hls.window(rated_started, Instant::now()));
     }
     Ok(aggregate)
+}
+
+/// Rolling per-process counters between two samples of one rated window.
+struct SampleClocks {
+    prev_ticks: u64,
+    prev_ffmpeg_ticks: HashMap<u32, u64>,
+    prev_ctxt: ProcCtxtSwitches,
+    prev_instant: Instant,
+}
+
+impl SampleClocks {
+    fn new(pid: u32) -> Result<Self, String> {
+        Ok(Self {
+            prev_ticks: read_proc_stat_ticks(pid)?,
+            prev_ffmpeg_ticks: HashMap::new(),
+            prev_ctxt: read_proc_ctxt_switches(pid)?,
+            prev_instant: Instant::now(),
+        })
+    }
+}
+
+/// Sleep one sample interval and collect the sample's process, memory and
+/// ring-buffer counters. Returns the sample and the `/api/v1/measure` payload
+/// for the caller's delivery sample.
+async fn collect_resource_sample(
+    env: &ResourceSweepEnv,
+    stack: &ResourceSweepStack,
+    meta: &ResourceScenarioMeta<'_>,
+    clocks: &mut SampleClocks,
+) -> Result<(ResourceSample, Value), String> {
+    tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
+    let now = Instant::now();
+    let ticks = read_proc_stat_ticks(stack.restream_pid)?;
+    let ffmpeg = ffmpeg_children_stats(stack.restream_pid)?;
+    let interval_secs = clocks.prev_instant.elapsed().as_secs_f64().max(0.001);
+    let (restream_cpu_pct, ffmpeg_cpu_pct) = cpu_pcts(
+        ticks,
+        clocks.prev_ticks,
+        &ffmpeg.pids,
+        &mut clocks.prev_ffmpeg_ticks,
+        interval_secs,
+    );
+    let total_cpu_pct = restream_cpu_pct + ffmpeg_cpu_pct;
+    let ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
+    let voluntary_ctxt_switches_per_sec =
+        ctxt.voluntary.saturating_sub(clocks.prev_ctxt.voluntary) as f64 / interval_secs;
+    let nonvoluntary_ctxt_switches_per_sec =
+        ctxt.nonvoluntary
+            .saturating_sub(clocks.prev_ctxt.nonvoluntary) as f64
+            / interval_secs;
+    clocks.prev_ticks = ticks;
+    clocks.prev_ctxt = ctxt;
+    clocks.prev_instant = now;
+    let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
+    let rss_kb = read_proc_status_kb_checked(stack.restream_pid, "VmRSS", &env.restream_log)?;
+    let rollup = read_smaps_rollup(stack.restream_pid)?;
+    // One fixed-shape snapshot per sample: the full telemetry and health
+    // payloads cost enough Restream CPU to bias the measurement.
+    let measure = stack.api.get_json("/api/v1/measure").await?;
+    let system = stack.api.get_json("/metrics/system?view=summary").await?;
+    let restream_cpus = read_proc_status_text(stack.restream_pid, "Cpus_allowed_list");
+    super::packet_contract::record(
+        &system,
+        interval_secs,
+        restream_cpu_pct,
+        meta,
+        restream_cpus.as_deref(),
+    )
+    .await?;
+    let kb = |field: &str| measure[field].as_u64().unwrap_or(0) / 1024;
+    let retained_kb = kb("retainedPayloadBytes");
+    let source_ring_kb = kb("sourceRingPayloadBytes");
+    let transcoder_ring_kb = kb("transcoderRingPayloadBytes");
+    let tsmux_ring_kb = kb("tsMuxerRingPayloadBytes");
+    let count = |field: &str| measure[field].as_u64().unwrap_or(0) as usize;
+    let sample = ResourceSample {
+        scenario: meta.scenario.to_string(),
+        label: meta.label.clone(),
+        lifecycle: env.lifecycle.as_str().to_string(),
+        pipelines: meta.pipelines,
+        outputs: meta.outputs,
+        ingest_types: meta.ingest_types.clone(),
+        egress_mix: meta.egress_mix.clone(),
+        transcode: meta.transcode.to_string(),
+        restream_cpu_pct,
+        ffmpeg_cpu_pct,
+        total_cpu_pct,
+        voluntary_ctxt_switches_per_sec,
+        nonvoluntary_ctxt_switches_per_sec,
+        thread_count,
+        rss_kb,
+        ffmpeg_count: ffmpeg.count,
+        ffmpeg_rss_kb: ffmpeg.rss_kb,
+        anonymous_kb: rollup.anonymous_kb,
+        private_dirty_kb: rollup.private_dirty_kb,
+        private_clean_kb: rollup.private_clean_kb,
+        shared_clean_kb: rollup.shared_clean_kb,
+        shared_dirty_kb: rollup.shared_dirty_kb,
+        pss_kb: rollup.pss_kb,
+        swap_kb: rollup.swap_kb,
+        retained_kb,
+        source_ring_kb,
+        transcoder_ring_kb,
+        tsmux_ring_kb,
+        active_transcoder_buffers: measure["activeTranscoderBuffers"].as_u64().unwrap_or(0),
+        ingests: count("ingests"),
+        egresses: count("egresses"),
+        stages: count("stages"),
+        pipeline_count: count("pipelines"),
+        unattributed_kb: rss_kb.saturating_sub(retained_kb),
+    };
+    Ok((sample, measure))
 }
 
 pub(super) fn summarize_resource_samples(

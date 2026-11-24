@@ -578,10 +578,6 @@ pub(super) async fn create_mixed_pipeline(
     Ok((pipeline_id, stream_key))
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 pub(super) async fn run_mixed_file_config(
     env: &MixedEnv,
     api: &RampApi,
@@ -596,40 +592,12 @@ pub(super) async fn run_mixed_file_config(
         env.output_groups.as_deref(),
     )?;
     let total = n * output_cases.len();
+    let ingest = start_file_mixed_ingest(env, api, case).await?;
 
-    let fixture = mixed_input_fixture(case)?;
-
-    let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
-    let media_dest = env.media_dir.join(&fixture_name);
-    if !media_dest.exists() {
-        std::fs::copy(&fixture, &media_dest).map_err(|e| e.to_string())?;
-    }
-
-    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
-
-    api.put_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/file-ingest"),
-        json!({"filename": fixture_name, "loop": true}),
-    )
-    .await?;
-
-    let ingest_list = api.get_json("/api/v1/ingests").await?;
-    let ingest_id = ingest_list
-        .as_array()
-        .and_then(|arr| {
-            arr.iter()
-                .find(|i| i["streamKey"].as_str() == Some(&stream_key))
-        })
-        .and_then(|i| i["id"].as_str())
-        .ok_or("file ingest not found in list")?
-        .to_string();
-
-    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
-        .await?;
-    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let hls_preview =
-        verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
-    let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
+        verify_optional_mixed_hls_preview(env, api, cfg, &ingest.pipeline_id, case, resume).await?;
+    let recording =
+        verify_mixed_recording(env, api, cfg, &ingest.pipeline_id, case, resume).await?;
     let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
     if !env.skip_load {
         snapshot_mixed(
@@ -647,7 +615,7 @@ pub(super) async fn run_mixed_file_config(
     add_mixed_outputs_and_gate(
         env,
         api,
-        &pipeline_id,
+        &ingest.pipeline_id,
         restream_pid,
         case,
         &output_cases,
@@ -658,7 +626,6 @@ pub(super) async fn run_mixed_file_config(
     )
     .await?;
 
-    let duration_secs: u64 = 10;
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
     }
@@ -673,41 +640,23 @@ pub(super) async fn run_mixed_file_config(
     )
     .await?;
 
-    println!("[{cfg}] sustaining {total} outputs for {duration_secs}s");
-    tokio::time::sleep(Duration::from_secs(duration_secs)).await;
-    if !env.skip_load {
-        snapshot_mixed(
-            env,
-            restream_pid,
-            cfg,
-            &format!("after {duration_secs}s sustained"),
-        )
-        .await?;
-    }
+    let rss_peak = sustain_file_mixed_outputs(env, cfg, restream_pid, total).await?;
 
-    let rss_peak = process_rss_kb(restream_pid).await.unwrap_or(0);
-    let growth_kb = rss_peak.saturating_sub(rss_baseline);
-
-    stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
-    wait_for_outputs_stopped(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await?;
-    delete_and_verify_mixed_outputs(
-        env,
-        api,
-        cfg,
-        &pipeline_id,
-        &output_ids,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
+    stop_file_mixed_run(env, api, cfg, &ingest.pipeline_id, &output_ids).await?;
+    api.post_empty(&format!("/api/v1/ingests/{}/stop", ingest.ingest_id))
         .await?;
 
     if env.check_selected("runtime-log") {
         let runtime_log_started = Instant::now();
-        verify_mixed_runtime_log_hygiene(env, cfg, &pipeline_id, runtime_log_started.elapsed())?;
+        verify_mixed_runtime_log_hygiene(
+            env,
+            cfg,
+            &ingest.pipeline_id,
+            runtime_log_started.elapsed(),
+        )?;
     }
 
+    let growth_kb = rss_peak.saturating_sub(rss_baseline);
     println!(
         "[{cfg}] done: {total} outputs, baseline={rss_baseline}kB peak={rss_peak}kB growth={growth_kb}kB"
     );
@@ -734,6 +683,98 @@ pub(super) async fn run_mixed_file_config(
         result["hlsPreview"] = summary;
     }
     Ok(result)
+}
+
+struct FileMixedIngest {
+    pipeline_id: String,
+    ingest_id: String,
+}
+
+/// Copies the fixture, creates the pipeline, and starts looping file ingest.
+async fn start_file_mixed_ingest(
+    env: &MixedEnv,
+    api: &RampApi,
+    case: MixedInputCase,
+) -> Result<FileMixedIngest, String> {
+    let fixture = mixed_input_fixture(case)?;
+
+    let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
+    let media_dest = env.media_dir.join(&fixture_name);
+    if !media_dest.exists() {
+        std::fs::copy(&fixture, &media_dest).map_err(|e| e.to_string())?;
+    }
+
+    let (pipeline_id, stream_key) = create_mixed_pipeline(api, case.scenario_id()).await?;
+
+    api.put_json(
+        &format!("/api/v1/pipelines/{pipeline_id}/file-ingest"),
+        json!({"filename": fixture_name, "loop": true}),
+    )
+    .await?;
+
+    let ingest_list = api.get_json("/api/v1/ingests").await?;
+    let ingest_id = ingest_list
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|i| i["streamKey"].as_str() == Some(&stream_key))
+        })
+        .and_then(|i| i["id"].as_str())
+        .ok_or("file ingest not found in list")?
+        .to_string();
+
+    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
+        .await?;
+    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
+
+    Ok(FileMixedIngest {
+        pipeline_id,
+        ingest_id,
+    })
+}
+
+/// Sustains the output load for ten seconds and samples peak RSS.
+async fn sustain_file_mixed_outputs(
+    env: &MixedEnv,
+    cfg: &str,
+    restream_pid: u32,
+    total: usize,
+) -> Result<u64, String> {
+    let duration_secs: u64 = 10;
+    println!("[{cfg}] sustaining {total} outputs for {duration_secs}s");
+    tokio::time::sleep(Duration::from_secs(duration_secs)).await;
+    if !env.skip_load {
+        snapshot_mixed(
+            env,
+            restream_pid,
+            cfg,
+            &format!("after {duration_secs}s sustained"),
+        )
+        .await?;
+    }
+    Ok(process_rss_kb(restream_pid).await.unwrap_or(0))
+}
+
+/// Stops and deletes all outputs for the file-ingest scenario.
+async fn stop_file_mixed_run(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    output_ids: &[String],
+) -> Result<(), String> {
+    stop_mixed_outputs(api, pipeline_id, output_ids).await;
+    wait_for_outputs_stopped(api, pipeline_id, output_ids, Duration::from_secs(60)).await?;
+    delete_and_verify_mixed_outputs(
+        env,
+        api,
+        cfg,
+        pipeline_id,
+        output_ids,
+        Duration::from_secs(30),
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

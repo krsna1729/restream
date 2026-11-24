@@ -408,10 +408,6 @@ fn build_listener_plan(port: u16, udp_buffer: usize) -> Result<OwnerListenerPlan
     Ok(plan)
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "predates the complexity limit; split it before growing it"
-)]
 fn sink_thread(
     port: u16,
     plan: OwnerListenerPlan,
@@ -420,7 +416,7 @@ fn sink_thread(
     counters: Arc<SinkCounters>,
     ready_tx: SyncSender<Result<(), String>>,
 ) {
-    let (mut owner, runtime) = match build_owner(&plan) {
+    let (owner, runtime) = match build_owner(&plan) {
         Ok(built) => {
             let _ = ready_tx.send(Ok(()));
             built
@@ -430,104 +426,186 @@ fn sink_thread(
             return;
         }
     };
-    let epoch = Instant::now();
-    let now =
-        || Timestamp::from_micros(epoch.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
-    let idle_us = u64::try_from(IDLE_PARK.as_micros()).unwrap_or(u64::MAX);
-    let mut events: Vec<AdmissionEvent> = Vec::with_capacity(64);
-    // Connection index and bytes per logical peer (its raw id is private).
-    let mut per_peer: HashMap<LogicalPeerId, (u64, u64)> = HashMap::new();
-    let mut continuity = check_ts.then(TsContinuity::new);
-    let mut published_at = Instant::now();
+    let mut sink = SinkThreadState::new(port, owner, runtime, check_ts, counters);
     while !stop.load(Ordering::Acquire) {
+        if !sink.poll_once() {
+            break;
+        }
+        sink.park();
+    }
+    sink.shutdown();
+}
+
+/// One sink Owner thread's live state: the Owner, its runtime, the counters it
+/// updates, and the per-connection view published every `PUBLISH_EVERY`.
+struct SinkThreadState {
+    port: u16,
+    owner: Owner,
+    runtime: compio::runtime::Runtime,
+    counters: Arc<SinkCounters>,
+    epoch: Instant,
+    idle_us: u64,
+    at: Timestamp,
+    work_remaining: bool,
+    events: Vec<AdmissionEvent>,
+    /// Connection index and bytes per logical peer (its raw id is private).
+    per_peer: HashMap<LogicalPeerId, (u64, u64)>,
+    continuity: Option<TsContinuity>,
+    published_at: Instant,
+}
+
+impl SinkThreadState {
+    fn new(
+        port: u16,
+        owner: Owner,
+        runtime: compio::runtime::Runtime,
+        check_ts: bool,
+        counters: Arc<SinkCounters>,
+    ) -> Self {
+        Self {
+            port,
+            owner,
+            runtime,
+            counters,
+            epoch: Instant::now(),
+            idle_us: u64::try_from(IDLE_PARK.as_micros()).unwrap_or(u64::MAX),
+            at: Timestamp::from_micros(0),
+            work_remaining: false,
+            events: Vec::with_capacity(64),
+            per_peer: HashMap::new(),
+            continuity: check_ts.then(TsContinuity::new),
+            published_at: Instant::now(),
+        }
+    }
+
+    fn now(&self) -> Timestamp {
+        Timestamp::from_micros(self.epoch.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
+    }
+
+    /// Drive one poll of the Owner; `false` when it faulted and the port stops.
+    fn poll_once(&mut self) -> bool {
         // One non-blocking driver poll per visit reaps TX completions and RX.
-        runtime.enter(|| {
-            runtime.poll_with(Some(Duration::ZERO));
-            runtime.run();
+        self.runtime.enter(|| {
+            self.runtime.poll_with(Some(Duration::ZERO));
+            self.runtime.run();
         });
-        let at = now();
-        let report = runtime.block_on(owner.service(at, OwnerServiceBudget::default()));
-        if let Some(fault) = owner.fault() {
+        self.at = self.now();
+        let report = self
+            .runtime
+            .block_on(self.owner.service(self.at, OwnerServiceBudget::default()));
+        if let Some(fault) = self.owner.fault() {
             tracing::error!(
-                port,
+                self.port,
                 ?fault,
                 "harness SRT sink Owner faulted; its port stops"
             );
-            counters.owner_faults.fetch_add(1, Ordering::AcqRel);
-            break;
+            self.counters.owner_faults.fetch_add(1, Ordering::AcqRel);
+            return false;
         }
-        owner.poll_listener_events(&mut events);
-        for AdmissionEvent {
-            logical_peer,
-            event,
-            ..
-        } in events.drain(..)
-        {
-            match event {
-                ConnectionEvent::Connected => {
-                    counters.accepted.fetch_add(1, Ordering::Relaxed);
-                }
-                ConnectionEvent::DataReceived { payload, .. } => {
-                    let len = payload.len() as u64;
-                    counters.discarded_bytes.fetch_add(len, Ordering::Relaxed);
-                    per_peer
-                        .entry(logical_peer)
-                        .or_insert_with(|| {
-                            (counters.next_connection.fetch_add(1, Ordering::Relaxed), 0)
-                        })
-                        .1 += len;
-                    if let Some(continuity) = continuity.as_mut() {
-                        for chunk in payload.chunks() {
-                            let tally = continuity.feed(chunk);
-                            counters
-                                .ts_packets
-                                .fetch_add(tally.packets, Ordering::Relaxed);
-                            counters
-                                .ts_continuity_errors
-                                .fetch_add(tally.errors, Ordering::Relaxed);
-                            counters
-                                .ts_misaligned
-                                .fetch_add(tally.misaligned, Ordering::Relaxed);
-                        }
-                    }
-                }
-                // A closed connection is no longer a destination: keep
-                // reused sink stacks from reporting it as a stalled one.
-                ConnectionEvent::Disconnected { .. } => {
-                    counters.closed.fetch_add(1, Ordering::Relaxed);
-                    if let Some((index, _)) = per_peer.remove(&logical_peer) {
-                        lock(&counters.per_peer).remove(&(port, index));
-                    }
-                }
-                _ => {}
-            }
-        }
-        if published_at.elapsed() >= PUBLISH_EVERY {
-            published_at = Instant::now();
-            lock(&counters.per_peer).extend(
-                per_peer
-                    .values()
-                    .map(|(index, bytes)| ((port, *index), *bytes)),
+        self.owner.poll_listener_events(&mut self.events);
+        for event in self.events.drain(..) {
+            apply_event(
+                self.port,
+                &self.counters,
+                &mut self.per_peer,
+                self.continuity.as_mut(),
+                event,
             );
-            if let Some(rx) = owner.rx_stats().listener {
-                lock(&counters.owner_rx).insert(
-                    port,
-                    OwnerRxDrops {
-                        dropped: rx.dropped,
-                        buffer_exhaustions: rx.buffer_exhaustions,
-                        truncated: rx.truncated,
-                    },
-                );
-            }
         }
-        if !report.work_remaining {
-            let wait =
-                Duration::from_micros(owner.time_until_next_deadline(at, idle_us)).min(IDLE_PARK);
-            runtime.block_on(owner.wait_for_activity(wait));
+        if self.published_at.elapsed() >= PUBLISH_EVERY {
+            self.publish();
+        }
+        self.work_remaining = report.work_remaining;
+        true
+    }
+
+    fn publish(&mut self) {
+        self.published_at = Instant::now();
+        lock(&self.counters.per_peer).extend(
+            self.per_peer
+                .values()
+                .map(|(index, bytes)| ((self.port, *index), *bytes)),
+        );
+        if let Some(rx) = self.owner.rx_stats().listener {
+            lock(&self.counters.owner_rx).insert(
+                self.port,
+                OwnerRxDrops {
+                    dropped: rx.dropped,
+                    buffer_exhaustions: rx.buffer_exhaustions,
+                    truncated: rx.truncated,
+                },
+            );
         }
     }
-    if !runtime.block_on(owner.shutdown_and_drain(SHUTDOWN_DRAIN)) {
-        tracing::warn!(port, "harness SRT sink Owner did not reach quiescence");
+
+    fn park(&mut self) {
+        if self.work_remaining {
+            return;
+        }
+        let wait =
+            Duration::from_micros(self.owner.time_until_next_deadline(self.at, self.idle_us))
+                .min(IDLE_PARK);
+        self.runtime.block_on(self.owner.wait_for_activity(wait));
+    }
+
+    fn shutdown(&mut self) {
+        if !self
+            .runtime
+            .block_on(self.owner.shutdown_and_drain(SHUTDOWN_DRAIN))
+        {
+            tracing::warn!(self.port, "harness SRT sink Owner did not reach quiescence");
+        }
+    }
+}
+
+/// Apply one admission event to the sink counters and per-peer view.
+fn apply_event(
+    port: u16,
+    counters: &SinkCounters,
+    per_peer: &mut HashMap<LogicalPeerId, (u64, u64)>,
+    mut continuity: Option<&mut TsContinuity>,
+    event: AdmissionEvent,
+) {
+    let AdmissionEvent {
+        logical_peer,
+        event,
+        ..
+    } = event;
+    match event {
+        ConnectionEvent::Connected => {
+            counters.accepted.fetch_add(1, Ordering::Relaxed);
+        }
+        ConnectionEvent::DataReceived { payload, .. } => {
+            let len = payload.len() as u64;
+            counters.discarded_bytes.fetch_add(len, Ordering::Relaxed);
+            per_peer
+                .entry(logical_peer)
+                .or_insert_with(|| (counters.next_connection.fetch_add(1, Ordering::Relaxed), 0))
+                .1 += len;
+            if let Some(continuity) = continuity.as_mut() {
+                for chunk in payload.chunks() {
+                    let tally = continuity.feed(chunk);
+                    counters
+                        .ts_packets
+                        .fetch_add(tally.packets, Ordering::Relaxed);
+                    counters
+                        .ts_continuity_errors
+                        .fetch_add(tally.errors, Ordering::Relaxed);
+                    counters
+                        .ts_misaligned
+                        .fetch_add(tally.misaligned, Ordering::Relaxed);
+                }
+            }
+        }
+        // A closed connection is no longer a destination: keep reused sink
+        // stacks from reporting it as a stalled one.
+        ConnectionEvent::Disconnected { .. } => {
+            counters.closed.fetch_add(1, Ordering::Relaxed);
+            if let Some((index, _)) = per_peer.remove(&logical_peer) {
+                lock(&counters.per_peer).remove(&(port, index));
+            }
+        }
+        _ => {}
     }
 }
 

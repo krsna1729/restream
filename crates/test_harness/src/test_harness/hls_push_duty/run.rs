@@ -353,10 +353,6 @@ impl Session {
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     async fn sample(
         &self,
         options: &HlsPushOptions,
@@ -393,107 +389,19 @@ impl Session {
 
         let mut rows = Vec::with_capacity(self.tasks.len());
         let mut failures: Vec<String> = Vec::new();
+        let context = SampleContext {
+            options,
+            window,
+            media_executor: &media_executor,
+            shards: &shards,
+            shard_lookup: &shard_lookup,
+            egress_by_output: &egress_by_output,
+            baselines,
+        };
         for (index, task) in self.tasks.iter().enumerate() {
-            let probe = self
-                .api
-                .get_json(&format!("/api/v1/pipelines/{}/probe", task.pipeline_id))
-                .await
-                .unwrap_or(Value::Null);
-            let egress = egress_by_output.get(task.output_id.as_str()).copied();
-            let shard = egress
-                .and_then(|egress| egress.get("fabricFeed").and_then(Value::as_str))
-                .and_then(|feed| {
-                    shards
-                        .iter()
-                        .find(|shard| shard.get("feedId").and_then(Value::as_str) == Some(feed))
-                })
-                .or_else(|| {
-                    let protocol = egress
-                        .and_then(|egress| egress.get("fabricFeed").and_then(Value::as_str))
-                        .and_then(|feed| feed.split(':').next())
-                        .unwrap_or("sink")
-                        .to_string();
-                    let index =
-                        egress.and_then(|egress| egress.get("shardId").and_then(Value::as_u64))?;
-                    shard_lookup.get(&(protocol, index))
-                });
-            let sink_summary = task.metrics.summary();
-            let executor =
-                pipeline_poll_window(&window.executor_start, &media_executor, &task.pipeline_id);
-            let input = input_published_summary(&probe);
-            let keyframe_count = gop_keyframe_count(&probe);
-            let (baseline_probe, baseline_sink) = baselines
-                .get(index)
-                .map(|(probe, sink)| (probe.clone(), sink.clone()))
-                .unwrap_or((Value::Null, Value::Null));
-            // The rated window is what this mode measures, so a check requires
-            // progress *inside* it: an output that delivered during readiness
-            // and then stalled for the whole window passes a lifetime check.
-            // The pulled preview is Restream's own HLS output, whose audio
-            // cadence is the preview's, so a pull pipeline is held to the
-            // hls-pull-duty gate's checks rather than the push ingests'.
-            let (published_now, delivered_now) = if task.kind == "hls-pull" {
-                (pull_published_ok(&probe), pull_delivered_ok(&sink_summary))
-            } else {
-                (
-                    published_ok(&probe, keyframe_count),
-                    delivered_ok(&sink_summary),
-                )
-            };
-            let published_progress = published_progress_ok(&baseline_probe, &probe);
-            let delivered_progress = delivered_progress_ok(&baseline_sink, &sink_summary);
-            let published = published_now && published_progress;
-            let delivered = delivered_now && delivered_progress;
-            if !published_now {
-                failures.push(format!("{}: ingest published no media", task.name));
-            }
-            if !published_progress {
-                failures.push(format!(
-                    "{}: ingest received no new media during the window",
-                    task.name
-                ));
-            }
-            if !delivered_now {
-                failures.push(format!("{}: output delivered no media", task.name));
-            }
-            if !delivered_progress {
-                failures.push(format!(
-                    "{}: output delivered no new media during the window",
-                    task.name
-                ));
-            }
-            if task.kind == "hls"
-                && let Err(error) = check_mean_poll_cpu(&executor, MAX_MEAN_POLL_CPU_US)
-            {
-                failures.push(format!("{}: {error}", task.name));
-            }
-            rows.push(json!({
-                "name": task.name,
-                "kind": task.kind,
-                "pipelineId": task.pipeline_id,
-                "streamKey": task.stream_key,
-                "segmentType": (task.kind == "hls").then(|| options.segment_type.as_str()),
-                "method": (task.kind == "hls").then(|| options.method.as_str()),
-                "outputId": task.output_id,
-                "sinkPort": task.sink_port,
-                "input": input,
-                "publishedPackets": {
-                    "video": sink_summary.get("videoCount").cloned().unwrap_or(Value::Null),
-                    "audio": sink_summary.get("audioCount").cloned().unwrap_or(Value::Null),
-                    "keyframes": sink_summary.get("keyframeCount").cloned().unwrap_or(Value::Null),
-                    "bytes": sink_summary.get("bytes").cloned().unwrap_or(Value::Null),
-                },
-                "sink": sink_summary,
-                "windowDelivery": window_delivery(&baseline_sink, &sink_summary, window.secs),
-                "executor": executor,
-                "egress": pipeline_egress_summary(egress, shard),
-                "checks": {
-                    "inputPublished": published,
-                    "outputDelivered": delivered,
-                    "inputPublishedProgress": published_progress,
-                    "outputDeliveredProgress": delivered_progress,
-                },
-            }));
+            let (row, task_failures) = self.sample_task(&context, index, task).await;
+            rows.push(row);
+            failures.extend(task_failures);
         }
 
         let passed = failures.is_empty();
@@ -558,6 +466,96 @@ impl Session {
             ));
         }
         Ok(report)
+    }
+
+    /// Sample one pipeline under test and return its row plus failures.
+    async fn sample_task(
+        &self,
+        context: &SampleContext<'_>,
+        index: usize,
+        task: &PipelineTask,
+    ) -> (Value, Vec<String>) {
+        let mut failures = Vec::new();
+        let probe = self
+            .api
+            .get_json(&format!("/api/v1/pipelines/{}/probe", task.pipeline_id))
+            .await
+            .unwrap_or(Value::Null);
+        let egress = context
+            .egress_by_output
+            .get(task.output_id.as_str())
+            .copied();
+        let shard = join_egress_shard(egress, context.shards, context.shard_lookup);
+        let sink_summary = task.metrics.summary();
+        let executor = pipeline_poll_window(
+            &context.window.executor_start,
+            context.media_executor,
+            &task.pipeline_id,
+        );
+        let input = input_published_summary(&probe);
+        let keyframe_count = gop_keyframe_count(&probe);
+        let (baseline_probe, baseline_sink) = context
+            .baselines
+            .get(index)
+            .map(|(probe, sink)| (probe.clone(), sink.clone()))
+            .unwrap_or((Value::Null, Value::Null));
+        // The rated window is what this mode measures, so a check requires
+        // progress *inside* it: an output that delivered during readiness
+        // and then stalled for the whole window passes a lifetime check.
+        // The pulled preview is Restream's own HLS output, whose audio
+        // cadence is the preview's, so a pull pipeline is held to the
+        // hls-pull-duty gate's checks rather than the push ingests'.
+        let (published_now, delivered_now) = if task.kind == "hls-pull" {
+            (pull_published_ok(&probe), pull_delivered_ok(&sink_summary))
+        } else {
+            (
+                published_ok(&probe, keyframe_count),
+                delivered_ok(&sink_summary),
+            )
+        };
+        let published_progress = published_progress_ok(&baseline_probe, &probe);
+        let delivered_progress = delivered_progress_ok(&baseline_sink, &sink_summary);
+        record_task_failures(
+            &mut failures,
+            &task.name,
+            published_now,
+            published_progress,
+            delivered_now,
+            delivered_progress,
+        );
+        if task.kind == "hls"
+            && let Err(error) = check_mean_poll_cpu(&executor, MAX_MEAN_POLL_CPU_US)
+        {
+            failures.push(format!("{}: {error}", task.name));
+        }
+        let row = json!({
+            "name": task.name,
+            "kind": task.kind,
+            "pipelineId": task.pipeline_id,
+            "streamKey": task.stream_key,
+            "segmentType": (task.kind == "hls").then(|| context.options.segment_type.as_str()),
+            "method": (task.kind == "hls").then(|| context.options.method.as_str()),
+            "outputId": task.output_id,
+            "sinkPort": task.sink_port,
+            "input": input,
+            "publishedPackets": {
+                "video": sink_summary.get("videoCount").cloned().unwrap_or(Value::Null),
+                "audio": sink_summary.get("audioCount").cloned().unwrap_or(Value::Null),
+                "keyframes": sink_summary.get("keyframeCount").cloned().unwrap_or(Value::Null),
+                "bytes": sink_summary.get("bytes").cloned().unwrap_or(Value::Null),
+            },
+            "sink": sink_summary,
+            "windowDelivery": window_delivery(&baseline_sink, &sink_summary, context.window.secs),
+            "executor": executor,
+            "egress": pipeline_egress_summary(egress, shard),
+            "checks": {
+                "inputPublished": published_now && published_progress,
+                "outputDelivered": delivered_now && delivered_progress,
+                "inputPublishedProgress": published_progress,
+                "outputDeliveredProgress": delivered_progress,
+            },
+        });
+        (row, failures)
     }
 
     async fn shutdown(&mut self) {
@@ -632,6 +630,69 @@ pub(crate) fn hls_publisher_args(
     argv.extend(segment_type.ffmpeg_args().iter().map(|arg| arg.to_string()));
     argv.push(url.to_string());
     argv
+}
+
+/// Inputs shared by every per-task sample of one window.
+struct SampleContext<'a> {
+    options: &'a HlsPushOptions,
+    window: &'a Window,
+    media_executor: &'a Value,
+    shards: &'a [Value],
+    shard_lookup: &'a std::collections::BTreeMap<super::metrics::ShardKey, Value>,
+    egress_by_output: &'a HashMap<&'a str, &'a Value>,
+    baselines: &'a [(Value, Value)],
+}
+
+/// Join an egress' shard id to the shard row: the fabric feed first, then the
+/// protocol + shard index lookup.
+fn join_egress_shard<'a>(
+    egress: Option<&'a Value>,
+    shards: &'a [Value],
+    shard_lookup: &'a std::collections::BTreeMap<super::metrics::ShardKey, Value>,
+) -> Option<&'a Value> {
+    egress
+        .and_then(|egress| egress.get("fabricFeed").and_then(Value::as_str))
+        .and_then(|feed| {
+            shards
+                .iter()
+                .find(|shard| shard.get("feedId").and_then(Value::as_str) == Some(feed))
+        })
+        .or_else(|| {
+            let protocol = egress
+                .and_then(|egress| egress.get("fabricFeed").and_then(Value::as_str))
+                .and_then(|feed| feed.split(':').next())
+                .unwrap_or("sink")
+                .to_string();
+            let index = egress.and_then(|egress| egress.get("shardId").and_then(Value::as_u64))?;
+            shard_lookup.get(&(protocol, index))
+        })
+}
+
+/// Record a task's publish and delivery failures in order.
+fn record_task_failures(
+    failures: &mut Vec<String>,
+    name: &str,
+    published_now: bool,
+    published_progress: bool,
+    delivered_now: bool,
+    delivered_progress: bool,
+) {
+    if !published_now {
+        failures.push(format!("{name}: ingest published no media"));
+    }
+    if !published_progress {
+        failures.push(format!(
+            "{name}: ingest received no new media during the window"
+        ));
+    }
+    if !delivered_now {
+        failures.push(format!("{name}: output delivered no media"));
+    }
+    if !delivered_progress {
+        failures.push(format!(
+            "{name}: output delivered no new media during the window"
+        ));
+    }
 }
 
 /// The RTMP sink for each pipeline needs its own port so the sink summary can

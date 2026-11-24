@@ -168,10 +168,6 @@ pub(crate) async fn run_hls_pull_duty(
 }
 
 impl Session {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "predates the function-size limit (#147); split it before growing it"
-    )]
     async fn execute(
         &mut self,
         options: &HlsPullOptions,
@@ -180,215 +176,25 @@ impl Session {
         args: &[String],
     ) -> Result<Value, String> {
         let mut checks = Checks::default();
-
-        // ── Source pipeline, fed by a real RTMP publisher ─────────────
-        let source_pipeline_id =
-            create_resource_pipeline(&self.api, "hls-pull-source", "sk-hls-pull-source").await?;
-        self.source_pipeline_id = source_pipeline_id.clone();
-        let publisher_args = crate::hls_push_duty::run::rtmp_publisher_args(
-            &plan.fixture,
-            &plan.rtmp_publish_url("sk-hls-pull-source"),
-        );
-        // The source publisher: real-time copy of the checked-in fixture over RTMP.
-        self.publisher = Some(spawn_logged_ffmpeg(
-            &plan.ffmpeg,
-            &publisher_args,
-            &plan.work_dir.join("source-publisher.log"),
-            "hls-pull-source",
-        )?);
-        wait_for_api_input_live(&self.api, &source_pipeline_id, Duration::from_secs(60)).await?;
-        wait_for_api_input_media_ready(&self.api, &source_pipeline_id, Duration::from_secs(60))
-            .await?;
-
-        let preview_url = plan.preview_master_url(&source_pipeline_id);
-        let preview_path = Plan::preview_master_path(&source_pipeline_id);
-        wait_for_preview_master(&self.api, &preview_path, PREVIEW_TIMEOUT).await?;
-        println!(
-            "[hls-pull-duty] {}",
-            json!({"phase": "source-ready", "pipelineId": source_pipeline_id, "url": preview_url})
-        );
-
-        // ── Pull pipeline: input + promoted selection + sink output ───
-        let pull_pipeline_id =
-            create_resource_pipeline(&self.api, "hls-pull-target", "sk-hls-pull-target").await?;
-        let sink = start_generalized_sink_server(plan.sink_port, self.sink_metrics.clone()).await?;
-        self.sink = Some(sink);
-        let output_url = format!("rtmp://127.0.0.1:{}/live/hls-pull-target", plan.sink_port);
-        let output_id = create_output(
-            &self.api,
+        let preview_url = self.bring_up_source(plan).await?;
+        let (pull_pipeline_id, pull_input_id, pull_source_url, cookie) =
+            self.bring_up_pull_target(plan, options).await?;
+        self.bring_up_failure_input(options, &cookie).await?;
+        self.record_input_read_back(
+            &mut checks,
             &pull_pipeline_id,
-            "sink-pull",
-            &output_url,
-            "source",
-        )
-        .await?;
-        start_output(&self.api, &pull_pipeline_id, &output_id).await?;
-        self.output_id = Some(output_id);
-
-        let cookie = self
-            .api
-            .cookie
-            .clone()
-            .ok_or("harness logged in without a session cookie to present to the preview")?;
-        let pull_source_url = options.pull_source_url(&preview_url);
-        let pull_input_id = create_pull_input(
-            &self.api,
-            &pull_pipeline_id,
-            "Pull in",
+            &pull_input_id,
             &pull_source_url,
-            &cookie,
         )
         .await?;
-        // A later-created input is a backup and does not forward; the pull
-        // graph only publishes through the selected input, so promote it
-        // before the reconciler starts the pull. Promote wakes the reconciler
-        // itself, so the first pass that sees this row sees it selected.
-        promote_input(&self.api, &pull_pipeline_id, &pull_input_id).await?;
-        self.good = Some(PullInput {
-            pipeline_id: pull_pipeline_id.clone(),
-            input_id: pull_input_id.clone(),
-            source_url: pull_source_url.clone(),
-        });
-
-        // ── The failure-reporting input ───────────────────────────────
-        // In the failing variant the good pull already carries the bad URL;
-        // otherwise a second pipeline carries it, so the gate always covers
-        // "reports a failure, does not stop the pipeline".
-        if options.fail_unresolvable {
-            self.failure = self.good.clone();
-        } else {
-            let bad_pipeline_id =
-                create_resource_pipeline(&self.api, "hls-pull-bad", "sk-hls-pull-bad").await?;
-            let bad_url = options.bad_pull_url();
-            let bad_input_id =
-                create_pull_input(&self.api, &bad_pipeline_id, "Bad pull", bad_url, &cookie)
-                    .await?;
-            self.failure = Some(PullInput {
-                pipeline_id: bad_pipeline_id,
-                input_id: bad_input_id,
-                source_url: bad_url.to_string(),
-            });
-        }
-
-        // ── Read the created input back ───────────────────────────────
-        let inputs = self.pipeline_inputs(&pull_pipeline_id).await?;
-        let row = find_input(&inputs, &pull_input_id);
-        checks.record(
-            "pullInputCreated",
-            row.is_some(),
-            json!({"inputId": pull_input_id, "found": row.is_some()}),
-        );
-        let row = row.cloned().unwrap_or(Value::Null);
-        let read_back = json!({
-            "kind": row.get("kind").cloned().unwrap_or(Value::Null),
-            "sourceUrl": row.get("sourceUrl").cloned().unwrap_or(Value::Null),
-            "variantRule": row.get("variantRule").cloned().unwrap_or(Value::Null),
-            "authKind": row.get("authKind").cloned().unwrap_or(Value::Null),
-            "enabled": row.get("enabled").cloned().unwrap_or(Value::Null),
-        });
-        checks.record(
-            "pullInputSourceUrl",
-            row.get("kind").and_then(Value::as_str) == Some("hlsPull")
-                && row.get("sourceUrl").and_then(Value::as_str) == Some(pull_source_url.as_str())
-                && row.get("variantRule").and_then(Value::as_str) == Some("highestBandwidth")
-                && row.get("authKind").and_then(Value::as_str) == Some("headers"),
-            read_back,
-        );
-
-        // ── Wait for the `hls-pull` session and hold the window ───────
-        let session_timeout = if options.fail_unresolvable {
-            FAILING_SESSION_TIMEOUT
-        } else {
-            SESSION_TIMEOUT
-        };
-        let protocol = self
-            .wait_for_pull_session(&pull_pipeline_id, &pull_input_id, session_timeout)
+        let (probe, sink_summary) = self
+            .observe_pull_window(options, &mut checks, &pull_pipeline_id, &pull_input_id)
             .await?;
-        checks.record(
-            "pullSessionProtocol",
-            protocol.as_deref() == Some("hls-pull"),
-            json!({"protocol": protocol, "expected": "hls-pull"}),
-        );
-        println!(
-            "[hls-pull-duty] {}",
-            json!({"phase": "pull-session", "protocol": protocol})
-        );
-
-        // A baseline before the window, so keep-up measures progress inside it
-        // rather than lifetime totals (the probe's keyframe timeline is capped,
-        // so its media seconds freeze while uptime keeps growing).
-        let sink_before = self.sink_metrics.summary();
-        let window_started = std::time::Instant::now();
-        tokio::time::sleep(options.window()).await;
-        let wall_secs = window_started.elapsed().as_secs_f64();
-
-        // ── Sample the good path over the window ──────────────────────
-        let probe = self
-            .api
-            .get_json(&format!("/api/v1/pipelines/{pull_pipeline_id}/probe"))
-            .await
-            .unwrap_or(Value::Null);
-        let sink_summary = self.sink_metrics.summary();
-        checks.record(
-            "pullMediaPublished",
-            pull_published_ok(&probe),
-            pull_media_summary(&probe),
-        );
-        checks.record(
-            "pullSinkDelivered",
-            pull_delivered_ok(&sink_summary),
-            sink_summary.clone(),
-        );
-        checks.record(
-            "pullKeepsUp",
-            pull_keeps_up_over_window(&sink_before, &sink_summary, wall_secs),
-            json!({
-                "wallSeconds": (wall_secs * 10.0).round() / 10.0,
-                "mediaProgressMsBefore": sink_before.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
-                "mediaProgressMs": sink_summary.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
-                "uptimeSeconds": pull_media_summary(&probe).get("uptimeSeconds").cloned().unwrap_or(Value::Null),
-            }),
-        );
-
-        // ── The failure the gate exists for ───────────────────────────
         let failure = self
             .failure
             .clone()
             .ok_or("failure-reporting input missing")?;
-        let reported = self
-            .wait_for_bad_pull_log(&plan.log_path, &failure.input_id, Duration::from_secs(60))
-            .await?;
-        checks.record(
-            "badPullReported",
-            reported,
-            json!({
-                "inputId": failure.input_id,
-                "url": failure.source_url,
-                "logLine": format!("HLS pull failed; retrying input={}", failure.input_id),
-            }),
-        );
-
-        let bad_inputs = self.pipeline_inputs(&failure.pipeline_id).await?;
-        let bad_row = find_input(&bad_inputs, &failure.input_id);
-        let bad_connected = bad_row.and_then(session_protocol).is_some();
-        let bad_enabled = bad_row
-            .and_then(|row| row.get("enabled"))
-            .and_then(Value::as_bool)
-            == Some(true);
-        let pipelines = self.api.get_json("/api/v1/pipelines").await?;
-        let bad_present = pipeline_present(&pipelines, &failure.pipeline_id);
-        checks.record(
-            "badPullDoesNotStopPipeline",
-            bad_present && bad_enabled && !bad_connected,
-            json!({
-                "pipelineId": failure.pipeline_id,
-                "pipelinePresent": bad_present,
-                "inputEnabled": bad_enabled,
-                "inputConnected": bad_connected,
-            }),
-        );
-
-        // ── Reconciler-owned lifecycle ────────────────────────────────
+        self.check_bad_pull(plan, &mut checks, &failure).await?;
         let lifecycle = self.run_lifecycle(options, &mut checks).await?;
 
         let passed = checks.failures.is_empty();
@@ -449,6 +255,253 @@ impl Session {
             ));
         }
         Ok(report)
+    }
+
+    /// Source pipeline fed by a real RTMP publisher; waits for the preview
+    /// master before the pull input can resolve it.
+    async fn bring_up_source(&mut self, plan: &Plan) -> Result<String, String> {
+        let source_pipeline_id =
+            create_resource_pipeline(&self.api, "hls-pull-source", "sk-hls-pull-source").await?;
+        self.source_pipeline_id = source_pipeline_id.clone();
+        let publisher_args = crate::hls_push_duty::run::rtmp_publisher_args(
+            &plan.fixture,
+            &plan.rtmp_publish_url("sk-hls-pull-source"),
+        );
+        // The source publisher: real-time copy of the checked-in fixture over RTMP.
+        self.publisher = Some(spawn_logged_ffmpeg(
+            &plan.ffmpeg,
+            &publisher_args,
+            &plan.work_dir.join("source-publisher.log"),
+            "hls-pull-source",
+        )?);
+        wait_for_api_input_live(&self.api, &source_pipeline_id, Duration::from_secs(60)).await?;
+        wait_for_api_input_media_ready(&self.api, &source_pipeline_id, Duration::from_secs(60))
+            .await?;
+
+        let preview_url = plan.preview_master_url(&source_pipeline_id);
+        let preview_path = Plan::preview_master_path(&source_pipeline_id);
+        wait_for_preview_master(&self.api, &preview_path, PREVIEW_TIMEOUT).await?;
+        println!(
+            "[hls-pull-duty] {}",
+            json!({"phase": "source-ready", "pipelineId": source_pipeline_id, "url": preview_url})
+        );
+        Ok(preview_url)
+    }
+
+    /// Pull pipeline: input, promoted selection and a sink output.
+    async fn bring_up_pull_target(
+        &mut self,
+        plan: &Plan,
+        options: &HlsPullOptions,
+    ) -> Result<(String, String, String, String), String> {
+        let preview_url = plan.preview_master_url(&self.source_pipeline_id);
+        let pull_pipeline_id =
+            create_resource_pipeline(&self.api, "hls-pull-target", "sk-hls-pull-target").await?;
+        let sink = start_generalized_sink_server(plan.sink_port, self.sink_metrics.clone()).await?;
+        self.sink = Some(sink);
+        let output_url = format!("rtmp://127.0.0.1:{}/live/hls-pull-target", plan.sink_port);
+        let output_id = create_output(
+            &self.api,
+            &pull_pipeline_id,
+            "sink-pull",
+            &output_url,
+            "source",
+        )
+        .await?;
+        start_output(&self.api, &pull_pipeline_id, &output_id).await?;
+        self.output_id = Some(output_id);
+
+        let cookie = self
+            .api
+            .cookie
+            .clone()
+            .ok_or("harness logged in without a session cookie to present to the preview")?;
+        let pull_source_url = options.pull_source_url(&preview_url);
+        let pull_input_id = create_pull_input(
+            &self.api,
+            &pull_pipeline_id,
+            "Pull in",
+            &pull_source_url,
+            &cookie,
+        )
+        .await?;
+        // A later-created input is a backup and does not forward; the pull
+        // graph only publishes through the selected input, so promote it
+        // before the reconciler starts the pull. Promote wakes the reconciler
+        // itself, so the first pass that sees this row sees it selected.
+        promote_input(&self.api, &pull_pipeline_id, &pull_input_id).await?;
+        self.good = Some(PullInput {
+            pipeline_id: pull_pipeline_id.clone(),
+            input_id: pull_input_id.clone(),
+            source_url: pull_source_url.clone(),
+        });
+        Ok((pull_pipeline_id, pull_input_id, pull_source_url, cookie))
+    }
+
+    /// The failure-reporting input. In the failing variant the good pull
+    /// already carries the bad URL; otherwise a second pipeline carries it, so
+    /// the gate always covers "reports a failure, does not stop the pipeline".
+    async fn bring_up_failure_input(
+        &mut self,
+        options: &HlsPullOptions,
+        cookie: &str,
+    ) -> Result<(), String> {
+        if options.fail_unresolvable {
+            self.failure = self.good.clone();
+            return Ok(());
+        }
+        let bad_pipeline_id =
+            create_resource_pipeline(&self.api, "hls-pull-bad", "sk-hls-pull-bad").await?;
+        let bad_url = options.bad_pull_url();
+        let bad_input_id =
+            create_pull_input(&self.api, &bad_pipeline_id, "Bad pull", bad_url, cookie).await?;
+        self.failure = Some(PullInput {
+            pipeline_id: bad_pipeline_id,
+            input_id: bad_input_id,
+            source_url: bad_url.to_string(),
+        });
+        Ok(())
+    }
+
+    /// Read the created input back and record both row checks.
+    async fn record_input_read_back(
+        &self,
+        checks: &mut Checks,
+        pull_pipeline_id: &str,
+        pull_input_id: &str,
+        pull_source_url: &str,
+    ) -> Result<(), String> {
+        let inputs = self.pipeline_inputs(pull_pipeline_id).await?;
+        let row = find_input(&inputs, pull_input_id);
+        checks.record(
+            "pullInputCreated",
+            row.is_some(),
+            json!({"inputId": pull_input_id, "found": row.is_some()}),
+        );
+        let row = row.cloned().unwrap_or(Value::Null);
+        let read_back = json!({
+            "kind": row.get("kind").cloned().unwrap_or(Value::Null),
+            "sourceUrl": row.get("sourceUrl").cloned().unwrap_or(Value::Null),
+            "variantRule": row.get("variantRule").cloned().unwrap_or(Value::Null),
+            "authKind": row.get("authKind").cloned().unwrap_or(Value::Null),
+            "enabled": row.get("enabled").cloned().unwrap_or(Value::Null),
+        });
+        checks.record(
+            "pullInputSourceUrl",
+            row.get("kind").and_then(Value::as_str) == Some("hlsPull")
+                && row.get("sourceUrl").and_then(Value::as_str) == Some(pull_source_url)
+                && row.get("variantRule").and_then(Value::as_str) == Some("highestBandwidth")
+                && row.get("authKind").and_then(Value::as_str) == Some("headers"),
+            read_back,
+        );
+        Ok(())
+    }
+
+    /// Wait for the `hls-pull` session, hold the window, and sample the good
+    /// path over it.
+    async fn observe_pull_window(
+        &mut self,
+        options: &HlsPullOptions,
+        checks: &mut Checks,
+        pull_pipeline_id: &str,
+        pull_input_id: &str,
+    ) -> Result<(Value, Value), String> {
+        let session_timeout = if options.fail_unresolvable {
+            FAILING_SESSION_TIMEOUT
+        } else {
+            SESSION_TIMEOUT
+        };
+        let protocol = self
+            .wait_for_pull_session(pull_pipeline_id, pull_input_id, session_timeout)
+            .await?;
+        checks.record(
+            "pullSessionProtocol",
+            protocol.as_deref() == Some("hls-pull"),
+            json!({"protocol": protocol, "expected": "hls-pull"}),
+        );
+        println!(
+            "[hls-pull-duty] {}",
+            json!({"phase": "pull-session", "protocol": protocol})
+        );
+
+        // A baseline before the window, so keep-up measures progress inside it
+        // rather than lifetime totals (the probe's keyframe timeline is capped,
+        // so its media seconds freeze while uptime keeps growing).
+        let sink_before = self.sink_metrics.summary();
+        let window_started = std::time::Instant::now();
+        tokio::time::sleep(options.window()).await;
+        let wall_secs = window_started.elapsed().as_secs_f64();
+
+        let probe = self
+            .api
+            .get_json(&format!("/api/v1/pipelines/{pull_pipeline_id}/probe"))
+            .await
+            .unwrap_or(Value::Null);
+        let sink_summary = self.sink_metrics.summary();
+        checks.record(
+            "pullMediaPublished",
+            pull_published_ok(&probe),
+            pull_media_summary(&probe),
+        );
+        checks.record(
+            "pullSinkDelivered",
+            pull_delivered_ok(&sink_summary),
+            sink_summary.clone(),
+        );
+        checks.record(
+            "pullKeepsUp",
+            pull_keeps_up_over_window(&sink_before, &sink_summary, wall_secs),
+            json!({
+                "wallSeconds": (wall_secs * 10.0).round() / 10.0,
+                "mediaProgressMsBefore": sink_before.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
+                "mediaProgressMs": sink_summary.get("mediaProgressMs").cloned().unwrap_or(Value::Null),
+                "uptimeSeconds": pull_media_summary(&probe).get("uptimeSeconds").cloned().unwrap_or(Value::Null),
+            }),
+        );
+        Ok((probe, sink_summary))
+    }
+
+    /// The failure the gate exists for: the bad pull reports an error without
+    /// stopping its pipeline.
+    async fn check_bad_pull(
+        &mut self,
+        plan: &Plan,
+        checks: &mut Checks,
+        failure: &PullInput,
+    ) -> Result<(), String> {
+        let reported = self
+            .wait_for_bad_pull_log(&plan.log_path, &failure.input_id, Duration::from_secs(60))
+            .await?;
+        checks.record(
+            "badPullReported",
+            reported,
+            json!({
+                "inputId": failure.input_id,
+                "url": failure.source_url,
+                "logLine": format!("HLS pull failed; retrying input={}", failure.input_id),
+            }),
+        );
+
+        let bad_inputs = self.pipeline_inputs(&failure.pipeline_id).await?;
+        let bad_row = find_input(&bad_inputs, &failure.input_id);
+        let bad_connected = bad_row.and_then(session_protocol).is_some();
+        let bad_enabled = bad_row
+            .and_then(|row| row.get("enabled"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        let pipelines = self.api.get_json("/api/v1/pipelines").await?;
+        let bad_present = pipeline_present(&pipelines, &failure.pipeline_id);
+        checks.record(
+            "badPullDoesNotStopPipeline",
+            bad_present && bad_enabled && !bad_connected,
+            json!({
+                "pipelineId": failure.pipeline_id,
+                "pipelinePresent": bad_present,
+                "inputEnabled": bad_enabled,
+                "inputConnected": bad_connected,
+            }),
+        );
+        Ok(())
     }
 
     /// Disable the pull input through the API and assert the pull stops, then
