@@ -479,6 +479,22 @@ impl MediaEngine {
         self.egresses.recent.read().await.get(output_id).cloned()
     }
 
+    /// Drop settled outcomes and retry state for outputs that no longer exist,
+    /// so deleted outputs stop appearing in status and health and their
+    /// records do not accumulate for the engine's lifetime.
+    pub async fn retain_egress_records(&self, keep: &std::collections::HashSet<String>) {
+        self.egresses
+            .recent
+            .write()
+            .await
+            .retain(|output_id, _| keep.contains(output_id));
+        self.egresses
+            .retry
+            .write()
+            .await
+            .retain(|output_id, _| keep.contains(output_id));
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "lock order `retry` -> `cancel_tokens` (module docs of `engine_registries`): held across `has_active_egress`, which reads `cancel_tokens`, on purpose (below)"
