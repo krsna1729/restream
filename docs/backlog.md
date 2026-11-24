@@ -8,7 +8,7 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-117 drop vendored hang and moq-msf](#q-117-platform-sonnet-drop-the-vendored-hang-and-moq-msf)
+- [Q-117 drop vendored hang](#q-117-platform-sonnet-drop-the-vendored-hang)
 - [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
@@ -22,20 +22,19 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
 
-### Q-117 [platform] [sonnet] Drop the vendored hang and moq-msf
-- Goal: `hang` and `moq-msf` come from crates.io again, so Dependabot and
-  the advisory checks see their real versions.
-- The `hang` H.264 codec fix is on upstream's release branch
-  ([moq-dev/moq#9256](https://github.com/moq-dev/moq/pull/9256)) but not in
-  `hang` 0.21.24. A Git pin at the backport would also bring a different
-  `moq-net` source from the one Restream patches for Compio. Keep the vendor
-  patch until a compatible release passes the gate below.
-- The 0.5.x catalog bounds patch is open as
-  [moq-dev/moq#9288](https://github.com/moq-dev/moq/pull/9288).
-- Gates, per crate: an upstream release passes the vendored regression
-  cases, ported to Restream tests against the public API. Then delete
-  `vendor/<crate>` and its `[patch.crates-io]` entries in the root and
-  `fuzz/` manifests, and the `moq_ingest` fuzz smoke stays clean.
+### Q-117 [platform] [sonnet] Drop the vendored hang
+- Goal: `hang` comes from crates.io again, so Dependabot and the advisory
+  checks see its real version. `moq-msf` 0.5.2 (bounds from
+  [moq-dev/moq#9288](https://github.com/moq-dev/moq/pull/9288)) is used.
+- The `hang` H.264 codec fix
+  ([moq-dev/moq#9256](https://github.com/moq-dev/moq/pull/9256)) shipped in
+  `hang` 0.21.25, but that release requires `moq-net` 0.3.24. Restream's
+  Compio transport needs the `unsend` patch on vendored `moq-net` 0.3.15.
+  Move the patch to 0.3.24, then update `hang` and delete `vendor/hang`.
+- Gate: the `hang` release passes
+  `a_catalog_hang_cannot_parse_ends_only_that_publisher`, and the
+  `moq_ingest` fuzz smoke stays clean. Then delete the root and `fuzz/`
+  `[patch.crates-io]` entries.
 
 ### Q-120 [performance] [opus] Split the last two complexity baselines
 - Goal: `SrtOwners::drain_events` (22) and `KtlsConnection::read_records` (21)

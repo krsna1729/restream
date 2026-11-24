@@ -790,7 +790,7 @@ fn bounded_draft01_shared_init_references_reach_the_ring() {
                 {"name":"audio-b","packaging":"loc","role":"audio","codec":"mp4a.40.2","initRef":"aac"}
             ]
         }"#;
-        assert!(json.len() < moq_msf::MAX_CATALOG_BYTES);
+        assert!(json.len() < 32 * 1024 * 1024);
         let broadcast = moq_net::broadcast::Info::new().produce();
         let track = broadcast
             .create_track(moq_msf::DEFAULT_NAME, hang::Catalog::default_track_info())

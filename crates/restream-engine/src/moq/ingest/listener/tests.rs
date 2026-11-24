@@ -199,6 +199,12 @@ fn publish_until(addr: SocketAddr, done: Arc<AtomicBool>) {
 /// off a char boundary (found by the `moq_ingest` fuzz target).
 const NON_ASCII_CODEC_CATALOG: &str = r#"{"video":{"renditions":{"video":{"codec":"avc1.4Ψ01e","codedWidth":64,"codedHeight":36,"container":{"kind":"legacy"}}}}}"#;
 
+/// The private 32 MiB serialized and resolved limit in moq-msf 0.5.2.
+const MSF_MAX_CATALOG_BYTES: usize = 32 * 1024 * 1024;
+/// Enough shared references that one payload over the aggregate limit stays
+/// below the serialized limit.
+const MSF_SHARED_REFS: usize = 64;
+
 /// Publish a raw catalog until the listener closes the publisher session.
 fn publish_raw_catalog(addr: SocketAddr, broadcast_name: &str, catalog_name: &str, catalog: Bytes) {
     run(async move {
@@ -747,8 +753,8 @@ async fn a_catalog_hang_cannot_parse_ends_only_that_publisher() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_oversized_shared_init_msf_catalog_ends_only_that_publisher() {
-    let init_size = moq_msf::MAX_CATALOG_BYTES / moq_msf::MAX_TRACKS + 1;
-    let tracks: Vec<_> = (0..moq_msf::MAX_TRACKS)
+    let init_size = MSF_MAX_CATALOG_BYTES / MSF_SHARED_REFS + 1;
+    let tracks: Vec<_> = (0..MSF_SHARED_REFS)
         .map(|index| {
             serde_json::json!({
                 "name": format!("audio-{index}"),
@@ -765,8 +771,8 @@ async fn an_oversized_shared_init_msf_catalog_ends_only_that_publisher() {
         "tracks": tracks,
     }))
     .unwrap();
-    assert!(catalog.len() < moq_msf::MAX_CATALOG_BYTES);
-    assert!(init_size * moq_msf::MAX_TRACKS > moq_msf::MAX_CATALOG_BYTES);
+    assert!(catalog.len() < MSF_MAX_CATALOG_BYTES);
+    assert!(init_size * MSF_SHARED_REFS > MSF_MAX_CATALOG_BYTES);
     // The transport sees only ~0.5 MiB. The upstream parser must reject the
     // >32 MiB resolved total before cloning initRef payloads or converting
     // AAC: without that guard this would fail later as malformed init data.

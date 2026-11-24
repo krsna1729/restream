@@ -41,7 +41,7 @@ rustls-pki-types = { version = "1", features = ["std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
 tracing = "0.1"
 compio = { version = "0.19", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "io-compat"] }
-moq-msf = "0.5"
+moq-msf = "=0.5.2"
 hang = "=0.21.16"
 moq-net = { version = "=0.3.15", features = ["unsend"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio"] }
