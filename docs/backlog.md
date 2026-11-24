@@ -10,6 +10,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-117 drop vendored hang](#q-117-platform-sonnet-drop-the-vendored-hang)
 - [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
+- [Q-121 converge EgressTask fabric paths](#q-121-lifecycle-opus-converge-the-fabric-run-paths-in-egresstask)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -47,6 +48,20 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: a production-path benchmark for each, then the split with numbers
   showing no regression on a named host, then delete the entry with
   `cargo xtask reportcard --update-baseline`.
+
+### Q-121 [lifecycle] [opus] Converge the fabric run paths in EgressTask
+- Goal: `run_srt_fabric`, `run_rtmp_fabric`, and `run_hls_put_fabric` share
+  one sequence for retain, dispatch placement, stop or leaf wait, Remove or
+  Abandon, runtime release, and status forwarding. A protocol supplies only
+  its hooks and phase.
+- Why open: #697 fenced retry settlement by attempt and
+  `EgressManager::dispatch_remove` routes Remove and Abandon through one
+  path, but the three run methods still repeat the sequence and can drift.
+  HLS uses Abandon when a stage ends under the output; SRT and RTMP always
+  Remove. No known correctness gap; this is duplication risk.
+- Gates: RTMP, SRT, and HLS fabric tests cover stop, leaf failure, dispatch
+  failure, and stage end; every status and retry write stays `_if_current`;
+  shutdown ordering does not change.
 
 ## Not planned
 
