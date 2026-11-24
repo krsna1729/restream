@@ -403,13 +403,8 @@ mod tests {
     use super::*;
 
     #[cfg(target_os = "linux")]
-    #[test]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "predates the complexity limit; split it before growing it"
-    )]
-    fn converts_receiver_side_tcp_info_fields() {
-        let info = LinuxTcpInfo {
+    fn full_tcp_info() -> LinuxTcpInfo {
+        LinuxTcpInfo {
             tcpi_rtt: 12_000,
             tcpi_rttvar: 2_000,
             tcpi_snd_mss: 1448,
@@ -450,9 +445,11 @@ mod tests {
             tcpi_total_rto_recoveries: 5,
             tcpi_total_rto_time: 600,
             ..LinuxTcpInfo::default()
-        };
+        }
+    }
 
-        let stats = stats_from_tcp_info(&info, std::mem::size_of::<LinuxTcpInfo>());
+    #[cfg(target_os = "linux")]
+    fn assert_byte_and_time_fields(stats: &TcpReceiverStats) {
         assert_eq!(stats.tcp_rtt_ms, Some(12.0));
         assert_eq!(stats.tcp_congestion_algorithm, None);
         assert_eq!(stats.tcp_rtt_var_ms, Some(2.0));
@@ -467,6 +464,10 @@ mod tests {
         assert_eq!(stats.tcp_rcv_ooopack, Some(15));
         assert_eq!(stats.tcp_snd_mss, Some(1448));
         assert_eq!(stats.tcp_pmtu, Some(1500));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_window_fields(stats: &TcpReceiverStats) {
         assert_eq!(stats.tcp_unacked, Some(4));
         assert_eq!(stats.tcp_sacked, Some(1));
         assert_eq!(stats.tcp_lost, Some(2));
@@ -477,6 +478,10 @@ mod tests {
         assert_eq!(stats.tcp_reordering, Some(3));
         assert_eq!(stats.tcp_notsent_bytes, Some(2048));
         assert_eq!(stats.tcp_total_retrans, Some(3));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_rate_and_pacing_fields(stats: &TcpReceiverStats) {
         assert_eq!(stats.tcp_pacing_rate_bps, Some(9_000_000));
         assert_eq!(stats.tcp_max_pacing_rate_bps, Some(10_000_000));
         assert_eq!(stats.tcp_delivery_rate_bps, Some(8_000_000));
@@ -493,6 +498,15 @@ mod tests {
         assert_eq!(stats.tcp_total_rto, Some(4));
         assert_eq!(stats.tcp_total_rto_recoveries, Some(5));
         assert_eq!(stats.tcp_total_rto_time_ms, Some(600));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn converts_receiver_side_tcp_info_fields() {
+        let stats = stats_from_tcp_info(&full_tcp_info(), std::mem::size_of::<LinuxTcpInfo>());
+        assert_byte_and_time_fields(&stats);
+        assert_window_fields(&stats);
+        assert_rate_and_pacing_fields(&stats);
     }
 
     #[cfg(target_os = "linux")]
