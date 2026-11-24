@@ -7,6 +7,17 @@ use thiserror::Error;
 pub trait Decode<V>: Sized {
 	/// Decode the value from the given buffer.
 	fn decode<B: bytes::Buf>(buf: &mut B, version: V) -> Result<Self, DecodeError>;
+
+	/// The control metric class of this decoded value, or `None` for selectors and media headers.
+	fn control(&self, _version: V) -> Option<crate::stats::Control> {
+		None
+	}
+
+	/// Leading bytes of this value left out of its [`Self::control`] count: a type selector
+	/// the sender writes apart from the message, and so never counts.
+	fn uncounted(&self) -> usize {
+		0
+	}
 }
 
 /// A decode error.

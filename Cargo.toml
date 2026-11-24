@@ -29,7 +29,7 @@ members = [
 default-members = [".", "crates/*"]
 # Carried patches (`[patch.crates-io]` below), not members. Excluding them
 # lets each manifest load on its own, which CodeQL needs to analyze them.
-exclude = ["vendor/hang", "vendor/moq-net", "vendor/rml_rtmp"]
+exclude = ["vendor/moq-net", "vendor/rml_rtmp"]
 
 # `restream-mcp` checks that its target reports the same version and commit.
 [workspace.package]
@@ -202,7 +202,6 @@ panic = "unwind"
 
 # Vendored with small hardening patches (see vendor/<crate>/RESTREAM_PATCHES.md).
 [patch.crates-io]
-hang = { path = "vendor/hang" }
 rml_rtmp = { path = "vendor/rml_rtmp" }
-# moq-net 0.3.15 plus the `unsend` feature (see vendor/moq-net/PATCH.md).
+# moq-net 0.3.24 plus the `unsend` feature (see vendor/moq-net/PATCH.md).
 moq-net = { path = "vendor/moq-net" }

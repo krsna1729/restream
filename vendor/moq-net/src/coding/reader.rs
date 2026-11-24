@@ -19,6 +19,7 @@ pub struct Reader<S: crate::transport::poll::RecvStream, V> {
 	stream: S,
 	buffer: BytesMut,
 	version: V,
+	stats: crate::stats::Session,
 }
 
 /// How much payload may pile up behind a parked consumer before
@@ -38,7 +39,14 @@ impl<S: crate::transport::poll::RecvStream, V: StreamCodes> Reader<S, V> {
 			stream,
 			buffer: Default::default(),
 			version,
+			stats: Default::default(),
 		}
+	}
+
+	/// Count control messages read here under `stats`.
+	pub(crate) fn with_stats(mut self, stats: &crate::stats::Session) -> Self {
+		self.stats = stats.clone();
+		self
 	}
 
 	/// Poll for the next message on the stream.
@@ -46,12 +54,30 @@ impl<S: crate::transport::poll::RecvStream, V: StreamCodes> Reader<S, V> {
 	where
 		V: Clone,
 	{
+		self.poll_decode_sized(cx).map_ok(|(msg, _)| msg)
+	}
+
+	/// [`Self::poll_decode`], also returning how many bytes the message took, for a
+	/// handshake to count once the session's stats are known.
+	pub(crate) fn poll_decode_sized<T: Decode<V> + Debug>(
+		&mut self,
+		cx: &mut Context<'_>,
+	) -> Poll<Result<(T, usize), Error>>
+	where
+		V: Clone,
+	{
 		loop {
 			let mut cursor = io::Cursor::new(&self.buffer);
 			match T::decode(&mut cursor, self.version.clone()) {
 				Ok(msg) => {
-					self.buffer.advance(cursor.position() as usize);
-					return Poll::Ready(Ok(msg));
+					let used = cursor.position() as usize;
+					self.buffer.advance(used);
+					// Counted only once consumed, so a peek or a retry after a short read
+					// never counts the same message twice.
+					if let Some(class) = Decode::control(&msg, self.version.clone()) {
+						self.stats.control(class, used - msg.uncounted(), true);
+					}
+					return Poll::Ready(Ok((msg, used)));
 				}
 				// Stream closed while we still need more data.
 				Err(DecodeError::Short) if !ready!(self.poll_read_more(cx))? => {
@@ -69,6 +95,14 @@ impl<S: crate::transport::poll::RecvStream, V: StreamCodes> Reader<S, V> {
 		V: Clone,
 	{
 		std::future::poll_fn(|cx| self.poll_decode(cx)).await
+	}
+
+	/// [`Self::decode`], also returning how many bytes the message took.
+	pub(crate) async fn decode_sized<T: Decode<V> + Debug>(&mut self) -> Result<(T, usize), Error>
+	where
+		V: Clone,
+	{
+		std::future::poll_fn(|cx| self.poll_decode_sized(cx)).await
 	}
 
 	/// Poll for the next message unless the stream is closed cleanly first.
@@ -260,7 +294,20 @@ impl<S: crate::transport::poll::RecvStream, V: StreamCodes> Reader<S, V> {
 			stream: self.stream,
 			buffer: self.buffer,
 			version,
+			stats: self.stats,
 		}
+	}
+}
+
+impl<S: crate::transport::poll::RecvStream> Reader<S, crate::ietf::Version> {
+	/// Read the `[size][body]` of an IETF message whose type `id` was already read,
+	/// counting both (but not the type) as control bytes once the body arrives.
+	pub(crate) async fn read_message(&mut self, id: u64) -> Result<Bytes, Error> {
+		let size: u16 = self.decode().await?;
+		let body = self.read_exact(size as usize).await?;
+		self.stats
+			.control(crate::ietf::message::control(id, self.version), body.len() + 2, true);
+		Ok(body)
 	}
 }
 
@@ -297,6 +344,55 @@ mod tests {
 		fn poll_closed(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
 			std::task::Poll::Ready(Ok(()))
 		}
+	}
+
+	/// A control message counts once, when it is consumed: never on a peek, a retry after
+	/// a short read, or a failed decode, and in full when it spans chunks.
+	#[test]
+	fn control_counts_consumed_messages_once() {
+		use crate::{
+			coding::Encode,
+			lite,
+			stats::{Bytes, Control, Registry, Tier},
+		};
+		let registry = Registry::new(Default::default());
+		let session = registry.tier(Tier::default()).session("");
+		let version = lite::Version::Lite07;
+		let msg = lite::Probe {
+			bitrate: Some(123),
+			rtt: Some(4),
+		};
+		let bytes: &'static [u8] = msg.encode_bytes(version).unwrap().to_vec().leak();
+		let size = bytes.len() as u64;
+		let (head, tail) = bytes.split_at(2);
+		let counted = || registry.snapshot().control();
+		let probes = |n: u64| vec![(Tier::default(), Control::Probe, Bytes { tx: 0, rx: size * n })];
+
+		let mut reader = Reader::new(Chunks([bytes, head].into()), version).with_stats(&session);
+		let mut cx = Context::from_waker(std::task::Waker::noop());
+		assert!(matches!(
+			reader.poll_decode_peek_maybe::<lite::Probe>(&mut cx),
+			Poll::Ready(Ok(Some(_)))
+		));
+		assert!(counted().is_empty());
+		assert!(matches!(reader.poll_decode::<lite::Probe>(&mut cx), Poll::Ready(Ok(_))));
+		assert_eq!(counted(), probes(1));
+
+		// The second probe arrives in two chunks, so the reader parks and retries.
+		assert!(reader.poll_decode::<lite::Probe>(&mut cx).is_pending());
+		assert!(reader.poll_decode::<lite::Probe>(&mut cx).is_pending());
+		assert_eq!(counted(), probes(1));
+		reader.stream.0.push_back(tail);
+		assert!(matches!(reader.poll_decode::<lite::Probe>(&mut cx), Poll::Ready(Ok(_))));
+		assert_eq!(counted(), probes(2));
+
+		// A body cut short inside its declared size is malformed, and never counted.
+		reader.stream.0.push_back(&[1, 0x80]);
+		assert!(matches!(
+			reader.poll_decode::<lite::Probe>(&mut cx),
+			Poll::Ready(Err(_))
+		));
+		assert_eq!(counted(), probes(2));
 	}
 
 	/// STOP_SENDING refuses a stream, so it must carry a stream code. Reusing the session

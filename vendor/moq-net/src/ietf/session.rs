@@ -17,6 +17,9 @@ pub struct Config<S: crate::transport::poll::Session> {
 	/// The runtime that arms the session's timers.
 	pub runtime: crate::time::Clock,
 
+	/// Where the session's control traffic is counted, even with neither origin set.
+	pub stats: crate::stats::Session,
+
 	pub session: S,
 
 	/// The bidi SETUP stream (draft-14 through draft-16 only). Draft-17+ passes `None`
@@ -89,6 +92,7 @@ where
 {
 	let Config {
 		runtime,
+		stats,
 		mut session,
 		setup,
 		request_id_max,
@@ -124,8 +128,12 @@ where
 		// moq-transport threads concrete origins through the publisher/subscriber.
 		// An unset half gets an empty origin: an empty publish origin announces
 		// nothing, and an empty subscribe origin issues no SUBSCRIBE_NAMESPACE.
-		let publish = publish.unwrap_or_else(|| origin::Producer::empty(Hop::random()).consume());
-		let subscribe = subscribe.unwrap_or_else(|| origin::Producer::empty(Hop::random()));
+		let publish = publish.unwrap_or_else(|| {
+			origin::Producer::empty(Hop::random())
+				.consume()
+				.with_stats(stats.clone())
+		});
+		let subscribe = subscribe.unwrap_or_else(|| origin::Producer::empty(Hop::random()).with_stats(stats.clone()));
 
 		// What the peer declared in its SETUP. Seeded now when that stream was already
 		// read (the legacy handshake, or a gated server accept), and filled by the uni
@@ -149,7 +157,7 @@ where
 					return Err(err);
 				};
 				let control = Control::new(request_id_max, client);
-				let adapter = ControlStreamAdapter::new(session.clone(), control.clone(), version);
+				let adapter = ControlStreamAdapter::new(session.clone(), control.clone(), version).with_stats(&stats);
 
 				let publisher = Publisher::new(
 					runtime.clone(),
@@ -307,9 +315,20 @@ where
 					let runtime = runtime.clone();
 					let session = session.clone();
 					let goaway = goaway.clone();
+					let stats = stats.clone();
 					async move {
-						if let Err(err) =
-							run_setup(runtime, session, version, path, authority, self_origin, cost, goaway).await
+						if let Err(err) = run_setup(
+							runtime,
+							session,
+							version,
+							path,
+							authority,
+							self_origin,
+							cost,
+							goaway,
+							stats,
+						)
+						.await
 						{
 							tracing::warn!(%err, "setup send error");
 						}
@@ -350,9 +369,12 @@ where
 				// arrives on the wire.
 				let goaway_recv = {
 					let goaway = goaway.clone();
+					let stats = stats.clone();
 					async move {
 						match peer_setup_stream {
-							Some(reader) => run_goaway(reader.with_version(version), version, goaway).await,
+							Some(reader) => {
+								run_goaway(reader.with_stats(&stats).with_version(version), version, goaway).await
+							}
 							None => std::future::pending().await,
 						}
 					}
@@ -483,6 +505,9 @@ pub struct PeerSetup<S: crate::transport::poll::Session> {
 	/// The SETUP stream, which becomes the GOAWAY channel.
 	pub stream: Reader<S::RecvStream, crate::Version>,
 
+	/// The SETUP's encoded size, counted once the session's stats are known.
+	pub size: usize,
+
 	/// The request path the peer advertised, for URL-less transports.
 	pub path: Option<String>,
 
@@ -542,7 +567,7 @@ pub async fn accept_setup<S: crate::transport::poll::Session>(
 			continue;
 		}
 
-		let setup: setup::Setup = reader.decode().await?;
+		let (setup, size) = reader.decode_sized::<setup::Setup>().await?;
 		let mut bytes = setup.parameters.clone();
 		let params = ietf::Parameters::decode(&mut bytes, version)?;
 		let path = match params.get_bytes(ietf::ParameterBytes::Path) {
@@ -558,6 +583,7 @@ pub async fn accept_setup<S: crate::transport::poll::Session>(
 
 		return Ok(PeerSetup {
 			stream: reader,
+			size,
 			path,
 			token,
 			declared,
@@ -600,11 +626,12 @@ async fn run_setup<S: crate::transport::poll::Session>(
 	self_origin: Hop,
 	cost: Option<u64>,
 	goaway: crate::goaway::Protocol,
+	stats: crate::stats::Session,
 ) -> Result<(), Error> {
 	let outer_version = crate::Version::Ietf(version);
 
 	let send = session.open_uni().await.map_err(Error::from_transport)?;
-	let mut writer: Writer<S::SendStream, crate::Version> = Writer::new(send, outer_version);
+	let mut writer: Writer<S::SendStream, crate::Version> = Writer::new(send, outer_version).with_stats(&stats);
 
 	let mut parameters = ietf::Parameters::default();
 	parameters.set_bytes(ietf::ParameterBytes::Implementation, b"moq-lite-rs".to_vec());
@@ -653,6 +680,7 @@ async fn run_setup<S: crate::transport::poll::Session>(
 		let mut writer = writer.with_version(version);
 		writer.encode(&ietf::GoAway::ID).await?;
 		writer.encode(&size).await?;
+		stats.control(crate::stats::Control::Goaway, body.len() + 2, false);
 		writer.write_all(&mut std::io::Cursor::new(body)).await?;
 
 		crate::goaway::enforce(&runtime, &mut session, payload.timeout).await;
@@ -832,6 +860,7 @@ impl<S: crate::transport::poll::Session> Clone for Uni<S> {
 impl<S: crate::transport::poll::Boxable> Uni<S> {
 	/// Read the stream's type and serve it, failing only when the stream breaks the session.
 	async fn serve(self, mut reader: Reader<S::RecvStream, crate::Version>) -> Result<(), Error> {
+		reader = reader.with_stats(self.subscriber.stats());
 		let Self {
 			mut session,
 			mut subscriber,
@@ -1033,6 +1062,20 @@ where
 			Err(err) => return Err(err),
 		};
 
+		// Drafts 14-16 multiplex requests over the control stream, whose reader counts
+		// them; only a real bidi stream counts its request here. Draft 16 opens one
+		// for SUBSCRIBE_NAMESPACE.
+		let native = !matches!(version, Version::Draft14 | Version::Draft15 | Version::Draft16)
+			|| (version == Version::Draft16 && id == ietf::SubscribeNamespaceLegacy::ID);
+		let stream = match native {
+			true => {
+				let stats = publisher.stats();
+				stats.control(super::message::control(id, version), data.len() + 2, true);
+				stream.with_stats(stats)
+			}
+			false => super::request_stream::with_stats(stream, publisher.stats(), version),
+		};
+
 		match id {
 			// Publisher handles: Subscribe, Fetch, SubscribeNamespace (0x50 modern /
 			// 0x11 legacy), SubscribeTracks, TrackStatus
@@ -1068,8 +1111,7 @@ async fn run_goaway<R: crate::transport::poll::RecvStream>(
 		None => return Ok(()),
 	};
 
-	let size: u16 = reader.decode::<u16>().await?;
-	let mut data = reader.read_exact(size as usize).await?;
+	let mut data = reader.read_message(id).await?;
 
 	if id != ietf::GoAway::ID {
 		return Err(Error::UnexpectedMessage);
@@ -1100,8 +1142,7 @@ async fn run_goaway<R: crate::transport::poll::RecvStream>(
 			Some(id) => id,
 			None => return Ok(()),
 		};
-		let size: u16 = reader.decode::<u16>().await?;
-		let mut data = reader.read_exact(size as usize).await?;
+		let mut data = reader.read_message(id).await?;
 
 		if id == ietf::GoAway::ID {
 			let msg = ietf::GoAway::decode_msg(&mut data, version)?;
@@ -1169,6 +1210,7 @@ mod tests {
 
 		let (driver, _goaway) = start(Config {
 			runtime: crate::time::Clock::tokio(),
+			stats: Default::default(),
 			session,
 			setup: None,
 			request_id_max: None,
@@ -1229,6 +1271,7 @@ mod tests {
 
 		let (driver, _goaway) = start(Config {
 			runtime: crate::time::Clock::tokio(),
+			stats: Default::default(),
 			session,
 			setup: None,
 			request_id_max: None,
@@ -1282,6 +1325,7 @@ mod tests {
 
 		let (driver, _goaway) = start(Config {
 			runtime: crate::time::Clock::tokio(),
+			stats: Default::default(),
 			session,
 			setup: None,
 			request_id_max: None,
@@ -1391,6 +1435,7 @@ mod tests {
 
 		let (driver, _goaway) = start(Config {
 			runtime: crate::time::Clock::tokio(),
+			stats: Default::default(),
 			session,
 			setup: None,
 			request_id_max: None,
@@ -1432,6 +1477,7 @@ mod tests {
 
 			let (driver, _goaway) = start(Config {
 				runtime: crate::time::Clock::tokio(),
+				stats: Default::default(),
 				session,
 				setup: None,
 				request_id_max: None,
@@ -1785,6 +1831,7 @@ mod tests {
 
 		let (driver, _goaway) = start(Config {
 			runtime: crate::time::Clock::tokio(),
+			stats: Default::default(),
 			session,
 			setup: Some(setup),
 			request_id_max: None,

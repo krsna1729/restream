@@ -1,8 +1,8 @@
-# Restream patch to moq-net 0.3.15
+# Restream patch to moq-net 0.3.24
 
-Vendored from crates.io `moq-net` 0.3.15 (MIT OR Apache-2.0,
+Vendored from crates.io `moq-net` 0.3.24 (MIT OR Apache-2.0,
 <https://github.com/moq-dev/moq>, `rs/moq-net` at
-`e2c5b50572cc305afcfffb4f40184200e9965204`) and wired in through
+`3e69451e4138df4b02bdb06930b01b5bc96a7f69`) and wired in through
 `[patch.crates-io]` in the root `Cargo.toml`. Not upstreamed.
 
 ## Why
@@ -41,7 +41,7 @@ With `unsend` the IETF `Driver<S>` is `!Send`, as the lite driver over a
 `!Send` transport already is; it is driven on the thread that owns the
 connection. `Session` handles stay `Send + Sync` (moq-net's own
 `assert_send_sync::<Session>()` still compiles). No `tokio::spawn` or
-thread is introduced: moq-net 0.3.15 has none outside tests.
+thread is introduced: moq-net 0.3.24 has none outside tests.
 
 Packaging only: `tests/`, `benches/`, `examples/`, `CHANGELOG.md`,
 `AGENTS.md`, `Cargo.toml.orig` and `Cargo.lock` are omitted, and the

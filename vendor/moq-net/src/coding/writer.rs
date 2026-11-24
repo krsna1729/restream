@@ -16,6 +16,7 @@ pub struct Writer<S: crate::transport::poll::SendStream, V> {
 	stream: Option<S>,
 	buffer: bytes::BytesMut,
 	version: V,
+	stats: crate::stats::Session,
 }
 
 impl<S: crate::transport::poll::SendStream, V: StreamCodes> Writer<S, V> {
@@ -25,7 +26,14 @@ impl<S: crate::transport::poll::SendStream, V: StreamCodes> Writer<S, V> {
 			stream: Some(stream),
 			buffer: Default::default(),
 			version,
+			stats: Default::default(),
 		}
+	}
+
+	/// Count control messages encoded here under `stats`.
+	pub(crate) fn with_stats(mut self, stats: &crate::stats::Session) -> Self {
+		self.stats = stats.clone();
+		self
 	}
 
 	/// Encode the given message into the write buffer, to be sent by
@@ -39,6 +47,9 @@ impl<S: crate::transport::poll::SendStream, V: StreamCodes> Writer<S, V> {
 			// Drop the partial encode: flushing it would corrupt the stream.
 			self.buffer.truncate(start);
 			return Err(err.into());
+		}
+		if let Some(class) = Encode::control(msg, self.version.clone()) {
+			self.stats.control(class, self.buffer.len() - start, false);
 		}
 		Ok(())
 	}
@@ -184,6 +195,7 @@ impl<S: crate::transport::poll::SendStream, V: StreamCodes> Writer<S, V> {
 			stream: self.stream.take(),
 			buffer: std::mem::take(&mut self.buffer),
 			version,
+			stats: self.stats.clone(),
 		}
 	}
 }
@@ -303,6 +315,10 @@ mod tests {
 			w.put_slice(b"junk");
 			Err(EncodeError::BoundsExceeded)
 		}
+
+		fn control(&self, _: crate::lite::Version) -> Option<crate::stats::Control> {
+			Some(crate::stats::Control::Probe)
+		}
 	}
 
 	/// A failed encode must leave the buffer exactly as it was: flushing its
@@ -319,6 +335,52 @@ mod tests {
 		let mut cx = std::task::Context::from_waker(Waker::noop());
 		assert!(writer.poll_flush(&mut cx).is_ready());
 		assert_eq!(*log.writes.lock().unwrap(), vec![5, 7], "the partial encode leaked");
+	}
+
+	#[test]
+	fn control_body_counts_successful_encodes_once_before_transport_delivery() {
+		use crate::{
+			lite,
+			stats::{Bytes, Control, Registry, Tier},
+		};
+		let stats = Registry::new(Default::default());
+		let session = stats.tier(Tier::new("internal")).session("");
+		let gate = kio::Producer::new(false);
+		let mut writer =
+			Writer::new(SinkSend::gated(Log::default(), gate.consume()), lite::Version::Lite07).with_stats(&session);
+		writer.buffer(&lite::ControlType::Probe).unwrap();
+		let msg = lite::Probe {
+			bitrate: Some(1_000_000),
+			rtt: Some(12),
+		};
+		let size = msg.encode_bytes(lite::Version::Lite07).unwrap().len() as u64;
+		writer.buffer(&msg).unwrap();
+		writer.buffer(&Poison).unwrap_err();
+		assert!(writer.poll_flush(&mut Context::from_waker(Waker::noop())).is_pending());
+		assert!(writer.poll_flush(&mut Context::from_waker(Waker::noop())).is_pending());
+		assert_eq!(
+			stats.snapshot().control(),
+			vec![(Tier::new("internal"), Control::Probe, Bytes { tx: size, rx: 0 })]
+		);
+
+		writer
+			.buffer(&lite::Track {
+				broadcast: "test".into(),
+				track: "video".into(),
+			})
+			.unwrap();
+		writer.buffer(&lite::SubscribeStart { group: 3 }).unwrap();
+		writer
+			.buffer(&lite::AnnounceOk {
+				origin: crate::Hop::new(1).unwrap(),
+				active: 0,
+			})
+			.unwrap();
+		assert_eq!(
+			stats.snapshot().control().len(),
+			4,
+			"classes do not collapse into the same counter"
+		);
 	}
 
 	/// A flush interrupted mid-message resumes where it left off, so an

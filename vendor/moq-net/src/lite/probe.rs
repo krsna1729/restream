@@ -13,6 +13,7 @@ pub struct Probe {
 }
 
 impl Message for Probe {
+	const CONTROL: Option<crate::stats::Control> = Some(crate::stats::Control::Probe);
 	fn decode_msg<R: bytes::Buf>(r: &mut R, version: Version) -> Result<Self, DecodeError> {
 		match version {
 			Version::Lite01 | Version::Lite02 => {

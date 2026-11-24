@@ -60,14 +60,14 @@ url = "2"
 # conventions, pinned; Restream supplies the Compio transport. `unsend` is the
 # vendored patch (vendor/moq-net/PATCH.md) that lets the IETF entry points run
 # over that `!Send` transport.
-moq-net = { version = "=0.3.15", features = ["unsend"] }
-hang = "=0.21.16"
+moq-net = { version = "=0.3.24", features = ["unsend"] }
+hang = "=0.21.25"
 # The catalog producer/consumer (hang `catalog.json` + MSF `catalog`), group
 # management and LOC framing. Restream uses only paths that spawn nothing.
 moq-mux = "=0.10.16"
 moq-loc = "=0.2.24"
 moq-msf = "=0.5.2"
-# The poll transport traits moq-net 0.3.15 drives (`moq::transport`
+# The poll transport traits moq-net 0.3.24 drives (`moq::transport`
 # implements them over compio-quic), its waiter primitive, and the HTTP/3 +
 # WebTransport framing for browser sessions; all pinned to moq-net's versions.
 web-transport-trait = "=0.4.0"
