@@ -79,10 +79,14 @@ impl TlsListener {
             .map_err(|error| format!("HLS sink certificate {}: {error}", cert.display()))?;
         let key = PrivateKeyDer::from_pem_file(&key)
             .map_err(|error| format!("HLS sink key {}: {error}", key.display()))?;
-        let config = tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|error| format!("HLS sink TLS config: {error}"))?;
+        let config = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|error| format!("HLS sink TLS config: {error}"))?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|error| format!("HLS sink TLS config: {error}"))?;
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
         let local = tcp.local_addr().map_err(|error| error.to_string())?;
         let (tx, handshaken) = tokio::sync::mpsc::channel(1024);

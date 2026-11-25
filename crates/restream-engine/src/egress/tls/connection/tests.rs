@@ -130,6 +130,20 @@ use tokio_rustls::rustls::crypto::CryptoProvider;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, UnixTime};
 use tokio_rustls::rustls::{DigitallySignedStruct, ServerConfig, SignatureScheme};
 
+fn test_server_config(
+    cert: CertificateDer<'static>,
+    key: PrivatePkcs8KeyDer<'static>,
+) -> ServerConfig {
+    ServerConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring provider supports the safe protocol versions")
+    .with_no_client_auth()
+    .with_single_cert(vec![cert], key.into())
+    .expect("test certificate and key match")
+}
+
 #[derive(Debug)]
 struct AcceptAnyServerCert(Arc<CryptoProvider>);
 
@@ -510,10 +524,7 @@ fn run_tls_server_peer(
     cert: CertificateDer<'static>,
     key: PrivatePkcs8KeyDer<'static>,
 ) -> std::io::Result<()> {
-    let server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key.into())
-        .unwrap();
+    let server_config = test_server_config(cert, key);
     let mut conn = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
     let mut tls = tokio_rustls::rustls::Stream::new(&mut conn, &mut stream);
     let mut buf = [0u8; 5];
@@ -530,10 +541,7 @@ fn run_tls_handshake_only(
     cert: CertificateDer<'static>,
     key: PrivatePkcs8KeyDer<'static>,
 ) {
-    let server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key.into())
-        .unwrap();
+    let server_config = test_server_config(cert, key);
     let mut conn = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
     while conn.is_handshaking() {
         conn.complete_io(&mut stream).unwrap();
@@ -641,13 +649,10 @@ fn client_awaiting_handoff(
     )
     .unwrap();
     let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
-    let server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![cert_key.cert.der().clone()],
-            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
-        )
-        .unwrap();
+    let server_config = test_server_config(
+        cert_key.cert.der().clone(),
+        PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()),
+    );
     assert!(
         server_config.send_tls13_tickets > 0,
         "the server sends tickets"
@@ -746,13 +751,10 @@ fn records_after_the_servers_finished_are_not_cut_and_their_data_survives_the_ha
     )
     .unwrap();
     let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
-    let mut server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![cert_key.cert.der().clone()],
-            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
-        )
-        .unwrap();
+    let mut server_config = test_server_config(
+        cert_key.cert.der().clone(),
+        PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()),
+    );
     server_config.send_half_rtt_data = true;
     server_config.send_tls13_tickets = 0;
     let mut server = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
