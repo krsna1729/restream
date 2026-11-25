@@ -34,6 +34,7 @@ pub mod feed;
 #[doc(hidden)]
 pub mod fuzz_entry;
 pub(crate) mod http1;
+mod ids;
 pub mod journal;
 pub mod leaf;
 pub mod leaf_arena;

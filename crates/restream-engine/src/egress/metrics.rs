@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 
 use crate::egress::command::ShardId;
 
+/// Delivery ratio below which an output is not keeping up with what the feed
+/// offered. Shared by quality reporting and shard sizing.
+pub(crate) const DELIVERY_FLOOR: f64 = 0.95;
+
 // ---------------------------------------------------------------------------
 // SRT family Owner observability
 // ---------------------------------------------------------------------------
@@ -167,7 +171,7 @@ impl ServiceAccumulator {
             && offered > 0.0
         {
             summary.rated += 1;
-            summary.under_floor += u32::from(ratio < crate::egress::delivery::DELIVERY_FLOOR);
+            summary.under_floor += u32::from(ratio < DELIVERY_FLOOR);
             summary.sum_ratio += ratio;
             summary.sum_sq_ratio += ratio * ratio;
             summary.offered_bps += offered;
