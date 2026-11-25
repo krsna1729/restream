@@ -396,7 +396,7 @@ fn spawn_state_loops(
     });
     supervised_task::spawn_supervised("fleet_sampler", {
         let (history, hub, db, engine, config, stop) = (
-            state.fleet_history.clone(),
+            state.fleet_history_handle(),
             state.runtime_state.clone(),
             state.db.clone(),
             state.engine.clone(),

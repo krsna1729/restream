@@ -281,7 +281,7 @@ pub async fn logs_stream_handler(
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
 
     let db = state.db.clone();
-    let mut broadcast_rx = state.log_broadcast.subscribe();
+    let mut broadcast_rx = state.subscribe_logs();
 
     tokio::spawn(async move {
         let mut delivered_through = resume_from.unwrap_or(0);

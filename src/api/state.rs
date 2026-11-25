@@ -165,13 +165,13 @@ pub struct AppState {
     /// The revisioned runtime state behind `/api/v1/state`.
     pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     /// The fleet's sampled signals behind `/api/v1/fleet/history`.
-    pub fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
+    fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
     /// Each pipeline's recorded health behind
     /// `/api/v1/pipelines/:id/flight-recorder`.
     pub flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
     /// Public watch links behind `/watch/:token` and token HLS reads.
     pub share_links: Arc<crate::application::share::ShareLinks>,
-    pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+    log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
     pub agent_execution: Arc<restream_agent::execution::AgentExecutionStore>,
@@ -253,6 +253,29 @@ impl AppState {
             #[cfg(feature = "agent-execution")]
             agent_execution: Arc::new(restream_agent::execution::AgentExecutionStore::default()),
         }
+    }
+
+    /// Subscribe this request to the live log stream.
+    pub(crate) fn subscribe_logs(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::logging::LogBroadcast> {
+        self.log_broadcast.subscribe()
+    }
+
+    /// The fleet history samples in `[since_ms, until_ms]`.
+    pub(crate) fn fleet_history_window(
+        &self,
+        since_ms: u64,
+        until_ms: u64,
+    ) -> crate::application::fleet_history::FleetHistoryWindow {
+        self.fleet_history.window(since_ms, until_ms)
+    }
+
+    /// The shared history handle used by the fleet sampler task.
+    pub(crate) fn fleet_history_handle(
+        &self,
+    ) -> Arc<crate::application::fleet_history::FleetHistory> {
+        Arc::clone(&self.fleet_history)
     }
 
     // Session hashes are mirrored in-memory so request auth can stay cheap
