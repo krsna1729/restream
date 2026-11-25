@@ -6,8 +6,8 @@
 
 use std::time::Instant;
 
-use crate::egress::command::{FeedId, OutputId};
 use crate::egress::feed::FeedCursor;
+use crate::egress::ids::{FeedId, OutputId};
 use crate::egress::policy::LeafPolicy;
 use crate::egress::scheduler::ScheduleState;
 
@@ -347,7 +347,7 @@ impl LeafCommon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::egress::command::{FeedId, OutputId};
+    use crate::egress::ids::{FeedId, OutputId};
     use crate::egress::policy::LeafPolicy;
 
     fn make_common(id: &str, generation_val: u64) -> LeafCommon {
