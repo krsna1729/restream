@@ -30,6 +30,7 @@ use restream_health::alerts;
 use super::AppServices;
 
 mod endpoints;
+mod identity;
 mod ingests;
 mod notifications;
 mod observability;
@@ -158,8 +159,8 @@ pub struct AppState {
     pipeline_input_service: PipelineInputService,
     recirculation_service: RecirculationService,
     ingest_service: IngestService,
-    pub auth_service: AuthService,
-    pub team_service: crate::application::services::TeamService,
+    auth_service: AuthService,
+    team_service: crate::application::services::TeamService,
     notify_service: NotifyService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,

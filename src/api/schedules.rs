@@ -148,7 +148,7 @@ async fn audit_run(state: &AppState, schedule: &Schedule, ok: bool) {
         path: format!("/api/v1/schedules/{}", schedule.id),
         status: if ok { 200 } else { 500 },
     };
-    if let Err(error) = state.team_service.record(&entry).await {
+    if let Err(error) = state.record_audit(&entry).await {
         warn!(err = %error, "failed to audit a schedule run");
     }
 }

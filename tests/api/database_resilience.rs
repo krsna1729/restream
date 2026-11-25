@@ -126,8 +126,10 @@ async fn unavailable_principal_store_cannot_bypass_role_checks_and_mutate() {
     assert!(state.validate_session(CURRENT_TOKEN).await.unwrap());
     let principal_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&principal_pool).await.unwrap();
-    state.team_service =
-        TeamService::new(db::DeadlineDb::new(principal_pool.clone(), READ_DEADLINE));
+    state.replace_team_service_for_test(TeamService::new(db::DeadlineDb::new(
+        principal_pool.clone(),
+        READ_DEADLINE,
+    )));
     principal_pool.close().await;
     let app = api::create_router(Arc::new(state));
 
@@ -271,7 +273,7 @@ async fn cancelling_password_change_after_commit_still_revokes_sessions_and_audi
         loop {
             let persisted = db::list_sessions(&pool).await.unwrap();
             let cached = sessions.read().await.clone();
-            let audit = state.team_service.audit(20, None).await.unwrap();
+            let audit = state.audit_entries(20, None).await.unwrap();
             if persisted == vec![current_hash.clone()]
                 && cached == HashSet::from([current_hash.clone()])
                 && audit.iter().any(|entry| {
