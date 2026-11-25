@@ -156,8 +156,8 @@ pub async fn pipelines_get_handler(
                     view_models::pipeline_response_json(
                         pipeline,
                         &ingest_host,
-                        state.ports.rtmp,
-                        state.ports.srt,
+                        state.rtmp_port(),
+                        state.srt_port(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -192,8 +192,8 @@ pub async fn pipeline_detail_handler(
         "pipeline": view_models::pipeline_response_json(
             &pipeline,
             &ingest_host,
-            state.ports.rtmp,
-            state.ports.srt
+            state.rtmp_port(),
+            state.srt_port()
         ),
         "outputs": view_models::output_response_json_list(&outputs),
     }))
@@ -270,8 +270,8 @@ pub async fn pipelines_post_handler(
                         "pipeline": view_models::pipeline_response_json_with_file_ingest(
                             &pipeline,
                             &ingest_host,
-                            state.ports.rtmp,
-                            state.ports.srt,
+                            state.rtmp_port(),
+                            state.srt_port(),
                             file_ingest.ingest,
                             file_ingest.running,
                         )
@@ -375,8 +375,8 @@ pub async fn pipelines_update_handler(
                 "pipeline": view_models::pipeline_response_json_with_file_ingest(
                     &updated,
                     &ingest_host,
-                    state.ports.rtmp,
-                    state.ports.srt,
+                    state.rtmp_port(),
+                    state.srt_port(),
                     file_ingest.ingest,
                     file_ingest.running,
                 )
@@ -462,7 +462,7 @@ pub async fn pipeline_moq_token_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let Some(port) = state.ports.moq else {
+    let Some(port) = state.moq_port() else {
         return (StatusCode::CONFLICT, "The MoQ listener is off").into_response();
     };
     if let Err(error) = state.pipeline_service.get_by_id(&pipeline_id).await {

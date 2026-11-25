@@ -103,8 +103,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
             "byteLength": custom_encoding_len,
         },
         "ports": {
-            "rtmp": state.ports.rtmp,
-            "srt": state.ports.srt,
+            "rtmp": state.rtmp_port(),
+            "srt": state.srt_port(),
         }
     });
     let media = media_inventory(state).await;
