@@ -14,7 +14,7 @@ restream-engine = { path = "../crates/restream-engine" }
 restream-core = { path = "../crates/restream-core" }
 restream-mpegts = { path = "../crates/restream-mpegts" }
 restream-rtmp = { path = "../crates/restream-rtmp" }
-moq-net = { path = "../vendor/moq-net", features = ["fuzz"] }
+moq-net = { version = "=0.3.24", features = ["fuzz"] }
 
 # Not part of the root workspace: cargo-fuzz builds it with nightly and
 # sanitizer flags.
@@ -24,7 +24,6 @@ members = ["."]
 # Same patched crates as the root workspace (a [patch] is not inherited).
 [patch.crates-io]
 rml_rtmp = { path = "../vendor/rml_rtmp" }
-moq-net = { path = "../vendor/moq-net" }
 
 [[bin]]
 name = "flv_video_tag"

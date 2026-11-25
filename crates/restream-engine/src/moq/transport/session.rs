@@ -1,4 +1,4 @@
-//! [`MoqSession`] and its streams: `web_transport_trait::poll` over one
+//! [`RawSession`] and its streams: `web_transport_trait::poll` over one
 //! compio-quic connection.
 //!
 //! Every compio-quic operation used here (`accept_*`, `open_*_wait`,
@@ -149,11 +149,11 @@ impl Drop for Shared {
 /// One MoQ transport session: a native QUIC connection or one WebTransport
 /// session. Clones share the connection; the last drop closes it.
 #[derive(Clone)]
-pub struct MoqSession {
+pub struct RawSession {
     shared: Rc<Shared>,
 }
 
-impl MoqSession {
+impl RawSession {
     /// Wraps an established connection speaking `protocol`. `wt` carries the
     /// WebTransport session state and the CONNECT stream's receive half.
     /// Spawns the detached close observers, so it must run on a Compio
@@ -201,17 +201,23 @@ impl MoqSession {
     pub(super) fn connection(&self) -> &Connection {
         &self.shared.conn
     }
+
+    /// A snapshot for the checked wrapper, which cannot return an inner
+    /// `impl Stats` from a wrong thread.
+    pub(super) fn stats_snapshot(&self) -> MoqStats {
+        MoqStats(self.shared.conn.stats())
+    }
 }
 
-impl web_transport_trait::poll::Session for MoqSession {
-    type SendStream = MoqSendStream;
-    type RecvStream = MoqRecvStream;
+impl web_transport_trait::poll::Session for RawSession {
+    type SendStream = RawSendStream;
+    type RecvStream = RawRecvStream;
     type Error = TransportError;
 
     fn poll_accept_uni(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<MoqRecvStream, TransportError>> {
+    ) -> Poll<Result<RawRecvStream, TransportError>> {
         if let Some(reason) = self.closed_reason() {
             return Poll::Ready(Err(reason));
         }
@@ -219,18 +225,18 @@ impl web_transport_trait::poll::Session for MoqSession {
         match &shared.wt {
             None => pin!(shared.conn.accept_uni())
                 .poll(cx)
-                .map(|accepted| accepted.map(|stream| MoqRecvStream::new(stream, false)))
+                .map(|accepted| accepted.map(|stream| RawRecvStream::new(stream, false)))
                 .map_err(|error| connection_error(error, false)),
             Some(wt) => wt
                 .poll_accept_uni(&shared.conn, cx)
-                .map_ok(|stream| MoqRecvStream::new(stream, true)),
+                .map_ok(|stream| RawRecvStream::new(stream, true)),
         }
     }
 
     fn poll_accept_bi(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(MoqSendStream, MoqRecvStream), TransportError>> {
+    ) -> Poll<Result<(RawSendStream, RawRecvStream), TransportError>> {
         if let Some(reason) = self.closed_reason() {
             return Poll::Ready(Err(reason));
         }
@@ -242,15 +248,15 @@ impl web_transport_trait::poll::Session for MoqSession {
         };
         let wt = self.is_wt();
         Poll::Ready(Ok((
-            MoqSendStream::new(send, None, wt),
-            MoqRecvStream::new(recv, wt),
+            RawSendStream::new(send, None, wt),
+            RawRecvStream::new(recv, wt),
         )))
     }
 
     fn poll_open_uni(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<MoqSendStream, TransportError>> {
+    ) -> Poll<Result<RawSendStream, TransportError>> {
         if let Some(reason) = self.closed_reason() {
             return Poll::Ready(Err(reason));
         }
@@ -258,13 +264,13 @@ impl web_transport_trait::poll::Session for MoqSession {
         let stream = ready!(pin!(self.shared.conn.open_uni_wait()).poll(cx))
             .map_err(|error| connection_error(error, wt))?;
         let header = self.shared.wt.as_ref().map(WtSession::uni_header);
-        Poll::Ready(MoqSendStream::opened(stream, header, wt, cx))
+        Poll::Ready(RawSendStream::opened(stream, header, wt, cx))
     }
 
     fn poll_open_bi(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(MoqSendStream, MoqRecvStream), TransportError>> {
+    ) -> Poll<Result<(RawSendStream, RawRecvStream), TransportError>> {
         if let Some(reason) = self.closed_reason() {
             return Poll::Ready(Err(reason));
         }
@@ -272,8 +278,8 @@ impl web_transport_trait::poll::Session for MoqSession {
         let (send, recv) = ready!(pin!(self.shared.conn.open_bi_wait()).poll(cx))
             .map_err(|error| connection_error(error, wt))?;
         let header = self.shared.wt.as_ref().map(WtSession::bi_header);
-        let send = MoqSendStream::opened(send, header, wt, cx)?;
-        Poll::Ready(Ok((send, MoqRecvStream::new(recv, wt))))
+        let send = RawSendStream::opened(send, header, wt, cx)?;
+        Poll::Ready(Ok((send, RawRecvStream::new(recv, wt))))
     }
 
     /// Never pends: compio-quic drops the oldest queued datagram when full,
@@ -341,12 +347,12 @@ impl web_transport_trait::poll::Session for MoqSession {
     }
 
     fn stats(&self) -> impl web_transport_trait::Stats {
-        MoqStats(self.shared.conn.stats())
+        self.stats_snapshot()
     }
 }
 
 /// compio-quic's connection counters in the trait's shape.
-struct MoqStats(ConnectionStats);
+pub(super) struct MoqStats(ConnectionStats);
 
 impl web_transport_trait::Stats for MoqStats {
     fn bytes_sent(&self) -> Option<u64> {
@@ -381,7 +387,7 @@ impl web_transport_trait::Stats for MoqStats {
 /// An outgoing stream. A WebTransport stream first sends its header (stream
 /// type + session id), ahead of any caller byte; `poll_write` only reports
 /// caller bytes. Dropped unfinished, it is reset (code 0).
-pub struct MoqSendStream {
+pub struct RawSendStream {
     /// `None` only inside [`Self::poll_raw_write`], which borrows the stream
     /// as compio's slice-writing compat type.
     stream: Option<SendStream>,
@@ -390,7 +396,7 @@ pub struct MoqSendStream {
     done: bool,
 }
 
-impl MoqSendStream {
+impl RawSendStream {
     pub(super) fn new(stream: SendStream, header: Option<Header>, wt: bool) -> Self {
         Self {
             stream: Some(stream),
@@ -442,7 +448,7 @@ impl MoqSendStream {
     }
 }
 
-impl web_transport_trait::poll::SendStream for MoqSendStream {
+impl web_transport_trait::poll::SendStream for RawSendStream {
     type Error = TransportError;
 
     fn poll_write(
@@ -503,7 +509,7 @@ impl web_transport_trait::poll::SendStream for MoqSendStream {
     }
 }
 
-impl Drop for MoqSendStream {
+impl Drop for RawSendStream {
     fn drop(&mut self) {
         if !self.done {
             web_transport_trait::poll::SendStream::reset(self, 0);
@@ -513,18 +519,18 @@ impl Drop for MoqSendStream {
 
 /// An incoming stream (a WebTransport stream's header already consumed).
 /// Dropped before its end, it is stopped (code 0).
-pub struct MoqRecvStream {
+pub struct RawRecvStream {
     stream: RecvStream,
     wt: bool,
 }
 
-impl MoqRecvStream {
+impl RawRecvStream {
     pub(super) fn new(stream: RecvStream, wt: bool) -> Self {
         Self { stream, wt }
     }
 }
 
-impl web_transport_trait::poll::RecvStream for MoqRecvStream {
+impl web_transport_trait::poll::RecvStream for RawRecvStream {
     type Error = TransportError;
 
     fn poll_read(
@@ -571,7 +577,7 @@ impl web_transport_trait::poll::RecvStream for MoqRecvStream {
     }
 }
 
-impl Drop for MoqRecvStream {
+impl Drop for RawRecvStream {
     fn drop(&mut self) {
         // compio-quic stops an unread stream with raw code 0 on drop; a
         // WebTransport peer needs it in the session's HTTP/3 code range.

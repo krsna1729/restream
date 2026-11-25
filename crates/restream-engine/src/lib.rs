@@ -7,6 +7,10 @@
 //! runtime dependency; it appears only as an optional live-harness peer.
 //! Supports H.264, H.265/HEVC, and multi-track audio.
 
+// moq-net's IETF generic driver nests `Send` projections deeply enough that
+// the default 128-level trait evaluation overflows when instantiated with the
+// checked `LocalSession` under the fuzz sanitizer's `-D warnings` build.
+#![recursion_limit = "256"]
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 // Raw std lock access is disallowed in shipped code (clippy.toml, `restream_sync::lock`);
 // tests may poison and inspect locks directly.

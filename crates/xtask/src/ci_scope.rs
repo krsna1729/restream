@@ -224,7 +224,6 @@ fn ci_workflow_scopes_cover_container_build_inputs() {
         "scripts/dev/frontend/prepare-assets.mjs",
         "scripts/ci/install-system-deps.sh",
         "scripts/data/debian-packages.tsv",
-        "vendor/moq-net/src/lib.rs",
         "distribution/docker/restream-seccomp.json",
         "tests/docker_build_recipe.rs",
         ".github/workflows/ci.yml",

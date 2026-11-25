@@ -57,10 +57,9 @@ webpki-roots = "1.0"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "cookies"] }
 url = "2"
 # MoQ (moq-lite + hang, IETF MOQT drafts 14-22): the moq.dev drivers and media
-# conventions, pinned; Restream supplies the Compio transport. `unsend` is the
-# vendored patch (vendor/moq-net/PATCH.md) that lets the IETF entry points run
-# over that `!Send` transport.
-moq-net = { version = "=0.3.24", features = ["unsend"] }
+# conventions, pinned; Restream supplies the Compio transport. `local.rs`
+# adapts that `!Send` transport to moq-net's native `Send + Sync` bounds.
+moq-net = "=0.3.24"
 hang = "=0.21.25"
 # The catalog producer/consumer (hang `catalog.json` + MSF `catalog`), group
 # management and LOC framing. Restream uses only paths that spawn nothing.
@@ -71,6 +70,8 @@ moq-msf = "=0.5.2"
 # implements them over compio-quic), its waiter primitive, and the HTTP/3 +
 # WebTransport framing for browser sessions; all pinned to moq-net's versions.
 web-transport-trait = "=0.4.0"
+# `Send + Sync` adapters for the Compio thread-local MoQ transport.
+send_wrapper = "0.6"
 kio = "=0.6.4"
 web-transport-proto = "=0.6.4"
 shiguredo_mp4 = "2026.5.0"

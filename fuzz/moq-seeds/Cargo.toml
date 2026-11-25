@@ -9,4 +9,4 @@ publish = false
 [workspace]
 
 [dependencies]
-moq-net = { path = "../../vendor/moq-net", features = ["fuzz"] }
+moq-net = { version = "=0.3.24", features = ["fuzz"] }

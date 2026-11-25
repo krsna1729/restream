@@ -4,9 +4,8 @@
 //! yields a stream, and records how it was closed. The peer side can close
 //! it to model a relay going away.
 
-use std::cell::RefCell;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use bytes::Bytes;
@@ -89,7 +88,7 @@ struct State {
 
 #[derive(Clone, Default)]
 pub(crate) struct FakeSession {
-    state: Rc<RefCell<State>>,
+    state: Arc<Mutex<State>>,
 }
 
 impl FakeSession {
@@ -101,24 +100,28 @@ impl FakeSession {
     /// How the session was closed: (code, closed by the peer).
     pub(crate) fn closed(&self) -> Option<(u32, bool)> {
         self.state
-            .borrow()
+            .lock()
+            .expect("fake session state")
             .closed
             .as_ref()
             .map(|(code, _, peer)| (*code, *peer))
     }
 
     fn close_as(&self, code: u32, reason: &str, peer: bool) {
-        let mut state = self.state.borrow_mut();
-        if state.closed.is_none() {
-            state.closed = Some((code, reason.to_string(), peer));
-        }
-        for waker in state.wakers.drain(..) {
+        let wakers = {
+            let mut state = self.state.lock().expect("fake session state");
+            if state.closed.is_none() {
+                state.closed = Some((code, reason.to_string(), peer));
+            }
+            std::mem::take(&mut state.wakers)
+        };
+        for waker in wakers {
             waker.wake();
         }
     }
 
     fn wait<T>(&self, cx: &mut Context<'_>) -> Poll<Result<T, FakeError>> {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().expect("fake session state");
         match &state.closed {
             Some((code, reason, _)) => Poll::Ready(Err(FakeError(Some((*code, reason.clone()))))),
             None => {

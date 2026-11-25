@@ -43,7 +43,7 @@ tracing = "0.1"
 compio = { version = "0.19", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "io-compat"] }
 moq-msf = "=0.5.2"
 hang = "=0.21.25"
-moq-net = { version = "=0.3.24", features = ["unsend"] }
+moq-net = "=0.3.24"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
 [dev-dependencies]
