@@ -40,7 +40,7 @@ pub async fn v1_fleet_history_handler(
     };
     let since_ms = query.since.map_or(0, epoch_ms);
     let until_ms = query.until.map_or(u64::MAX, epoch_ms);
-    Json(state.fleet_history.window(since_ms, until_ms)).into_response()
+    Json(state.fleet_history_window(since_ms, until_ms)).into_response()
 }
 
 #[derive(Debug, serde::Deserialize)]
