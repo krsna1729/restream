@@ -27,7 +27,7 @@ pub async fn list_share_links_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match state.share_links.for_pipeline(&pipeline_id).await {
+    match state.share_links_for_pipeline(&pipeline_id).await {
         Ok(links) => Json(serde_json::json!({ "links": links })).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -60,8 +60,7 @@ pub async fn create_share_link_handler(
     rand::rng().fill(&mut id);
     rand::rng().fill(&mut token);
     match state
-        .share_links
-        .create(
+        .create_share_link(
             format!("sl_{}", to_hex(&id)),
             to_hex(&token),
             &pipeline_id,
@@ -86,7 +85,7 @@ pub async fn revoke_share_link_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match state.share_links.revoke(&id).await {
+    match state.revoke_share_link(&id).await {
         Ok(()) => Json(serde_json::json!({ "deleted": true })).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -118,7 +117,7 @@ pub async fn watch_page_handler(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Response {
-    let link = match state.share_links.resolve(&token, now_ms()).await {
+    let link = match state.resolve_share_link(&token, now_ms()).await {
         Ok(Some(link)) => link,
         Ok(None) => {
             return embeddable(
@@ -127,7 +126,7 @@ pub async fn watch_page_handler(
         }
         Err(_) => return embeddable(super::state::auth_unavailable_response()),
     };
-    drop(state.share_links.count_view(link.id));
+    drop(state.count_share_link_view(link.id));
     let title = state
         .file_ingest_service
         .get_pipeline(&link.pipeline_id)
