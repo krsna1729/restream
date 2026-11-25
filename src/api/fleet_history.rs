@@ -71,17 +71,16 @@ pub async fn v1_flight_recorder_handler(
         Ok(query) => query,
         Err(rejection) => return rejection.into_response(),
     };
-    match crate::application::flight_recorder::trace_window(
-        &state.flight_recorder,
-        &state.db,
-        &pipeline_id,
-        query.since.map_or(0, epoch_ms),
-        query.until.map_or(u64::MAX, epoch_ms),
-        query
-            .points
-            .unwrap_or(crate::application::flight_recorder::FLIGHT_MAX_POINTS),
-    )
-    .await
+    match state
+        .flight_recorder_trace(
+            &pipeline_id,
+            query.since.map_or(0, epoch_ms),
+            query.until.map_or(u64::MAX, epoch_ms),
+            query
+                .points
+                .unwrap_or(crate::application::flight_recorder::FLIGHT_MAX_POINTS),
+        )
+        .await
     {
         Some(trace) => Json(trace).into_response(),
         None => (
