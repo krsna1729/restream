@@ -168,7 +168,7 @@ pub struct AppState {
     fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
     /// Each pipeline's recorded health behind
     /// `/api/v1/pipelines/:id/flight-recorder`.
-    pub flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
+    flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
     /// Public watch links behind `/watch/:token` and token HLS reads.
     pub share_links: Arc<crate::application::share::ShareLinks>,
     log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
@@ -272,10 +272,43 @@ impl AppState {
     }
 
     /// The shared history handle used by the fleet sampler task.
-    pub(crate) fn fleet_history_handle(
+    pub(crate) fn fleet_history_sampler_handle(
         &self,
     ) -> Arc<crate::application::fleet_history::FleetHistory> {
         Arc::clone(&self.fleet_history)
+    }
+
+    /// The pipeline's flight trace over `[since_ms, until_ms]`.
+    pub(crate) async fn flight_recorder_trace(
+        &self,
+        pipeline_id: &str,
+        since_ms: u64,
+        until_ms: u64,
+        max_points: usize,
+    ) -> Option<crate::application::flight_recorder::FlightTrace> {
+        crate::application::flight_recorder::trace_window(
+            &self.flight_recorder,
+            &self.db,
+            pipeline_id,
+            since_ms,
+            until_ms,
+            max_points,
+        )
+        .await
+    }
+
+    /// Destination anomalies the alert evaluator reads.
+    pub(crate) fn flight_recorder_anomalies(
+        &self,
+    ) -> Vec<restream_health::destination_baselines::Anomaly> {
+        self.flight_recorder.baselines.anomalies()
+    }
+
+    /// The shared recorder handle used by the flight-recorder task.
+    pub(crate) fn flight_recorder_sampler_handle(
+        &self,
+    ) -> Arc<crate::application::flight_recorder::FlightRecorder> {
+        Arc::clone(&self.flight_recorder)
     }
 
     // Session hashes are mirrored in-memory so request auth can stay cheap

@@ -32,7 +32,7 @@ pub async fn agent_incident_explanation_handler(
     headers: HeaderMap,
     query: Result<Query<ExplainQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
-    use crate::application::flight_recorder::{FLIGHT_MAX_POINTS, trace_window};
+    use crate::application::flight_recorder::FLIGHT_MAX_POINTS;
     use crate::application::incident_explain::{EXPLAIN_LEAD_MS, explain};
 
     if let Some(response) = require_authenticated(&state, &headers).await {
@@ -89,17 +89,16 @@ pub async fn agent_incident_explanation_handler(
         .map_or(to_ms, epoch_ms);
 
     let samples = match alert.pipeline_id.as_deref() {
-        Some(pipeline_id) => trace_window(
-            &state.flight_recorder,
-            &state.db,
-            pipeline_id,
-            from_ms.saturating_sub(EXPLAIN_LEAD_MS),
-            to_ms.saturating_add(1),
-            FLIGHT_MAX_POINTS,
-        )
-        .await
-        .map(|trace| trace.samples)
-        .unwrap_or_default(),
+        Some(pipeline_id) => state
+            .flight_recorder_trace(
+                pipeline_id,
+                from_ms.saturating_sub(EXPLAIN_LEAD_MS),
+                to_ms.saturating_add(1),
+                FLIGHT_MAX_POINTS,
+            )
+            .await
+            .map(|trace| trace.samples)
+            .unwrap_or_default(),
         None => Vec::new(),
     };
     let explanation = explain(&alert, from_ms, to_ms, &samples);

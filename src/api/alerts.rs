@@ -72,7 +72,7 @@ pub async fn evaluate_alerts(state: &AppState) -> Vec<restream_health::alerts::A
     let snapshot = dashboard_alert_snapshot(state).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     alert_list.extend(alerts::anomaly_alerts(
-        &state.flight_recorder.baselines.anomalies(),
+        &state.flight_recorder_anomalies(),
         &snapshot_generated_at(&snapshot),
     ));
     let runtime = state.runtime_state.snapshot().await;

@@ -396,7 +396,7 @@ fn spawn_state_loops(
     });
     supervised_task::spawn_supervised("fleet_sampler", {
         let (history, hub, db, engine, config, stop) = (
-            state.fleet_history_handle(),
+            state.fleet_history_sampler_handle(),
             state.runtime_state.clone(),
             state.db.clone(),
             state.engine.clone(),
@@ -417,7 +417,7 @@ fn spawn_state_loops(
     });
     supervised_task::spawn_supervised("flight_recorder", {
         let (recorder, hub, db, engine, stop) = (
-            state.flight_recorder.clone(),
+            state.flight_recorder_sampler_handle(),
             state.runtime_state.clone(),
             state.db.clone(),
             state.engine.clone(),
