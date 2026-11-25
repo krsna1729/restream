@@ -17,8 +17,9 @@ use crate::api::view_models;
 use crate::application::services::file_ingest_service::FileIngestConfigInput;
 
 use super::error::ApiError;
-use super::ingests::sanitize_target_gop_seconds;
-use super::state::{AppState, MAX_NAME_LEN, check_field_len, require_authenticated};
+use super::state::{
+    AppState, MAX_NAME_LEN, check_field_len, require_authenticated, sanitize_target_gop_seconds,
+};
 
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

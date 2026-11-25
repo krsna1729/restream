@@ -50,12 +50,12 @@ pub use store::Fmp4HlsStore;
 
 #[cfg(test)]
 use codec::{
-    VIDEO_TIMESCALE, build_h264_sample_entry_from_flv_sequence_header,
+    BufferedSample, VIDEO_TIMESCALE, build_h264_sample_entry_from_flv_sequence_header,
     build_h264_sample_entry_from_video_packet, build_mux_samples, is_flv_avc_sequence_header,
     rescale_ms, sample_entry_codec_string,
 };
 #[cfg(test)]
-use rendition::{BufferedSample, VideoRenditionState};
+use rendition::VideoRenditionState;
 #[cfg(test)]
 use segmenter::{relative_to_hls_zero_ms, resolve_hls_sequence_headers};
 #[cfg(test)]

@@ -3,8 +3,8 @@ use shiguredo_mp4::{TrackKind, boxes::SampleEntry, mux::Fmp4SegmentMuxer};
 use tracing::warn;
 
 use super::codec::{
-    PreviewVideoCodec, VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
-    build_mux_samples, build_sample_entry_from_flv_sequence_header,
+    BufferedSample, PreviewVideoCodec, VIDEO_TIMESCALE, audio_default_duration,
+    build_aac_sample_entry, build_mux_samples, build_sample_entry_from_flv_sequence_header,
     build_sample_entry_from_video_packet, default_video_duration, flv_coded_frame_body,
     flv_sequence_header_codec, is_flv_video_sequence_header, rescale_ms, sample_entry_codec_string,
 };
@@ -14,15 +14,6 @@ use restream_core::codec::strip_adts;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, PayloadFormat};
 use restream_rtmp::enhanced_rtmp_hevc::h265_annexb_to_length_prefixed_into;
-
-pub(super) struct BufferedSample {
-    pub(super) pts: i64,
-    pub(super) dts: i64,
-    pub(super) keyframe: bool,
-    pub(super) data_offset: u64,
-    pub(super) data_size: usize,
-    pub(super) default_duration: u32,
-}
 
 #[derive(Default)]
 struct MonotonicTimestampState {

@@ -17,7 +17,8 @@ use crate::application::services::{ServiceError, file_ingest_service::FileIngest
 use super::error::ApiError;
 use super::file_ingest::validate_file_ingest_filename;
 use super::state::{
-    AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, check_field_len, require_authenticated, to_hex,
+    AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, check_field_len, require_authenticated,
+    sanitize_target_gop_seconds, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -40,14 +41,6 @@ struct NormalizedIngestPayload {
     start_time: String,
     live_optimized: bool,
     target_gop_seconds: u32,
-}
-
-/// Applies the API-level default and lower bound for live-optimized GOP sizing
-/// before the value reaches the service layer.
-pub fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
-    value
-        .unwrap_or(restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
-        .max(1)
 }
 
 fn ingest_response(ingest: &restream_domain::models::Ingest, running: bool) -> serde_json::Value {
@@ -307,10 +300,8 @@ pub async fn ingests_stop_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        IngestPayload, map_start_ingest_error, normalize_ingest_payload,
-        sanitize_target_gop_seconds,
-    };
+    use super::{IngestPayload, map_start_ingest_error, normalize_ingest_payload};
+    use crate::api::state::sanitize_target_gop_seconds;
     use crate::application::services::file_ingest_service::FileIngestStartError;
     use axum::http::StatusCode;
 

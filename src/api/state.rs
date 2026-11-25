@@ -38,6 +38,14 @@ pub const MIN_DASHBOARD_PASSWORD_LEN: usize = 12;
 
 pub const SESSION_COOKIE_NAME: &str = "session";
 pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
+
+/// Applies the API-level default and lower bound for live-optimized GOP sizing
+/// before the value reaches the service layer.
+pub(crate) fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
+    value
+        .unwrap_or(restream_domain::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
+        .max(1)
+}
 pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
 

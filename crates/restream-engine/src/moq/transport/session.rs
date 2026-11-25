@@ -9,11 +9,11 @@
 //! `Connection::closed()` is never called from a droppable future: it takes
 //! the connection worker's `JoinHandle`, and dropping that cancels the worker
 //! (and a second caller panics). One detached task per connection awaits it
-//! and publishes the reason into a [`CloseCell`] that `poll_closed` reads.
+//! and publishes the reason into a [`super::wire::CloseCell`] that `poll_closed` reads.
 //! Because that task holds a `Connection` clone, the session closes the
 //! connection itself when its last clone drops.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker, ready};
@@ -21,98 +21,15 @@ use std::task::{Context, Poll, Waker, ready};
 use bytes::Bytes;
 use compio::buf::IntoInner;
 use compio::quic::{
-    Connection, ConnectionError, ConnectionStats, ReadError, RecvStream, ResetError,
-    SendDatagramError, SendStream, StoppedError, VarInt, WriteError,
+    Connection, ConnectionError, ConnectionStats, RecvStream, ResetError, SendDatagramError,
+    SendStream, StoppedError, VarInt,
 };
-use web_transport_proto::{error_from_http3, error_to_http3};
 
 use super::TransportError;
-use super::webtransport::{Header, WtSession};
-
-/// How the session ended, shared with the tasks that observe it.
-#[derive(Default)]
-pub(super) struct CloseState {
-    reason: Option<TransportError>,
-    wakers: Vec<Waker>,
-}
-
-pub(super) type CloseCell = Rc<RefCell<CloseState>>;
-
-/// Records the first reason the session ended and wakes every `poll_closed`
-/// caller; later reasons are ignored.
-pub(super) fn publish_close(cell: &CloseCell, reason: TransportError) {
-    let wakers = {
-        let mut state = cell.borrow_mut();
-        if state.reason.is_some() {
-            return;
-        }
-        state.reason = Some(reason);
-        std::mem::take(&mut state.wakers)
-    };
-    wakers.into_iter().for_each(Waker::wake);
-}
-
-fn close_reason(cell: &CloseCell) -> Option<TransportError> {
-    cell.borrow().reason.clone()
-}
-
-fn poll_close(cell: &CloseCell, cx: &mut Context<'_>) -> Poll<TransportError> {
-    let mut state = cell.borrow_mut();
-    if let Some(reason) = &state.reason {
-        return Poll::Ready(reason.clone());
-    }
-    if !state.wakers.iter().any(|waker| waker.will_wake(cx.waker())) {
-        state.wakers.push(cx.waker().clone());
-    }
-    Poll::Pending
-}
-
-/// An application code from the wire, in moq-net's `u32` space: WebTransport
-/// codes are mapped out of the HTTP/3 range (anything else reads as 0).
-pub(super) fn wire_code(code: VarInt, wt: bool) -> u32 {
-    let code = code.into_inner();
-    if wt {
-        error_from_http3(code).unwrap_or(0)
-    } else {
-        u32::try_from(code).unwrap_or(u32::MAX)
-    }
-}
-
-/// The inverse of [`wire_code`] for codes we send.
-pub(super) fn stream_code(code: u32, wt: bool) -> VarInt {
-    if wt {
-        // `error_to_http3` stays below 2^62, so this never falls back.
-        VarInt::from_u64(error_to_http3(code)).unwrap_or(VarInt::from_u32(0))
-    } else {
-        VarInt::from_u32(code)
-    }
-}
-
-pub(super) fn connection_error(error: ConnectionError, wt: bool) -> TransportError {
-    match error {
-        ConnectionError::ApplicationClosed(close) => TransportError::Closed {
-            code: wire_code(close.error_code, wt),
-            reason: String::from_utf8_lossy(&close.reason).into_owned(),
-        },
-        other => TransportError::Connection(other),
-    }
-}
-
-pub(super) fn write_error(error: WriteError, wt: bool) -> TransportError {
-    match error {
-        WriteError::Stopped(code) => TransportError::StreamStopped(wire_code(code, wt)),
-        WriteError::ConnectionLost(error) => connection_error(error, wt),
-        _ => TransportError::StreamClosed,
-    }
-}
-
-pub(super) fn read_error(error: ReadError, wt: bool) -> TransportError {
-    match error {
-        ReadError::Reset(code) => TransportError::StreamReset(wire_code(code, wt)),
-        ReadError::ConnectionLost(error) => connection_error(error, wt),
-        _ => TransportError::StreamClosed,
-    }
-}
+use super::wire::{
+    CloseCell, Header, WtSession, close_reason, connection_error, poll_close, publish_close,
+    read_error, stream_code, watch_connect_stream, wire_code, write_error,
+};
 
 struct Shared {
     conn: Connection,
@@ -173,7 +90,7 @@ impl RawSession {
         })
         .detach();
         let wt = wt.map(|(session, connect_recv)| {
-            super::webtransport::watch_connect_stream(connect_recv, conn.clone(), close.clone());
+            watch_connect_stream(connect_recv, conn.clone(), close.clone());
             session
         });
         Self {
