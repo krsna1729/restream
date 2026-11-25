@@ -503,10 +503,14 @@ fn rtmps_test_acceptor(
         .map_err(|error| format!("read RTMPS test certificate: {error}"))?;
     let key = rustls_pki_types::PrivateKeyDer::from_pem_file(key_path)
         .map_err(|error| format!("read RTMPS test key: {error}"))?;
-    let config = tokio_rustls::rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key)
-        .map_err(|error| format!("configure RTMPS test server: {error}"))?;
+    let config = tokio_rustls::rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| format!("configure RTMPS test server: {error}"))?
+    .with_no_client_auth()
+    .with_single_cert(vec![cert], key)
+    .map_err(|error| format!("configure RTMPS test server: {error}"))?;
     Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)))
 }
 

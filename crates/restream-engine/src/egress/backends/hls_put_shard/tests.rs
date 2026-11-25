@@ -615,13 +615,17 @@ fn tls_origin() -> (Origin, Arc<tokio_rustls::rustls::ClientConfig>) {
     )
     .unwrap();
     let server_config = Arc::new(
-        tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![CertificateDer::from(cert_key.cert.der().to_vec())],
-                PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
-            )
-            .unwrap(),
+        tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(cert_key.cert.der().to_vec())],
+            PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der()).into(),
+        )
+        .unwrap(),
     );
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

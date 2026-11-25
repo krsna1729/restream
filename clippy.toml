@@ -18,6 +18,8 @@ disallowed-methods = [
   { path = "reqwest::ClientBuilder::tls_certs_merge", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_pem_roots" },
   { path = "reqwest::ClientBuilder::tls_certs_only", reason = "ignored by restream_http's preconfigured TLS: use restream_http::client_builder_with_tls" },
   { path = "httparse::Response::new", reason = "use the bounded HTTP/1 response reader in restream_engine::egress::http1 (header and body limits, framing and connection reuse)" },
+  { path = "tokio_rustls::rustls::ServerConfig::builder", reason = "builds with the process-default crypto provider (panics when none is installed): build through the crate that owns the TLS config" },
+  { path = "rustls::ServerConfig::builder", reason = "builds with the process-default crypto provider (panics when none is installed): build through the crate that owns the TLS config" },
   { path = "tokio_rustls::rustls::ClientConfig::builder", reason = "builds with the process-default crypto provider (panics when none is installed): build through the crate that owns the TLS config" },
   { path = "rustls::ClientConfig::builder", reason = "builds with the process-default crypto provider (panics when none is installed): build through the crate that owns the TLS config" },
   { path = "tokio_rustls::rustls::ClientConfig::builder_with_provider", reason = "TLS clients use the ring provider and webpki roots, built by their owner: restream_http::client_builder (HTTP), restream_engine::egress::tls::client_config (egress), or restream_moq::tls::client_config (MoQ)" },
