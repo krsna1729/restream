@@ -130,11 +130,7 @@ pub async fn build_file_diagnostics_context(
         .map(restream_domain::timestamp::rfc3339);
 
     let (analysis, analysis_error) = if file_exists {
-        match state
-            .media_library_service
-            .analyze_media_file(path.clone())
-            .await
-        {
+        match state.analyze_media(path.clone()).await {
             Ok(analysis) => (Some(analysis), None),
             Err(error) => (None, Some(error)),
         }

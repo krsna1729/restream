@@ -58,13 +58,10 @@ pub async fn recording_start_handler(
     let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
     let active = state
-        .media_library_service
-        .recording_start(
-            &state.engine,
+        .start_recording(
             &pipeline_id,
             pipeline.name.clone(),
             pipeline.input_source.clone(),
-            &state.media_dir,
         )
         .await?;
 
@@ -84,10 +81,7 @@ pub async fn recording_stop_handler(
 
     let _ = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
-    state
-        .media_library_service
-        .recording_stop(&state.engine, &pipeline_id)
-        .await?;
+    state.stop_recording(&pipeline_id).await?;
 
     Ok(recording_state_response(false, false))
 }
@@ -101,10 +95,7 @@ pub async fn media_list_handler(
         return response;
     }
 
-    let files = state
-        .media_library_service
-        .list_media_files(&state.media_dir)
-        .await;
+    let files = state.media_files().await;
     Json(serde_json::json!({ "files": files })).into_response()
 }
 
@@ -323,7 +314,7 @@ pub async fn media_poster_handler(
     {
         return (StatusCode::NOT_MODIFIED, cache).into_response();
     }
-    match state.media_library_service.media_poster(path).await {
+    match state.media_poster(path).await {
         Ok(png) => (
             [(axum::http::header::CONTENT_TYPE, "image/png".to_string())],
             cache,
@@ -354,7 +345,7 @@ pub async fn media_analysis_handler(
         Err(status) => return status.into_response(),
     };
 
-    let analysis = match state.media_library_service.analyze_media_file(path).await {
+    let analysis = match state.analyze_media(path).await {
         Ok(analysis) => analysis,
         Err(error) => {
             return (
@@ -636,11 +627,7 @@ pub async fn media_delete_handler(
         Err(status) => return media_directory_error_response(status),
     };
 
-    match state
-        .media_library_service
-        .delete_media_file(&filename, &canonical_path)
-        .await
-    {
+    match state.delete_media(&filename, &canonical_path).await {
         Ok(()) => Json(serde_json::json!({ "deleted": true })).into_response(),
         Err(MediaDeleteError::HasConfiguredIngests) => (
             StatusCode::CONFLICT,
@@ -713,8 +700,7 @@ pub async fn media_rename_handler(
     }
 
     let updated_ingests = match state
-        .media_library_service
-        .rename_media_file(&filename, new_name, &source_path, &destination_path)
+        .rename_media(&filename, new_name, &source_path, &destination_path)
         .await
     {
         Ok(updated_ingests) => updated_ingests,
