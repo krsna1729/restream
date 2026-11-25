@@ -156,7 +156,7 @@ pub async fn ingests_get_handler(
         return Ok(response);
     }
 
-    let ingests = state.ingest_service.list_ingests().await?;
+    let ingests = state.list_ingests().await?;
     let mut res = Vec::new();
     for i in ingests {
         let running = state.engine.is_file_ingest_running(&i.id).await;
@@ -183,7 +183,6 @@ pub async fn ingests_post_handler(
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
 
     let ingest = state
-        .ingest_service
         .create_ingest(
             &id,
             &normalized.filename,
@@ -216,7 +215,6 @@ pub async fn ingests_update_handler(
     };
 
     let ingest = state
-        .ingest_service
         .update_ingest(
             &id,
             &normalized.filename,
