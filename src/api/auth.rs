@@ -576,8 +576,8 @@ pub async fn stream_keys_handler(
                         "key": key.clone(),
                         "label": pipeline.name,
                         "ingestUrls": {
-                            "rtmp": format!("rtmp://{}:{}/live/{}", host, state.ports.rtmp, key),
-                            "srt": format!("srt://{}:{}?streamid=publish:{}", host, state.ports.srt, key)
+                            "rtmp": format!("rtmp://{}:{}/live/{}", host, state.rtmp_port(), key),
+                            "srt": format!("srt://{}:{}?streamid=publish:{}", host, state.srt_port(), key)
                         }
                     })
                 })

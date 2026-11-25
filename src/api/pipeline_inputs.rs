@@ -472,7 +472,7 @@ async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serd
         });
     let endpoints = crate::application::runtime_state::IngestEndpoints {
         host: host.to_string(),
-        ports: state.ports.server_ports(),
+        ports: state.server_ports(),
     };
     serde_json::json!({
         "id": input.id,
@@ -521,7 +521,7 @@ pub async fn pipeline_inputs_get_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let inputs = match state.pipeline_input_service.list(&pipeline_id).await {
+    let inputs = match state.pipeline_inputs(&pipeline_id).await {
         Ok(inputs) => inputs,
         Err(error) => return ApiError::from(error).into_response(),
     };
@@ -565,8 +565,7 @@ pub async fn pipeline_inputs_post_handler(
         Err(response) => return response,
     };
     let input = match state
-        .pipeline_input_service
-        .create(&pipeline_id, payload.label.trim(), source)
+        .create_pipeline_input(&pipeline_id, payload.label.trim(), source)
         .await
     {
         Ok(input) => input,
@@ -597,11 +596,7 @@ pub async fn pipeline_input_patch_handler(
     {
         return response;
     }
-    let current = match state
-        .pipeline_input_service
-        .get(&pipeline_id, &input_id)
-        .await
-    {
+    let current = match state.pipeline_input(&pipeline_id, &input_id).await {
         Ok(input) => input,
         Err(error) => return ApiError::from(error).into_response(),
     };
@@ -623,8 +618,7 @@ pub async fn pipeline_input_patch_handler(
     };
     let kind = source.kind;
     let input = match state
-        .pipeline_input_service
-        .update(
+        .update_pipeline_input(
             &pipeline_id,
             &input_id,
             label,
@@ -663,11 +657,7 @@ pub async fn pipeline_input_delete_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match state
-        .pipeline_input_service
-        .delete(&pipeline_id, &input_id)
-        .await
-    {
+    match state.delete_pipeline_input(&pipeline_id, &input_id).await {
         Ok(true) => {
             state.engine.cancel_pipeline_input(&input_id).await;
             refresh_srt_ingest_policy_store(&state).await;
@@ -686,11 +676,7 @@ pub async fn pipeline_input_promote_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let input = match state
-        .pipeline_input_service
-        .promote(&pipeline_id, &input_id)
-        .await
-    {
+    let input = match state.promote_pipeline_input(&pipeline_id, &input_id).await {
         Ok(input) => input,
         Err(error) => return ApiError::from(error).into_response(),
     };

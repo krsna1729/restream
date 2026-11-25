@@ -222,8 +222,8 @@ pub async fn config_get_handler(
         pipelines.push(view_models::pipeline_response_json_with_file_ingest(
             pipeline,
             effective_ingest_host,
-            state.ports.rtmp,
-            state.ports.srt,
+            state.rtmp_port(),
+            state.srt_port(),
             file_ingest.ingest,
             file_ingest.running,
         ));
