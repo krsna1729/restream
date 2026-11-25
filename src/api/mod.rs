@@ -42,6 +42,17 @@ pub mod team;
 pub mod telemetry;
 pub mod view_models;
 
+/// One validated file-ingest request, shared by the handler and state operations.
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedIngestPayload {
+    pub(crate) filename: String,
+    pub(crate) stream_key: String,
+    pub(crate) loop_flag: bool,
+    pub(crate) start_time: String,
+    pub(crate) live_optimized: bool,
+    pub(crate) target_gop_seconds: u32,
+}
+
 /// The API's service graph and shared main-pool database executor.
 pub struct AppServices {
     pub db: crate::db::DeadlineDb,

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::application::services::{ServiceError, file_ingest_service::FileIngestStartError};
 
+use super::NormalizedIngestPayload;
 use super::error::ApiError;
 use super::file_ingest::validate_file_ingest_filename;
 use super::state::{
@@ -31,16 +32,6 @@ pub struct IngestPayload {
     pub start_time: Option<String>,
     pub live_optimized: Option<bool>,
     pub target_gop_seconds: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-struct NormalizedIngestPayload {
-    filename: String,
-    stream_key: String,
-    loop_flag: bool,
-    start_time: String,
-    live_optimized: bool,
-    target_gop_seconds: u32,
 }
 
 fn ingest_response(ingest: &restream_domain::models::Ingest, running: bool) -> serde_json::Value {
@@ -182,17 +173,7 @@ pub async fn ingests_post_handler(
     };
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
 
-    let ingest = state
-        .create_ingest(
-            &id,
-            &normalized.filename,
-            &normalized.stream_key,
-            normalized.loop_flag,
-            &normalized.start_time,
-            normalized.live_optimized,
-            normalized.target_gop_seconds,
-        )
-        .await?;
+    let ingest = state.create_ingest(&id, &normalized).await?;
 
     Ok(ingest_json_response(&ingest, false))
 }
@@ -214,17 +195,7 @@ pub async fn ingests_update_handler(
         Err(response) => return Ok(*response),
     };
 
-    let ingest = state
-        .update_ingest(
-            &id,
-            &normalized.filename,
-            &normalized.stream_key,
-            normalized.loop_flag,
-            &normalized.start_time,
-            normalized.live_optimized,
-            normalized.target_gop_seconds,
-        )
-        .await?;
+    let ingest = state.update_ingest(&id, &normalized).await?;
 
     let running = state.engine.is_file_ingest_running(&ingest.id).await;
     Ok(ingest_json_response(&ingest, running))

@@ -411,7 +411,7 @@ pub async fn pipelines_delete_handler(
             state.reconcile.wake();
             refresh_srt_ingest_policy_store(&state).await;
             // Its watch links go with it.
-            state.share_links.forget_pipeline(&id).await;
+            state.forget_pipeline_share_links(&id).await;
             // Its replay history goes with it; a failure only leaves rows the
             // retention prune removes.
             let history_id = id.clone();

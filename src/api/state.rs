@@ -170,7 +170,7 @@ pub struct AppState {
     /// `/api/v1/pipelines/:id/flight-recorder`.
     flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
     /// Public watch links behind `/watch/:token` and token HLS reads.
-    pub share_links: Arc<crate::application::share::ShareLinks>,
+    share_links: Arc<crate::application::share::ShareLinks>,
     log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
@@ -319,51 +319,39 @@ impl AppState {
     }
 
     /// Creates one persisted file ingest.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn create_ingest(
         &self,
         id: &str,
-        filename: &str,
-        stream_key: &str,
-        loop_flag: bool,
-        start_time: &str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
+        payload: &crate::api::NormalizedIngestPayload,
     ) -> crate::application::services::ServiceResult<restream_domain::models::Ingest> {
         self.ingest_service
             .create_ingest(
                 id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
+                &payload.filename,
+                &payload.stream_key,
+                payload.loop_flag,
+                &payload.start_time,
+                payload.live_optimized,
+                payload.target_gop_seconds,
             )
             .await
     }
 
     /// Updates one persisted file ingest.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_ingest(
         &self,
         id: &str,
-        filename: &str,
-        stream_key: &str,
-        loop_flag: bool,
-        start_time: &str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
+        payload: &crate::api::NormalizedIngestPayload,
     ) -> crate::application::services::ServiceResult<restream_domain::models::Ingest> {
         self.ingest_service
             .update_ingest(
                 id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
+                &payload.filename,
+                &payload.stream_key,
+                payload.loop_flag,
+                &payload.start_time,
+                payload.live_optimized,
+                payload.target_gop_seconds,
             )
             .await
     }
@@ -377,6 +365,71 @@ impl AppState {
         self.recirculation_service
             .validate_output_candidate(source_pipeline_id, target)
             .await
+    }
+
+    /// Lists the watch links of one pipeline.
+    pub(crate) async fn share_links_for_pipeline(
+        &self,
+        pipeline_id: &str,
+    ) -> crate::application::services::ServiceResult<Vec<crate::application::share::ShareLink>>
+    {
+        self.share_links.for_pipeline(pipeline_id).await
+    }
+
+    /// Creates one watch link and returns it.
+    pub(crate) async fn create_share_link(
+        &self,
+        id: String,
+        token: String,
+        pipeline_id: &str,
+        label: &str,
+        lifetime_hours: Option<i64>,
+        now_ms: i64,
+    ) -> crate::application::services::ServiceResult<crate::application::share::ShareLink> {
+        self.share_links
+            .create(id, token, pipeline_id, label, lifetime_hours, now_ms)
+            .await
+    }
+
+    /// Revokes one watch link.
+    pub(crate) async fn revoke_share_link(
+        &self,
+        id: &str,
+    ) -> crate::application::services::ServiceResult<()> {
+        self.share_links.revoke(id).await
+    }
+
+    /// Resolves a live watch credential.
+    pub(crate) async fn resolve_share_link(
+        &self,
+        token: &str,
+        now_ms: i64,
+    ) -> crate::application::services::ServiceResult<Option<crate::application::share::ShareLink>>
+    {
+        self.share_links.resolve(token, now_ms).await
+    }
+
+    /// Records one best-effort watch view.
+    pub(crate) fn count_share_link_view(
+        &self,
+        id: String,
+    ) -> Option<tokio::task::JoinHandle<crate::application::services::ServiceResult<()>>> {
+        self.share_links.count_view(id)
+    }
+
+    /// Drops every watch link of a deleted pipeline.
+    pub(crate) async fn forget_pipeline_share_links(&self, pipeline_id: &str) {
+        self.share_links.forget_pipeline(pipeline_id).await;
+    }
+
+    /// Returns whether a share credential admits one HLS pipeline.
+    pub(crate) async fn share_link_admits(
+        &self,
+        token: &str,
+        pipeline_id: &str,
+        now_ms: i64,
+    ) -> crate::application::services::ServiceResult<bool> {
+        self.share_links.admits(token, pipeline_id, now_ms).await
     }
 
     // Session hashes are mirrored in-memory so request auth can stay cheap
@@ -671,8 +724,7 @@ pub async fn require_hls_access(
         crate::application::share::token_of(uri.query()),
     ) {
         match state
-            .share_links
-            .admits(token, pipeline_id, jiff::Timestamp::now().as_millisecond())
+            .share_link_admits(token, pipeline_id, jiff::Timestamp::now().as_millisecond())
             .await
         {
             Ok(true) => return None,
