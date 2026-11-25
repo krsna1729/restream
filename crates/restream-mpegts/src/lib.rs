@@ -11,8 +11,9 @@ mod mux;
 mod probe;
 pub mod wire;
 
-pub use demux::{DemuxProbe, StreamKind, TopologyChanges, TsDemuxer};
+pub use demux::{DemuxProbe, TopologyChanges, TsDemuxer};
 pub use mux::{MuxStreamConfig, PacketMeta, TsMuxer, TsServiceMetadata};
+pub use probe::StreamKind;
 
 pub fn hevc_video_meta(annex_b: &[u8]) -> VideoMeta {
     let mut meta = probe::probe_video(StreamKind::H265, 0, None, None, annex_b);

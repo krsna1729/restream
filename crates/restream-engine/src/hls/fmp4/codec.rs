@@ -23,7 +23,6 @@ use shiguredo_mp4::{
     mux::Sample,
 };
 
-use super::rendition::BufferedSample;
 use restream_core::codec::adts_frame_count;
 use restream_core::codec::avcc_record;
 use restream_core::codec::build_aac_sequence_header;
@@ -36,6 +35,16 @@ use restream_rtmp::enhanced_rtmp_hevc::ex_video_tag;
 use restream_rtmp::flv::flv_video_config;
 
 pub(super) const VIDEO_TIMESCALE: u32 = 90_000;
+
+/// One media sample buffered until the segment's muxer consumes it.
+pub(super) struct BufferedSample {
+    pub(super) pts: i64,
+    pub(super) dts: i64,
+    pub(super) keyframe: bool,
+    pub(super) data_offset: u64,
+    pub(super) data_size: usize,
+    pub(super) default_duration: u32,
+}
 
 pub(super) fn build_mux_samples(
     buffered: &[BufferedSample],

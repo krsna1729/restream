@@ -64,15 +64,16 @@ the [assurance roadmap](assurance-roadmap.md).
   engine tests pass; any hot metric path keeps its benchmark evidence.
 
 ### Q-123 [architecture] [opus] Break the smallest module cycles
-- Goal: remove the 28 `module-cycle` findings, starting with the smallest:
-  `moq::transport` (`local`/`session`/`webtransport`), `api::file_ingest`
-  and `api::ingests`, `restream-mpegts` (`demux`/`probe`), and
-  `hls::fmp4` (`codec`/`rendition`). Extract shared close/error/header
-  primitives for the MoQ transport cycle instead of moving imports.
-- Why open: the MoQ adapter now joins the pre-existing `session` and
-  `webtransport` coupling; the others are independent two-module cycles.
-  The 32-module engine cycle and the 16-module `test_harness` cycle need
-  their own design, not a mechanical import shuffle.
+- Goal: remove the remaining `module-cycle` findings. The four smallest are
+  removed: `moq::transport` shares close/error/header/HTTP-3 frame primitives
+  in `transport::wire`; `api::file_ingest` and `api::ingests` share the GOP
+  sanitizer in `api::state`; `restream-mpegts` owns `StreamKind` in `probe`;
+  and `hls::fmp4` owns `BufferedSample` in `codec`. The 32-module engine
+  cycle and the 16-module `test_harness` cycle still need their own design,
+  not a mechanical import shuffle.
+- Why open: the remaining cycles are wider than the four removed pairs, and
+  the engine and harness cycles need an ownership boundary rather than a
+  move of one shared item.
 - Gates: scoped `deslop-please` reports no cycle for each changed area;
   affected lifecycle/protocol tests pass; public API changes are documented.
 

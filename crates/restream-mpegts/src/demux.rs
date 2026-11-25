@@ -20,7 +20,7 @@ mod adts;
 use adts::{AdtsFraming, Framed};
 
 use super::probe::{
-    audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
+    StreamKind, audio_meta_complete, h264_is_keyframe, h265_is_keyframe, probe_audio, probe_video,
     video_meta_complete,
 };
 use super::wire::{PAT_PID, TS_PACKET_SIZE, TS_SYNC_BYTE, crc32_mpeg2, parse_timestamp, ts_to_ms};
@@ -34,51 +34,11 @@ pub(crate) const CC_UNSET: u8 = u8::MAX;
 /// Sentinel meaning "no PMT version parsed yet". Valid PMT version_number values are 0–31.
 pub(crate) const PMT_VER_UNSET: u8 = u8::MAX;
 
-const STREAM_TYPE_H264: u8 = 0x1B;
-const STREAM_TYPE_H265: u8 = 0x24;
-const STREAM_TYPE_AAC_ADTS: u8 = 0x0F;
-const STREAM_TYPE_AAC_LATM: u8 = 0x11;
-
 fn pes_payload_len(pes_packet_len: usize, pes_header_len: usize) -> Option<usize> {
     if pes_packet_len == 0 {
         return None;
     }
     pes_packet_len.checked_sub(pes_header_len.checked_add(3)?)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamKind {
-    H264,
-    H265,
-    AacAdts,
-    AacLatm,
-}
-
-impl StreamKind {
-    fn from_stream_type(st: u8) -> Option<Self> {
-        match st {
-            STREAM_TYPE_H264 => Some(Self::H264),
-            STREAM_TYPE_H265 => Some(Self::H265),
-            STREAM_TYPE_AAC_ADTS => Some(Self::AacAdts),
-            STREAM_TYPE_AAC_LATM => Some(Self::AacLatm),
-            _ => None,
-        }
-    }
-
-    fn media_type(self) -> MediaType {
-        match self {
-            Self::H264 | Self::H265 => MediaType::Video,
-            Self::AacAdts | Self::AacLatm => MediaType::Audio,
-        }
-    }
-
-    pub fn codec_name(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::H265 => "hevc",
-            Self::AacAdts | Self::AacLatm => "aac",
-        }
-    }
 }
 
 #[derive(Debug)]

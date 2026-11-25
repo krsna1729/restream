@@ -11,11 +11,51 @@
 
 use std::ops::ControlFlow;
 
-use super::StreamKind;
-use restream_core::{AudioMeta, VideoMeta};
+use restream_core::{AudioMeta, MediaType, VideoMeta};
 
 mod h264;
 mod h265;
+
+const STREAM_TYPE_H264: u8 = 0x1B;
+const STREAM_TYPE_H265: u8 = 0x24;
+const STREAM_TYPE_AAC_ADTS: u8 = 0x0F;
+const STREAM_TYPE_AAC_LATM: u8 = 0x11;
+
+/// Elementary stream kind carried by one MPEG-TS PID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    H264,
+    H265,
+    AacAdts,
+    AacLatm,
+}
+
+impl StreamKind {
+    pub(crate) fn from_stream_type(stream_type: u8) -> Option<Self> {
+        match stream_type {
+            STREAM_TYPE_H264 => Some(Self::H264),
+            STREAM_TYPE_H265 => Some(Self::H265),
+            STREAM_TYPE_AAC_ADTS => Some(Self::AacAdts),
+            STREAM_TYPE_AAC_LATM => Some(Self::AacLatm),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn media_type(self) -> MediaType {
+        match self {
+            Self::H264 | Self::H265 => MediaType::Video,
+            Self::AacAdts | Self::AacLatm => MediaType::Audio,
+        }
+    }
+
+    pub fn codec_name(self) -> &'static str {
+        match self {
+            Self::H264 => "h264",
+            Self::H265 => "hevc",
+            Self::AacAdts | Self::AacLatm => "aac",
+        }
+    }
+}
 
 use h264::parse_sps as parse_h264_sps;
 pub use h264::{find_sps as find_h264_sps, is_keyframe as h264_is_keyframe};

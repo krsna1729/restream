@@ -5,7 +5,7 @@ use moq_net::transport::poll::Session as _;
 use web_transport_trait::poll::Session as _;
 
 use super::super::test_support::{LOOPBACK_SERVER_NAME, Loopback, loopback_client_tls, run};
-use super::super::webtransport::{
+use super::super::wire::{
     H3_MESSAGE_ERROR, H3_REQUEST_REJECTED, H3_STREAM_CREATION_ERROR, WT_BUFFERED_STREAM_REJECTED,
 };
 use super::super::*;
