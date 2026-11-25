@@ -150,8 +150,8 @@ pub struct AppState {
     srt_pbkeylen: i32,
     pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
-    pub recirculation_service: RecirculationService,
-    pub ingest_service: IngestService,
+    recirculation_service: RecirculationService,
+    ingest_service: IngestService,
     pub auth_service: AuthService,
     pub team_service: crate::application::services::TeamService,
     pub notify_service: crate::application::services::NotifyService,
@@ -309,6 +309,74 @@ impl AppState {
         &self,
     ) -> Arc<crate::application::flight_recorder::FlightRecorder> {
         Arc::clone(&self.flight_recorder)
+    }
+
+    /// Lists the persisted file ingests.
+    pub(crate) async fn list_ingests(
+        &self,
+    ) -> crate::application::services::ServiceResult<Vec<restream_domain::models::Ingest>> {
+        self.ingest_service.list_ingests().await
+    }
+
+    /// Creates one persisted file ingest.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_ingest(
+        &self,
+        id: &str,
+        filename: &str,
+        stream_key: &str,
+        loop_flag: bool,
+        start_time: &str,
+        live_optimized: bool,
+        target_gop_seconds: u32,
+    ) -> crate::application::services::ServiceResult<restream_domain::models::Ingest> {
+        self.ingest_service
+            .create_ingest(
+                id,
+                filename,
+                stream_key,
+                loop_flag,
+                start_time,
+                live_optimized,
+                target_gop_seconds,
+            )
+            .await
+    }
+
+    /// Updates one persisted file ingest.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_ingest(
+        &self,
+        id: &str,
+        filename: &str,
+        stream_key: &str,
+        loop_flag: bool,
+        start_time: &str,
+        live_optimized: bool,
+        target_gop_seconds: u32,
+    ) -> crate::application::services::ServiceResult<restream_domain::models::Ingest> {
+        self.ingest_service
+            .update_ingest(
+                id,
+                filename,
+                stream_key,
+                loop_flag,
+                start_time,
+                live_optimized,
+                target_gop_seconds,
+            )
+            .await
+    }
+
+    /// Validates a recirculation target before an output is reserved.
+    pub(crate) async fn validate_recirculation_candidate(
+        &self,
+        source_pipeline_id: &str,
+        target: &restream_domain::domain::output_spec::RecirculationTarget,
+    ) -> crate::application::services::ServiceResult<()> {
+        self.recirculation_service
+            .validate_output_candidate(source_pipeline_id, target)
+            .await
     }
 
     // Session hashes are mirrored in-memory so request auth can stay cheap

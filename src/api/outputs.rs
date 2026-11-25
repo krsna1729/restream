@@ -481,8 +481,7 @@ async fn validate_reserved_recirculation_candidate(
     let target =
         RecirculationTarget::parse(url).map_err(|error| Box::new(bad_request(error.message())))?;
     state
-        .recirculation_service
-        .validate_output_candidate(source_pipeline_id, &target)
+        .validate_recirculation_candidate(source_pipeline_id, &target)
         .await
         .map_err(|error| Box::new(ApiError::from(error).into_response()))
 }
