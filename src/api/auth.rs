@@ -125,8 +125,7 @@ fn validate_new_dashboard_password(password: &str) -> Result<(), String> {
 
 async fn set_bootstrap_password_prompt(state: &AppState, value: &'static str) {
     let _ = state
-        .auth_service
-        .set_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, value)
+        .set_auth_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, value)
         .await;
 }
 
@@ -171,7 +170,7 @@ pub async fn login_post_handler(
     let member = if username.is_empty() || username == BUILTIN_ADMIN_USERNAME {
         None
     } else {
-        match state.team_service.login_candidate(&username).await {
+        match state.login_candidate(&username).await {
             Ok(Some(stored)) => Some(stored),
             Ok(None) => {
                 state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
@@ -182,7 +181,7 @@ pub async fn login_post_handler(
     };
     let stored_hash = match &member {
         Some(stored) => stored.password_hash.clone(),
-        None => match state.auth_service.get_password_hash().await {
+        None => match state.password_hash().await {
             Ok(Some(hash)) => hash,
             Ok(None) => return incorrect_password_response(),
             Err(_) => return auth_unavailable_response(),
@@ -209,12 +208,7 @@ pub async fn login_post_handler(
             let token_hash = hash_session_token(&token);
 
             let ts = jiff::Timestamp::now().as_millisecond();
-            if state
-                .auth_service
-                .create_session(&token_hash, ts)
-                .await
-                .is_err()
-            {
+            if state.create_session(&token_hash, ts).await.is_err() {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Failed to create session",
@@ -224,13 +218,12 @@ pub async fn login_post_handler(
 
             if member_id.is_some()
                 && state
-                    .team_service
                     .bind_session(&token_hash, member_id.as_deref())
                     .await
                     .is_err()
             {
                 // An unbound session would be the built-in admin's: never leave one.
-                let _ = state.auth_service.delete_session(&token_hash).await;
+                let _ = state.delete_session(&token_hash).await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Failed to create session",
@@ -263,7 +256,7 @@ pub async fn logout_handler(
     if let Some(token) = get_session_token_from_headers(&headers) {
         let token_hash = hash_session_token(&token);
         state.remove_session_hash(&token_hash).await;
-        if let Err(e) = state.auth_service.delete_session(&token_hash).await {
+        if let Err(e) = state.delete_session(&token_hash).await {
             warn!(err = %e, "failed to delete session from DB");
         }
     }
@@ -305,7 +298,7 @@ pub async fn change_password_handler(
             .into_response();
     }
 
-    let principal = match state.team_service.principal(&token_hash).await {
+    let principal = match state.principal(&token_hash).await {
         Ok(Some(principal)) => principal,
         Ok(None) => return super::state::unauthorized_response(),
         Err(_) => return auth_unavailable_response(),
@@ -321,7 +314,7 @@ pub async fn change_password_handler(
         .await;
     }
 
-    let stored_hash = match state.auth_service.get_password_hash().await {
+    let stored_hash = match state.password_hash().await {
         Ok(Some(hash)) => hash,
         Ok(None) => {
             return (
@@ -356,24 +349,14 @@ pub async fn change_password_handler(
         )
             .into_response();
     }
-    if state
-        .auth_service
-        .set_password_hash(&new_hash)
-        .await
-        .is_err()
-    {
+    if state.set_password_hash(&new_hash).await.is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to update password",
         )
             .into_response();
     }
-    if state
-        .auth_service
-        .delete_sessions_except(&token_hash)
-        .await
-        .is_err()
-    {
+    if state.delete_sessions_except(&token_hash).await.is_err() {
         state.clear_session_hashes().await;
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -401,7 +384,7 @@ async fn change_member_password(
         )
             .into_response()
     };
-    let stored = match state.team_service.stored_user(user_id).await {
+    let stored = match state.stored_user(user_id).await {
         Ok(Some(stored)) => stored,
         Ok(None) => return incorrect(),
         Err(_) => return auth_unavailable_response(),
@@ -425,7 +408,6 @@ async fn change_member_password(
             .into_response();
     }
     if state
-        .team_service
         .set_own_password(user_id, &new_hash, token_hash)
         .await
         .is_err()
@@ -450,8 +432,7 @@ pub async fn dismiss_password_change_prompt_handler(
     }
 
     if state
-        .auth_service
-        .set_meta(
+        .set_auth_meta(
             BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
             BOOTSTRAP_PROMPT_DISMISSED,
         )

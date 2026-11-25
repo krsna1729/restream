@@ -30,7 +30,7 @@ pub(in crate::api) async fn session_principal(
 ) -> Result<(String, Principal), Response> {
     let token = require_authenticated_token(state, headers).await?;
     let token_hash = hash_session_token(&token);
-    match state.team_service.principal(&token_hash).await {
+    match state.principal(&token_hash).await {
         Ok(Some(principal)) => Ok((token_hash, principal)),
         Ok(None) => Err(unauthorized_response()),
         Err(_) => Err(auth_unavailable_response()),
@@ -74,7 +74,7 @@ pub(super) async fn audit(
         path: path.to_string(),
         status,
     };
-    if let Err(error) = state.team_service.record(&entry).await {
+    if let Err(error) = state.record_audit(&entry).await {
         warn!(err = %error, "failed to append audit entry");
     }
 }
@@ -172,7 +172,6 @@ pub async fn view_as_handler(
         Err(response) => return response,
     };
     match state
-        .team_service
         .set_view_as(&token_hash, &principal, payload.role)
         .await
     {
@@ -231,7 +230,7 @@ pub async fn list_users_handler(
     if let Err(response) = session_principal(&state, &headers).await {
         return response;
     }
-    match state.team_service.list_users().await {
+    match state.list_users().await {
         Ok(users) => Json(serde_json::json!({ "users": users })).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -261,7 +260,7 @@ pub async fn create_user_handler(
         disabled: false,
         last_active_ms: None,
     };
-    match state.team_service.create_user(user, &hash).await {
+    match state.create_user(user, &hash).await {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -285,7 +284,6 @@ pub async fn update_user_handler(
         None => None,
     };
     match state
-        .team_service
         .update_user(&id, payload.role, payload.disabled, hash.as_deref())
         .await
     {
@@ -303,7 +301,7 @@ pub async fn delete_user_handler(
     if let Err(response) = session_principal(&state, &headers).await {
         return response;
     }
-    match state.team_service.delete_user(&id).await {
+    match state.delete_user(&id).await {
         Ok(()) => Json(serde_json::json!({ "deleted": true })).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -325,8 +323,7 @@ pub async fn audit_handler(
         return response;
     }
     match state
-        .team_service
-        .audit(query.limit.unwrap_or(100), query.before)
+        .audit_entries(query.limit.unwrap_or(100), query.before)
         .await
     {
         Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
