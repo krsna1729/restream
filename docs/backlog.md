@@ -10,6 +10,9 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
 - [Q-121 converge EgressTask fabric paths](#q-121-lifecycle-opus-converge-the-fabric-run-paths-in-egresstask)
+- [Q-122 deepen AppState and engine metric interfaces](#q-122-architecture-opus-deepen-appstate-and-engine-metric-interfaces)
+- [Q-123 break the smallest module cycles](#q-123-architecture-opus-break-the-smallest-module-cycles)
+- [Q-124 untangle HLS egress and triage the remaining deslop findings](#q-124-architecture-opus-untangle-hls-egress-and-triage-the-remaining-deslop-findings)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -47,6 +50,44 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: RTMP, SRT, and HLS fabric tests cover stop, leaf failure, dispatch
   failure, and stage end; every status and retry write stays `_if_current`;
   shutdown ordering does not change.
+
+### Q-122 [architecture] [opus] Deepen AppState and engine metric interfaces
+- Goal: remove the 189 `field-leak` findings, starting with `AppState` (23),
+  `ShardMetrics` (21), `IoBuffers` (13), `GeneralizedSinkMetrics` (11),
+  `LeafCommon` (8) and `MediaEngine` (7). Hide fields behind operations or
+  snapshot queries; do not replace each field with a mechanical getter.
+- Why open: `deslop-please` 0.1.4 reports code outside each owner reading or
+  mutating its fields. `AppState` is the API surface; the engine metrics are
+  shared across modules. The remaining top owners are listed in the audit
+  output, not duplicated here.
+- Gates: scoped `deslop-please` has no `field-leak` for those owners; API and
+  engine tests pass; any hot metric path keeps its benchmark evidence.
+
+### Q-123 [architecture] [opus] Break the smallest module cycles
+- Goal: remove the 28 `module-cycle` findings, starting with the smallest:
+  `moq::transport` (`local`/`session`/`webtransport`), `api::file_ingest`
+  and `api::ingests`, `restream-mpegts` (`demux`/`probe`), and
+  `hls::fmp4` (`codec`/`rendition`). Extract shared close/error/header
+  primitives for the MoQ transport cycle instead of moving imports.
+- Why open: the MoQ adapter now joins the pre-existing `session` and
+  `webtransport` coupling; the others are independent two-module cycles.
+  The 32-module engine cycle and the 16-module `test_harness` cycle need
+  their own design, not a mechanical import shuffle.
+- Gates: scoped `deslop-please` reports no cycle for each changed area;
+  affected lifecycle/protocol tests pass; public API changes are documented.
+
+### Q-124 [architecture] [opus] Untangle HLS egress and triage the remaining deslop findings
+- Goal: reduce the `hls_put_shard` tangle (58 things across 37 modules) and
+  the `hls_ingest::registry` tangle (6 across 3), then decide the remaining
+  17 `shallow-module` and 15 `wide-directory` findings by ownership rather
+  than file moves. Treat the 69 predominantly test-only findings in
+  `test_harness` as lower priority.
+- Why open: `hls_put_shard` crosses most of the egress module graph; several
+  shallow `lib.rs` modules may be deliberate public façades. No `long-file`
+  finding exists, so file length alone is not the problem.
+- Gates: a design note names the intended layers for the HLS tangle; RTMP,
+  SRT, HLS, and harness tests pass; scoped `deslop-please` shows the intended
+  reduction; no wide-directory move without an owning module.
 
 ## Not planned
 
