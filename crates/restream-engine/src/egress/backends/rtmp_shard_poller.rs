@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use crate::egress::leaf_arena::LeafKey;
 
-use super::tcp::{TcpConnectAttempt, TcpEgressPollError, TcpReadyLeaf};
+use super::compio_tcp::TcpConnectAttempt;
+use super::tcp::{TcpEgressPollError, TcpReadyLeaf};
 
 pub(crate) trait RtmpReadinessPoller {
     fn ready_capacity(&self) -> usize;

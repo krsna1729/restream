@@ -10,11 +10,11 @@ use compio::driver::{DriverType, ProactorBuilder};
 use compio::runtime::fd::PollFd;
 use compio::runtime::{Runtime, RuntimeBuilder};
 
-use super::super::tcp::{TcpConnectAttempt, TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
-use super::CompioTcpStream;
+use super::super::tcp::{TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
 #[cfg(test)]
 use super::stream::TRANSPORT_BUFFER_CAPACITY;
 use super::stream::{SharedIoBuffers, receive_worker, transmit_worker};
+use super::{CompioTcpStream, TcpConnectAttempt};
 use crate::egress::leaf_arena::LeafKey;
 use crate::egress::shard::EgressShardIdleWake;
 impl Drop for CompioTcpPoller {

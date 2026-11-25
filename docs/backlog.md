@@ -64,16 +64,17 @@ the [assurance roadmap](assurance-roadmap.md).
   engine tests pass; any hot metric path keeps its benchmark evidence.
 
 ### Q-123 [architecture] [opus] Break the smallest module cycles
-- Goal: remove the remaining `module-cycle` findings. The six smallest are
+- Goal: remove the remaining `module-cycle` findings. The seven smallest are
   removed: `moq::transport` shares close/error/header/HTTP-3 frame primitives
   in `transport::wire`; `api::file_ingest` and `api::ingests` share the GOP
   sanitizer in `api::state`; `restream-mpegts` owns `StreamKind` in `probe`;
   `hls::fmp4` owns `BufferedSample` in `codec`; egress `command` and `leaf`
-  share `FeedId`/`OutputId` in `egress::ids`; and `metrics` owns the delivery
-  floor instead of importing it from `delivery`. The 32-module engine cycle
-  and the 16-module `test_harness` cycle still need their own design, not a
-  mechanical import shuffle.
-- Why open: the remaining cycles are wider than the six removed pairs, and
+  share `FeedId`/`OutputId` in `egress::ids`; `metrics` owns the delivery
+  floor instead of importing it from `delivery`; and `TcpConnectAttempt`
+  belongs to the Compio TCP owner. The 32-module engine cycle and the
+  16-module `test_harness` cycle still need their own design, not a mechanical
+  import shuffle.
+- Why open: the remaining cycles are wider than the seven removed pairs, and
   the engine and harness cycles need an ownership boundary rather than a
   move of one shared item.
 - Gates: scoped `deslop-please` reports no cycle for each changed area;

@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-use super::super::tcp::{TcpConnectAttempt, TcpReadyLeaf, connect_error};
+use super::super::compio_tcp::TcpConnectAttempt;
+use super::super::tcp::{TcpReadyLeaf, connect_error};
 use super::*;
 
 pub(super) struct PendingRtmpConnect {
