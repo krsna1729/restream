@@ -64,7 +64,7 @@ hang = "=0.21.25"
 # The catalog producer/consumer (hang `catalog.json` + MSF `catalog`), group
 # management and LOC framing. Restream uses only paths that spawn nothing.
 moq-mux = "=0.10.16"
-moq-loc = "=0.2.24"
+moq-loc = "=0.2.32"
 moq-msf = "=0.5.2"
 # The poll transport traits moq-net 0.3.24 drives (`moq::transport`
 # implements them over compio-quic), its waiter primitive, and the HTTP/3 +
