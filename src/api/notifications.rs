@@ -96,8 +96,7 @@ pub async fn list_channels_handler(
     }
     result(
         state
-            .notify_service
-            .channels()
+            .notification_channels()
             .await
             .map(|channels| serde_json::json!({ "channels": channels })),
     )
@@ -115,8 +114,7 @@ pub async fn create_channel_handler(
     }
     let secret = format!("whsec_{}", random_hex(24));
     match state
-        .notify_service
-        .create_channel(
+        .create_notification_channel(
             format!("ch_{}", random_hex(8)),
             secret,
             payload.into(),
@@ -143,12 +141,7 @@ pub async fn update_channel_handler(
     if let Err(response) = member(&state, &headers).await {
         return response;
     }
-    result(
-        state
-            .notify_service
-            .update_channel(&id, payload.into())
-            .await,
-    )
+    result(state.update_notification_channel(&id, payload.into()).await)
 }
 
 /// `DELETE /api/v1/notifications/channels/{id}` (admin).
@@ -162,8 +155,7 @@ pub async fn delete_channel_handler(
     }
     result(
         state
-            .notify_service
-            .delete_channel(&id)
+            .delete_notification_channel(&id)
             .await
             .map(|()| serde_json::json!({ "deleted": true })),
     )
@@ -182,8 +174,7 @@ pub async fn test_channel_handler(
     };
     result(
         state
-            .notify_service
-            .test_channel(&id, &test_event(&username))
+            .test_notification_channel(&id, &test_event(&username))
             .await,
     )
 }
@@ -200,8 +191,7 @@ pub async fn channel_secret_handler(
     }
     result(
         state
-            .notify_service
-            .channel_secret(&id)
+            .notification_channel_secret(&id)
             .await
             .map(|secret| serde_json::json!({ "secret": secret })),
     )
@@ -223,8 +213,7 @@ pub async fn deliveries_handler(
     }
     result(
         state
-            .notify_service
-            .deliveries(query.limit.unwrap_or(100))
+            .notification_deliveries(query.limit.unwrap_or(100))
             .await
             .map(|deliveries| serde_json::json!({ "deliveries": deliveries })),
     )
@@ -240,8 +229,7 @@ pub async fn push_key_handler(State(state): State<Arc<AppState>>, headers: Heade
         .complete_mutation(move |state| async move {
             result(
                 state
-                    .notify_service
-                    .push_public_key()
+                    .notification_push_public_key()
                     .await
                     .map(|key| serde_json::json!({ "publicKey": key })),
             )
@@ -260,8 +248,7 @@ pub async fn my_subscriptions_handler(
     };
     result(
         state
-            .notify_service
-            .subscriptions_of(&username)
+            .notification_subscriptions(&username)
             .await
             .map(|subscriptions| serde_json::json!({ "subscriptions": subscriptions })),
     )
@@ -302,7 +289,7 @@ pub async fn subscribe_handler(
         min_severity: payload.min_severity,
         created_at_ms: jiff::Timestamp::now().as_millisecond(),
     };
-    match state.notify_service.subscribe(subscription).await {
+    match state.subscribe_notifications(subscription).await {
         Ok(subscription) => (StatusCode::CREATED, Json(subscription)).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -320,8 +307,7 @@ pub async fn unsubscribe_handler(
     };
     result(
         state
-            .notify_service
-            .unsubscribe(&username, &id)
+            .unsubscribe_notifications(&username, &id)
             .await
             .map(|()| serde_json::json!({ "deleted": true })),
     )
@@ -336,8 +322,7 @@ pub async fn test_push_handler(State(state): State<Arc<AppState>>, headers: Head
     };
     result(
         state
-            .notify_service
-            .test_push(&username, &test_event(&username))
+            .test_notification_push(&username, &test_event(&username))
             .await
             .map(|deliveries| serde_json::json!({ "deliveries": deliveries })),
     )

@@ -122,10 +122,7 @@ pub async fn run_alert_notifier(
             .collect();
         let events = transitions.observe(&briefs, jiff::Timestamp::now().as_millisecond());
         for event in events {
-            let notify = state.notify_service.clone();
-            tokio::spawn(async move {
-                notify.dispatch(&event).await;
-            });
+            state.dispatch_notification_event(event);
         }
     }
 }
