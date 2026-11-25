@@ -9,7 +9,6 @@ use moq_net::{Client, Hop, Server, Timestamp};
 use web_transport_trait::Error as _;
 use web_transport_trait::poll::{SendStream as _, Session as _};
 
-use super::super::session::MoqRecvStream;
 use super::super::test_support::{Loopback, loopback_client_tls, run};
 use super::super::*;
 
@@ -177,8 +176,8 @@ fn native_moq_lite_session_round_trips_a_frame() {
     });
 }
 
-/// The IETF drafts run over the `!Send` transport through the vendored
-/// `unsend` patch: draft-19 (SETUP on uni streams) and draft-16 (the legacy
+/// The IETF drafts run over the checked local adapter for the `!Send`
+/// transport: draft-19 (SETUP on uni streams) and draft-16 (the legacy
 /// bidi SETUP exchange).
 #[test]
 fn native_ietf_sessions_round_trip_a_frame() {

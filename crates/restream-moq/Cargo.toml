@@ -15,7 +15,7 @@ bytes = "1.12"
 base64 = "0.23"
 sha2 = "0.11"
 hang = "=0.21.25"
-moq-net = { version = "=0.3.24", features = ["unsend"] }
+moq-net = "=0.3.24"
 compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes", "quic", "ring", "io-compat"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
 percent-encoding = "2"

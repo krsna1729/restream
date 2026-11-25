@@ -955,7 +955,8 @@ MoQ negotiates moq-lite (`moq-lite-03` to `moq-lite-06`) or IETF MOQT
 drafts 14–22 using `moq-net` on Compio QUIC. One listener serves publishers
 (ingest) and viewers (origin). `moq-mux` publishes both hang `catalog.json`
 (plus its compressed form) and MSF `catalog`; media tracks use LOC.
-The vendored `moq-net` `unsend` feature preserves the `!Send` transport owner.
+A checked local adapter (`moq::transport::local`) preserves the `!Send`
+transport owner while satisfying moq-net's `Send + Sync` transport bounds.
 
 `crates/restream-moq/src/` implements media/catalog conversion helpers,
 cache budgets, tokens, URL parsing and TLS configuration builders. It is

@@ -3,15 +3,15 @@
 //! [`MoqSession`] implements `web_transport_trait::poll` (0.4) over one
 //! compio-quic connection, either native QUIC (the ALPN names the MoQ
 //! version: moq-lite or an IETF MOQT draft) or one WebTransport session over
-//! HTTP/3 (ALPN `h3`; the CONNECT subprotocol names the version). Every type
-//! here is `!Send` and lives on the Compio thread that owns the connection:
-//! [`accept`] / [`connect`] build a session, moq-net's
-//! `Server::accept_request` / `Client::connect` run the MoQ handshake on it
-//! (the vendored `unsend` patch admits this `!Send` transport for the IETF
-//! drafts too), and [`run_driver`] drives the resulting moq-net driver with
+//! HTTP/3 (ALPN `h3`; the CONNECT subprotocol names the version). The raw
+//! types are `!Send` and live on the Compio thread that owns the connection;
+//! [`local`] wraps them with a checked `Send + Sync` adapter so moq-net's
+//! `Server::accept_request` / `Client::connect` accept them on their native
+//! `Send` path. [`run_driver`] drives the resulting moq-net driver with
 //! Compio timers.
 
 mod driver;
+mod local;
 mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -28,7 +28,10 @@ use compio::quic::{
 };
 
 pub(crate) use driver::run_driver;
-pub use session::MoqSession;
+pub use local::{
+    LocalRecvStream as MoqRecvStream, LocalSendStream as MoqSendStream, LocalSession as MoqSession,
+};
+use session::RawSession;
 
 use restream_srt::address_family::AddressFamily;
 
@@ -102,6 +105,9 @@ pub enum TransportError {
     /// The session could not be established: no MoQ ALPN, a rejected or
     /// malformed WebTransport CONNECT, or the handshake timed out.
     Handshake(String),
+    /// A transport method was called off the Compio thread that owns it.
+    /// This is an internal invariant failure, never a peer error.
+    WrongThread,
 }
 
 impl fmt::Display for TransportError {
@@ -122,6 +128,7 @@ impl fmt::Display for TransportError {
             }
             Self::Datagram(error) => write!(f, "MoQ datagram: {error}"),
             Self::Handshake(reason) => write!(f, "MoQ handshake: {reason}"),
+            Self::WrongThread => f.write_str("MoQ transport used off its Compio owner thread"),
         }
     }
 }
@@ -178,7 +185,7 @@ async fn accept_connection(incoming: Incoming) -> Result<Accepted, TransportErro
     }
     let protocol = moq_protocol(&conn, alpn.as_deref())?;
     Ok(Accepted {
-        session: MoqSession::new(conn, protocol, None),
+        session: MoqSession::new(RawSession::new(conn, protocol, None)),
         mode: TransportMode::Native,
         path: String::new(),
         query: None,
@@ -202,7 +209,7 @@ pub async fn connect(
         .map_err(TransportError::Connection)?;
     let alpn = negotiated_alpn(&mut conn)?;
     let protocol = moq_protocol(&conn, alpn.as_deref())?;
-    Ok(MoqSession::new(conn, protocol, None))
+    Ok(MoqSession::new(RawSession::new(conn, protocol, None)))
 }
 
 fn negotiated_alpn(conn: &mut Connection) -> Result<Option<Vec<u8>>, TransportError> {

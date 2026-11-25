@@ -40,9 +40,9 @@ use web_transport_proto::http::StatusCode;
 use web_transport_proto::{Capsule, CapsuleError, ConnectRequest, ConnectResponse, Settings};
 
 use super::session::{
-    CloseCell, MoqSession, connection_error, publish_close, read_error, write_error,
+    CloseCell, RawSession, connection_error, publish_close, read_error, write_error,
 };
-use super::{Accepted, MOQ_ALPNS, TransportError, TransportMode};
+use super::{Accepted, MOQ_ALPNS, MoqSession, TransportError, TransportMode};
 
 /// HTTP/3 uni stream types (RFC 9114 §6.2, RFC 9204 §4.2) and the
 /// WebTransport stream signals.
@@ -662,7 +662,7 @@ pub(super) async fn accept(conn: Connection) -> Result<Accepted, TransportError>
     let query = request.url.query().map(str::to_owned);
     let session = WtSession::new(session_id, control, send, Vec::new(), 0);
     Ok(Accepted {
-        session: MoqSession::new(conn, protocol, Some((session, recv))),
+        session: MoqSession::new(RawSession::new(conn, protocol, Some((session, recv)))),
         mode: TransportMode::WebTransport,
         path,
         query,
@@ -737,5 +737,9 @@ pub(super) async fn connect(
         })?;
     let session_id = u64::from(send.id());
     let session = WtSession::new(session_id, control, send, held, held_types);
-    Ok(MoqSession::new(conn, protocol, Some((session, recv))))
+    Ok(MoqSession::new(RawSession::new(
+        conn,
+        protocol,
+        Some((session, recv)),
+    )))
 }
