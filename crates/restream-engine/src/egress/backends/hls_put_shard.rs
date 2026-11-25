@@ -22,9 +22,10 @@ use std::time::{Duration, Instant};
 use tokio_rustls::rustls::ClientConfig;
 
 use super::compio_tcp::CompioTcpStream;
+use super::compio_tcp::TcpConnectAttempt;
 use super::hls_put::{Exchange, ExchangeStep, HlsPutTarget};
 use super::rtmp_shard_poller::RtmpReadinessPoller;
-use super::tcp::{TcpConnectAttempt, TcpReadyLeaf, connect_error};
+use super::tcp::{TcpReadyLeaf, connect_error};
 use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::egress::delivery::{DeliveryTracker, LeafServiceSweep};
 use crate::egress::leaf::EgressProgressSink;

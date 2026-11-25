@@ -34,8 +34,6 @@ use restream_rtmp::parse_rtmp_url;
 use super::compio_tcp::CompioTcpPoller;
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
 #[cfg(test)]
-use super::tcp::TcpConnectAttempt;
-#[cfg(test)]
 use super::tcp::TcpEgressPollError;
 use super::tcp::TcpReadyLeaf;
 use crate::egress::tls::TlsTcpConnection;

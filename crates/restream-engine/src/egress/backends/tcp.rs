@@ -1,7 +1,7 @@
 //! Transport-neutral TCP egress types shared by the RTMP/RTMPS fabric shard and
 //! its Compio poller ([`super::compio_tcp::CompioTcpPoller`]): readiness
-//! interest, ready-leaf events, poll errors, connect attempts and the
-//! nonblocking-connect result check.
+//! interest, ready-leaf events, poll errors and the nonblocking-connect result
+//! check. The connect attempt itself belongs to the Compio stream owner.
 
 use crate::egress::leaf_arena::LeafKey;
 use std::io;
@@ -51,12 +51,6 @@ impl TcpEgressPollError {
             message,
         }
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum TcpConnectAttempt {
-    Connected(super::compio_tcp::CompioTcpStream),
-    InProgress(super::compio_tcp::CompioTcpStream),
 }
 
 pub(crate) fn connect_error(fd: RawFd) -> io::Result<()> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::egress::backends::compio_tcp::TcpConnectAttempt;
 use crate::egress::journal::FeedEpoch;
 use crate::egress::leaf::EgressProgressSink;
 use crate::egress::policy::{LeafPolicy, WorkBudgetConfig};
