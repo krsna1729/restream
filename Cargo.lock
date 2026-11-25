@@ -2028,12 +2028,12 @@ dependencies = [
 
 [[package]]
 name = "jiff"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed5d126d72eb017f10b302e73bdeca446bea405ee449af4d9e7866d6b082d83e"
+checksum = "c5e77cbfb9fff4798e283c2d69dff39fc2c45e7da017e5ce95b654e46ea41236"
 dependencies = [
  "jiff-core 1.0.1",
- "jiff-static 1.0.1",
+ "jiff-static 1.0.2",
  "jiff-tzdb-platform 1.0.0",
  "log",
  "portable-atomic",
@@ -2075,9 +2075,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0127e9bde3c6130d6169e7d8d68676e4be69c4bf7573c308b6f960a5089c428"
+checksum = "e9067a0b23e5be3147d56b2dcf652b18e6b1364caca93fb157653b6fbcab23a9"
 dependencies = [
  "jiff-core 1.0.1",
  "proc-macro2",
@@ -2401,9 +2401,9 @@ dependencies = [
 
 [[package]]
 name = "moq-loc"
-version = "0.2.24"
+version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9851162fcbacd3c2387e5b390729c33f367ddd3e41ad33d6f1ca5ca669fc40fd"
+checksum = "1a17ceba908b3f1516db66ec6e984b77ba397d60cf66ce654741c5a5b0b24a23"
 dependencies = [
  "bytes",
  "moq-net",
@@ -3286,7 +3286,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "jiff 1.0.1",
+ "jiff 1.0.2",
  "libc",
  "libsqlite3-sys",
  "loom",
@@ -3366,7 +3366,7 @@ dependencies = [
 name = "restream-domain"
 version = "0.1.0"
 dependencies = [
- "jiff 1.0.1",
+ "jiff 1.0.2",
  "proptest",
  "restream-core",
  "serde",
@@ -3390,7 +3390,7 @@ dependencies = [
  "hang",
  "httparse",
  "io-uring",
- "jiff 1.0.1",
+ "jiff 1.0.2",
  "kio",
  "libc",
  "loom",
@@ -4547,7 +4547,7 @@ dependencies = [
  "compio",
  "futures-util",
  "hang",
- "jiff 1.0.1",
+ "jiff 1.0.2",
  "libc",
  "moq-msf",
  "moq-net",
