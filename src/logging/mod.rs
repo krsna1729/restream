@@ -162,6 +162,30 @@ impl FieldCollector {
         }
     }
 
+    /// Consumes the collector into a history row.
+    fn into_entry(
+        mut self,
+        level: String,
+        target: String,
+        span: &SpanFields,
+    ) -> crate::logging::types::AppLogEntry {
+        let fields = self.fields_json();
+        crate::logging::types::AppLogEntry {
+            ts: restream_domain::timestamp::rfc3339_utc(
+                std::time::SystemTime::now(),
+                restream_domain::timestamp::Precision::Millis,
+            ),
+            level,
+            target,
+            message: self.message.take().unwrap_or_default(),
+            fields,
+            pipeline_id: self.pipeline_id.take().or_else(|| span.pipeline_id.clone()),
+            output_id: self.output_id.take().or_else(|| span.output_id.clone()),
+            event_type: self.event_type.take(),
+            event_class: self.event_class.take(),
+        }
+    }
+
     fn fields_json(&self) -> Option<String> {
         if self.extras.is_empty() {
             return None;
@@ -259,30 +283,11 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
         event.record(&mut fc);
 
         let span_ctx = self.spans.lookup(&ctx);
-        // Extract fields_json before any moves of fc's fields.
-        let fields = fc.fields_json();
-        let message = fc.message.take().unwrap_or_default();
-        let pipeline_id = fc.pipeline_id.take().or(span_ctx.pipeline_id);
-        let output_id = fc.output_id.take().or(span_ctx.output_id);
-        let event_type = fc.event_type.take();
-        let event_class = fc.event_class.take();
-        let ts = restream_domain::timestamp::rfc3339_utc(
-            std::time::SystemTime::now(),
-            restream_domain::timestamp::Precision::Millis,
+        let entry = fc.into_entry(
+            meta.level().to_string().to_uppercase(),
+            meta.target().to_string(),
+            &span_ctx,
         );
-        let level = meta.level().to_string().to_uppercase();
-
-        let entry = AppLogEntry {
-            ts,
-            level,
-            target: meta.target().to_string(),
-            message,
-            fields,
-            pipeline_id,
-            output_id,
-            event_type,
-            event_class,
-        };
 
         // try_send — never block the callsite; drop and count if the channel is full.
         if self.tx.try_send(entry).is_err() {
