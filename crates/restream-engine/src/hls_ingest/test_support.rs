@@ -149,6 +149,7 @@ pub fn test_ingest_with(
         access,
         Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
         limits,
+        crate::hls_pull::spawn,
     );
     (engine, ingest)
 }

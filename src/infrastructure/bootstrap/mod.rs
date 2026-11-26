@@ -195,6 +195,7 @@ async fn serve(
         ingest_authenticator.clone(),
         security.clone(),
         restream_engine::hls_ingest::HlsIngestLimits::default(),
+        restream_engine::hls_pull::spawn,
     );
 
     let reconciler = reconcile::Reconciler::new(

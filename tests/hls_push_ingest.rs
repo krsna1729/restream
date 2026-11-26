@@ -54,6 +54,7 @@ async fn serve() -> Server {
         )),
         security,
         HlsIngestLimits::default(),
+        restream_engine::hls_pull::spawn,
     );
     let app = restream::api::create_hls_ingest_router(ingest.clone(), catalog);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
