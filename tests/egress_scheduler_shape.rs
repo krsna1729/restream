@@ -1,19 +1,18 @@
 //! Egress scheduler shape gate: ready-queue cost follows ready work, never the
 //! leaf population. Drives the production `ReadyQueue` exactly as the shards
-//! do (`push` a leaf's key, then `pop`).
+//! do (`push` a leaf's key, then `pop`) and counts the entries `pop` inspects.
 //!
-//! Hosted VMs are noisy, so the bounds are generous shape invariants, not
-//! nanosecond pins: a population scan would show the full population ratio.
-//! Each figure is the fastest of several trials, so a preemption or a sibling
-//! test binary competing for the CPU inflates one trial, not the result.
+//! The counter is test support on `ReadyQueue`, so the shape is checked without
+//! wall-clock ratios: a pop that scanned the population would inspect every
+//! leaf, while the indexed queue inspects exactly the queued entries.
 #![allow(clippy::disallowed_methods)] // test code: raw std locks are fine
-
-use std::time::Instant;
 
 use restream_engine::egress::leaf_arena::{LeafArena, LeafKey};
 use restream_engine::egress::scheduler::{Push, ReadyQueue, ScheduleState};
 
-fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
+/// Push `ready` keys into a queue sized for `population`, drain it, and return
+/// the entries `pop` inspected plus the keys it returned, in order.
+fn drain(population: usize, ready: usize) -> (usize, Vec<LeafKey>) {
     let mut leaves = LeafArena::with_capacity(population);
     let keys: Vec<LeafKey> = (0..population)
         .map(|_| {
@@ -23,47 +22,41 @@ fn drain_nanos(population: usize, ready: usize, iters: u64) -> u128 {
         })
         .collect();
     let mut queue = ReadyQueue::with_capacity(population);
-    let start = Instant::now();
-    for _ in 0..iters {
-        for &key in keys.iter().take(ready) {
-            assert_eq!(queue.push(key), Push::Queued);
-        }
-        while let Some(key) = queue.pop() {
-            assert!(leaves.get(key).is_some());
-        }
+    for &key in keys.iter().take(ready) {
+        assert_eq!(queue.push(key), Push::Queued);
     }
-    start.elapsed().as_nanos() / u128::from(iters.max(1))
-}
-
-fn fastest(population: usize, ready: usize, iters: u64) -> u128 {
-    (0..5)
-        .map(|_| drain_nanos(population, ready, iters))
-        .min()
-        .expect("at least one trial")
+    queue.reset_pop_probes();
+    let mut popped = Vec::with_capacity(ready);
+    while let Some(key) = queue.pop() {
+        assert!(leaves.get(key).is_some());
+        popped.push(key);
+    }
+    (queue.pop_probes(), popped)
 }
 
 #[test]
 fn one_ready_leaf_is_population_independent() {
-    // 16x population; a scan would be far more than 8x, while an indexed
-    // queue only grows by the larger arena's cache and TLB footprint
-    // (coverage-instrumented CI measured 4.15x: 1150 ns vs 277 ns).
-    let _ = drain_nanos(1_024, 1, 100);
-    let small = fastest(1_024, 1, 2_000);
-    let large = fastest(16_384, 1, 2_000);
-    assert!(
-        large <= small.saturating_mul(8).max(1_000),
-        "T(N=16384,R=1)={large}ns vs T(N=1024,R=1)={small}ns: ready cost scales with population"
-    );
+    // A population scan would inspect all 16384 leaves; the queue inspects
+    // exactly the one queued entry.
+    for population in [1_024, 16_384] {
+        let (probes, popped) = drain(population, 1);
+        assert_eq!(popped.len(), 1, "population {population}");
+        assert_eq!(
+            probes, 1,
+            "pop inspected {probes} entries for one ready leaf at population {population}"
+        );
+    }
 }
 
 #[test]
 fn few_ready_leaves_cost_far_less_than_all_ready() {
-    // 32 vs 4096 ready leaves is 128x the work; even 4x slop leaves a gap.
-    let _ = drain_nanos(4_096, 32, 50);
-    let few = fastest(4_096, 32, 500);
-    let all = fastest(4_096, 4_096, 50);
-    assert!(
-        few.saturating_mul(8) < all,
-        "T(N=4096,R=32)={few}ns vs T(N=4096,R=4096)={all}ns: ready cost does not follow ready work"
-    );
+    // Probes equal the ready count, never the population, and FIFO holds.
+    for ready in [32, 4_096] {
+        let (probes, popped) = drain(4_096, ready);
+        assert_eq!(popped.len(), ready);
+        assert_eq!(
+            probes, ready,
+            "pop inspected {probes} entries for {ready} ready leaves"
+        );
+    }
 }
