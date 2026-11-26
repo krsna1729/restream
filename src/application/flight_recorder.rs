@@ -279,7 +279,7 @@ pub struct FlightRecorder {
     traces: Mutex<HashMap<String, Trace>>,
     /// Each running destination's usual, fed on the same clock
     /// (`destination_baselines`); the alert rules read its anomalies.
-    pub baselines: restream_health::destination_baselines::DestinationBaselines,
+    baselines: restream_health::destination_baselines::DestinationBaselines,
     cap: usize,
     started_ms: u64,
 }
@@ -293,6 +293,26 @@ impl Default for FlightRecorder {
 impl FlightRecorder {
     pub fn new() -> Self {
         Self::started_at(MediaEngine::now_epoch_ms(), FLIGHT_HISTORY_CAP)
+    }
+
+    /// Feeds one sample of destination readings to the baselines.
+    pub(crate) fn observe_baselines(
+        &self,
+        at_ms: u64,
+        sample: Vec<(
+            String,
+            String,
+            restream_health::destination_baselines::Readings,
+        )>,
+    ) {
+        self.baselines.observe(at_ms, sample);
+    }
+
+    /// Destination anomalies the alert evaluator reads.
+    pub(crate) fn baseline_anomalies(
+        &self,
+    ) -> Vec<restream_health::destination_baselines::Anomaly> {
+        self.baselines.anomalies()
     }
 
     pub(crate) fn started_at(started_ms: u64, cap: usize) -> Self {
@@ -836,9 +856,7 @@ pub async fn run_flight_recorder(
         let probes = collect_probes(&hub, &engine, inspector.as_ref()).await;
         let now_ms = MediaEngine::now_epoch_ms();
         recorder.record(now_ms, probes);
-        recorder
-            .baselines
-            .observe(now_ms, destination_readings(&engine).await);
+        recorder.observe_baselines(now_ms, destination_readings(&engine).await);
         tick = tick.wrapping_add(1);
         if let Some(retention) = retention
             && tick.is_multiple_of(FLIGHT_PERSIST_EVERY)
