@@ -46,7 +46,6 @@ pub async fn list_dashboard_runtime_pipeline_ids(
     // Keep pipeline-store failures on an ApiError boundary so handlers decide
     // whether they surface JSON, plain status codes, or merged telemetry views.
     state
-        .pipeline_service
         .list_pipeline_ids()
         .await
         .map_err(|err| ApiError::internal(format!("list dashboard pipeline ids: {err}")))

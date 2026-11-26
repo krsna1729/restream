@@ -546,8 +546,8 @@ pub async fn stream_keys_handler(
         return response;
     }
 
-    let host = state.pipeline_service.get_ingest_host().await;
-    match state.pipeline_service.list_pipelines().await {
+    let host = state.ingest_host().await;
+    match state.list_pipelines().await {
         Ok(pipelines) => {
             let keys = pipelines
                 .into_iter()

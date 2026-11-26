@@ -370,10 +370,11 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
         engine,
         log_broadcast,
     );
-    state.pipeline_service =
+    state.replace_pipeline_service(
         restream::infrastructure::service_wiring::ControlPlane::on_pool(&pipeline_pool)
             .services
-            .pipeline_service;
+            .pipeline_service,
+    );
     pipeline_pool.close().await;
     let app = api::create_router(Arc::new(state));
     let cookie = login(&app).await;
