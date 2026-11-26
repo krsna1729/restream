@@ -25,14 +25,9 @@ async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_
 
     // Pipeline-scoped transport views intentionally use an immediate snapshot so
     // alerts and diagnostics reflect current runtime state without grace-window delay.
-    crate::api::runtime_views::health_snapshot(
-        &state.engine,
-        &state.config,
-        pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await
+    state
+        .health_snapshot(pipeline_ids, &recording_enabled, 0)
+        .await
 }
 
 async fn pipeline_health_summary_snapshot(
@@ -43,14 +38,9 @@ async fn pipeline_health_summary_snapshot(
     let pipeline_ids = std::slice::from_ref(&pipeline_id);
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
 
-    crate::api::runtime_views::health_summary_snapshot(
-        &state.engine,
-        &state.config,
-        pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await
+    state
+        .health_summary_snapshot(pipeline_ids, &recording_enabled, 0)
+        .await
 }
 
 /// Pulls the shared generation timestamp from runtime health snapshots so

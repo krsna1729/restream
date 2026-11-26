@@ -31,8 +31,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let free_mem = total_mem.saturating_sub(used_mem);
     let mem_pct = used_percent(total_mem, used_mem);
     let load1 = System::load_average().map_or(0.0, |load| load.one);
-    let capacity =
-        crate::application::capacity::capacity_snapshot(&state.engine, &state.config).await;
+    let capacity = state.capacity_snapshot().await;
     let egress_shards = state
         .engine
         .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
@@ -349,7 +348,7 @@ fn is_external_interface(name: &str) -> bool {
 fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Value {
     use std::sync::atomic::Ordering::Relaxed;
     let engine = &state.engine;
-    let control = state.config.tokio_runtime.worker_threads;
+    let control = state.tokio_worker_threads();
     let media = restream_engine::executor::configured_workers();
     let rtmp = engine.runtime.rtmp_listener_stats.owners.load(Relaxed) as usize;
     let srt = engine

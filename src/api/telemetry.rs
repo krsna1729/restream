@@ -311,14 +311,9 @@ pub async fn v1_engine_resource_map_handler(
 
     let process =
         crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
-    let snapshot = crate::api::runtime_views::resource_map(
-        &state.engine,
-        &state.config,
-        process,
-        query.pipeline_id.as_deref(),
-        query.options(),
-    )
-    .await;
+    let snapshot = state
+        .resource_map(process, query.pipeline_id.as_deref(), query.options())
+        .await;
     Json(snapshot).into_response()
 }
 
@@ -365,13 +360,7 @@ pub async fn v1_capacity_scenario_handler(
         stages: query.add_stages,
         pipeline_id: query.pipeline_id,
     };
-    let scenario = match crate::application::capacity::capacity_scenario(
-        &state.engine,
-        &state.config,
-        &change,
-    )
-    .await
-    {
+    let scenario = match state.capacity_scenario(&change).await {
         Ok(scenario) => scenario,
         Err(crate::application::capacity::NoLiveIngest(pipeline_id)) => {
             return (
@@ -385,7 +374,7 @@ pub async fn v1_capacity_scenario_handler(
                 .into_response();
         }
     };
-    let policy = state.config.tuning.output_retry_policy();
+    let policy = state.output_retry_policy();
     let retry_policy = serde_json::json!({
         "maxRetries": policy.max_retries,
         "baseMs": policy.base_ms,
@@ -397,7 +386,7 @@ pub async fn v1_capacity_scenario_handler(
         "addStages": change.stages,
         "ratedBy": scenario.rated_by,
         "ingest": scenario.ingest,
-        "calibration": crate::application::capacity::capacity_calibration(&state.config),
+        "calibration": state.capacity_calibration(),
         // The output reconnect policy, so a what-if (the Stability Lab)
         // replays the engine's own backoff rather than a guessed one.
         "retryPolicy": retry_policy,
@@ -459,14 +448,9 @@ pub async fn v1_overview_handler(
         .unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let snapshot = crate::api::runtime_views::health_snapshot(
-        &state.engine,
-        &state.config,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let snapshot = state
+        .health_snapshot(&pipeline_ids, &recording_enabled, 0)
+        .await;
 
     let alert_list = alerts::derive_alerts(&snapshot);
     let critical = alert_list
