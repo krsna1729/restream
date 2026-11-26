@@ -6,7 +6,7 @@
 
 use crate::db::DeadlineDb;
 
-use super::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 const DASHBOARD_PASSWORD_HASH_META_KEY: &str = "dashboardPasswordHash";
 

@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::application::fleet_history::is_delivering;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
-use crate::application::services::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 use restream_domain::domain::state::DesiredOutputState;
 use restream_engine::engine::MediaEngine;
 

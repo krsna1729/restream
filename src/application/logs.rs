@@ -5,7 +5,7 @@
 
 use crate::db::DeadlineDb;
 
-use crate::application::services::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
 /// Lists persisted application logs using the caller-supplied filters

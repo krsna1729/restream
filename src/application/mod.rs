@@ -26,6 +26,7 @@ pub mod reconcile;
 pub mod recording;
 pub mod runtime_state;
 pub mod schedules;
+pub mod service_error;
 pub mod services;
 pub mod settings;
 pub mod share;

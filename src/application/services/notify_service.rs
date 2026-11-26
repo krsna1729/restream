@@ -15,7 +15,7 @@ use crate::application::notify::{
 use crate::application::ports::{NotifyTransport, PostOutcome};
 use crate::db::{DeadlineDb, notify_repo};
 
-use super::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 fn store_error<E: std::fmt::Display>(context: &str) -> impl Fn(E) -> ServiceError + '_ {
     move |err| ServiceError::internal(format!("{context}: {err}"))

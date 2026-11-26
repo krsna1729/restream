@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::application::services::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 use crate::db::DeadlineDb;
 use crate::db::share_repo::{self, ShareLinkRecord};
 

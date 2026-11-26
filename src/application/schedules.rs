@@ -13,7 +13,7 @@
 use crate::db::DeadlineDb;
 use serde::{Deserialize, Serialize};
 
-use crate::application::services::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 /// How late an occurrence may still run.
 pub const RUN_GRACE_MS: i64 = 60_000;

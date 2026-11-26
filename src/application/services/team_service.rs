@@ -10,7 +10,7 @@ use crate::application::team::{AuditEntry, Principal, UserRecord, valid_username
 use crate::db::{DeadlineDb, team_repo};
 use restream_domain::domain::role::Role;
 
-use super::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 pub const BUILTIN_ADMIN_ID: &str = "admin";
 pub const BUILTIN_ADMIN_USERNAME: &str = "admin";

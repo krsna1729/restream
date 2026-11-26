@@ -19,8 +19,8 @@ use restream_domain::models::{Job, Pipeline};
 use restream_engine::security::IngestSecurityService;
 use restream_engine::srt::SrtIngestPolicyStore;
 
-use super::error::{ServiceError, ServiceResult};
 use super::pipeline_service::PipelineService;
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 const SERVER_NAME_META_KEY: &str = "server_name";
 

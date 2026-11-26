@@ -271,7 +271,7 @@ impl AgentService {
         pipeline_id: &str,
         output_id: &str,
         desired_state: DesiredOutputState,
-    ) -> crate::application::services::error::ServiceResult<Output> {
+    ) -> crate::application::service_error::ServiceResult<Output> {
         match desired_state {
             DesiredOutputState::Running => {
                 crate::application::outputs::request_start(&self.db, pipeline_id, output_id).await

@@ -1,4 +1,5 @@
-use crate::application::services::{PipelineService, ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
+use crate::application::services::PipelineService;
 use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::{
     PipelineInput, PipelineInputRole, PipelineInputSource,
@@ -191,7 +192,7 @@ impl PipelineInputService {
 }
 
 /// Resolution without an enabled check, for callers that own eligibility.
-pub(super) async fn read_pipeline_input_by_stream_key(
+async fn read_pipeline_input_by_stream_key(
     db: &DeadlineDb,
     stream_key: &str,
 ) -> Result<Option<PipelineInput>, sqlx::Error> {
