@@ -8,7 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
 - [Q-121 converge EgressTask fabric paths](#q-121-lifecycle-opus-converge-the-fabric-run-paths-in-egresstask)
 - [Q-122 deepen AppState and engine metric interfaces](#q-122-architecture-opus-deepen-appstate-and-engine-metric-interfaces)
 - [Q-123 break the smallest module cycles](#q-123-architecture-opus-break-the-smallest-module-cycles)
@@ -24,18 +23,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-120 [performance] [opus] Split the last two complexity baselines
-- Goal: `SrtOwners::drain_events` (22) and `KtlsConnection::read_records` (21)
-  leave `crates/xtask/reportcard-baseline.json`, so the reportcard ratchet has
-  no engine entries left.
-- Why still open: both are hot paths, so a split needs before/after numbers
-  from a benchmark that drives the real path. `drain_events` needs a live SRT
-  owner set; `read_records` needs a kernel-TLS socket and the engine's private
-  connection type. No existing Criterion suite covers either.
-- Gates: a production-path benchmark for each, then the split with numbers
-  showing no regression on a named host, then delete the entry with
-  `cargo xtask reportcard --update-baseline`.
 
 ### Q-121 [lifecycle] [opus] Converge the fabric run paths in EgressTask
 - Goal: `run_srt_fabric`, `run_rtmp_fabric`, and `run_hls_put_fabric` share
