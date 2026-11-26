@@ -491,15 +491,21 @@ async fn ingest_rates(engine: &MediaEngine) -> HashMap<String, IngestRate> {
 /// The observed workload: ingest rates, each output's fan-out of its
 /// own pipeline, stages and the egress shard count.
 async fn capacity_workload(engine: &MediaEngine, rates: &HashMap<String, IngestRate>) -> Workload {
-    let mut workload = Workload {
-        media_bps: rates.values().map(|rate| rate.bps as u64).sum(),
-        media_pps: rates.values().map(|rate| rate.pps as u64).sum(),
-        ..Workload::default()
-    };
-    for egress in engine.egresses.active.read().await.values() {
-        let ingest = rates.get(&egress.pipeline_id).copied().unwrap_or_default();
-        workload = workload.with_outputs(1, ingest, OutputProtocol::of_egress(&egress.protocol));
-    }
+    let mut workload = engine
+        .with_active_egresses(|active| {
+            let mut workload = Workload {
+                media_bps: rates.values().map(|rate| rate.bps as u64).sum(),
+                media_pps: rates.values().map(|rate| rate.pps as u64).sum(),
+                ..Workload::default()
+            };
+            for egress in active.values() {
+                let ingest = rates.get(&egress.pipeline_id).copied().unwrap_or_default();
+                workload =
+                    workload.with_outputs(1, ingest, OutputProtocol::of_egress(&egress.protocol));
+            }
+            workload
+        })
+        .await;
     workload.stage_count = engine
         .stages
         .runtimes

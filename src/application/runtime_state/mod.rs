@@ -235,12 +235,10 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
     let ingests = read_ingests(engine).await;
     let standby = count_standby_inputs(engine, &ingests).await;
     let recording: std::collections::HashSet<String> = engine.active_recording_pipelines().await;
-    let retries = engine.egresses.retry.read().await.clone();
+    let retries = engine.retry_egress_states().await;
     // Read one map at a time: no new lock nesting between egress maps.
     let recent_evidence: HashMap<String, FailureEvidence> = engine
-        .egresses
-        .recent
-        .read()
+        .recent_egress_outcomes()
         .await
         .iter()
         .filter_map(|(output_id, outcome)| {
@@ -265,20 +263,21 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
     };
 
     let mut projection = Projection::default();
-    {
-        let active = engine.egresses.active.read().await;
-        for output in outputs {
-            let state = project_output(
-                output,
-                active.get(&output.id),
-                recent_evidence.get(&output.id),
-                retries.get(&output.id),
-                ingests.contains_key(&output.pipeline_id),
-                &context,
-            );
-            projection.outputs.insert(output.id.clone(), state);
-        }
-    }
+    engine
+        .with_active_egresses(|active| {
+            for output in outputs {
+                let state = project_output(
+                    output,
+                    active.get(&output.id),
+                    recent_evidence.get(&output.id),
+                    retries.get(&output.id),
+                    ingests.contains_key(&output.pipeline_id),
+                    &context,
+                );
+                projection.outputs.insert(output.id.clone(), state);
+            }
+        })
+        .await;
     for pipeline in pipelines {
         projection.pipelines.insert(
             pipeline.id.clone(),
@@ -368,13 +367,13 @@ async fn read_blocked_terminals(
     engine: &MediaEngine,
 ) -> HashMap<restream_domain::domain::stage::StageKey, (String, String)> {
     let terminal_keys: std::collections::HashSet<_> = engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .filter_map(|egress| egress.terminal_stage_key.clone())
-        .collect();
+        .with_active_egresses(|active| {
+            active
+                .values()
+                .filter_map(|egress| egress.terminal_stage_key.clone())
+                .collect()
+        })
+        .await;
     let mut blocked = HashMap::new();
     for key in terminal_keys {
         if let Some(stage) = engine.egress_blocked_by_stage_snapshot(&key).await {

@@ -677,24 +677,24 @@ async fn collect_probes(
 
 async fn egress_probes(engine: &MediaEngine) -> HashMap<String, EgressProbe> {
     engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .map(|egress| {
-            let quality = restream_sync::lock::lock(&egress.quality);
-            (
-                egress.output_id.clone(),
-                EgressProbe {
-                    offered_bps: quality.offered_bps,
-                    delivered_bps: quality.delivered_bps,
-                    resyncs: egress.resync_count.load(Ordering::Relaxed),
-                    feed_lag: egress.feed_lag_units.load(Ordering::Relaxed),
-                },
-            )
+        .with_active_egresses(|active| {
+            active
+                .values()
+                .map(|egress| {
+                    let quality = restream_sync::lock::lock(&egress.quality);
+                    (
+                        egress.output_id.clone(),
+                        EgressProbe {
+                            offered_bps: quality.offered_bps,
+                            delivered_bps: quality.delivered_bps,
+                            resyncs: egress.resync_count.load(Ordering::Relaxed),
+                            feed_lag: egress.feed_lag_units.load(Ordering::Relaxed),
+                        },
+                    )
+                })
+                .collect()
         })
-        .collect()
+        .await
 }
 
 /// Each AAC track's frame length: every track a multi-track source
@@ -820,24 +820,24 @@ async fn destination_readings(
     restream_health::destination_baselines::Readings,
 )> {
     engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .map(|egress| {
-            let quality = restream_sync::lock::lock(&egress.quality);
-            (
-                egress.pipeline_id.clone(),
-                egress.output_id.clone(),
-                restream_health::destination_baselines::Readings {
-                    delivery_ratio: quality.delivery_ratio,
-                    rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
-                    retrans_per_sec: quality.packets_sent_retrans_per_sec,
-                },
-            )
+        .with_active_egresses(|active| {
+            active
+                .values()
+                .map(|egress| {
+                    let quality = restream_sync::lock::lock(&egress.quality);
+                    (
+                        egress.pipeline_id.clone(),
+                        egress.output_id.clone(),
+                        restream_health::destination_baselines::Readings {
+                            delivery_ratio: quality.delivery_ratio,
+                            rtt_ms: quality.ms_rtt.or(quality.tcp_rtt_ms),
+                            retrans_per_sec: quality.packets_sent_retrans_per_sec,
+                        },
+                    )
+                })
+                .collect()
         })
-        .collect()
+        .await
 }
 
 /// Samples every pipeline each `interval` until `shutdown`.

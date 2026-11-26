@@ -317,11 +317,10 @@ pub(crate) async fn output_status(
     engine: &MediaEngine,
     output_id: &str,
 ) -> Option<serde_json::Value> {
-    let retry = engine.egresses.retry.read().await.get(output_id).cloned();
-    let recent = engine.egresses.recent.read().await.get(output_id).cloned();
-    let active = {
-        let egresses = engine.egresses.active.read().await;
-        egresses.get(output_id).map(|egress| {
+    let retry = engine.egress_retry_state(output_id).await;
+    let recent = engine.recent_egress_outcome(output_id).await;
+    let active = engine
+        .with_active_egress(output_id, |egress| {
             let terminal_stage_key = egress.terminal_stage_key.clone();
             let mut view = api_view_models::egress_runtime_view(egress, false, true, None);
             view.apply_recent_instability(recent.as_ref());
@@ -343,7 +342,7 @@ pub(crate) async fn output_status(
             };
             (view, explanation, terminal_stage_key)
         })
-    };
+        .await;
 
     if let Some((mut view, mut explanation, terminal_stage_key)) = active {
         let blocked_by = if let Some(key) = terminal_stage_key.as_ref() {
@@ -408,8 +407,8 @@ pub(crate) async fn health_snapshot_view(
     }
 
     let recent_ingests = engine.ingests.recent.read().await.clone();
-    let recent_egresses = engine.egresses.recent.read().await.clone();
-    let retry_egresses = engine.egresses.retry.read().await.clone();
+    let recent_egresses = engine.recent_egress_outcomes().await;
+    let retry_egresses = engine.retry_egress_states().await;
     let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_metrics_by_pipeline = reader_metrics_by_pipeline(engine).await;
     let active_ingest_ids: HashSet<String> =
@@ -581,41 +580,45 @@ async fn active_egress_views(
     recent_egresses: &HashMap<String, restream_engine::engine::RecentEgressOutcome>,
     retry_egresses: &HashMap<String, restream_engine::engine::EgressRetryState>,
 ) -> ActiveEgressViews {
-    let egresses = engine.egresses.active.read().await;
-    let mut views = ActiveEgressViews {
-        total_bytes_by_pipeline: HashMap::new(),
-        outputs_by_pipeline: HashMap::new(),
-        blocked_requests: Vec::new(),
-    };
-    for (output_id, egress) in egresses.iter() {
-        let pipeline_id = egress.pipeline_id.clone();
-        let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
-        *views
-            .total_bytes_by_pipeline
-            .entry(pipeline_id.clone())
-            .or_default() += bytes_sent;
+    engine
+        .with_active_egresses(|egresses| {
+            let mut views = ActiveEgressViews {
+                total_bytes_by_pipeline: HashMap::new(),
+                outputs_by_pipeline: HashMap::new(),
+                blocked_requests: Vec::new(),
+            };
+            for (output_id, egress) in egresses.iter() {
+                let pipeline_id = egress.pipeline_id.clone();
+                let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
+                *views
+                    .total_bytes_by_pipeline
+                    .entry(pipeline_id.clone())
+                    .or_default() += bytes_sent;
 
-        let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
-        let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
-        let mut view = api_view_models::egress_runtime_view(egress, false, has_ingest, None);
-        view.apply_recent_instability(recent_egresses.get(output_id));
-        view.apply_retry_state(retry_egresses.get(output_id));
-        let view = view.with_totals(bytes_sent, bitrate_kbps, &egress.started_at);
-        if let Some(key) = egress.terminal_stage_key.clone() {
+                let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
+                let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
+                let mut view =
+                    api_view_models::egress_runtime_view(egress, false, has_ingest, None);
+                view.apply_recent_instability(recent_egresses.get(output_id));
+                view.apply_retry_state(retry_egresses.get(output_id));
+                let view = view.with_totals(bytes_sent, bitrate_kbps, &egress.started_at);
+                if let Some(key) = egress.terminal_stage_key.clone() {
+                    views
+                        .blocked_requests
+                        .push((pipeline_id.clone(), output_id.to_string(), key));
+                }
+                views
+                    .outputs_by_pipeline
+                    .entry(pipeline_id)
+                    .or_default()
+                    .insert(
+                        output_id.to_string(),
+                        api_view_models::OutputHealthView::Active(view),
+                    );
+            }
             views
-                .blocked_requests
-                .push((pipeline_id.clone(), output_id.to_string(), key));
-        }
-        views
-            .outputs_by_pipeline
-            .entry(pipeline_id)
-            .or_default()
-            .insert(
-                output_id.to_string(),
-                api_view_models::OutputHealthView::Active(view),
-            );
-    }
-    views
+        })
+        .await
 }
 
 /// Adds the pipeline's recently ended outputs that no active egress shows.
@@ -728,8 +731,8 @@ pub(crate) async fn health_summary_snapshot(
     disconnect_grace_ms: u64,
 ) -> serde_json::Value {
     let recent_ingests = engine.ingests.recent.read().await.clone();
-    let recent_egresses = engine.egresses.recent.read().await.clone();
-    let retry_egresses = engine.egresses.retry.read().await.clone();
+    let recent_egresses = engine.recent_egress_outcomes().await;
+    let retry_egresses = engine.retry_egress_states().await;
     let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_counts: HashMap<String, usize> = engine
         .ingests
@@ -742,38 +745,39 @@ pub(crate) async fn health_summary_snapshot(
     let active_ingest_ids: HashSet<String> =
         engine.ingests.active.read().await.keys().cloned().collect();
 
-    let (total_bytes_by_pipeline, mut outputs_by_pipeline) = {
-        let egresses = engine.egresses.active.read().await;
-        let mut totals: HashMap<String, u64> = HashMap::new();
-        let mut outputs: HashMap<String, serde_json::Map<String, serde_json::Value>> =
-            HashMap::new();
+    let (total_bytes_by_pipeline, mut outputs_by_pipeline) = engine
+        .with_active_egresses(|egresses| {
+            let mut totals: HashMap<String, u64> = HashMap::new();
+            let mut outputs: HashMap<String, serde_json::Map<String, serde_json::Value>> =
+                HashMap::new();
 
-        for (output_id, egress) in egresses.iter() {
-            let pipeline_id = egress.pipeline_id.clone();
-            let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
-            *totals.entry(pipeline_id.clone()).or_default() += bytes_sent;
-            let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
-            let status = MediaEngine::egress_effective_status_best_effort(egress, has_ingest);
-            let retry_state = retry_egresses.get(output_id);
+            for (output_id, egress) in egresses.iter() {
+                let pipeline_id = egress.pipeline_id.clone();
+                let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
+                *totals.entry(pipeline_id.clone()).or_default() += bytes_sent;
+                let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
+                let status = MediaEngine::egress_effective_status_best_effort(egress, has_ingest);
+                let retry_state = retry_egresses.get(output_id);
 
-            outputs.entry(pipeline_id).or_default().insert(
-                output_id.to_string(),
-                serde_json::json!({
-                    "status": if retry_state.is_some() {
-                        "retrying".to_string()
-                    } else {
-                        status
-                    },
-                    "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
-                    "totalSize": bytes_sent,
-                    "bitrateKbps": serde_json::Value::Null,
-                    "retrying": retry_state.is_some(),
-                }),
-            );
-        }
+                outputs.entry(pipeline_id).or_default().insert(
+                    output_id.to_string(),
+                    serde_json::json!({
+                        "status": if retry_state.is_some() {
+                            "retrying".to_string()
+                        } else {
+                            status
+                        },
+                        "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
+                        "totalSize": bytes_sent,
+                        "bitrateKbps": serde_json::Value::Null,
+                        "retrying": retry_state.is_some(),
+                    }),
+                );
+            }
 
-        (totals, outputs)
-    };
+            (totals, outputs)
+        })
+        .await;
 
     let active_inputs: HashMap<String, serde_json::Value> = {
         let ingests = engine.ingests.active.read().await;
