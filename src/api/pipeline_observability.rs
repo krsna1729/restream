@@ -63,8 +63,7 @@ pub async fn pipeline_graph_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let pipeline_outputs =
-        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
+    let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
     let mut graph =
         crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
@@ -133,8 +132,7 @@ pub async fn pipeline_diagnostics_context_handler(
     let health = pipeline_health_snapshot(&state, &pipeline_id).await;
     let generated_at = snapshot_generated_at(&health);
 
-    let pipeline_outputs =
-        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
+    let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
@@ -148,27 +146,23 @@ pub async fn pipeline_diagnostics_context_handler(
     let mut alert_list = alerts::derive_alerts(&health);
     state.stamp_alerts(&mut alert_list);
     let recent_events = state.engine.recent_events(100, Some(&pipeline_id));
-    let recent_logs = crate::application::logs::list_logs(
-        &state.db,
-        &AppLogFilters {
+    let recent_logs = state
+        .app_logs(&AppLogFilters {
             pipeline_id: Some(pipeline_id.clone()),
             limit: Some(100),
             order: Some("desc".to_string()),
             ..empty_log_filters()
-        },
-    )
-    .await?;
-    let backend_stderr_tail = crate::application::logs::list_logs(
-        &state.db,
-        &AppLogFilters {
+        })
+        .await?;
+    let backend_stderr_tail = state
+        .app_logs(&AppLogFilters {
             pipeline_id: Some(pipeline_id.clone()),
             prefix: Some("[ext-transcoder] ffmpeg stderr".to_string()),
             limit: Some(20),
             order: Some("desc".to_string()),
             ..empty_log_filters()
-        },
-    )
-    .await?;
+        })
+        .await?;
 
     Ok(Json(serde_json::json!({
         "generatedAt": generated_at,
@@ -206,8 +200,7 @@ pub async fn v1_pipeline_summary_handler(
     let generated_at = snapshot_generated_at(&snapshot);
 
     let pip = &snapshot["pipelines"][&pipeline_id];
-    let pipeline_outputs =
-        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
+    let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
     let graph =
         crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;

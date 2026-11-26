@@ -31,6 +31,7 @@ use super::AppServices;
 
 mod agent;
 mod alert_tracker;
+mod db;
 mod endpoints;
 mod identity;
 mod ingests;
@@ -151,7 +152,7 @@ pub struct AppState {
     mutation_admission: Arc<tokio::sync::Semaphore>,
     pub engine: Arc<MediaEngine>,
     /// Main-pool reads are deadline bounded; writes run to their outcome.
-    pub db: crate::db::DeadlineDb,
+    db: crate::db::DeadlineDb,
     pub ingest_disconnect_grace_ms: u64,
     ports: PortConfig,
     /// See [`AppStateRuntimeConfig::moq_certificate_sha256`].

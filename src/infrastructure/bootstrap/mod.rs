@@ -379,7 +379,7 @@ fn spawn_state_loops(
     supervised_task::spawn_supervised("runtime_state_projector", {
         let (hub, db, engine, stop) = (
             state.runtime_state_handle(),
-            state.db.clone(),
+            state.db_handle(),
             state.engine.clone(),
             stop.clone(),
         );
@@ -398,7 +398,7 @@ fn spawn_state_loops(
         let (history, hub, db, engine, config, stop) = (
             state.fleet_history_sampler_handle(),
             state.runtime_state_handle(),
-            state.db.clone(),
+            state.db_handle(),
             state.engine.clone(),
             config.clone(),
             stop.clone(),
@@ -419,7 +419,7 @@ fn spawn_state_loops(
         let (recorder, hub, db, engine, stop) = (
             state.flight_recorder_sampler_handle(),
             state.runtime_state_handle(),
-            state.db.clone(),
+            state.db_handle(),
             state.engine.clone(),
             stop.clone(),
         );

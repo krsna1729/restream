@@ -220,79 +220,25 @@ fn log_row_sse_frame(row: &crate::logging::AppLogRow) -> String {
     format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data)
 }
 
-fn log_level_passes(min_level: &str, level: &str) -> bool {
-    match min_level {
-        "error" => level == "ERROR",
-        "warn" => matches!(level, "ERROR" | "WARN"),
-        "debug" => matches!(level, "ERROR" | "WARN" | "INFO" | "DEBUG"),
-        _ => matches!(level, "ERROR" | "WARN" | "INFO"),
-    }
-}
-
-/// Lists persisted log rows using the HTTP query as a thin transport-to-filter
-/// mapping over the log service.
-pub async fn logs_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    axum::extract::Query(query): axum::extract::Query<LogsQuery>,
-) -> impl IntoResponse {
-    if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
-    }
-
-    let filters = build_logs_filters(query);
-
-    let logs = crate::application::logs::list_logs(&state.db, &filters)
-        .await
-        .unwrap_or_default();
-    let has_more = logs.len()
-        >= filters
-            .limit
-            .unwrap_or(i64::from(DEFAULT_LOG_PAGE_LIMIT))
-            .clamp(1, 1000) as usize;
-
-    Json(serde_json::json!({
-        "logs": logs,
-        "total": logs.len(),
-        "hasMore": has_more,
-    }))
-    .into_response()
-}
-
-/// Streams log events over SSE, optionally backfilling from the caller's last
-/// seen event id before switching to live broadcast delivery.
-pub async fn logs_stream_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    axum::extract::Query(query): axum::extract::Query<LogsStreamQuery>,
-) -> impl IntoResponse {
-    if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
-    }
-
-    let resume_from: Option<i64> = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .or(query.last_event_id);
-
-    let filter = LogsStreamFilter::from_query(query);
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
-
-    let db = state.db.clone();
+/// Streams backfill then live rows until the client disconnects.
+fn spawn_log_stream(
+    state: Arc<AppState>,
+    filter: LogsStreamFilter,
+    resume_from: Option<i64>,
+    tx: tokio::sync::mpsc::Sender<String>,
+) {
     let mut broadcast_rx = state.subscribe_logs();
 
     tokio::spawn(async move {
         let mut delivered_through = resume_from.unwrap_or(0);
         if resume_from.is_some() {
             loop {
-                let Ok(backfill) = crate::application::logs::list_stream_backfill(
-                    &db,
-                    &filter.backfill_filters(delivered_through),
-                    filter.include_restream,
-                )
-                .await
+                let Ok(backfill) = state
+                    .log_backfill(
+                        &filter.backfill_filters(delivered_through),
+                        filter.include_restream,
+                    )
+                    .await
                 else {
                     // End the response so EventSource reconnects with its prior
                     // cursor instead of silently treating a failed page as empty.
@@ -338,6 +284,66 @@ pub async fn logs_stream_handler(
             }
         }
     });
+}
+
+fn log_level_passes(min_level: &str, level: &str) -> bool {
+    match min_level {
+        "error" => level == "ERROR",
+        "warn" => matches!(level, "ERROR" | "WARN"),
+        "debug" => matches!(level, "ERROR" | "WARN" | "INFO" | "DEBUG"),
+        _ => matches!(level, "ERROR" | "WARN" | "INFO"),
+    }
+}
+
+/// Lists persisted log rows using the HTTP query as a thin transport-to-filter
+/// mapping over the log service.
+pub async fn logs_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<LogsQuery>,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+
+    let filters = build_logs_filters(query);
+
+    let logs = state.app_logs(&filters).await.unwrap_or_default();
+    let has_more = logs.len()
+        >= filters
+            .limit
+            .unwrap_or(i64::from(DEFAULT_LOG_PAGE_LIMIT))
+            .clamp(1, 1000) as usize;
+
+    Json(serde_json::json!({
+        "logs": logs,
+        "total": logs.len(),
+        "hasMore": has_more,
+    }))
+    .into_response()
+}
+
+/// Streams log events over SSE, optionally backfilling from the caller's last
+/// seen event id before switching to live broadcast delivery.
+pub async fn logs_stream_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<LogsStreamQuery>,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+
+    let resume_from: Option<i64> = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .or(query.last_event_id);
+
+    let filter = LogsStreamFilter::from_query(query);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    spawn_log_stream(state, filter, resume_from, tx);
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     let body = axum::body::Body::from_stream(futures_util::StreamExt::map(stream, |s| {
