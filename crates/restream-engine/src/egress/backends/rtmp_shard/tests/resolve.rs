@@ -9,17 +9,17 @@ use crate::resolver::fake::FakeDns;
 fn backend_on(
     resolver: Arc<Resolver>,
 ) -> RtmpShardBackend<CompioTcpPoller, EmptyRtmpPublishStartupSource> {
-    rtmp_shard_backend(
+    RtmpShardBackend::with_runtime_components(
         CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
         4096,
         crate::egress::tls::rustls_client_config(),
+        Some(resolver),
         EmptyRtmpPublishStartupSource,
-        Duration::from_secs(3),
-        8,
-        resolver,
     )
+    .with_leaf_capacity(8)
+    .with_drain_timeout(Duration::from_secs(3))
 }
 
 /// An output whose `terminated_unexpectedly` flag the test reads, resolving

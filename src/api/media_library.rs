@@ -166,13 +166,13 @@ async fn store_upload(
             "Unsupported or unsafe media filename",
         ));
     }
-    let Ok(destination) = media_destination_path_under_root(media_dir, &filename) else {
+    let Ok(destination) = media_destination_path_under_root(media_dir, &filename).await else {
         return Err(upload_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Media directory error",
         ));
     };
-    if destination.exists() {
+    if tokio::fs::try_exists(&destination).await.unwrap_or(false) {
         return Err(upload_error(
             StatusCode::CONFLICT,
             "A media file with that name already exists",
@@ -285,7 +285,7 @@ pub async fn media_poster_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let path = match media_path_under_root(&state.media_dir, &filename) {
+    let path = match media_path_under_root(&state.media_dir, &filename).await {
         Ok(path) => path,
         Err(status) => return status.into_response(),
     };
@@ -340,7 +340,7 @@ pub async fn media_analysis_handler(
         return response;
     }
 
-    let path = match media_path_under_root(&state.media_dir, &filename) {
+    let path = match media_path_under_root(&state.media_dir, &filename).await {
         Ok(path) => path,
         Err(status) => return status.into_response(),
     };
@@ -417,22 +417,29 @@ pub fn validate_media_filename(filename: &str) -> Result<(), StatusCode> {
 }
 
 /// Resolves an existing media filename under the configured library root,
-/// rejecting traversal and symlink escapes via canonicalization.
-pub fn media_path_under_root(
+/// rejecting traversal and symlink escapes via canonicalization. The
+/// filesystem calls run on the blocking pool.
+pub async fn media_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
-    // Existing-file lookups canonicalize both root and target so requests
-    // cannot escape the configured media directory through symlinks or parents.
-    let _ = std::fs::create_dir_all(media_dir);
-    let media_root =
-        std::fs::canonicalize(media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let path = std::path::Path::new(media_dir).join(filename);
-    let canonical_path = std::fs::canonicalize(&path).map_err(|_| StatusCode::NOT_FOUND)?;
-    if !canonical_path.starts_with(&media_root) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    Ok(canonical_path)
+    let media_dir = media_dir.to_owned();
+    let path = std::path::Path::new(&media_dir).join(filename);
+    tokio::task::spawn_blocking(move || {
+        // Existing-file lookups canonicalize both root and target so requests
+        // cannot escape the configured media directory through symlinks or
+        // parents.
+        let _ = std::fs::create_dir_all(&media_dir);
+        let media_root =
+            std::fs::canonicalize(&media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let canonical_path = std::fs::canonicalize(&path).map_err(|_| StatusCode::NOT_FOUND)?;
+        if !canonical_path.starts_with(&media_root) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        Ok(canonical_path)
+    })
+    .await
+    .unwrap_or(Err(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -570,24 +577,30 @@ async fn media_file_response(
 }
 
 /// Builds the destination path for a new media-library file without requiring
-/// the target file to exist yet.
-pub fn media_destination_path_under_root(
+/// the target file to exist yet. The filesystem calls run on the blocking pool.
+pub async fn media_destination_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
     // Destination paths validate the requested filename first, then join under
     // the canonical media root without requiring the target file to exist yet.
     validate_media_filename(filename)?;
-    let _ = std::fs::create_dir_all(media_dir);
-    let media_root =
-        std::fs::canonicalize(media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let path = media_root.join(filename);
-    if let Some(parent) = path.parent()
-        && !parent.starts_with(&media_root)
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    Ok(path)
+    let media_dir = media_dir.to_owned();
+    let filename = filename.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _ = std::fs::create_dir_all(&media_dir);
+        let media_root =
+            std::fs::canonicalize(&media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let path = media_root.join(filename);
+        if let Some(parent) = path.parent()
+            && !parent.starts_with(&media_root)
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        Ok(path)
+    })
+    .await
+    .unwrap_or(Err(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 /// Streams one media file from the library, supporting byte ranges for video
@@ -601,7 +614,7 @@ pub async fn media_file_handler(
         return response;
     }
 
-    let path = match media_path_under_root(&state.media_dir, &filename) {
+    let path = match media_path_under_root(&state.media_dir, &filename).await {
         Ok(path) => path,
         Err(status) => return status.into_response(),
     };
@@ -622,7 +635,7 @@ pub async fn media_delete_handler(
         return response;
     }
 
-    let canonical_path = match media_path_under_root(&state.media_dir, &filename) {
+    let canonical_path = match media_path_under_root(&state.media_dir, &filename).await {
         Ok(path) => path,
         Err(status) => return media_directory_error_response(status),
     };
@@ -683,15 +696,19 @@ pub async fn media_rename_handler(
             .into_response();
     }
 
-    let source_path = match media_path_under_root(&state.media_dir, &filename) {
+    let source_path = match media_path_under_root(&state.media_dir, &filename).await {
         Ok(path) => path,
         Err(status) => return media_directory_error_response(status),
     };
-    let destination_path = match media_destination_path_under_root(&state.media_dir, new_name) {
+    let destination_path = match media_destination_path_under_root(&state.media_dir, new_name).await
+    {
         Ok(path) => path,
         Err(status) => return media_directory_error_response(status),
     };
-    if destination_path.exists() {
+    if tokio::fs::try_exists(&destination_path)
+        .await
+        .unwrap_or(false)
+    {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "A media file with that name already exists"})),
@@ -764,22 +781,25 @@ mod tests {
         path
     }
 
-    #[test]
-    fn media_destination_path_uses_canonical_root_for_relative_media_dir() {
+    #[tokio::test]
+    async fn media_destination_path_uses_canonical_root_for_relative_media_dir() {
         let media_dir = relative_media_dir("relative-rename");
         let canonical_root = std::fs::canonicalize(&media_dir).unwrap();
 
-        let destination = media_destination_path_under_root(&media_dir, "renamed.mp4").unwrap();
+        let destination = media_destination_path_under_root(&media_dir, "renamed.mp4")
+            .await
+            .unwrap();
 
         assert_eq!(destination, canonical_root.join("renamed.mp4"));
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    #[test]
-    fn media_destination_path_rejects_traversal() {
+    #[tokio::test]
+    async fn media_destination_path_rejects_traversal() {
         let media_dir = temp_media_dir("rename-traversal");
 
         let err = media_destination_path_under_root(media_dir.to_str().unwrap(), "../clip.mp4")
+            .await
             .unwrap_err();
 
         assert_eq!(err, StatusCode::BAD_REQUEST);

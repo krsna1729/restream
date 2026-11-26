@@ -456,34 +456,3 @@ where
         self.activate_connected(&output_id, connecting, event.key)
     }
 }
-
-/// Build one RTMP shard backend whose lookups go to `resolver`
-/// (`crate::resolver::shared()` in production).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn rtmp_shard_backend<P, S>(
-    poller: P,
-    feed: RingFeed,
-    budget: WorkBudgetConfig,
-    chunk_size: u32,
-    rtmps_client_config: Arc<ClientConfig>,
-    startup_source: S,
-    drain_timeout: Duration,
-    leaf_capacity: usize,
-    resolver: Arc<Resolver>,
-) -> RtmpShardBackend<P, S>
-where
-    P: RtmpReadinessPoller,
-    S: RtmpPublishStartupSource,
-{
-    RtmpShardBackend::with_runtime_components(
-        poller,
-        feed,
-        budget,
-        chunk_size,
-        rtmps_client_config,
-        Some(resolver),
-        startup_source,
-    )
-    .with_leaf_capacity(leaf_capacity)
-    .with_drain_timeout(drain_timeout)
-}

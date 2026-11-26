@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::egress::backends::pipeline_shard::{PipelineShardBackend, SharedPipelineTargetSource};
-use crate::egress::backends::rtmp_shard::{SharedRtmpPublishStartupSource, rtmp_shard_backend};
+use crate::egress::backends::rtmp_shard::{RtmpShardBackend, SharedRtmpPublishStartupSource};
 use crate::egress::backends::sink_shard::SinkShardBackend;
 use crate::egress::backends::srt::{SrtOwnerSettings, srt_shard_backend};
 use crate::egress::backends::tcp::TcpEgressPollError;
@@ -85,17 +85,17 @@ where
         // so a creation failure surfaces here as `Backend`.
         move || {
             let poller = CompioTcpPoller::new(poller_max_events)?;
-            Ok(rtmp_shard_backend(
+            Ok(RtmpShardBackend::with_runtime_components(
                 poller,
                 feed,
                 budget,
                 chunk_size,
                 rtmps_client_config,
+                Some(crate::resolver::shared()),
                 startup_source,
-                drain_timeout,
-                leaf_capacity,
-                crate::resolver::shared(),
-            ))
+            )
+            .with_leaf_capacity(leaf_capacity)
+            .with_drain_timeout(drain_timeout))
         }
     })
     .map_err(|error| match error {

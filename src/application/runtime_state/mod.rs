@@ -240,14 +240,14 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
     let recent_evidence: HashMap<String, FailureEvidence> = engine
         .recent_egress_outcomes()
         .await
-        .iter()
+        .into_iter()
         .filter_map(|(output_id, outcome)| {
-            outcome.last_error.clone().map(|error| {
+            outcome.last_error.map(|error| {
                 (
-                    output_id.clone(),
+                    output_id,
                     FailureEvidence {
                         error,
-                        phase: outcome.failure_phase.clone(),
+                        phase: outcome.failure_phase,
                         at_ms: outcome.last_error_ms,
                     },
                 )

@@ -70,17 +70,19 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
         let feed = feed.clone_reader();
         let startup_source = PanickingStartupSource(startup_source.clone());
         move || {
-            Ok::<_, TcpEgressPollError>(crate::egress::backends::rtmp_shard::rtmp_shard_backend(
-                CompioTcpPoller::new(4)?,
-                feed,
-                budget(),
-                4096,
-                crate::egress::tls::resolve_client_config(None).unwrap(),
-                startup_source,
-                shard_config.drain_timeout(),
-                shard_config.leaf_capacity().get(),
-                crate::resolver::shared(),
-            ))
+            Ok::<_, TcpEgressPollError>(
+                RtmpShardBackend::with_runtime_components(
+                    CompioTcpPoller::new(4)?,
+                    feed,
+                    budget(),
+                    4096,
+                    crate::egress::tls::resolve_client_config(None).unwrap(),
+                    Some(crate::resolver::shared()),
+                    startup_source,
+                )
+                .with_leaf_capacity(shard_config.leaf_capacity().get())
+                .with_drain_timeout(shard_config.drain_timeout()),
+            )
         }
     };
     let group = crate::egress::shard::EgressShardGroup::try_spawn_with(

@@ -116,7 +116,7 @@ pub async fn build_file_diagnostics_context(
     let pipeline = state.pipeline(pipeline_id).await.ok()?;
     let ingest = state.file_ingest_state(&pipeline).await.ok()?.ingest?;
     let path = expected_media_path(&state.media_dir, &ingest.filename);
-    let metadata = std::fs::metadata(&path).ok();
+    let metadata = tokio::fs::metadata(&path).await.ok();
     let file_exists = metadata.is_some();
     let file_size_bytes = metadata.as_ref().map(std::fs::Metadata::len);
     let file_modified_at = metadata

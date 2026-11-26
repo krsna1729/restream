@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::egress::backends::rtmp::RtmpPublishStartup;
+use crate::egress::backends::rtmp_shard::RtmpShardBackend;
 use crate::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
-use crate::egress::backends::rtmp_shard::rtmp_shard_backend;
 use crate::egress::backends::tcp::TcpEgressPollError;
 use crate::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
@@ -291,17 +291,19 @@ impl MediaEngine {
                 let leaf_capacity = shard_config.leaf_capacity().get();
                 move || {
                     let poller = CompioTcpPoller::new(poller_max_events)?;
-                    Ok::<_, TcpEgressPollError>(rtmp_shard_backend(
-                        poller,
-                        feed,
-                        budget,
-                        chunk_size,
-                        rtmps_client_config,
-                        startup_source,
-                        drain_timeout,
-                        leaf_capacity,
-                        crate::resolver::shared(),
-                    ))
+                    Ok::<_, TcpEgressPollError>(
+                        RtmpShardBackend::with_runtime_components(
+                            poller,
+                            feed,
+                            budget,
+                            chunk_size,
+                            rtmps_client_config,
+                            Some(crate::resolver::shared()),
+                            startup_source,
+                        )
+                        .with_leaf_capacity(leaf_capacity)
+                        .with_drain_timeout(drain_timeout),
+                    )
                 }
             },
         );

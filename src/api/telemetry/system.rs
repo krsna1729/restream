@@ -40,13 +40,18 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
     let hls_put_tls = HLS_PUT_TLS_COUNTERS.snapshot();
 
-    // A host that will not list its disks reports none.
-    let disks = Disks::new_with_refreshed_list().ok();
-    let disks: &[sysinfo::Disk] = disks.as_deref().unwrap_or_default();
-    let system_disk = system_disk_usage(disks);
+    // Disk listing and path resolution are blocking syscalls. A host that
+    // will not list its disks reports none.
+    let media_dir = state.media_dir.clone();
+    let (system_disk, media_disk) = tokio::task::spawn_blocking(move || {
+        let disks = Disks::new_with_refreshed_list().ok();
+        let disks: &[sysinfo::Disk] = disks.as_deref().unwrap_or_default();
+        (system_disk_usage(disks), media_disk_json(&media_dir, disks))
+    })
+    .await
+    .unwrap_or_else(|_| (system_disk_usage(&[]), None));
     let free_disk = system_disk.total.saturating_sub(system_disk.used);
     let disk_pct = used_percent(system_disk.total, system_disk.used);
-    let media_disk = media_disk_json(&state.media_dir, disks);
 
     let network = sample_external_network().await;
     let dl_bytes_sec = network.rx_bytes_per_sec;

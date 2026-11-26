@@ -252,8 +252,7 @@ impl FabricRun for RtmpRun<'_> {
 pub(super) struct HlsPutRun<'a> {
     task: &'a EgressTask,
     fabric: HlsPutFabricTask,
-    /// Taken once `ensure` has consumed it, matching the previous local
-    /// drop after the retain call.
+    /// Taken by `ensure`, which drops it after the retain call.
     store: Option<Arc<restream_engine::hls::HlsStore>>,
     forwarded: ForwardedUploadStatus,
 }
@@ -297,17 +296,15 @@ impl FabricRun for HlsPutRun<'_> {
     }
     async fn prepare(&self) {}
     async fn ensure(&mut self) -> Result<(), String> {
-        let store = self
-            .store
-            .as_ref()
-            .expect("HLS store present before ensure");
-        let result = self
-            .task
+        let Some(store) = self.store.take() else {
+            return Err("HLS store already consumed by an earlier ensure".to_string());
+        };
+        self.task
             .engine
-            .retain_hls_put_fabric_runtime(self.feed_id(), store)
-            .await;
-        self.store = None;
-        result.map(|_| ()).map_err(|error| format!("{error:?}"))
+            .retain_hls_put_fabric_runtime(self.feed_id(), &store)
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
     }
     async fn add(
         &self,
