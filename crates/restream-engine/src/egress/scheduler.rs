@@ -90,6 +90,11 @@ pub struct ReadyQueue {
     order: VecDeque<LeafKey>,
     member: Vec<Option<LeafKey>>,
     capacity: usize,
+    /// Entries `pop` inspected, including skipped stale keys. Test support
+    /// only: the scheduler-shape tests read it to prove pop never scans the
+    /// leaf population.
+    #[cfg(any(test, feature = "test-support"))]
+    pop_probes: usize,
 }
 
 impl ReadyQueue {
@@ -102,6 +107,8 @@ impl ReadyQueue {
             order: VecDeque::with_capacity(capacity),
             member: vec![None; capacity],
             capacity,
+            #[cfg(any(test, feature = "test-support"))]
+            pop_probes: 0,
         }
     }
 
@@ -133,6 +140,10 @@ impl ReadyQueue {
     /// Take the next queued key; it may be pushed again at once.
     pub fn pop(&mut self) -> Option<LeafKey> {
         while let Some(key) = self.order.pop_front() {
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.pop_probes += 1;
+            }
             if let Some(entry) = self.member.get_mut(key.slot())
                 && *entry == Some(key)
             {
@@ -141,6 +152,18 @@ impl ReadyQueue {
             }
         }
         None
+    }
+
+    /// Entries `pop` inspected since the last reset. Test support only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pop_probes(&self) -> usize {
+        self.pop_probes
+    }
+
+    /// Clear the [`Self::pop_probes`] counter. Test support only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_pop_probes(&mut self) {
+        self.pop_probes = 0;
     }
 
     /// The key `pop` would return next.
