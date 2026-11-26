@@ -168,7 +168,7 @@ impl EgressShardGroup {
     ) -> Vec<std::sync::Arc<std::sync::Mutex<EgressShardSnapshot>>> {
         self.handles
             .iter()
-            .map(|handle| std::sync::Arc::clone(&handle.snapshot))
+            .map(EgressShardHandle::snapshot_handle)
             .collect()
     }
 
