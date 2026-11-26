@@ -52,7 +52,7 @@ impl AppState {
     pub(crate) fn flight_recorder_anomalies(
         &self,
     ) -> Vec<restream_health::destination_baselines::Anomaly> {
-        self.flight_recorder.baselines.anomalies()
+        self.flight_recorder.baseline_anomalies()
     }
 
     /// The shared recorder handle used by the flight-recorder task.
