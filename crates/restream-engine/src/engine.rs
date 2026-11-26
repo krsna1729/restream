@@ -214,6 +214,16 @@ pub struct EgressRegistration {
     pub attempt_id: u64,
 }
 
+/// RTMP ingress limits derived from the engine configuration.
+#[derive(Clone, Copy, Debug)]
+pub struct RtmpIngressLimits {
+    pub max_connections: usize,
+    pub max_connections_per_ip: usize,
+    pub parser_budget_bytes: usize,
+    pub ingress_owners: usize,
+    pub max_message_bytes: usize,
+}
+
 pub struct MediaEngine {
     pub ingests: IngestRegistry,
     pub egresses: EgressRegistry,
@@ -255,6 +265,27 @@ impl MediaEngine {
 
     pub fn now_epoch_ms() -> u64 {
         jiff::Timestamp::now().as_millisecond().max(0) as u64
+    }
+
+    /// The RTMP ingress limits this engine was configured with.
+    pub fn rtmp_ingress_limits(&self) -> RtmpIngressLimits {
+        RtmpIngressLimits {
+            max_connections: self.config.rtmp_max_connections,
+            max_connections_per_ip: self.config.rtmp_max_connections_per_ip,
+            parser_budget_bytes: self.config.rtmp_ingest_parser_budget_bytes,
+            ingress_owners: self.config.rtmp_ingress_owners,
+            max_message_bytes: self.config.rtmp_max_message_bytes,
+        }
+    }
+
+    /// The configured egress fabric shard count, at least one.
+    pub fn egress_shard_count(&self) -> u32 {
+        self.config.egress_fabric.shards.max(1)
+    }
+
+    /// Extra PEM roots the HLS uploader trusts, when configured.
+    pub fn hls_upload_trust_roots(&self) -> Option<&str> {
+        self.config.rtmps_extra_trust_roots_pem_path.as_deref()
     }
 
     /// `ms` as [`restream_domain::timestamp::rfc3339`]; `None` for 0 (never).

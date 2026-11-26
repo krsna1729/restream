@@ -65,17 +65,16 @@ pub async fn start_rtmp_server_on_with_shutdown(
     engine.register_listener_shutdown(move || shutdown_for_engine.cancel());
 
     let addr = format!("0.0.0.0:{port}");
-    let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
-    let client_slots =
-        restream_sync::client_slots::ClientSlots::new(engine.config.rtmp_max_connections_per_ip);
-    let parser_budget = engine.config.rtmp_ingest_parser_budget_bytes;
-    let owners = engine
-        .config
-        .rtmp_ingress_owners
+    let limits = engine.rtmp_ingress_limits();
+    let connection_limit = limits.max_connections.clamp(1, 16_384);
+    let client_slots = restream_sync::client_slots::ClientSlots::new(limits.max_connections_per_ip);
+    let parser_budget = limits.parser_budget_bytes;
+    let owners = limits
+        .ingress_owners
         .clamp(1, 64)
         .min(connection_limit)
-        .min((parser_budget / engine.config.rtmp_max_message_bytes.max(1)).max(1));
-    log_owner_limits(&engine, owners, connection_limit, parser_budget);
+        .min((parser_budget / limits.max_message_bytes.max(1)).max(1));
+    log_owner_limits(&limits, owners, connection_limit, parser_budget);
     let Some((listeners, bound_addr)) = bind_for_startup(&engine, port, owners, &mut started)
     else {
         return;
@@ -135,14 +134,14 @@ pub async fn start_rtmp_server_on_with_shutdown(
 }
 
 fn log_owner_limits(
-    engine: &MediaEngine,
+    limits: &crate::engine::RtmpIngressLimits,
     owners: usize,
     connection_limit: usize,
     parser_budget: usize,
 ) {
-    if owners < engine.config.rtmp_ingress_owners.clamp(1, 64) {
+    if owners < limits.ingress_owners.clamp(1, 64) {
         warn!(
-            requested = engine.config.rtmp_ingress_owners,
+            requested = limits.ingress_owners,
             owners,
             connection_limit,
             parser_budget,

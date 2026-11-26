@@ -262,13 +262,7 @@ async fn put_request(
     } else {
         HLS_UPLOAD_REQUEST_TIMEOUT
     };
-    let clients = hls_upload_clients(
-        report
-            .engine
-            .config
-            .rtmps_extra_trust_roots_pem_path
-            .as_deref(),
-    );
+    let clients = hls_upload_clients(report.engine.hls_upload_trust_roots());
     let client = if request.fresh_connection || avoid_pool {
         &clients.fresh
     } else {
