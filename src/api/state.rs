@@ -35,6 +35,7 @@ mod ingests;
 mod media;
 mod notifications;
 mod observability;
+mod settings;
 mod shares;
 
 pub const MAX_NAME_LEN: usize = 256;
@@ -163,7 +164,7 @@ pub struct AppState {
     auth_service: AuthService,
     team_service: crate::application::services::TeamService,
     notify_service: NotifyService,
-    pub settings_service: SettingsService,
+    settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
     media_library_service: MediaLibraryService,
     pub agent_service: AgentService,
@@ -610,10 +611,7 @@ pub async fn recording_enabled_map(
     state: &AppState,
     pipeline_ids: &[String],
 ) -> std::collections::HashMap<String, bool> {
-    state
-        .settings_service
-        .recording_enabled_map(&state.engine, pipeline_ids)
-        .await
+    state.recording_enabled_by_pipeline(pipeline_ids).await
 }
 
 #[cfg(test)]

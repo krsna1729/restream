@@ -117,7 +117,7 @@ async fn jobs_response_json(
         return Vec::new();
     }
 
-    let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
+    let jobs = state.settings_jobs().await.unwrap_or_default();
     if wants_latest_jobs(query) {
         view_models::latest_job_response_json_list(&jobs)
     } else {
@@ -197,17 +197,9 @@ pub async fn config_get_handler(
         return response;
     }
 
-    let ingest_host = state
-        .settings_service
-        .get_ingest_host_raw()
-        .await
-        .unwrap_or_default();
+    let ingest_host = state.ingest_host_raw().await.unwrap_or_default();
     let effective_ingest_host = effective_ingest_host(&ingest_host);
-    let raw_pipelines = state
-        .settings_service
-        .list_pipelines()
-        .await
-        .unwrap_or_default();
+    let raw_pipelines = state.settings_pipelines().await.unwrap_or_default();
 
     let mut pipelines = Vec::with_capacity(raw_pipelines.len());
     for pipeline in &raw_pipelines {
@@ -238,8 +230,7 @@ pub async fn config_get_handler(
     };
     let dashboard_password_change_recommended = dashboard_password_change_recommended(
         state
-            .settings_service
-            .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
+            .settings_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
             .await
             .unwrap_or(None),
     );
@@ -274,13 +265,13 @@ pub async fn config_patch_handler(
     };
 
     if let Some(ref name) = payload.server_name
-        && state.settings_service.set_server_name(name).await.is_err()
+        && state.set_server_name(name).await.is_err()
     {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
     if let Some(ref host) = payload.ingest_host
-        && state.settings_service.set_ingest_host(host).await.is_err()
+        && state.set_ingest_host(host).await.is_err()
     {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -288,12 +279,7 @@ pub async fn config_patch_handler(
     // Normalize and validate before persistence so every downstream consumer
     // sees the same canonical security configuration.
     if let Some(sec) = normalized.ingest_security {
-        if state
-            .settings_service
-            .save_ingest_security_config(&sec)
-            .await
-            .is_err()
-        {
+        if state.save_ingest_security_config(&sec).await.is_err() {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         state.update_ingest_security_config(sec);
@@ -301,7 +287,6 @@ pub async fn config_patch_handler(
 
     if let Some(ref recording_settings) = payload.recording_settings
         && state
-            .settings_service
             .save_recording_settings(recording_settings)
             .await
             .is_err()
@@ -311,8 +296,7 @@ pub async fn config_patch_handler(
 
     if let Some(raw_json) = normalized.srt_ingest_json {
         if state
-            .settings_service
-            .set_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
+            .set_settings_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
             .await
             .is_err()
         {
@@ -324,10 +308,7 @@ pub async fn config_patch_handler(
     }
 
     if let Some(ref profiles) = payload.transcode_profiles
-        && let Err(e) = state
-            .settings_service
-            .save_transcode_profiles(profiles)
-            .await
+        && let Err(e) = state.save_transcode_profiles(profiles).await
     {
         warn!(err = %e, "failed to save transcode profiles");
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();
