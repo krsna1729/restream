@@ -202,7 +202,7 @@ async fn serve(
         lifecycle.clone(),
         engine.clone(),
         state.reconcile_handle(),
-        state.runtime_state.clone(),
+        state.runtime_state_handle(),
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
@@ -352,7 +352,7 @@ fn spawn_runtime_event_consumer(
     config: &AppConfig,
 ) {
     let requests = state.reconcile_handle();
-    let runtime_state = state.runtime_state.clone();
+    let runtime_state = state.runtime_state_handle();
     let disconnect_grace =
         std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
     // Shared so a restart after a panic resumes the same channel; a tokio
@@ -378,7 +378,7 @@ fn spawn_state_loops(
 ) {
     supervised_task::spawn_supervised("runtime_state_projector", {
         let (hub, db, engine, stop) = (
-            state.runtime_state.clone(),
+            state.runtime_state_handle(),
             state.db.clone(),
             state.engine.clone(),
             stop.clone(),
@@ -397,7 +397,7 @@ fn spawn_state_loops(
     supervised_task::spawn_supervised("fleet_sampler", {
         let (history, hub, db, engine, config, stop) = (
             state.fleet_history_sampler_handle(),
-            state.runtime_state.clone(),
+            state.runtime_state_handle(),
             state.db.clone(),
             state.engine.clone(),
             config.clone(),
@@ -418,7 +418,7 @@ fn spawn_state_loops(
     supervised_task::spawn_supervised("flight_recorder", {
         let (recorder, hub, db, engine, stop) = (
             state.flight_recorder_sampler_handle(),
-            state.runtime_state.clone(),
+            state.runtime_state_handle(),
             state.db.clone(),
             state.engine.clone(),
             stop.clone(),

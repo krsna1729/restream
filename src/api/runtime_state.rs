@@ -14,8 +14,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::state::{AppState, require_authenticated};
-use crate::application::runtime_state::hub::Since;
-use crate::application::runtime_state::{RuntimeState, StateDelta};
 
 pub async fn v1_state_handler(
     State(state): State<Arc<AppState>>,
@@ -24,34 +22,12 @@ pub async fn v1_state_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    state
-        .runtime_state
-        .refresh_on_demand(&state.db, &state.engine)
-        .await;
-    Json(state.runtime_state.snapshot().await).into_response()
+    Json(state.refresh_runtime_snapshot().await).into_response()
 }
 
 #[derive(Deserialize)]
 pub struct StateStreamQuery {
     since: Option<String>,
-}
-
-fn snapshot_frame(snapshot: &RuntimeState) -> String {
-    format!(
-        "id: {}.{}\nevent: snapshot\ndata: {}\n\n",
-        snapshot.epoch,
-        snapshot.revision,
-        serde_json::to_string(snapshot).unwrap_or_default()
-    )
-}
-
-fn delta_frame(delta: &StateDelta) -> String {
-    format!(
-        "id: {}.{}\nevent: delta\ndata: {}\n\n",
-        delta.epoch,
-        delta.revision,
-        serde_json::to_string(delta).unwrap_or_default()
-    )
 }
 
 pub async fn v1_state_stream_handler(
@@ -68,81 +44,8 @@ pub async fn v1_state_stream_handler(
         .map(str::to_string)
         .or(query.since);
 
-    let hub = state.runtime_state.clone();
-    // Subscribe before reading history, so no delta falls between them.
-    let mut live = hub.subscribe();
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
-    let (pool, engine) = (state.db.clone(), state.engine.clone());
-
-    tokio::spawn(async move {
-        // With no client the projector is idle, so the held state may be
-        // old: bring it current first (still after subscribing). Connected
-        // now, the projector keeps it so.
-        hub.refresh_on_demand(&pool, &engine).await;
-        let mut sent_through = match since.as_deref() {
-            Some(token) => match hub.since(token).await {
-                Since::Deltas(deltas) => {
-                    let mut through = token
-                        .rsplit_once('.')
-                        .and_then(|(_, revision)| revision.parse().ok())
-                        .unwrap_or(0);
-                    for delta in deltas {
-                        through = delta.revision;
-                        if tx.send(delta_frame(&delta)).await.is_err() {
-                            return;
-                        }
-                    }
-                    through
-                }
-                Since::Resync => send_snapshot(&hub, &tx).await,
-            },
-            None => send_snapshot(&hub, &tx).await,
-        };
-        if sent_through == u64::MAX {
-            return;
-        }
-
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                delta = live.recv() => match delta {
-                    Ok(delta) => {
-                        if delta.revision <= sent_through {
-                            continue;
-                        }
-                        sent_through = delta.revision;
-                        if tx.send(delta_frame(&delta)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Missed deltas: start the client over from now.
-                        sent_through = send_snapshot(&hub, &tx).await;
-                        if sent_through == u64::MAX {
-                            return;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                },
-                _ = heartbeat.tick() => {
-                    // A named event, not an SSE comment: the client sees it
-                    // and can tell a quiet stream from a dead connection.
-                    if tx.send("event: heartbeat\ndata: {}\n\n".to_string()).await.is_err() {
-                        return;
-                    }
-                }
-                // Release the receiver (and the projector's cadence) once
-                // hyper drops the response body: at once when the client
-                // goes, since only HLS upload connections are served with
-                // half-close (`api::http_server`).
-                () = tx.closed() => return,
-                // Shutdown: end the stream so the HTTP drain is not held
-                // open by a response that never completes on its own.
-                () = hub.streams_closed() => return,
-            }
-        }
-    });
+    state.spawn_runtime_state_stream(since, tx);
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     let body = axum::body::Body::from_stream(futures_util::StreamExt::map(stream, |frame| {
@@ -158,17 +61,4 @@ pub async fn v1_state_stream_handler(
         body,
     )
         .into_response()
-}
-
-/// Sends the current snapshot; returns its revision, or `u64::MAX` when the
-/// client is gone.
-async fn send_snapshot(
-    hub: &crate::application::runtime_state::hub::StateHub,
-    tx: &tokio::sync::mpsc::Sender<String>,
-) -> u64 {
-    let snapshot = hub.snapshot().await;
-    match tx.send(snapshot_frame(&snapshot)).await {
-        Ok(()) => snapshot.revision,
-        Err(_) => u64::MAX,
-    }
 }

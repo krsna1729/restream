@@ -37,6 +37,7 @@ mod ingests;
 mod media;
 mod notifications;
 mod observability;
+mod runtime;
 mod settings;
 mod shares;
 
@@ -174,7 +175,7 @@ pub struct AppState {
     /// Mutation handlers persist, then ask the reconciler to converge here.
     reconcile: Arc<crate::application::topology::ReconcileRequests>,
     /// The revisioned runtime state behind `/api/v1/state`.
-    pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
+    runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     /// The fleet's sampled signals behind `/api/v1/fleet/history`.
     fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
     /// Each pipeline's recorded health behind
