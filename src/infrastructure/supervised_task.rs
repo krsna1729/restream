@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::error;
 
-use super::listener_supervisor::RestartBackoff;
+use super::restart_backoff::RestartBackoff;
 
 /// Spawns the loop `run` builds, rebuilding and restarting it after the
 /// listener restart backoff each time it panics.

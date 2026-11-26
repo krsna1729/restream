@@ -211,10 +211,11 @@ impl Listeners {
         // Shared so a restart after a panic resumes the same listeners; a
         // tokio Mutex is not poisoned by the panicking holder.
         let listeners = Arc::new(tokio::sync::Mutex::new(self));
-        let task = super::supervised_task::spawn_supervised("listener_supervisor", {
-            let listeners = listeners.clone();
-            move || supervise(listeners.clone(), shutdown.clone())
-        });
+        let task =
+            crate::infrastructure::supervised_task::spawn_supervised("listener_supervisor", {
+                let listeners = listeners.clone();
+                move || supervise(listeners.clone(), shutdown.clone())
+            });
         ListenerSupervision { listeners, task }
     }
 }

@@ -10,41 +10,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::{error, info};
 
-const RESTART_DELAY_MIN: Duration = Duration::from_secs(1);
-const RESTART_DELAY_MAX: Duration = Duration::from_secs(30);
-/// A listener that ran this long before exiting restarts at the minimum
-/// delay again.
-const HEALTHY_RUN: Duration = Duration::from_secs(60);
-
-/// Exponential restart delay: 1 s doubling to 30 s, reset after a healthy run.
-#[derive(Debug)]
-pub(super) struct RestartBackoff {
-    next_delay: Duration,
-}
-
-impl RestartBackoff {
-    pub(super) fn new() -> Self {
-        Self {
-            next_delay: RESTART_DELAY_MIN,
-        }
-    }
-
-    /// The delay before restarting a listener that ran for `ran`.
-    pub(super) fn on_exit(&mut self, ran: Duration) -> Duration {
-        if ran >= HEALTHY_RUN {
-            self.next_delay = RESTART_DELAY_MIN;
-        }
-        let delay = self.next_delay;
-        self.next_delay = (self.next_delay * 2).min(RESTART_DELAY_MAX);
-        delay
-    }
-}
+use crate::infrastructure::restart_backoff::RestartBackoff;
 
 pub(super) struct SupervisedListener {
     name: &'static str,
@@ -120,16 +91,7 @@ impl SupervisedListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn restart_delay_doubles_to_the_cap_and_resets_after_a_healthy_run() {
-        let mut backoff = RestartBackoff::new();
-        let quick = Duration::from_secs(1);
-        let delays: Vec<u64> = (0..7).map(|_| backoff.on_exit(quick).as_secs()).collect();
-        assert_eq!(delays, [1, 2, 4, 8, 16, 30, 30]);
-        assert_eq!(backoff.on_exit(HEALTHY_RUN), RESTART_DELAY_MIN);
-        assert_eq!(backoff.on_exit(quick), Duration::from_secs(2));
-    }
+    use std::time::Duration;
 
     /// A listener task that ends is respawned after its delay, counted, and
     /// the supervisor never resolves `exited` while it is down.
