@@ -17,6 +17,7 @@ pub(crate) struct HlsPreview<'a> {
 }
 
 /// HLS preview limits the agent context reports.
+#[cfg(feature = "agent-plane")]
 pub(crate) struct HlsLimits {
     pub min_segment_secs: f64,
     pub segment_capacity_bytes: usize,
@@ -86,6 +87,7 @@ impl AppState {
     }
 
     /// The pipeline's HLS dependency state.
+    #[cfg(feature = "agent-plane")]
     pub(crate) async fn hls_dependency_snapshot(
         &self,
         pipeline_id: &str,
@@ -94,6 +96,7 @@ impl AppState {
     }
 
     /// The file ingest's dependency state.
+    #[cfg(feature = "agent-plane")]
     pub(crate) async fn file_ingest_dependency_snapshot(
         &self,
         ingest_id: &str,
@@ -102,6 +105,7 @@ impl AppState {
     }
 
     /// Whether the pipeline is recording.
+    #[cfg(feature = "agent-plane")]
     pub(crate) async fn is_recording_active(&self, pipeline_id: &str) -> bool {
         self.engine.is_recording_active(pipeline_id).await
     }
@@ -199,6 +203,7 @@ impl AppState {
     }
 
     /// HLS limits the agent context reports.
+    #[cfg(feature = "agent-plane")]
     pub(crate) fn hls_limits(&self) -> HlsLimits {
         HlsLimits {
             min_segment_secs: self.engine.config.hls_min_segment_ms,
