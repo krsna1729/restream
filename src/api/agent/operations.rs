@@ -42,7 +42,7 @@ pub async fn agent_operation_create_handler(
         return response;
     }
     let plan = build_agent_plan(&state, request.plan_request()).await;
-    let result = match state.agent_execution.create(request, plan) {
+    let result = match state.create_agent_operation(request, plan) {
         Ok(result) => result,
         Err(err) => return operation_store_error(err),
     };
@@ -75,7 +75,7 @@ pub async fn agent_operation_get_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match state.agent_execution.get(&operation_id) {
+    match state.agent_operation(&operation_id) {
         Some(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
         None => operation_store_error(restream_agent::execution::OperationStoreError::NotFound),
     }
@@ -103,17 +103,16 @@ pub async fn agent_operation_apply_handler(
         return response;
     }
     let changed = state
-        .agent_execution
-        .get(&operation_id)
+        .agent_operation(&operation_id)
         .map(|record| changed_pipelines(&record.request))
         .unwrap_or_default();
     let baseline = apply_baseline(&state, &changed).await;
-    let record = match state.agent_execution.start_apply(&operation_id, baseline) {
+    let record = match state.start_agent_apply(&operation_id, baseline) {
         Ok(record) => record,
         Err(err) => return operation_store_error(err),
     };
     match execute_operation(&state, &record).await {
-        Ok(result) => match state.agent_execution.complete_apply(
+        Ok(result) => match state.complete_agent_apply(
             &operation_id,
             result.state_transitions,
             result.progress_snapshots,
@@ -122,7 +121,7 @@ pub async fn agent_operation_apply_handler(
             Some(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
             None => operation_store_error(restream_agent::execution::OperationStoreError::NotFound),
         },
-        Err(err) => match state.agent_execution.fail_apply(&operation_id, err.clone()) {
+        Err(err) => match state.fail_agent_apply(&operation_id, err.clone()) {
             Some(record) => (
                 StatusCode::BAD_REQUEST,
                 Json(restream_agent::execution::public_record(&record)),
@@ -210,10 +209,7 @@ async fn execute_operation(
     record: &restream_agent::execution::OperationRecord,
 ) -> Result<OperationApplyOutcome, String> {
     let request = record.request.plan_request();
-    let catalog = state
-        .agent_service
-        .try_load_pipeline_output_catalog()
-        .await?;
+    let catalog = state.try_agent_output_catalog().await?;
     let validation =
         restream_agent::plane::validate_plan(&request, &catalog.pipelines, &catalog.outputs);
     if !validation.valid {
@@ -288,8 +284,7 @@ async fn apply_change(
         other => return Err(format!("unsupported change kind '{other}'")),
     };
     let outcome = state
-        .agent_service
-        .apply_output_mutation(&state.reconcile, pipeline_id, mutation)
+        .apply_agent_output_mutation(pipeline_id, mutation)
         .await?;
     Ok(mutation_json(&change.kind, pipeline_id, outcome))
 }
@@ -332,7 +327,6 @@ async fn prepare_update_output(
 ) -> Result<AgentOutputMutation, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
     let existing = state
-        .agent_service
         .load_output_for_mutation(pipeline_id, output_id)
         .await?;
     let name = change.name.as_deref().unwrap_or(&existing.name);
@@ -540,7 +534,7 @@ fn verify_output_upsert(
 
 #[cfg(feature = "agent-execution")]
 async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::response::Response {
-    let record = match state.agent_execution.get(operation_id) {
+    let record = match state.agent_operation(operation_id) {
         Some(record) => record,
         None => {
             return operation_store_error(restream_agent::execution::OperationStoreError::NotFound);
@@ -552,10 +546,7 @@ async fn verify_operation_by_id(state: &AppState, operation_id: &str) -> axum::r
         return operation_store_error(err);
     }
     let verification = verify_operation(state, &record).await;
-    match state
-        .agent_execution
-        .complete_verify(operation_id, verification)
-    {
+    match state.complete_agent_verify(operation_id, verification) {
         Ok(record) => Json(restream_agent::execution::public_record(&record)).into_response(),
         Err(err) => operation_store_error(err),
     }
@@ -566,7 +557,7 @@ async fn verify_operation(
     state: &AppState,
     record: &restream_agent::execution::OperationRecord,
 ) -> serde_json::Value {
-    let catalog = state.agent_service.load_pipeline_output_catalog().await;
+    let catalog = state.agent_output_catalog().await;
     let pipelines = catalog.pipelines;
     let pipeline_ids = pipelines
         .iter()
@@ -743,7 +734,7 @@ async fn apply_baseline(
     state: &AppState,
     changed: &std::collections::HashSet<String>,
 ) -> restream_agent::execution::ApplyBaseline {
-    let catalog = state.agent_service.load_pipeline_output_catalog().await;
+    let catalog = state.agent_output_catalog().await;
     let pipeline_ids = catalog
         .pipelines
         .iter()
@@ -920,11 +911,10 @@ mod tests {
             }))
             .unwrap();
         let plan = build_agent_plan(&state, request.plan_request()).await;
-        let created = state.agent_execution.create(request, plan).unwrap();
+        let created = state.create_agent_operation(request, plan).unwrap();
         let id = created.operation["operationId"].as_str().unwrap();
         state
-            .agent_execution
-            .approve(
+            .approve_agent_operation(
                 id,
                 &restream_agent::execution::Approver {
                     username: "test".into(),
@@ -937,8 +927,7 @@ mod tests {
             )
             .unwrap();
         let applying = state
-            .agent_execution
-            .start_apply(id, ApplyBaseline::default())
+            .start_agent_apply(id, ApplyBaseline::default())
             .unwrap();
         assert_eq!(applying.status, OperationStatus::Applying);
         assert!(applying.execution_result.is_none());
@@ -951,8 +940,7 @@ mod tests {
         let mut verify = std::pin::pin!(verify_operation_by_id(&state, id));
         let first_poll = futures_util::poll!(verify.as_mut());
         state
-            .agent_execution
-            .complete_apply(
+            .complete_agent_apply(
                 id,
                 Vec::new(),
                 Vec::new(),
@@ -972,7 +960,7 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["code"], "alreadyApplying");
-        let applied = state.agent_execution.get(id).unwrap();
+        let applied = state.agent_operation(id).unwrap();
         assert_eq!(applied.status, OperationStatus::Applied);
         assert!(applied.verification_result.is_none());
         assert_eq!(

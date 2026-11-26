@@ -623,7 +623,7 @@ pub async fn outputs_delete_handler(
     if !deleted {
         return Ok((StatusCode::NOT_FOUND, "Output not found").into_response());
     }
-    state.reconcile.wake();
+    state.wake_reconciler();
     Ok(Json(serde_json::json!({"message": "Output deleted"})).into_response())
 }
 

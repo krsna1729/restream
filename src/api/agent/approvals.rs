@@ -69,9 +69,7 @@ pub async fn agent_operation_approve_handler(
         Ok(approver) => approver,
         Err(response) => return response,
     };
-    let result = state
-        .agent_execution
-        .approve(&operation_id, &approver, request);
+    let result = state.approve_agent_operation(&operation_id, &approver, request);
     approval_response(result, &approver)
 }
 
@@ -87,10 +85,7 @@ pub async fn agent_action_approve_handler(
         Ok(approver) => approver,
         Err(response) => return response,
     };
-    let result =
-        state
-            .agent_execution
-            .approve_action(&operation_id, index, &approver, request.reason);
+    let result = state.approve_agent_action(&operation_id, index, &approver, request.reason);
     approval_response(result, &approver)
 }
 

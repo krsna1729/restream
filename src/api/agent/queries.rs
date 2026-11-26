@@ -73,7 +73,7 @@ pub async fn agent_investigation_handler(
         return response;
     }
 
-    let catalog = state.agent_service.load_pipeline_output_catalog().await;
+    let catalog = state.agent_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
     let pipeline_exists = request
@@ -279,7 +279,7 @@ pub(super) async fn build_agent_plan(
     state: &AppState,
     request: restream_agent_contract::PlanRequest,
 ) -> restream_agent::plane::PlanResponse {
-    let catalog = state.agent_service.load_pipeline_output_catalog().await;
+    let catalog = state.agent_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
     let (current_graph, ingest_codec) = if let Some(pid) = request.pipeline_id.as_deref()

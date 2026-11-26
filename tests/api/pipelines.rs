@@ -815,7 +815,7 @@ async fn a_successful_mutation_requests_a_reconcile_pass() {
         log_broadcast,
     ));
     let app = api::create_router(state.clone());
-    let due = || state.reconcile.take_due(std::time::Instant::now());
+    let due = || state.take_due_reconcile_requests(std::time::Instant::now());
     let cookie = login(&app).await;
     let _ = due(); // the login itself was a successful POST
 

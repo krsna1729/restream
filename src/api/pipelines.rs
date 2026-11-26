@@ -408,7 +408,7 @@ pub async fn pipelines_delete_handler(
 
     match state.pipeline_service.delete_pipeline(&id).await {
         Ok(true) => {
-            state.reconcile.wake();
+            state.wake_reconciler();
             refresh_srt_ingest_policy_store(&state).await;
             // Its watch links go with it.
             state.forget_pipeline_share_links(&id).await;
