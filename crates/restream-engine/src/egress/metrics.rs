@@ -285,6 +285,49 @@ impl ShardMetrics {
             .loop_duration_sum_us
             .saturating_add(duration.as_micros() as u64);
     }
+
+    /// Fold one shard-loop iteration: its duration, batch counts and gauges,
+    /// and the backend's running totals.
+    pub(crate) fn record_iteration(&mut self, iteration: LoopIteration) {
+        self.record_loop_iteration(iteration.duration);
+        self.commands_processed = self
+            .commands_processed
+            .saturating_add(iteration.commands as u64);
+        self.timers_processed = self
+            .timers_processed
+            .saturating_add(iteration.timers as u64);
+        self.pending_timers = u32::try_from(iteration.pending_timers).unwrap_or(u32::MAX);
+        self.observe_ready_depth(u32::try_from(iteration.ready_depth).unwrap_or(u32::MAX));
+        self.media_ticks = self.media_ticks.saturating_add(1);
+        self.feed_resyncs = iteration.feed_resyncs;
+        self.budget_exhaustions = iteration.budget_exhaustions;
+    }
+
+    /// Count one ready batch's backend visits.
+    pub(crate) fn record_ready_visits(&mut self, visits: usize) {
+        self.ready_visits = self.ready_visits.saturating_add(visits as u64);
+    }
+
+    /// Count ready wakes dropped because the ready backlog was full.
+    pub(crate) fn record_ready_overflows(&mut self, dropped: usize) {
+        self.ready_overflows = self.ready_overflows.saturating_add(dropped as u64);
+    }
+
+    /// Count one enqueue a bounded shard queue refused.
+    pub(crate) fn record_queue_overflow(&mut self) {
+        self.queue_overflows = self.queue_overflows.saturating_add(1);
+    }
+}
+
+/// One shard-loop iteration, as [`ShardMetrics::record_iteration`] folds it.
+pub(crate) struct LoopIteration {
+    pub(crate) duration: Duration,
+    pub(crate) commands: usize,
+    pub(crate) timers: usize,
+    pub(crate) pending_timers: usize,
+    pub(crate) ready_depth: usize,
+    pub(crate) feed_resyncs: u64,
+    pub(crate) budget_exhaustions: u64,
 }
 
 // ---------------------------------------------------------------------------
