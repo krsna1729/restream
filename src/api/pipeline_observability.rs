@@ -122,7 +122,7 @@ pub async fn pipeline_alerts_handler(
 
     let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
-    state.alert_tracker.stamp_only(&mut alert_list);
+    state.stamp_alerts(&mut alert_list);
     Json(serde_json::json!({
         "generatedAt": snapshot_generated_at(&snapshot),
         "alerts": alert_list,
@@ -166,7 +166,7 @@ pub async fn pipeline_diagnostics_context_handler(
             .await;
 
     let mut alert_list = alerts::derive_alerts(&health);
-    state.alert_tracker.stamp_only(&mut alert_list);
+    state.stamp_alerts(&mut alert_list);
     let recent_events = state.engine.recent_events(100, Some(&pipeline_id));
     let recent_logs = crate::application::logs::list_logs(
         &state.db,
@@ -258,7 +258,7 @@ pub async fn v1_pipeline_summary_handler(
     // The summary lacks stage, reader and fabric inputs: an alert it does
     // not derive may still be open, so it stamps and resolves nothing.
     let mut alert_list = alerts::derive_alerts(&snapshot);
-    state.alert_tracker.stamp_only(&mut alert_list);
+    state.stamp_alerts(&mut alert_list);
 
     let input_status = pip["input"]["status"].as_str().unwrap_or("off");
     let bitrate_kbps = pip["input"]["bitrateKbps"].as_f64();

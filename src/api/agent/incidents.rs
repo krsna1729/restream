@@ -51,8 +51,7 @@ pub async fn agent_incident_explanation_handler(
                 .is_none_or(|first| alert.first_seen.as_ref() == Some(first))
     };
     let open = state
-        .alert_tracker
-        .latest()
+        .latest_alerts()
         .unwrap_or_default()
         .alerts
         .into_iter()
@@ -60,8 +59,7 @@ pub async fn agent_incident_explanation_handler(
         .map(|alert| (alert, now_ms));
     let incident = open.or_else(|| {
         state
-            .alert_tracker
-            .resolved_since(std::time::SystemTime::UNIX_EPOCH)
+            .resolved_alerts_since(std::time::SystemTime::UNIX_EPOCH)
             .alerts
             .into_iter()
             .rev()
