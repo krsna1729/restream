@@ -3,6 +3,15 @@
 //! TCP admission, ingest sessions, and egress publication are separate owners.
 //! The public entry points remain re-exported here for callers.
 
+// The client socket reads publisher bytes (isolation audit F6).
+#[deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+mod connection;
 mod egress_metadata;
 #[cfg(fuzzing)]
 #[doc(hidden)]

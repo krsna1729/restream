@@ -105,7 +105,7 @@ async fn request_publish(
     engine: &Arc<MediaEngine>,
     key: &str,
 ) -> (
-    tokio::sync::mpsc::Sender<super::ingest::RtmpControlCommand>,
+    tokio::sync::mpsc::Sender<super::connection::RtmpControlCommand>,
     tokio::task::JoinHandle<()>,
     bool,
 ) {
@@ -119,7 +119,7 @@ async fn request_publish(
     ));
     let (reply, response) = tokio::sync::oneshot::channel();
     commands
-        .send(super::ingest::RtmpControlCommand::PublishRequested {
+        .send(super::connection::RtmpControlCommand::PublishRequested {
             stream_key: key.to_string(),
             client_ip: "127.0.0.1".to_string(),
             client_addr: "127.0.0.1:1".to_string(),
@@ -129,7 +129,7 @@ async fn request_publish(
         .unwrap();
     let accepted = matches!(
         response.await.unwrap(),
-        super::ingest::PublishAuthorization::Accepted(_)
+        super::connection::PublishAuthorization::Accepted(_)
     );
     (commands, session, accepted)
 }
@@ -143,7 +143,7 @@ async fn a_panicking_control_session_frees_its_stream_key() {
     assert!(accepted, "the first publish is accepted");
     let (reply, _response) = tokio::sync::oneshot::channel();
     commands
-        .send(super::ingest::RtmpControlCommand::PlayRequested {
+        .send(super::connection::RtmpControlCommand::PlayRequested {
             stream_key: "key-control-panic".to_string(),
             client_ip: "127.0.0.1".to_string(),
             reply,
