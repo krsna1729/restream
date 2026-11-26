@@ -8,51 +8,7 @@ use restream_domain::domain::state::DesiredOutputState;
 use restream_domain::models::{Output, Pipeline};
 use restream_engine::engine::MediaEngine;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutputRetryPolicy {
-    pub max_retries: u32,
-    pub base_ms: u64,
-    pub max_ms: u64,
-}
-
-impl OutputRetryPolicy {
-    /// Backoff delay before the next retry attempt, in milliseconds.
-    ///
-    /// `jitter_key` (in production, the output id) desynchronizes retries.
-    /// Without jitter, outputs that fail their first dispatch attempt in the
-    /// same narrow window (e.g. a burst of output creates hitting a busy
-    /// shard) all compute the exact same delay and retry in a second,
-    /// equally-synchronized wave against the same still-busy shard. Equal
-    /// jitter -- half the computed delay fixed, half spread uniformly across
-    /// `[0, half]` -- desynchronizes those retries while still guaranteeing
-    /// at least half the intended backoff (unlike full jitter, which can
-    /// degenerate to a near-zero wait right after a failure). The jitter is a
-    /// deterministic hash of `(jitter_key, shift)`, not a fresh random draw
-    /// per call, so repeated calls against the same failure (e.g. successive
-    /// reconciler ticks polling `remaining_ms`) return a stable value instead
-    /// of jittering around on every poll. Hashing the clamped `shift` rather
-    /// than raw `retries` keeps retries beyond the shift limit -- which
-    /// already clamp to the same delay -- on the same jitter too.
-    pub fn backoff_ms(&self, retries: u32, jitter_key: &str) -> u64 {
-        let shift = retries.min(16);
-        let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
-        let capped = self.base_ms.saturating_mul(multiplier).min(self.max_ms);
-        let half = capped / 2;
-        half + (jitter_fraction(jitter_key, shift) * half as f64) as u64
-    }
-}
-
-/// Deterministic pseudo-random fraction in `[0, 1)` derived from `key` and
-/// `retries`. Not a real RNG -- the goal is a stable, well-spread value per
-/// `(key, retries)` pair so different outputs desynchronize, not
-/// unpredictability.
-fn jitter_fraction(key: &str, retries: u32) -> f64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
-    retries.hash(&mut hasher);
-    (hasher.finish() as f64) / (u64::MAX as f64)
-}
+use crate::config::OutputRetryPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputFailureWindow {

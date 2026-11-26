@@ -1,10 +1,10 @@
 //! Centralized application configuration.
 //! Reads environment variables once at startup and stores them in a typed struct.
 
-use crate::application::capacity::{CapacityLimits, LimitSource, LimitSources};
 use restream_engine::config::EngineConfig;
 use restream_engine::config::env::{env_bool, env_present, env_u32, env_u64, env_usize, env_var};
 use restream_engine::host_capacity::HostCapacity;
+use serde::Serialize;
 
 /// Default location for media-library files relative to the process working directory.
 ///
@@ -73,13 +73,117 @@ impl RuntimeTuning {
         self.output_retry_policy().backoff_ms(retries, jitter_key)
     }
 
-    pub(crate) fn output_retry_policy(&self) -> crate::application::reconcile::OutputRetryPolicy {
-        crate::application::reconcile::OutputRetryPolicy {
+    pub(crate) fn output_retry_policy(&self) -> OutputRetryPolicy {
+        OutputRetryPolicy {
             max_retries: self.output_max_retries,
             base_ms: self.output_retry_base_ms,
             max_ms: self.output_retry_max_ms,
         }
     }
+}
+
+/// The configured output reconnect policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputRetryPolicy {
+    pub max_retries: u32,
+    pub base_ms: u64,
+    pub max_ms: u64,
+}
+
+impl OutputRetryPolicy {
+    /// Backoff delay before the next retry attempt, in milliseconds.
+    ///
+    /// `jitter_key` (in production, the output id) desynchronizes retries.
+    /// Without jitter, outputs that fail their first dispatch attempt in the
+    /// same narrow window (e.g. a burst of output creates hitting a busy
+    /// shard) all compute the exact same delay and retry in a second,
+    /// equally-synchronized wave against the same still-busy shard. Equal
+    /// jitter -- half the computed delay fixed, half spread uniformly across
+    /// `[0, half]` -- desynchronizes those retries while still guaranteeing
+    /// at least half the intended backoff (unlike full jitter, which can
+    /// degenerate to a near-zero wait right after a failure). The jitter is a
+    /// deterministic hash of `(jitter_key, shift)`, not a fresh random draw
+    /// per call, so repeated calls against the same failure (e.g. successive
+    /// reconciler ticks polling `remaining_ms`) return a stable value instead
+    /// of jittering around on every poll. Hashing the clamped `shift` rather
+    /// than raw `retries` keeps retries beyond the shift limit -- which
+    /// already clamp to the same delay -- on the same jitter too.
+    pub fn backoff_ms(&self, retries: u32, jitter_key: &str) -> u64 {
+        let shift = retries.min(16);
+        let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
+        let capped = self.base_ms.saturating_mul(multiplier).min(self.max_ms);
+        let half = capped / 2;
+        half + (jitter_fraction(jitter_key, shift) * half as f64) as u64
+    }
+}
+
+/// Deterministic pseudo-random fraction in `[0, 1)` derived from `key` and
+/// `retries`. Not a real RNG -- the goal is a stable, well-spread value per
+/// `(key, retries)` pair so different outputs desynchronize, not
+/// unpredictability.
+fn jitter_fraction(key: &str, retries: u32) -> f64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    retries.hash(&mut hasher);
+    (hasher.finish() as f64) / (u64::MAX as f64)
+}
+
+/// Host-specific service-center capacities.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityLimits {
+    pub ingress_pps: f64,
+    pub egress_pps: f64,
+    pub nic_bps: f64,
+    pub memory_bytes: f64,
+    pub ffmpeg_stages: f64,
+    pub disk_bps: f64,
+}
+
+impl CapacityLimits {
+    /// Conservative starting calibration. Deployments can replace these
+    /// values through `AppConfig::from_env` after measuring their host.
+    pub fn from_parallelism(parallelism: u32) -> Self {
+        let cores = f64::from(parallelism.max(1));
+        Self {
+            ingress_pps: cores * 100_000.0,
+            egress_pps: cores * 250_000.0,
+            nic_bps: 10_000_000_000.0,
+            memory_bytes: 1_000_000_000.0,
+            ffmpeg_stages: cores,
+            disk_bps: 500_000_000.0,
+        }
+    }
+}
+
+impl Default for CapacityLimits {
+    fn default() -> Self {
+        Self::from_parallelism(HostCapacity::get().cpus as u32)
+    }
+}
+
+/// Where each limit comes from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitSource {
+    /// `CapacityLimits::from_parallelism`: a conservative prior from the CPU
+    /// count, not a measurement of this host.
+    #[default]
+    Prior,
+    /// Set by the operator (`RESTREAM_CAPACITY_*`), presumably measured.
+    Configured,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitSources {
+    pub ingress_pps: LimitSource,
+    pub egress_pps: LimitSource,
+    pub nic_bps: LimitSource,
+    pub memory_bytes: LimitSource,
+    pub ffmpeg_stages: LimitSource,
+    pub disk_bps: LimitSource,
 }
 
 /// The VAPID contact when `RESTREAM_PUSH_SUBJECT` is unset or not a
