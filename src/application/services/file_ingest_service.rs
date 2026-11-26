@@ -13,7 +13,6 @@ use crate::application::ingest::{
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
-use crate::application::pipeline_inputs::read_pipeline_input_by_stream_key;
 use crate::db::{self, DeadlineDb};
 use restream_domain::models::{Ingest, Pipeline};
 use restream_engine::engine::MediaEngine;
@@ -21,8 +20,8 @@ use restream_engine::external_file_ingest::{
     ExternalFileIngestRuntime, ExternalFileIngestSource, start_external_file_ingest,
 };
 
-use super::error::{ServiceError, ServiceResult};
 use super::pipeline_service::PipelineService;
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 /// Transport-facing payload for creating or updating one persisted file ingest
 /// configuration before it is translated into the domain/storage model.
@@ -227,7 +226,13 @@ impl FileIngestService {
             .iter()
             .map(|filename| Self::resolve_media_file_path(media_dir, filename))
             .collect::<Result<Vec<_>, _>>()?;
-        let input = read_pipeline_input_by_stream_key(&self.db, &ingest.stream_key)
+        let input = self
+            .db
+            .read(|pool| {
+                db::with_busy_retry(|| {
+                    db::get_pipeline_input_by_stream_key(pool, &ingest.stream_key)
+                })
+            })
             .await
             .map_err(|error| FileIngestStartError::PipelineStore(error.to_string()))?
             .ok_or(FileIngestStartError::MissingPipelineForStreamKey)?;

@@ -5,7 +5,7 @@
 
 use crate::db::DeadlineDb;
 
-use crate::application::services::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::state::DesiredOutputState;
 use restream_domain::models::Output;

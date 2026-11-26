@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::application::services::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 use crate::db::{self, DeadlineDb};
 use restream_domain::domain::pipeline_input::PipelineInput;
 use restream_domain::domain::srt_ingest::{

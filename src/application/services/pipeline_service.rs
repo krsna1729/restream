@@ -6,7 +6,7 @@ use crate::application::catalog_auth::CatalogAuth;
 use crate::db::{self, DeadlineDb};
 use restream_domain::models::Pipeline;
 
-use super::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 /// Application service for pipeline CRUD and read operations.
 /// Each write runs with a reload of the ingest admission index as one task

@@ -3,7 +3,7 @@
 use crate::db::{self, DeadlineDb};
 use restream_domain::models::Ingest;
 
-use super::error::{ServiceError, ServiceResult};
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 #[derive(Clone)]
 /// Application service for ingest catalog reads and mutations.

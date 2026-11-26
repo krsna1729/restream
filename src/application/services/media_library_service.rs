@@ -19,9 +19,9 @@ use restream_domain::models::Pipeline;
 use restream_engine::engine::MediaEngine;
 use restream_engine::recording::RecordingMetadataReporter;
 
-use super::error::{ServiceError, ServiceResult};
 use super::ingest_service::IngestService;
 use super::pipeline_service::PipelineService;
+use crate::application::service_error::{ServiceError, ServiceResult};
 
 /// Posters extracted at once; the rest wait their turn.
 const POSTER_CONCURRENCY: usize = 2;
