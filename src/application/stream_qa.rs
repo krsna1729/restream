@@ -4,13 +4,12 @@
 
 use std::sync::Arc;
 
+use crate::application::housekeeping_keys::STREAM_QA_ENABLED_META_PREFIX;
 use crate::application::reconcile::{
     HousekeepingSwitches, RecordingAction, decide_recording_action,
 };
 use restream_domain::models::Pipeline;
 use restream_engine::engine::MediaEngine;
-
-pub const STREAM_QA_ENABLED_META_PREFIX: &str = "stream_qa_enabled:";
 
 pub fn stream_qa_enabled_meta_key(pipeline_id: &str) -> String {
     format!("{STREAM_QA_ENABLED_META_PREFIX}{pipeline_id}")

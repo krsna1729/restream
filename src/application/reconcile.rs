@@ -188,16 +188,16 @@ pub struct HousekeepingSwitches {
 impl HousekeepingSwitches {
     /// The key prefixes [`Self::from_meta`] reads.
     pub const META_PREFIXES: [&'static str; 3] = [
-        crate::application::recording::RECORDING_ENABLED_META_PREFIX,
-        crate::application::stream_qa::STREAM_QA_ENABLED_META_PREFIX,
-        crate::application::recording::RECORDING_SETTINGS_META_KEY,
+        crate::application::housekeeping_keys::RECORDING_ENABLED_META_PREFIX,
+        crate::application::housekeeping_keys::STREAM_QA_ENABLED_META_PREFIX,
+        crate::application::housekeeping_keys::RECORDING_SETTINGS_META_KEY,
     ];
 
     pub fn from_meta(rows: Vec<(String, Option<String>)>) -> Self {
-        use crate::application::recording::{
+        use crate::application::housekeeping_keys::{
             RECORDING_ENABLED_META_PREFIX, RECORDING_SETTINGS_META_KEY,
+            STREAM_QA_ENABLED_META_PREFIX,
         };
-        use crate::application::stream_qa::STREAM_QA_ENABLED_META_PREFIX;
 
         let mut switches = Self::default();
         for (key, value) in rows {

@@ -71,12 +71,30 @@ the [assurance roadmap](assurance-roadmap.md).
   `hls::fmp4` owns `BufferedSample` in `codec`; egress `command` and `leaf`
   share `FeedId`/`OutputId` in `egress::ids`; `metrics` owns the delivery
   floor instead of importing it from `delivery`; and `TcpConnectAttempt`
-  belongs to the Compio TCP owner. The 32-module engine cycle and the
-  16-module `test_harness` cycle still need their own design, not a mechanical
-  import shuffle.
-- Why open: the remaining cycles are wider than the seven removed pairs, and
-  the engine and harness cycles need an ownership boundary rather than a
-  move of one shared item.
+  belongs to the Compio TCP owner. Later removals: the HLS session owns its
+  applied-init state; the push registry takes the pull spawner instead of
+  importing `hls_pull`; `config` owns the capacity and retry value types; and
+  the recording/stream-check meta keys sit in one leaf module for the
+  reconciler and their owners. The 32-module engine cycle and the 16-module
+  `test_harness` cycle still need their own design, not a mechanical import
+  shuffle.
+- Design: the engine modules target this order, low to high: vocabulary and
+  configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`);
+  runtime storage (`engine_registries`, `stage_registry_access`,
+  `ingest_lease`, `stage_lease`); media primitives (`stage_runtime`,
+  `audio_router`, `external_transcoder`, `ingest_publisher`, `hls`);
+  protocol paths (`rtmp`, `srt`, `moq`, `hls_ingest`, `hls_pull`);
+  `egress`; and finally the `engine`/`engine_*` composition modules and
+  snapshots. Lower modules must not import `engine` or `engine_*`. A
+  subsystem that needs engine state takes a scoped handle (event log, stage
+  manager, egress context) instead of `Arc<MediaEngine>`. The reported
+  32-module cycle is the union of those subsystem back-references, so it
+  closes only when the last one is gone; each slice removes one back-reference
+  and is checked with the same scoped audit. The harness cycle follows after
+  the production cycles.
+- Why open: the remaining cycles are wider than the removed pairs, and the
+  engine and harness cycles need ownership boundaries rather than a move of
+  one shared item.
 - Gates: scoped `deslop-please` reports no cycle for each changed area;
   affected lifecycle/protocol tests pass; public API changes are documented.
 

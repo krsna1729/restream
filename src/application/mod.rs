@@ -10,6 +10,7 @@ pub mod fleet_history;
 pub mod flight_recorder;
 pub mod graph;
 pub mod hls_preview;
+mod housekeeping_keys;
 #[cfg(feature = "agent-plane")]
 pub mod incident_explain;
 pub mod ingest;
