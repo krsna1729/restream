@@ -22,6 +22,7 @@ fn reconciler(engine: Arc<MediaEngine>, db: DeadlineDb, pool: &sqlx::SqlitePool)
         ),
         security,
         restream_engine::hls_ingest::HlsIngestLimits::default(),
+        restream_engine::hls_pull::spawn,
     );
     let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
         config.ports,

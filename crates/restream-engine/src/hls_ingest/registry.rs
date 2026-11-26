@@ -12,6 +12,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{info, warn};
 
 use super::ordering::{Counters, SessionLimits};
+use super::pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
 #[cfg(any(test, feature = "test-support"))]
 use super::session::AppliedInit;
 use super::session::{self, AppliedInits, HlsObject, SessionContext, SessionEnd};
@@ -20,7 +21,6 @@ use super::{
 };
 use crate::engine::MediaEngine;
 use crate::executor::{MediaService, MediaServiceClass};
-use crate::hls_pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
 use crate::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
@@ -104,6 +104,9 @@ pub struct HlsIngest {
     access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
     limits: HlsIngestLimits,
+    /// Starts a pull task for the fetch module, which owns the fetch loop.
+    /// Passed at construction so the push registry does not depend on it.
+    pull_spawner: PullSpawner,
     budget: Arc<Semaphore>,
     /// Keyed by input id; held for lookups only, never across an await.
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
@@ -113,6 +116,11 @@ pub struct HlsIngest {
     /// an await.
     pulls: std::sync::Mutex<HashMap<String, RunningPull>>,
 }
+
+/// Starts a pull task for a row. `hls_pull::spawn` implements it; the
+/// registry holds the function so it never imports the fetch module.
+pub type PullSpawner =
+    fn(Arc<MediaEngine>, Arc<HlsIngest>, PullIdentity, PullSource, HlsIngestLimits) -> HlsPullTask;
 
 /// A running pull and the source it was started from. A row whose URL,
 /// rendition or credential differs is a different origin, so the task is
@@ -207,12 +215,14 @@ impl HlsIngest {
         access: Arc<dyn PipelineAccessAuthenticator>,
         security: Arc<IngestSecurityService>,
         limits: HlsIngestLimits,
+        pull_spawner: PullSpawner,
     ) -> Arc<Self> {
         Arc::new(Self {
             engine,
             access,
             security,
             limits,
+            pull_spawner,
             budget: Arc::new(Semaphore::new(limits.total_buffer_bytes)),
             sessions: std::sync::Mutex::new(HashMap::new()),
             keys: std::sync::Mutex::new(HashMap::new()),
@@ -291,7 +301,7 @@ impl HlsIngest {
             }
         }
         let input_id = identity.input_id.clone();
-        let task = crate::hls_pull::spawn(
+        let task = (self.pull_spawner)(
             self.engine.clone(),
             self.clone(),
             identity,

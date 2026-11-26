@@ -11,6 +11,7 @@ pub mod playlist;
 
 mod ordering;
 mod pacing;
+mod pull;
 mod registry;
 mod session;
 #[cfg(any(test, feature = "test-support"))]
@@ -24,7 +25,8 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::warn;
 
-pub use registry::{AuthorizeError, DispatchError, DispatchOrigin, HlsIngest};
+pub use pull::{HlsPullTask, PullEnd, PullIdentity, PullSource};
+pub use registry::{AuthorizeError, DispatchError, DispatchOrigin, HlsIngest, PullSpawner};
 
 /// Every bound on what HLS push ingest buffers. `Default` is production;
 /// tests inject smaller values through `HlsIngest::new`.

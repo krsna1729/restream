@@ -309,6 +309,7 @@ async fn every_access_mode_authenticates_while_the_database_pool_is_exhausted() 
         )),
         c.security.clone(),
         restream_engine::hls_ingest::HlsIngestLimits::default(),
+        restream_engine::hls_pull::spawn,
     );
     let app = crate::api::create_hls_ingest_router(ingest, c.catalog.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
