@@ -319,6 +319,16 @@ impl MediaEngine {
         ingests.get(pipeline_id).map(|ingest| f(ingest.as_ref()))
     }
 
+    /// The selected active ingest for a pipeline.
+    pub async fn active_ingest(&self, pipeline_id: &str) -> Option<Arc<ActiveIngest>> {
+        self.ingests.active.read().await.get(pipeline_id).cloned()
+    }
+
+    /// The live session registered for one input.
+    pub async fn ingest_session(&self, input_id: &str) -> Option<Arc<ActiveIngest>> {
+        self.ingests.sessions.read().await.get(input_id).cloned()
+    }
+
     pub async fn with_ingest_session<R>(
         &self,
         registration: &IngestRegistration,

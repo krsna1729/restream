@@ -33,6 +33,7 @@ mod agent;
 mod alert_tracker;
 mod db;
 mod endpoints;
+mod engine;
 mod identity;
 mod ingests;
 mod media;
@@ -150,7 +151,7 @@ pub struct AppState {
     ingest_policy_store: Arc<SrtIngestPolicyStore>,
     sessions: Arc<TokioRwLock<HashSet<String>>>,
     mutation_admission: Arc<tokio::sync::Semaphore>,
-    pub engine: Arc<MediaEngine>,
+    engine: Arc<MediaEngine>,
     /// Main-pool reads are deadline bounded; writes run to their outcome.
     db: crate::db::DeadlineDb,
     pub ingest_disconnect_grace_ms: u64,

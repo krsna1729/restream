@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::{future::Future, sync::Arc};
 
 use super::state::{AppState, require_hls_access};
-use crate::application::hls_preview::{self, HlsPreviewReadError};
+use crate::application::hls_preview::HlsPreviewReadError;
 
 /// Serves the single-playlist HLS view for one pipeline.
 pub async fn hls_playlist_handler(
@@ -22,7 +22,7 @@ pub async fn hls_playlist_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::primary_playlist(state.engine.clone(), &pipeline_id).await
+        state.hls_preview().primary_playlist(&pipeline_id).await
     })
     .await
 }
@@ -35,7 +35,7 @@ pub async fn hls_master_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::master_playlist(state.engine.clone(), &pipeline_id).await
+        state.hls_preview().master_playlist(&pipeline_id).await
     })
     .await
 }
@@ -48,7 +48,7 @@ pub async fn hls_video_playlist_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::video_playlist(state.engine.clone(), &pipeline_id).await
+        state.hls_preview().video_playlist(&pipeline_id).await
     })
     .await
 }
@@ -61,7 +61,10 @@ pub async fn hls_audio_playlist_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::audio_playlist(state.engine.clone(), &pipeline_id, track_index).await
+        state
+            .hls_preview()
+            .audio_playlist(&pipeline_id, track_index)
+            .await
     })
     .await
 }
@@ -74,7 +77,10 @@ pub async fn hls_segment_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
-        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await
+        state
+            .hls_preview()
+            .video_segment(&pipeline_id, &segment)
+            .await
     })
     .await
 }
@@ -87,7 +93,10 @@ pub async fn hls_video_segment_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
-        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await
+        state
+            .hls_preview()
+            .video_segment(&pipeline_id, &segment)
+            .await
     })
     .await
 }
@@ -100,7 +109,7 @@ pub async fn hls_video_init_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
-        hls_preview::video_init_segment(state.engine.clone(), &pipeline_id).await
+        state.hls_preview().video_init_segment(&pipeline_id).await
     })
     .await
 }
@@ -113,7 +122,10 @@ pub async fn hls_audio_segment_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
-        hls_preview::audio_segment(state.engine.clone(), &pipeline_id, track_index, &segment).await
+        state
+            .hls_preview()
+            .audio_segment(&pipeline_id, track_index, &segment)
+            .await
     })
     .await
 }
@@ -126,7 +138,10 @@ pub async fn hls_audio_init_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
-        hls_preview::audio_init_segment(state.engine.clone(), &pipeline_id, track_index).await
+        state
+            .hls_preview()
+            .audio_init_segment(&pipeline_id, track_index)
+            .await
     })
     .await
 }
@@ -138,7 +153,7 @@ pub async fn input_hls_master_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::input_master_playlist(state.engine.clone(), &input_id).await
+        state.hls_preview().input_master_playlist(&input_id).await
     })
     .await
 }
@@ -150,7 +165,7 @@ pub async fn input_hls_video_playlist_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::input_video_playlist(state.engine.clone(), &input_id).await
+        state.hls_preview().input_video_playlist(&input_id).await
     })
     .await
 }
@@ -162,7 +177,10 @@ pub async fn input_hls_video_init_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
-        hls_preview::input_video_init_segment(state.engine.clone(), &input_id).await
+        state
+            .hls_preview()
+            .input_video_init_segment(&input_id)
+            .await
     })
     .await
 }
@@ -174,7 +192,10 @@ pub async fn input_hls_video_segment_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
-        hls_preview::input_video_segment(state.engine.clone(), &input_id, &segment).await
+        state
+            .hls_preview()
+            .input_video_segment(&input_id, &segment)
+            .await
     })
     .await
 }
@@ -186,7 +207,10 @@ pub async fn input_hls_audio_playlist_handler(
     headers: HeaderMap,
 ) -> Response {
     playlist_with_hls_access(&state, &headers, &uri, || async {
-        hls_preview::input_audio_playlist(state.engine.clone(), &input_id, track_index).await
+        state
+            .hls_preview()
+            .input_audio_playlist(&input_id, track_index)
+            .await
     })
     .await
 }
@@ -198,7 +222,10 @@ pub async fn input_hls_audio_init_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
-        hls_preview::input_audio_init_segment(state.engine.clone(), &input_id, track_index).await
+        state
+            .hls_preview()
+            .input_audio_init_segment(&input_id, track_index)
+            .await
     })
     .await
 }
@@ -210,7 +237,9 @@ pub async fn input_hls_audio_segment_handler(
     headers: HeaderMap,
 ) -> Response {
     media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
-        hls_preview::input_audio_segment(state.engine.clone(), &input_id, track_index, &segment)
+        state
+            .hls_preview()
+            .input_audio_segment(&input_id, track_index, &segment)
             .await
     })
     .await

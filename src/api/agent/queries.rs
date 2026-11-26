@@ -127,14 +127,14 @@ pub async fn agent_investigation_handler(
             .count()
             <= AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT
     {
-        Some(crate::api::runtime_views::processing_graph(&state.engine, pid, &outputs).await)
+        Some(state.processing_graph(pid, &outputs).await)
     } else {
         None
     };
     let telemetry = if let Some(pid) = request.pipeline_id.as_deref() {
-        crate::api::runtime_views::pipeline_telemetry(&state.engine, pid).await
+        state.pipeline_telemetry(pid).await
     } else {
-        crate::api::runtime_views::engine_telemetry(&state.engine).await
+        state.engine_telemetry().await
     };
     let process =
         crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
@@ -145,7 +145,7 @@ pub async fn agent_investigation_handler(
             ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
         )
         .await;
-    let events = state.engine.recent_events(
+    let events = state.recent_events(
         request.event_limit.min(events::MAX_EVENTS),
         request.pipeline_id.as_deref(),
     );
@@ -285,8 +285,8 @@ pub(super) async fn build_agent_plan(
         && pipelines.iter().any(|pipeline| pipeline.id == pid)
     {
         (
-            Some(crate::api::runtime_views::processing_graph(&state.engine, pid, &outputs).await),
-            state.engine.ingest_video_codec(pid).await,
+            Some(state.processing_graph(pid, &outputs).await),
+            state.ingest_video_codec(pid).await,
         )
     } else {
         (None, None)

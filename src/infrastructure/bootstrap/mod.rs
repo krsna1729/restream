@@ -381,7 +381,7 @@ fn spawn_state_loops(
         let (hub, db, engine, stop) = (
             state.runtime_state_handle(),
             main_db.clone(),
-            state.engine.clone(),
+            state.engine_handle(),
             stop.clone(),
         );
         let interval = std::time::Duration::from_millis(config.tuning.reconciler_interval_ms);
@@ -400,7 +400,7 @@ fn spawn_state_loops(
             state.fleet_history_sampler_handle(),
             state.runtime_state_handle(),
             main_db.clone(),
-            state.engine.clone(),
+            state.engine_handle(),
             config.clone(),
             stop.clone(),
         );
@@ -421,7 +421,7 @@ fn spawn_state_loops(
             state.flight_recorder_sampler_handle(),
             state.runtime_state_handle(),
             main_db.clone(),
-            state.engine.clone(),
+            state.engine_handle(),
             stop.clone(),
         );
         let retention = (config.flight_history_hours > 0)

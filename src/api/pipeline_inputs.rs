@@ -433,14 +433,7 @@ async fn resolve_source(
 }
 
 async fn input_json(state: &AppState, input: &PipelineInput, host: &str) -> serde_json::Value {
-    let runtime = state
-        .engine
-        .ingests
-        .sessions
-        .read()
-        .await
-        .get(&input.id)
-        .cloned();
+    let runtime = state.ingest_session(&input.id).await;
     let runtime = runtime
         .as_ref()
         .map(|ingest| {
@@ -631,7 +624,7 @@ pub async fn pipeline_input_patch_handler(
         Err(error) => return ApiError::from(error).into_response(),
     };
     if !input.enabled {
-        state.engine.cancel_pipeline_input(&input.id).await;
+        state.cancel_pipeline_input(&input.id).await;
     }
     // A changed source kind hands the input's session to a different
     // publisher: a keyed input's session belongs to a live push, and a pull
@@ -639,7 +632,7 @@ pub async fn pipeline_input_patch_handler(
     // `PublisherActive` and backs off until the old one leaves on its own —
     // which, for a pusher that never stops, is never.
     if kind != current.source_kind {
-        state.engine.cancel_pipeline_input(&input.id).await;
+        state.cancel_pipeline_input(&input.id).await;
     }
     refresh_srt_ingest_policy_store(&state).await;
     let host = state.ingest_host().await;
@@ -659,7 +652,7 @@ pub async fn pipeline_input_delete_handler(
     }
     match state.delete_pipeline_input(&pipeline_id, &input_id).await {
         Ok(true) => {
-            state.engine.cancel_pipeline_input(&input_id).await;
+            state.cancel_pipeline_input(&input_id).await;
             refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"deleted": true})).into_response()
         }
@@ -683,10 +676,7 @@ pub async fn pipeline_input_promote_handler(
     // The reconciler switches the forwarded input; report whether the
     // target has a live session to switch to.
     state.input_selection_changed(&pipeline_id);
-    let connected = state
-        .engine
-        .input_has_session(&pipeline_id, &input_id)
-        .await;
+    let connected = state.input_has_session(&pipeline_id, &input_id).await;
     let host = state.ingest_host().await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await,

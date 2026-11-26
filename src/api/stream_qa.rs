@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use super::error::ApiError;
 use super::state::{AppState, require_authenticated};
-use crate::application::stream_qa::{spawn_stream_qa, stream_qa_enabled_meta_key};
+use crate::application::stream_qa::stream_qa_enabled_meta_key;
 
 #[derive(Debug, Deserialize)]
 pub struct StreamQaWrite {
@@ -23,8 +23,8 @@ pub struct StreamQaWrite {
 fn state_response(state: &AppState, pipeline_id: &str, enabled: bool) -> Response {
     Json(serde_json::json!({
         "enabled": enabled,
-        "active": state.engine.is_stream_qa_active(pipeline_id),
-        "findings": state.engine.stream_qa(pipeline_id),
+        "active": state.is_stream_qa_active(pipeline_id),
+        "findings": state.stream_qa_findings(pipeline_id),
     }))
     .into_response()
 }
@@ -64,11 +64,9 @@ pub async fn stream_qa_put_handler(
         )
         .await?;
     if write.enabled {
-        if state.engine.has_active_ingest(&pipeline_id).await {
-            spawn_stream_qa(state.engine.clone(), pipeline_id.clone()).await;
-        }
+        state.start_stream_qa(&pipeline_id).await;
     } else {
-        state.engine.unregister_stream_qa(&pipeline_id);
+        state.unregister_stream_qa(&pipeline_id);
     }
     Ok(state_response(&state, &pipeline_id, write.enabled))
 }

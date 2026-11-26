@@ -27,8 +27,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let ingests = catalog.ingests;
     let (recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
-    let events = state.engine.recent_events(events::MAX_EVENTS, None);
-    let engine_telemetry = crate::api::runtime_views::engine_telemetry(&state.engine).await;
+    let events = state.recent_events(events::MAX_EVENTS, None);
+    let engine_telemetry = state.engine_telemetry().await;
     let process =
         crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
     let resource_map = state
@@ -37,11 +37,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let mut pipeline_telemetry = Vec::new();
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
-        pipeline_telemetry
-            .push(crate::api::runtime_views::pipeline_telemetry(&state.engine, pipeline_id).await);
-        graphs.push(
-            crate::api::runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
-        );
+        pipeline_telemetry.push(state.pipeline_telemetry(pipeline_id).await);
+        graphs.push(state.processing_graph(pipeline_id, &outputs).await);
     }
     // Output convergence and diagnosis come from the runtime state, the
     // one classification the dashboard and alerts also read.
@@ -66,7 +63,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     )
     .await;
 
-    let bonding_available = state.engine.bonding_available();
+    let bonding_available = state.bonding_available();
     let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
     status["os"] = crate::host::system_sampling::sampled_system(system_status).unwrap_or_default();
 
@@ -360,7 +357,7 @@ async fn dependency_summary(
     let mut hls = Vec::new();
     let mut recordings = Vec::new();
     for pipeline in pipelines {
-        let snapshot = state.engine.hls_dependency_snapshot(&pipeline.id).await;
+        let snapshot = state.hls_dependency_snapshot(&pipeline.id).await;
         hls.push(serde_json::json!({
             "pipelineId": pipeline.id,
             "storeExists": snapshot.store_exists,
@@ -377,7 +374,7 @@ async fn dependency_summary(
         recordings.push(serde_json::json!({
             "pipelineId": pipeline.id,
             "desiredEnabled": desired_enabled,
-            "active": state.engine.is_recording_active(&pipeline.id).await,
+            "active": state.is_recording_active(&pipeline.id).await,
             "inputStatus": health["pipelines"][&pipeline.id]["input"]["status"],
         }));
     }
@@ -386,10 +383,7 @@ async fn dependency_summary(
     let mut file_ingest = Vec::new();
     for ingest in ingests {
         let media_path = Path::new(&state.media_dir).join(&ingest.filename);
-        let runtime = state
-            .engine
-            .file_ingest_dependency_snapshot(&ingest.id)
-            .await;
+        let runtime = state.file_ingest_dependency_snapshot(&ingest.id).await;
         file_ingest.push(serde_json::json!({
             "id": ingest.id,
             "filename": ingest.filename,
@@ -409,12 +403,13 @@ async fn dependency_summary(
         .filter(|output| OutputUrlScheme::from_url(&output.url).is_hls_family())
         .count();
 
+    let hls_limits = state.hls_limits();
     serde_json::json!({
         "hls": {
             "config": {
-                "minSegmentSecs": state.engine.config.hls_min_segment_ms,
-                "segmentCapacity": state.engine.config.hls_segment_capacity_bytes,
-                "maxSegments": state.engine.config.hls_max_segments,
+                "minSegmentSecs": hls_limits.min_segment_secs,
+                "segmentCapacity": hls_limits.segment_capacity_bytes,
+                "maxSegments": hls_limits.max_segments,
             },
             "outputCount": hls_output_count,
             "pipelines": hls,

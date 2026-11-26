@@ -158,11 +158,7 @@ pub async fn pipeline_diagnostics_run_handler(
         return response;
     }
 
-    let probe_protocol = match state
-        .engine
-        .active_ingest_protocol_for_probe(&pipeline_id)
-        .await
-    {
+    let probe_protocol = match state.active_ingest_protocol_for_probe(&pipeline_id).await {
         Some(protocol) => protocol,
         None => {
             return (
@@ -175,8 +171,8 @@ pub async fn pipeline_diagnostics_run_handler(
         }
     };
 
-    let engine = state.engine.clone();
-    let sem = engine.get_or_create_diag_semaphore(&pipeline_id).await;
+    let sem = state.diag_semaphore(&pipeline_id).await;
+    let engine = state.engine_handle();
     let permit = match sem.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -238,7 +234,7 @@ pub async fn status_get_handler(
         return response;
     }
 
-    let bonding_available = state.engine.bonding_available();
+    let bonding_available = state.bonding_available();
     let (mut status, _) = crate::host::runtime_info::status_and_sbom(bonding_available);
     status["os"] = crate::host::system_sampling::sampled_system(system_status).unwrap_or_default();
 
@@ -282,7 +278,7 @@ pub async fn status_sbom_get_handler(
         return response;
     }
 
-    let bonding_available = state.engine.bonding_available();
+    let bonding_available = state.bonding_available();
     let (_, sbom) = crate::host::runtime_info::status_and_sbom(bonding_available);
     (
         [
@@ -423,7 +419,7 @@ pub async fn v1_events_handler(
 
     let limit = query.limit.min(events::MAX_EVENTS);
     let pipeline_filter = query.pipeline_id.as_deref();
-    let event_list = state.engine.recent_events(limit, pipeline_filter);
+    let event_list = state.recent_events(limit, pipeline_filter);
 
     Json(serde_json::json!({
         "generatedAt": restream_domain::timestamp::now_rfc3339(),
@@ -506,7 +502,7 @@ pub async fn v1_engine_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api::runtime_views::engine_telemetry(&state.engine).await).into_response()
+    Json(state.engine_telemetry().await).into_response()
 }
 
 /// Fixed-shape counters for capacity sampling: counts and byte sums
@@ -522,8 +518,7 @@ pub async fn v1_measure_handler(
         Ok(ids) => ids.len(),
         Err(error) => return error.into_response(),
     };
-    Json(crate::api::runtime_views::measure_snapshot(&state.engine, pipelines).await)
-        .into_response()
+    Json(state.measure_snapshot(pipelines).await).into_response()
 }
 
 pub async fn v1_pipeline_telemetry_handler(
@@ -534,8 +529,7 @@ pub async fn v1_pipeline_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api::runtime_views::pipeline_telemetry(&state.engine, &pipeline_id).await)
-        .into_response()
+    Json(state.pipeline_telemetry(&pipeline_id).await).into_response()
 }
 
 pub async fn v1_stage_telemetry_handler(
@@ -546,7 +540,7 @@ pub async fn v1_stage_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match crate::api::runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
+    match state.stage_telemetry_by_display(&stage_key).await {
         Some(val) => Json(val).into_response(),
         None => (StatusCode::NOT_FOUND, "Stage not found").into_response(),
     }
