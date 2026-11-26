@@ -665,7 +665,7 @@ pub async fn output_status_handler(
         return response;
     }
 
-    match crate::api::runtime_views::output_status(&state.engine, &output_id).await {
+    match state.output_status(&output_id).await {
         Some(status) => Json(status).into_response(),
         None => (
             StatusCode::NOT_FOUND,

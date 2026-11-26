@@ -22,6 +22,22 @@ impl MediaEngine {
             .load(Ordering::Relaxed)
     }
 
+    /// Current RTMP and SRT ingress owner counts.
+    pub fn ingress_owner_counts(&self) -> (usize, usize) {
+        let rtmp = self
+            .runtime
+            .rtmp_listener_stats
+            .owners
+            .load(Ordering::Relaxed) as usize;
+        let srt = self
+            .runtime
+            .listener_stats
+            .ingress_owner
+            .owners
+            .load(Ordering::Relaxed) as usize;
+        (rtmp, srt)
+    }
+
     /// Register an OS thread JoinHandle so it can be joined at shutdown.
     /// Already-finished handles are pruned opportunistically.
     pub fn register_os_thread(&self, handle: std::thread::JoinHandle<()>) {

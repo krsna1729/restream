@@ -149,7 +149,7 @@ pub async fn ingests_get_handler(
     let ingests = state.list_ingests().await?;
     let mut res = Vec::new();
     for i in ingests {
-        let running = state.engine.is_file_ingest_running(&i.id).await;
+        let running = state.is_file_ingest_running(&i.id).await;
         res.push(ingest_response(&i, running));
     }
     Ok(Json(res).into_response())
@@ -196,7 +196,7 @@ pub async fn ingests_update_handler(
 
     let ingest = state.update_ingest(&id, &normalized).await?;
 
-    let running = state.engine.is_file_ingest_running(&ingest.id).await;
+    let running = state.is_file_ingest_running(&ingest.id).await;
     Ok(ingest_json_response(&ingest, running))
 }
 

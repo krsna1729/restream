@@ -597,9 +597,7 @@ async fn verify_operation(
 
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
-        graphs.push(
-            crate::api::runtime_views::processing_graph(&state.engine, pipeline_id, &outputs).await,
-        );
+        graphs.push(state.processing_graph(pipeline_id, &outputs).await);
     }
     let active_graph_nodes = graphs
         .iter()

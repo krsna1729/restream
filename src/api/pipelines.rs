@@ -430,10 +430,9 @@ pub async fn pipeline_probe_handler(
         return response;
     }
 
-    let ingests = state.engine.ingests.active.read().await;
-    match ingests.get(&pipeline_id) {
+    match state.active_ingest(&pipeline_id).await {
         Some(ingest) => {
-            let probe = crate::api::view_models::probe_snapshot(&pipeline_id, ingest);
+            let probe = crate::api::view_models::probe_snapshot(&pipeline_id, &ingest);
             Json(probe).into_response()
         }
         None => (StatusCode::NOT_FOUND, "No active ingest for this pipeline").into_response(),

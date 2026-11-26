@@ -64,10 +64,10 @@ pub async fn pipeline_graph_handler(
     }
 
     let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
-    let mut graph =
-        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
-    let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let mut graph = state
+        .processing_graph(&pipeline_id, &pipeline_outputs)
+        .await;
+    let ingest_codec = state.ingest_video_codec(&pipeline_id).await;
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
@@ -133,19 +133,19 @@ pub async fn pipeline_diagnostics_context_handler(
     let generated_at = snapshot_generated_at(&health);
 
     let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
-    let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let ingest_codec = state.ingest_video_codec(&pipeline_id).await;
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
         &pipeline_outputs,
     );
-    let runtime_graph =
-        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
+    let runtime_graph = state
+        .processing_graph(&pipeline_id, &pipeline_outputs)
+        .await;
 
     let mut alert_list = alerts::derive_alerts(&health);
     state.stamp_alerts(&mut alert_list);
-    let recent_events = state.engine.recent_events(100, Some(&pipeline_id));
+    let recent_events = state.recent_events(100, Some(&pipeline_id));
     let recent_logs = state
         .app_logs(&AppLogFilters {
             pipeline_id: Some(pipeline_id.clone()),
@@ -201,9 +201,9 @@ pub async fn v1_pipeline_summary_handler(
 
     let pip = &snapshot["pipelines"][&pipeline_id];
     let pipeline_outputs = state.outputs_of(&pipeline_id).await?;
-    let graph =
-        crate::api::runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
+    let graph = state
+        .processing_graph(&pipeline_id, &pipeline_outputs)
+        .await;
 
     let graph_nodes = graph["nodes"]
         .as_array()

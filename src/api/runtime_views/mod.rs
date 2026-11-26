@@ -22,7 +22,7 @@ mod tests;
 
 pub(crate) use common::probe_snapshot;
 pub(crate) use graph::processing_graph;
-pub(crate) use measure::measure_snapshot;
+pub(crate) use measure::{MeasureSnapshot, measure_snapshot};
 pub(crate) use resource_map::{ResourceMapOptions, ResourceMapView, resource_map};
 pub(crate) use status::{
     health_snapshot, health_snapshot_view, health_summary_snapshot, output_status,

@@ -33,12 +33,8 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let load1 = System::load_average().map_or(0.0, |load| load.one);
     let capacity = state.capacity_snapshot().await;
     let egress_shards = state
-        .engine
-        .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
-        .await
-        .into_iter()
-        .map(|status| status.to_json())
-        .collect::<Vec<_>>();
+        .egress_shard_statuses(std::time::Duration::from_secs(5))
+        .await;
     let host_capacity = host_capacity_json(state, egress_shards.len());
     let io_uring = uring_capabilities();
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
@@ -346,17 +342,9 @@ fn is_external_interface(name: &str) -> bool {
 /// costs no CPU. MEDIA CPU time is in `mediaExecutor`; the resource sweep
 /// measures every thread group.
 fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Value {
-    use std::sync::atomic::Ordering::Relaxed;
-    let engine = &state.engine;
     let control = state.tokio_worker_threads();
     let media = restream_engine::executor::configured_workers();
-    let rtmp = engine.runtime.rtmp_listener_stats.owners.load(Relaxed) as usize;
-    let srt = engine
-        .runtime
-        .listener_stats
-        .ingress_owner
-        .owners
-        .load(Relaxed) as usize;
+    let (rtmp, srt) = state.ingress_owner_counts();
     serde_json::json!({
         "cpus": restream_engine::host_capacity::HostCapacity::get().cpus,
         "controlWorkers": control,
