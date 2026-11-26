@@ -227,7 +227,7 @@ async fn serve(
                 .reload_periodically(crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL)
         }
     });
-    spawn_state_loops(&state, &lifecycle, &config, &projector_stop);
+    spawn_state_loops(&state, &lifecycle, &api_db, &config, &projector_stop);
     let runtime::RuntimeTasks {
         http_stop,
         listeners,
@@ -373,13 +373,14 @@ fn spawn_runtime_event_consumer(
 fn spawn_state_loops(
     state: &Arc<crate::api::AppState>,
     lifecycle: &db::DeadlineDb,
+    main_db: &db::DeadlineDb,
     config: &Arc<AppConfig>,
     stop: &tokio_util::sync::CancellationToken,
 ) {
     supervised_task::spawn_supervised("runtime_state_projector", {
         let (hub, db, engine, stop) = (
             state.runtime_state_handle(),
-            state.db.clone(),
+            main_db.clone(),
             state.engine.clone(),
             stop.clone(),
         );
@@ -398,7 +399,7 @@ fn spawn_state_loops(
         let (history, hub, db, engine, config, stop) = (
             state.fleet_history_sampler_handle(),
             state.runtime_state_handle(),
-            state.db.clone(),
+            main_db.clone(),
             state.engine.clone(),
             config.clone(),
             stop.clone(),
@@ -419,7 +420,7 @@ fn spawn_state_loops(
         let (recorder, hub, db, engine, stop) = (
             state.flight_recorder_sampler_handle(),
             state.runtime_state_handle(),
-            state.db.clone(),
+            main_db.clone(),
             state.engine.clone(),
             stop.clone(),
         );

@@ -50,10 +50,10 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
     match schedule.action {
         ScheduleAction::StartOutputs | ScheduleAction::StopOutputs => {
             let start = schedule.action == ScheduleAction::StartOutputs;
-            let outputs =
-                crate::application::outputs::list_for_pipeline(&state.db, &schedule.pipeline_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
+            let outputs = state
+                .outputs_of(&schedule.pipeline_id)
+                .await
+                .map_err(|err| err.to_string())?;
             let targets: Vec<_> = outputs
                 .iter()
                 .filter(|output| {
@@ -66,19 +66,9 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
             let mut failed = 0usize;
             for output in &targets {
                 let result = if start {
-                    crate::application::outputs::request_start(
-                        &state.db,
-                        &schedule.pipeline_id,
-                        &output.id,
-                    )
-                    .await
+                    state.start_output(&schedule.pipeline_id, &output.id).await
                 } else {
-                    crate::application::outputs::request_stop(
-                        &state.db,
-                        &schedule.pipeline_id,
-                        &output.id,
-                    )
-                    .await
+                    state.stop_output(&schedule.pipeline_id, &output.id).await
                 };
                 if result.is_err() {
                     failed += 1;
@@ -355,7 +345,8 @@ pub async fn list_schedules_handler(
         return response;
     }
     result(
-        schedules::list(&state.db, now_ms())
+        state
+            .schedules(now_ms())
             .await
             .map(|list| serde_json::json!({ "schedules": list })),
     )
@@ -376,7 +367,10 @@ pub async fn create_schedule_handler(
     use rand::RngExt;
     let mut id = [0u8; 8];
     rand::rng().fill(&mut id);
-    match schedules::create(&state.db, &format!("sch_{}", to_hex(&id)), &draft, now_ms()).await {
+    match state
+        .create_schedule(&format!("sch_{}", to_hex(&id)), &draft, now_ms())
+        .await
+    {
         Ok(schedule) => (StatusCode::CREATED, Json(schedule)).into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
@@ -392,7 +386,7 @@ pub async fn update_schedule_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    result(schedules::update(&state.db, &id, &draft, now_ms()).await)
+    result(state.update_schedule(&id, &draft, now_ms()).await)
 }
 
 /// `DELETE /api/v1/schedules/{id}`.
@@ -405,7 +399,8 @@ pub async fn delete_schedule_handler(
         return response;
     }
     result(
-        schedules::delete(&state.db, &id)
+        state
+            .delete_schedule(&id)
             .await
             .map(|()| serde_json::json!({ "deleted": true })),
     )
@@ -421,7 +416,7 @@ pub async fn run_schedule_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let schedule = match schedules::get(&state.db, &id, now_ms()).await {
+    let schedule = match state.schedule(&id, now_ms()).await {
         Ok(schedule) => schedule,
         Err(error) => return ApiError::from(error).into_response(),
     };

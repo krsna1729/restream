@@ -217,9 +217,7 @@ pub async fn config_get_handler(
         ));
     }
 
-    let outputs = crate::application::outputs::list_outputs(&state.db)
-        .await
-        .unwrap_or_default();
+    let outputs = state.outputs().await.unwrap_or_default();
     let settings = match state.settings_snapshot().await {
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),

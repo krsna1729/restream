@@ -541,17 +541,16 @@ pub async fn outputs_create_handler(
 
     let id = format!("output_{}", to_hex(&rand::random::<[u8; 8]>()));
 
-    let output = crate::application::outputs::create_output(
-        &state.db,
-        &id,
-        &pipeline_id,
-        &payload.name,
-        &validated.url,
-        validated.monitoring_url.as_deref(),
-        DesiredOutputState::Stopped,
-        &validated.output_config,
-    )
-    .await?;
+    let output = state
+        .create_output(
+            &id,
+            &pipeline_id,
+            &payload.name,
+            &validated.url,
+            validated.monitoring_url.as_deref(),
+            &validated.output_config,
+        )
+        .await?;
 
     // Creation is the one output mutation that returns a 201 transport status;
     // the steady-state mutations below keep the same JSON envelope with 200s.
@@ -577,8 +576,7 @@ pub async fn outputs_update_handler(
         Ok(validated) => validated,
         Err(response) => return Ok(*response),
     };
-    let existing =
-        crate::application::outputs::get_by_id(&state.db, &pipeline_id, &output_id).await?;
+    let existing = state.output_of(&pipeline_id, &output_id).await?;
     // An output whose retries are exhausted is not running: its URL can be
     // fixed before the operator starts it again.
     if existing.desired_state == DesiredOutputState::Running
@@ -594,16 +592,16 @@ pub async fn outputs_update_handler(
             .into_response());
     }
 
-    let updated = crate::application::outputs::update_output(
-        &state.db,
-        &pipeline_id,
-        &output_id,
-        &payload.name,
-        &validated.url,
-        validated.monitoring_url.as_deref(),
-        &validated.output_config,
-    )
-    .await?;
+    let updated = state
+        .update_output(
+            &pipeline_id,
+            &output_id,
+            &payload.name,
+            &validated.url,
+            validated.monitoring_url.as_deref(),
+            &validated.output_config,
+        )
+        .await?;
 
     Ok(Json(output_response_body("Output updated", &updated)).into_response())
 }
@@ -618,8 +616,7 @@ pub async fn outputs_delete_handler(
         return Ok(response);
     }
 
-    let deleted =
-        crate::application::outputs::delete_output(&state.db, &pipeline_id, &output_id).await?;
+    let deleted = state.delete_output(&pipeline_id, &output_id).await?;
     if !deleted {
         return Ok((StatusCode::NOT_FOUND, "Output not found").into_response());
     }
@@ -638,8 +635,7 @@ pub async fn outputs_start_handler(
         return Ok(response);
     }
 
-    let output =
-        crate::application::outputs::request_start(&state.db, &pipeline_id, &output_id).await?;
+    let output = state.start_output(&pipeline_id, &output_id).await?;
     Ok(output_state_response("Output started", "running", &output))
 }
 
@@ -654,8 +650,7 @@ pub async fn outputs_stop_handler(
         return Ok(response);
     }
 
-    let output =
-        crate::application::outputs::request_stop(&state.db, &pipeline_id, &output_id).await?;
+    let output = state.stop_output(&pipeline_id, &output_id).await?;
     Ok(output_state_response("Output stopped", "stopped", &output))
 }
 

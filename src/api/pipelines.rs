@@ -182,7 +182,7 @@ pub async fn pipeline_detail_handler(
         Ok(pipeline) => pipeline,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    let outputs = match crate::application::outputs::list_for_pipeline(&state.db, &id).await {
+    let outputs = match state.outputs_of(&id).await {
         Ok(outputs) => outputs,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -412,13 +412,7 @@ pub async fn pipelines_delete_handler(
             state.forget_pipeline_share_links(&id).await;
             // Its replay history goes with it; a failure only leaves rows the
             // retention prune removes.
-            let history_id = id.clone();
-            let _ = state
-                .db
-                .write(move |pool| async move {
-                    crate::db::flight_repo::forget(&pool, &history_id).await
-                })
-                .await;
+            let _ = state.forget_flight_history(&id).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
