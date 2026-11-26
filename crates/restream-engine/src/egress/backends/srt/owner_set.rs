@@ -270,34 +270,51 @@ struct FamilyOwner {
     retired_payloads: std::collections::VecDeque<PayloadRetirement>,
 }
 
+/// Reused per-queue buffers for one `SrtOwners::drain_events` pass, so a
+/// drain allocates nothing in the steady state.
+struct DrainScratch {
+    pool: Vec<PoolEvent>,
+    caller: Vec<CallerEvent>,
+    tx_failure: Vec<TxFailureEvent>,
+    output_failure: Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
+    group_fault: Vec<CallerGroupFault>,
+}
+
+impl DrainScratch {
+    fn new() -> Self {
+        Self {
+            pool: Vec::with_capacity(EVENT_DRAIN),
+            caller: Vec::with_capacity(EVENT_DRAIN),
+            tx_failure: Vec::with_capacity(EVENT_DRAIN),
+            output_failure: Vec::with_capacity(EVENT_DRAIN),
+            group_fault: Vec::with_capacity(EVENT_DRAIN),
+        }
+    }
+}
+
 impl FamilyOwner {
     /// Drain one family's bounded queues into `out`. Returns `true` when any
     /// queue filled its cap or payload retirement remains, i.e. the backend
     /// should schedule another ordinary ready visit.
-    #[allow(clippy::too_many_arguments)]
     fn drain_events(
         &mut self,
         family: AddressFamily,
         cap: usize,
-        pool_scratch: &mut Vec<PoolEvent>,
-        caller_scratch: &mut Vec<CallerEvent>,
-        failure_scratch: &mut Vec<TxFailureEvent>,
-        output_failure_scratch: &mut Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
-        group_fault_scratch: &mut Vec<CallerGroupFault>,
+        scratch: &mut DrainScratch,
         out: &mut Vec<SrtOwnerEvent>,
     ) -> bool {
-        let pool_drained_fully = self.drain_pool_events(family, cap, pool_scratch, out);
+        let pool_drained_fully = self.drain_pool_events(family, cap, &mut scratch.pool, out);
         let mut more = self.drain_retired_payloads(cap);
-        more |= self.drain_caller_events(family, cap, caller_scratch, out);
-        more |= self.drain_tx_failures(family, cap, failure_scratch, out);
-        more |= self.drain_output_failures(family, cap, output_failure_scratch, out);
+        more |= self.drain_caller_events(family, cap, &mut scratch.caller, out);
+        more |= self.drain_tx_failures(family, cap, &mut scratch.tx_failure, out);
+        more |= self.drain_output_failures(family, cap, &mut scratch.output_failure, out);
         // A peer-group fault names a LOGICAL CALLER, so it may only be
         // delivered after every pool `Admitted` that could introduce that
         // caller to the backend: they precede it in `out` when the pool
         // queue drained fully this pass. If it did not, the (non-lossy)
         // upstream fault queue simply waits for the next pass.
         if pool_drained_fully {
-            more |= self.drain_group_faults(family, cap, group_fault_scratch, out);
+            more |= self.drain_group_faults(family, cap, &mut scratch.group_fault, out);
         }
         !pool_drained_fully || more
     }
@@ -458,11 +475,7 @@ pub(crate) struct SrtOwners {
     /// driven and retried on service visits, never serviced as live Owners.
     disposing: [Option<Disposing>; AddressFamily::COUNT],
     closing: std::collections::VecDeque<ClosingCaller>,
-    pool_scratch: Vec<PoolEvent>,
-    caller_scratch: Vec<CallerEvent>,
-    failure_scratch: Vec<TxFailureEvent>,
-    output_failure_scratch: Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
-    group_fault_scratch: Vec<CallerGroupFault>,
+    drain_scratch: DrainScratch,
     runtime: compio::runtime::Runtime,
     epoch: Instant,
     profile: CompioProductionProfile,
@@ -507,11 +520,7 @@ impl SrtOwners {
             closed: [None, None],
             disposing: [None, None],
             closing: std::collections::VecDeque::new(),
-            pool_scratch: Vec::with_capacity(EVENT_DRAIN),
-            caller_scratch: Vec::with_capacity(EVENT_DRAIN),
-            failure_scratch: Vec::with_capacity(EVENT_DRAIN),
-            output_failure_scratch: Vec::with_capacity(EVENT_DRAIN),
-            group_fault_scratch: Vec::with_capacity(EVENT_DRAIN),
+            drain_scratch: DrainScratch::new(),
             runtime,
             epoch: Instant::now(),
             profile,
@@ -858,16 +867,7 @@ impl SrtOwners {
             } else {
                 AddressFamily::V6
             };
-            more |= family_owner.drain_events(
-                family,
-                cap,
-                &mut self.pool_scratch,
-                &mut self.caller_scratch,
-                &mut self.failure_scratch,
-                &mut self.output_failure_scratch,
-                &mut self.group_fault_scratch,
-                out,
-            );
+            more |= family_owner.drain_events(family, cap, &mut self.drain_scratch, out);
         }
         more
     }

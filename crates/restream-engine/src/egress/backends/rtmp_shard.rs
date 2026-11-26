@@ -38,7 +38,6 @@ use super::tcp::TcpEgressPollError;
 use super::tcp::TcpReadyLeaf;
 use crate::egress::tls::TlsTcpConnection;
 
-pub(crate) use self::rtmp_shard_connect::rtmp_shard_backend;
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
 pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
 
@@ -443,9 +442,9 @@ where
     }
 
     /// Override the per-leaf drain deadline. Production threads the
-    /// configured `EgressFabricConfig::drain_timeout_ms` through here (see
-    /// `rtmp_shard_backend`); tests use it for fast, deterministic
-    /// timing instead of the constructor's multi-second default.
+    /// configured `EgressFabricConfig::drain_timeout_ms` through here; tests
+    /// use it for fast, deterministic timing instead of the constructor's
+    /// multi-second default.
     pub(crate) fn with_drain_timeout(mut self, drain_timeout: Duration) -> Self {
         self.drain_timeout = drain_timeout;
         self

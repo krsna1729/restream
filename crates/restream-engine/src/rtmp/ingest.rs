@@ -46,7 +46,7 @@ mod control;
 pub(super) use control::run_rtmp_control_session;
 #[path = "ingest/session.rs"]
 mod session;
-use session::handle_session_results;
+
 pub(super) struct RtmpClientSocket {
     stream: compio::net::TcpStream,
     shutdown: CancellationToken,

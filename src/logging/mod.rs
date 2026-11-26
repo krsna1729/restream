@@ -167,7 +167,7 @@ impl FieldCollector {
         mut self,
         level: String,
         target: String,
-        span: &SpanFields,
+        span: SpanFields,
     ) -> crate::logging::types::AppLogEntry {
         let fields = self.fields_json();
         crate::logging::types::AppLogEntry {
@@ -179,8 +179,8 @@ impl FieldCollector {
             target,
             message: self.message.take().unwrap_or_default(),
             fields,
-            pipeline_id: self.pipeline_id.take().or_else(|| span.pipeline_id.clone()),
-            output_id: self.output_id.take().or_else(|| span.output_id.clone()),
+            pipeline_id: self.pipeline_id.take().or(span.pipeline_id),
+            output_id: self.output_id.take().or(span.output_id),
             event_type: self.event_type.take(),
             event_class: self.event_class.take(),
         }
@@ -286,7 +286,7 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
         let entry = fc.into_entry(
             meta.level().to_string().to_uppercase(),
             meta.target().to_string(),
-            &span_ctx,
+            span_ctx,
         );
 
         // try_send — never block the callsite; drop and count if the channel is full.

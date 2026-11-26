@@ -123,18 +123,18 @@ struct ReadState {
     fd: RawFd,
 }
 
-struct RtmpClient<'a> {
-    session: ServerSession,
-    socket: RtmpClientSocket,
+pub(super) struct RtmpClient<'a> {
+    pub(super) session: ServerSession,
+    pub(super) socket: RtmpClientSocket,
     parser_charge: parser_budget::ParserCharge,
     /// Set when the publish is authorized: this connection's media, run here.
-    publisher: Option<Box<RtmpPublisherMedia>>,
+    pub(super) publisher: Option<Box<RtmpPublisherMedia>>,
     publishing: bool,
-    commands: &'a mpsc::Sender<RtmpControlCommand>,
-    client_ip: String,
-    client_addr: String,
-    engine: &'a MediaEngine,
-    shutdown: &'a CancellationToken,
+    pub(super) commands: &'a mpsc::Sender<RtmpControlCommand>,
+    pub(super) client_ip: String,
+    pub(super) client_addr: String,
+    pub(super) engine: &'a MediaEngine,
+    pub(super) shutdown: &'a CancellationToken,
 }
 
 impl RtmpClient<'_> {
@@ -237,18 +237,7 @@ impl RtmpClient<'_> {
             warn_parser_budget_exhausted(&self.client_addr);
             return Some(("session", PARSER_BUDGET_EXHAUSTED, true));
         }
-        let outcome = handle_session_results(
-            &mut self.session,
-            results,
-            &mut self.socket,
-            self.commands,
-            &self.client_ip,
-            &self.client_addr,
-            self.engine,
-            self.shutdown,
-            &mut self.publisher,
-        )
-        .await;
+        let outcome = self.handle_session_results(results).await;
         // Completed media has been published to the ring.
         self.parser_charge
             .release_to(self.session.inbound_buffered_bytes());

@@ -387,7 +387,7 @@ async fn dependency_summary(
         file_ingest.push(serde_json::json!({
             "id": ingest.id,
             "filename": ingest.filename,
-            "mediaExists": media_path.exists(),
+            "mediaExists": tokio::fs::try_exists(&media_path).await.unwrap_or(false),
             "markedActive": runtime.marked_active,
             "childRegistered": runtime.child_registered,
             "backend": file_ingest_backend,
@@ -442,23 +442,29 @@ async fn storage_summary(state: &AppState, media: &serde_json::Value) -> serde_j
         .as_array()
         .map(|files| files.len())
         .unwrap_or(0);
-    let media_root = std::fs::canonicalize(&state.media_dir)
-        .ok()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| state.media_dir.clone());
-    let disks = Disks::new_with_refreshed_list();
-    let selected_disk = disks
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .rfind(|disk| Path::new(&media_root).starts_with(disk.mount_point()))
-        .map(|disk| {
-            serde_json::json!({
-                "mountPoint": disk.mount_point().display().to_string(),
-                "totalBytes": disk.total_space(),
-                "availableBytes": disk.available_space(),
-            })
-        });
+    let media_dir = state.media_dir.clone();
+    let (media_root, selected_disk) = tokio::task::spawn_blocking(move || {
+        let media_root = std::fs::canonicalize(&media_dir)
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or(media_dir);
+        let disks = Disks::new_with_refreshed_list();
+        let selected_disk = disks
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .rfind(|disk| Path::new(&media_root).starts_with(disk.mount_point()))
+            .map(|disk| {
+                serde_json::json!({
+                    "mountPoint": disk.mount_point().display().to_string(),
+                    "totalBytes": disk.total_space(),
+                    "availableBytes": disk.available_space(),
+                })
+            });
+        (media_root, selected_disk)
+    })
+    .await
+    .unwrap_or_else(|_| (state.media_dir.clone(), None));
 
     serde_json::json!({
         "mediaDir": state.media_dir,
