@@ -509,7 +509,7 @@ lifecycle and probe events (dotted).
 - **Bridges.** Commands to the owner: `AttachPublisher`, `AttachReader`,
   `ProbeApplied`, `Disconnect`, `Shutdown` (256 per owner). Events to Tokio:
   `Connected`, `Probe`, `Disconnected`, `Fault` (256, shared)
-  (`crates/restream-engine/src/srt/ingress_bridge.rs`). Tokio retains at most one deferred
+  (`crates/restream-engine/src/srt/ingress_types.rs`). Tokio retains at most one deferred
   command; a full Owner command bridge backpressures event consumption, the
   application of finished admissions and the delivery of probe answers,
   instead of growing a reply queue behind another Owner's topology churn.

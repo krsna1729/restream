@@ -41,12 +41,13 @@ use super::calls::CallSupervisor;
 use super::ingress_admission::{
     AUTH_FAILURE_CAPACITY, AdmissionGuard, AuthFailure, ReceiverGroupId,
 };
+use super::ingress_bridge::SrtIngressHandle;
 use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
-use super::ingress_owner::{
-    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
-    IngressConfig, IngressPeer, SrtIngressEvent, SrtIngressHandle,
-};
 use super::ingress_quality::{QualityFold, QualitySample};
+use super::ingress_types::{
+    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
+    IngressConfig, IngressPeer, SrtIngressEvent,
+};
 
 /// How often deleted pipelines are checked and the shutdown flag is read.
 /// Lifecycle only: media does not wait on it.

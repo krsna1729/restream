@@ -35,7 +35,7 @@ use crate::ingest_auth::{AuthenticatedPipeline, PipelineAccessMode};
 use crate::security::RateLimitScope;
 use crate::srt::calls::CallerPublisher;
 use crate::srt::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
-use crate::srt::ingress_owner::{IngressCommand, IngressPeer};
+use crate::srt::ingress_types::{IngressCommand, IngressPeer};
 use crate::srt_stream_id::{ParsedStreamId, SrtConnectionMode, parse_srt_stream_id};
 
 /// Deadline for the pipeline lookup only: dropping it has no side effect.

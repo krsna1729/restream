@@ -32,8 +32,8 @@ use tracing::error;
 
 use super::{Publisher, PublisherSession, SrtServer};
 use crate::srt::ingress_media::ProbeIdentity;
-use crate::srt::ingress_owner::IngressPeer;
 use crate::srt::ingress_quality::QualityFold;
+use crate::srt::ingress_types::IngressPeer;
 
 /// One `Probe` event for a publisher's task.
 pub(super) struct ProbeJob {

@@ -22,7 +22,7 @@ use super::per_second;
 
 use srt_transport::advanced::admission::LogicalPeerStats;
 
-use super::ingress_bridge::IngressPeer;
+use super::ingress_types::IngressPeer;
 
 use crate::snapshots::PublisherQuality;
 
