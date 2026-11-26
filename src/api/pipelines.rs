@@ -147,9 +147,9 @@ pub async fn pipelines_get_handler(
         return response;
     }
 
-    match state.pipeline_service.list_pipelines().await {
+    match state.list_pipelines().await {
         Ok(pipelines) => {
-            let ingest_host = state.pipeline_service.get_ingest_host().await;
+            let ingest_host = state.ingest_host().await;
             let pipelines = pipelines
                 .iter()
                 .map(|pipeline| {
@@ -178,7 +178,7 @@ pub async fn pipeline_detail_handler(
         return response;
     }
 
-    let pipeline = match state.pipeline_service.get_by_id(&id).await {
+    let pipeline = match state.pipeline(&id).await {
         Ok(pipeline) => pipeline,
         Err(error) => return ApiError::from(error).into_response(),
     };
@@ -186,7 +186,7 @@ pub async fn pipeline_detail_handler(
         Ok(outputs) => outputs,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let ingest_host = state.pipeline_service.get_ingest_host().await;
+    let ingest_host = state.ingest_host().await;
 
     Json(serde_json::json!({
         "pipeline": view_models::pipeline_response_json(
@@ -239,7 +239,6 @@ pub async fn pipelines_post_handler(
             .unwrap_or_else(generate_stream_key);
         let id = format!("pipeline_{}", to_hex(&rand::random::<[u8; 8]>()));
         match state
-            .pipeline_service
             .create_pipeline(
                 &id,
                 &payload.name,
@@ -262,7 +261,7 @@ pub async fn pipelines_post_handler(
                     Ok(file_ingest) => file_ingest,
                     Err(response) => return response,
                 };
-                let ingest_host = state.pipeline_service.get_ingest_host().await;
+                let ingest_host = state.ingest_host().await;
                 return (
                     StatusCode::CREATED,
                     Json(serde_json::json!({
@@ -314,7 +313,7 @@ pub async fn pipelines_update_handler(
         return response;
     }
 
-    let existing = match state.pipeline_service.get_by_id(&id).await {
+    let existing = match state.pipeline(&id).await {
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
     };
@@ -337,7 +336,7 @@ pub async fn pipelines_update_handler(
         Err(response) => return *response,
     };
 
-    if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
+    if let Ok(active_pipelines) = state.list_pipelines().await
         && active_pipelines
             .iter()
             .any(|p| p.id != id && p.stream_key == stream_key)
@@ -346,7 +345,6 @@ pub async fn pipelines_update_handler(
     }
 
     match state
-        .pipeline_service
         .update_pipeline(
             &id,
             &payload.name,
@@ -369,7 +367,7 @@ pub async fn pipelines_update_handler(
                 Ok(file_ingest) => file_ingest,
                 Err(response) => return response,
             };
-            let ingest_host = state.pipeline_service.get_ingest_host().await;
+            let ingest_host = state.ingest_host().await;
             Json(serde_json::json!({
                 "message": "Pipeline updated",
                 "pipeline": view_models::pipeline_response_json_with_file_ingest(
@@ -406,7 +404,7 @@ pub async fn pipelines_delete_handler(
         return response;
     }
 
-    match state.pipeline_service.delete_pipeline(&id).await {
+    match state.delete_pipeline(&id).await {
         Ok(true) => {
             state.wake_reconciler();
             refresh_srt_ingest_policy_store(&state).await;
@@ -465,10 +463,10 @@ pub async fn pipeline_moq_token_handler(
     let Some(port) = state.moq_port() else {
         return (StatusCode::CONFLICT, "The MoQ listener is off").into_response();
     };
-    if let Err(error) = state.pipeline_service.get_by_id(&pipeline_id).await {
+    if let Err(error) = state.pipeline(&pipeline_id).await {
         return ApiError::from(error).into_response();
     }
-    let ingest_host = state.pipeline_service.get_ingest_host().await;
+    let ingest_host = state.ingest_host().await;
     let (token, expires_at) = restream_engine::moq::origin::mint_token(&pipeline_id);
     Json(moq_token_response(
         &ingest_host,

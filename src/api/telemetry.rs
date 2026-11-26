@@ -113,7 +113,7 @@ pub async fn build_file_diagnostics_context(
     state: &AppState,
     pipeline_id: &str,
 ) -> Option<diag::FileDiagnosticsContext> {
-    let pipeline = state.pipeline_service.get_by_id(pipeline_id).await.ok()?;
+    let pipeline = state.pipeline(pipeline_id).await.ok()?;
     let ingest = state.file_ingest_state(&pipeline).await.ok()?.ingest?;
     let path = expected_media_path(&state.media_dir, &ingest.filename);
     let metadata = std::fs::metadata(&path).ok();
@@ -441,11 +441,7 @@ pub async fn v1_overview_handler(
         return response;
     }
 
-    let pipelines = state
-        .pipeline_service
-        .list_pipelines()
-        .await
-        .unwrap_or_default();
+    let pipelines = state.list_pipelines().await.unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
     let snapshot = state

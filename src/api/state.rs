@@ -37,6 +37,7 @@ mod ingests;
 mod media;
 mod notifications;
 mod observability;
+mod pipelines;
 mod runtime;
 mod settings;
 mod shares;
@@ -161,7 +162,7 @@ pub struct AppState {
     pub db_path: String,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-    pub pipeline_service: PipelineService,
+    pipeline_service: PipelineService,
     pipeline_input_service: PipelineInputService,
     recirculation_service: RecirculationService,
     ingest_service: IngestService,

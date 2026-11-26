@@ -55,7 +55,7 @@ pub async fn recording_start_handler(
         return Ok(response);
     }
 
-    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
+    let pipeline = state.pipeline(&pipeline_id).await?;
 
     let active = state
         .start_recording(
@@ -79,7 +79,7 @@ pub async fn recording_stop_handler(
         return Ok(response);
     }
 
-    let _ = state.pipeline_service.get_by_id(&pipeline_id).await?;
+    let _ = state.pipeline(&pipeline_id).await?;
 
     state.stop_recording(&pipeline_id).await?;
 

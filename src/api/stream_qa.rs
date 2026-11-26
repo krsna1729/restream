@@ -37,7 +37,7 @@ pub async fn stream_qa_get_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return Ok(response);
     }
-    state.pipeline_service.get_by_id(&pipeline_id).await?;
+    state.pipeline(&pipeline_id).await?;
     let enabled = state
         .settings_meta(&stream_qa_enabled_meta_key(&pipeline_id))
         .await?
@@ -56,7 +56,7 @@ pub async fn stream_qa_put_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return Ok(response);
     }
-    state.pipeline_service.get_by_id(&pipeline_id).await?;
+    state.pipeline(&pipeline_id).await?;
     state
         .set_settings_meta(
             &stream_qa_enabled_meta_key(&pipeline_id),

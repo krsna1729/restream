@@ -59,12 +59,7 @@ pub async fn pipeline_graph_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return Ok(response);
     }
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
-        .await
-        .is_err()
-    {
+    if state.pipeline(&pipeline_id).await.is_err() {
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
@@ -131,12 +126,7 @@ pub async fn pipeline_diagnostics_context_handler(
         return Ok(response);
     }
 
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
-        .await
-        .is_err()
-    {
+    if state.pipeline(&pipeline_id).await.is_err() {
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
@@ -208,12 +198,7 @@ pub async fn v1_pipeline_summary_handler(
         return Ok(response);
     }
 
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
-        .await
-        .is_err()
-    {
+    if state.pipeline(&pipeline_id).await.is_err() {
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
