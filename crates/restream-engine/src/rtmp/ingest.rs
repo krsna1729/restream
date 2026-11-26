@@ -43,8 +43,6 @@ pub(super) use client::handle_rtmp_client;
 #[path = "ingest/control.rs"]
 mod control;
 pub(super) use control::run_rtmp_control_session;
-#[path = "ingest/session.rs"]
-mod session;
 
 async fn send_control_command(
     commands: &mpsc::Sender<RtmpControlCommand>,
