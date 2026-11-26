@@ -7,6 +7,11 @@
 //! samples, and exact minor/major fault counts. Wall-clock intervals use
 //! `std::time::Instant`.
 
+/// Wall-clock milliseconds since the Unix epoch, clamped at zero.
+pub(crate) fn epoch_ms() -> u64 {
+    jiff::Timestamp::now().as_millisecond().max(0) as u64
+}
+
 /// CPU time the calling thread has consumed.
 pub(crate) fn thread_cpu_ns() -> u64 {
     let ts = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);

@@ -781,7 +781,7 @@ fn report(
     let phase = upload_policy::phase(&request.target);
     match effect {
         Some(ResultEffect::Acknowledged { bytes }) => {
-            let now_ms = crate::engine::MediaEngine::now_epoch_ms();
+            let now_ms = crate::timing::epoch_ms();
             slot.progress.record_sent(bytes, 1, now_ms);
             slot.progress.record_upload_acknowledged();
             slot.last_failure = None;

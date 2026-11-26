@@ -89,6 +89,21 @@ the [assurance roadmap](assurance-roadmap.md).
 - Why open: `hls_put_shard` crosses most of the egress module graph; several
   shallow `lib.rs` modules may be deliberate public façades. No `long-file`
   finding exists, so file length alone is not the problem.
+- Design: [Backend module layers](egress-architecture.md#backend-module-layers)
+  names the order: leaf/visit and feeds, protocol backends, shard runtime,
+  then the engine fabric/factory that constructs a backend with its context.
+  The HLS report and `visit_leaf` no longer import `MediaEngine`; the clock
+  moved to `timing`. Remaining back-references (progress sink, upload report,
+  audio routing) move into a construction context.
+- Triage: the shallow findings are cohesive façades, not accidental bags:
+  `api::state` and `application::services` expose their owned operations,
+  `db` exposes queries, `restream_core`/`restream_domain`/`restream_moq`/
+  `restream_rtmp`/`restream_sync` are library surfaces, and the harness
+  modules are test-only. Splitting them would add forwarding, so they stay.
+  The wide directories (`restream-engine/src`, `egress`, `egress/backends`,
+  `srt`, benches, `api`, `runtime_views`, `application`, `db`, `bootstrap`,
+  `tests`) match their current owners; no file move is planned without a
+  new owner.
 - Gates: a design note names the intended layers for the HLS tangle; RTMP,
   SRT, HLS, and harness tests pass; scoped `deslop-please` shows the intended
   reduction; no wide-directory move without an owning module.
