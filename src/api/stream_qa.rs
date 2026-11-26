@@ -39,8 +39,7 @@ pub async fn stream_qa_get_handler(
     }
     state.pipeline_service.get_by_id(&pipeline_id).await?;
     let enabled = state
-        .settings_service
-        .get_meta(&stream_qa_enabled_meta_key(&pipeline_id))
+        .settings_meta(&stream_qa_enabled_meta_key(&pipeline_id))
         .await?
         .is_some_and(|value| value == "1");
     Ok(state_response(&state, &pipeline_id, enabled))
@@ -59,8 +58,7 @@ pub async fn stream_qa_put_handler(
     }
     state.pipeline_service.get_by_id(&pipeline_id).await?;
     state
-        .settings_service
-        .set_meta(
+        .set_settings_meta(
             &stream_qa_enabled_meta_key(&pipeline_id),
             if write.enabled { "1" } else { "0" },
         )

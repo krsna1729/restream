@@ -266,10 +266,11 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
         engine,
         log_broadcast,
     );
-    state.settings_service =
+    state.replace_settings_service_for_test(
         restream::infrastructure::service_wiring::ControlPlane::on_pool(&settings_pool)
             .services
-            .settings_service;
+            .settings_service,
+    );
     settings_pool.close().await;
     let app = api::create_router(Arc::new(state));
     let cookie = login(&app).await;
