@@ -219,7 +219,7 @@ async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
     let mut calls = CallSupervisor::new();
     let mut admissions = Admissions::new(4);
     let (mut peers, mut answers) = PeerWork::new();
-    sessions.insert(peer, Session::Publish(peers.attach(&server, peer, session)));
+    sessions.insert(peer, Session::Publish(peers.attach(&engine, peer, session)));
 
     let probe = DemuxProbe {
         video: Some(VideoMeta {

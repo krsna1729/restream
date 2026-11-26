@@ -30,7 +30,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinSet;
 use tracing::error;
 
-use super::{Publisher, PublisherSession, SrtServer};
+use super::{Publisher, PublisherSession};
+use crate::engine::MediaEngine;
 use crate::srt::ingress_media::ProbeIdentity;
 use crate::srt::ingress_quality::QualityFold;
 use crate::srt::ingress_types::IngressPeer;
@@ -71,7 +72,7 @@ impl PeerWork {
     /// probes.
     pub(super) fn attach(
         &mut self,
-        server: &Arc<SrtServer>,
+        engine: &Arc<MediaEngine>,
         logical_peer: IngressPeer,
         session: PublisherSession,
     ) -> Publisher {
@@ -79,7 +80,7 @@ impl PeerWork {
         let ingest = session.ingest.clone();
         let cancel = session.lease.registration().cancel_token.clone();
         self.tasks.spawn(run(
-            server.clone(),
+            engine.clone(),
             logical_peer,
             session,
             jobs,
@@ -96,10 +97,8 @@ impl PeerWork {
 
     /// Finish a publisher that never attached (its peer left during
     /// admission), off the loop.
-    pub(super) fn finish(&mut self, server: &Arc<SrtServer>, session: PublisherSession) {
-        let server = server.clone();
-        self.tasks
-            .spawn(async move { server.finish_publisher(session).await });
+    pub(super) fn finish(&mut self, session: PublisherSession) {
+        self.tasks.spawn(session.finish());
     }
 
     /// Join the next finished task, reporting a panic. Cancel safe.
@@ -118,14 +117,14 @@ impl PeerWork {
 }
 
 async fn run(
-    server: Arc<SrtServer>,
+    engine: Arc<MediaEngine>,
     logical_peer: IngressPeer,
     session: PublisherSession,
     mut jobs: UnboundedReceiver<ProbeJob>,
     answers: UnboundedSender<ProbeAnswer>,
 ) {
     while let Some(ProbeJob { identity, probe }) = jobs.recv().await {
-        let applied = AssertUnwindSafe(server.apply_probe(&session, identity, *probe))
+        let applied = AssertUnwindSafe(session.apply_probe(&engine, identity, *probe))
             .catch_unwind()
             .await;
         let ring = applied.unwrap_or_else(|payload| {
@@ -140,5 +139,5 @@ async fn run(
             ring,
         });
     }
-    server.finish_publisher(session).await;
+    session.finish().await;
 }

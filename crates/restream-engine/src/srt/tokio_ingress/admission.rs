@@ -287,7 +287,7 @@ impl SrtServer {
     ) -> Result<Admitted, String> {
         let (session, media) = self.start_publisher(peer, pipeline, stream_key).await?;
         if gone.load(Ordering::Acquire) {
-            self.finish_publisher(session).await;
+            session.finish().await;
             return Ok(Admitted::Rejected);
         }
         Ok(Admitted::Publish(session, media))
@@ -379,7 +379,7 @@ impl SrtServer {
         };
         match outcome {
             Some(Admitted::Publish(session, media)) => {
-                let publisher = peers.attach(self, logical_peer, session);
+                let publisher = peers.attach(&self.engine, logical_peer, session);
                 sessions.insert(logical_peer, Session::Publish(publisher));
                 ingress.command(IngressCommand::AttachPublisher {
                     logical_peer,
@@ -426,7 +426,7 @@ impl SrtServer {
     /// drop.
     fn discard_admission(self: &Arc<Self>, peers: &mut PeerWork, outcome: Admitted) {
         if let Admitted::Publish(session, _media) = outcome {
-            peers.finish(self, session);
+            peers.finish(session);
         }
     }
 }
