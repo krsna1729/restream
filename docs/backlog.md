@@ -8,8 +8,6 @@ the [assurance roadmap](assurance-roadmap.md).
 ## Contents
 
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
-- [Q-120 split the last complexity baselines](#q-120-performance-opus-split-the-last-two-complexity-baselines)
-- [Q-121 converge EgressTask fabric paths](#q-121-lifecycle-opus-converge-the-fabric-run-paths-in-egresstask)
 - [Q-122 deepen AppState and engine metric interfaces](#q-122-architecture-opus-deepen-appstate-and-engine-metric-interfaces)
 - [Q-123 break the smallest module cycles](#q-123-architecture-opus-break-the-smallest-module-cycles)
 - [Q-124 untangle HLS egress and triage the remaining deslop findings](#q-124-architecture-opus-untangle-hls-egress-and-triage-the-remaining-deslop-findings)
@@ -24,32 +22,6 @@ the [assurance roadmap](assurance-roadmap.md).
   and `srt_egress_connect_concurrency` (`crates/restream-engine/src/config.rs`) on a second host.
 - Gates: the single-shard SRT matrix on another host; no production policy
   change without measured evidence.
-
-### Q-120 [performance] [opus] Split the last two complexity baselines
-- Goal: `SrtOwners::drain_events` (22) and `KtlsConnection::read_records` (21)
-  leave `crates/xtask/reportcard-baseline.json`, so the reportcard ratchet has
-  no engine entries left.
-- Why still open: both are hot paths, so a split needs before/after numbers
-  from a benchmark that drives the real path. `drain_events` needs a live SRT
-  owner set; `read_records` needs a kernel-TLS socket and the engine's private
-  connection type. No existing Criterion suite covers either.
-- Gates: a production-path benchmark for each, then the split with numbers
-  showing no regression on a named host, then delete the entry with
-  `cargo xtask reportcard --update-baseline`.
-
-### Q-121 [lifecycle] [opus] Converge the fabric run paths in EgressTask
-- Goal: `run_srt_fabric`, `run_rtmp_fabric`, and `run_hls_put_fabric` share
-  one sequence for retain, dispatch placement, stop or leaf wait, Remove or
-  Abandon, runtime release, and status forwarding. A protocol supplies only
-  its hooks and phase.
-- Why open: #697 fenced retry settlement by attempt and
-  `EgressManager::dispatch_remove` routes Remove and Abandon through one
-  path, but the three run methods still repeat the sequence and can drift.
-  HLS uses Abandon when a stage ends under the output; SRT and RTMP always
-  Remove. No known correctness gap; this is duplication risk.
-- Gates: RTMP, SRT, and HLS fabric tests cover stop, leaf failure, dispatch
-  failure, and stage end; every status and retry write stays `_if_current`;
-  shutdown ordering does not change.
 
 ### Q-122 [architecture] [opus] Deepen AppState and engine metric interfaces
 - Goal: remove the 189 `field-leak` findings, starting with `AppState` (23),
