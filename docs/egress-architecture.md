@@ -558,6 +558,27 @@ Startup logs `srt egress shard runtime ready` per shard and
   process through `RecirculationInputPublisher`. It shares
   `Arc<MediaPacket>`; nothing is serialized.
 
+### Backend module layers
+
+`deslop-please` reports one tangle across the fabric backends, the
+`MediaEngine` composition modules and the stage/audio runtime. The intended
+order, low to high:
+
+1. leaf contract: `egress::leaf`, `egress::visit`, feeds and wire helpers.
+   These own cursors, progress, clocks and the end-of-visit report.
+2. protocol backends: `egress::backends::*` and `moq::egress`. A backend may
+   use the leaf contract and its feed; it must not import `engine` or
+   `engine_*`.
+3. shard runtime: `egress::shard`, `egress::manager`, `egress::runtime`.
+   It owns backends and calls their visits.
+4. composition: `engine_*_egress_fabric` and the factory build a backend
+   with the context it needs.
+
+The first slice moved the leaf clock to `timing` so the HLS report and
+`visit_leaf` no longer import `MediaEngine`. The remaining back-references
+(the progress sink, upload reporting and audio routing) move to a context
+passed at construction; the backend must not reach back into the engine.
+
 ## Configuration
 
 `EgressFabricConfig::from_env` (`crates/restream-engine/src/config.rs`) parses and clamps the

@@ -186,7 +186,7 @@ fn apply_progress_to_common<F: EgressFeed>(
         EngineProgress::Progress { bytes, units, .. } => {
             common.progress.record_send(*bytes, *units);
             if *bytes > 0 || *units > 0 {
-                let now_ms = crate::engine::MediaEngine::now_epoch_ms();
+                let now_ms = crate::timing::epoch_ms();
                 common
                     .progress_sink
                     .record_sent(*bytes as u64, *units as u64, now_ms);

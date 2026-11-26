@@ -264,7 +264,7 @@ impl MediaEngine {
     }
 
     pub fn now_epoch_ms() -> u64 {
-        jiff::Timestamp::now().as_millisecond().max(0) as u64
+        crate::timing::epoch_ms()
     }
 
     /// The RTMP ingress limits this engine was configured with.
