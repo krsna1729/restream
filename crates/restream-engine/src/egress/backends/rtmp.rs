@@ -184,6 +184,14 @@ struct MediaPublisher {
 const FEED_READ_BURST: usize = 32;
 
 impl MediaPublisher {
+    /// Units pulled from the feed but not yet encoded.
+    #[cfg(test)]
+    fn pending_len(&self) -> usize {
+        self.pending_units
+            .len()
+            .saturating_sub(self.pending_units_index)
+    }
+
     fn new(
         mut core: RtmpSessionCore,
         startup: RtmpPublishStartup,
@@ -660,12 +668,7 @@ impl RtmpFabricEngine {
     #[cfg(test)]
     pub(crate) fn publisher_pending_units_len(&self) -> Option<usize> {
         match &self.state {
-            Some(RtmpFabricState::Publishing(publisher)) => Some(
-                publisher
-                    .pending_units
-                    .len()
-                    .saturating_sub(publisher.pending_units_index),
-            ),
+            Some(RtmpFabricState::Publishing(publisher)) => Some(publisher.pending_len()),
             _ => None,
         }
     }
