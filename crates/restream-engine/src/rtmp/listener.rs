@@ -19,7 +19,8 @@ use crate::engine::MediaEngine;
 use crate::ingest_auth::PipelineAccessAuthenticator;
 use crate::security::IngestSecurityService;
 
-use super::ingest::{RtmpControlCommand, handle_rtmp_client, run_rtmp_control_session};
+use super::connection::RtmpControlCommand;
+use super::ingest::{handle_rtmp_client, run_rtmp_control_session};
 
 const CONTROL_SESSION_CAPACITY: usize = 16;
 const MAX_IO_URING_ENTRIES: u32 = 32_768;

@@ -545,7 +545,7 @@ async fn owner_publishes_media_in_order_and_reports_only_probes() {
 
     let (reply, response) = tokio::sync::oneshot::channel();
     commands
-        .send(super::ingest::RtmpControlCommand::PublishRequested {
+        .send(super::connection::RtmpControlCommand::PublishRequested {
             stream_key: "key".to_string(),
             client_ip: "127.0.0.1".to_string(),
             client_addr: "127.0.0.1:1".to_string(),
@@ -553,7 +553,8 @@ async fn owner_publishes_media_in_order_and_reports_only_probes() {
         })
         .await
         .unwrap();
-    let super::ingest::PublishAuthorization::Accepted(mut media) = response.await.unwrap() else {
+    let super::connection::PublishAuthorization::Accepted(mut media) = response.await.unwrap()
+    else {
         panic!("publish accepted");
     };
 
@@ -577,14 +578,14 @@ async fn owner_publishes_media_in_order_and_reports_only_probes() {
 
     // The probe goes to the control session as ingest metadata.
     commands
-        .send(super::ingest::RtmpControlCommand::MediaProbe(
+        .send(super::connection::RtmpControlCommand::MediaProbe(
             super::ingest_media::RtmpMediaEvent::Video(meta),
         ))
         .await
         .unwrap();
     let (reply, response) = tokio::sync::oneshot::channel();
     commands
-        .send(super::ingest::RtmpControlCommand::Finish {
+        .send(super::connection::RtmpControlCommand::Finish {
             phase: "disconnect".to_string(),
             reason: "test complete".to_string(),
             had_error: false,

@@ -9,19 +9,8 @@ use tracing::info;
 
 use restream_core::{MediaPacket, MediaType};
 
-use super::ingest::{RtmpClientSocket, RtmpControlCommand};
+use super::connection::{PlayAuthorization, RtmpClientSocket, RtmpControlCommand};
 use restream_rtmp::timestamps::RtmpTimestampGuard;
-
-pub(super) enum PlayAuthorization {
-    Accepted {
-        pipeline_id: String,
-    },
-    Rejected {
-        code: &'static str,
-        description: &'static str,
-        error: &'static str,
-    },
-}
 
 pub(super) struct RtmpPlayRequest<'a> {
     pub(super) session: &'a mut ServerSession,

@@ -1,6 +1,6 @@
 //! RTMP client and server handshake state machines.
 
-use super::ingest::RtmpClientSocket;
+use super::connection::RtmpClientSocket;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 #[cfg(test)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
