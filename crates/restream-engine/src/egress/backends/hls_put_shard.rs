@@ -23,6 +23,7 @@ use tokio_rustls::rustls::ClientConfig;
 
 use super::compio_tcp::CompioTcpStream;
 use super::compio_tcp::TcpConnectAttempt;
+use super::compio_tcp::TlsTcpConnection;
 use super::hls_put::{Exchange, ExchangeStep, HlsPutTarget};
 use super::rtmp_shard_poller::RtmpReadinessPoller;
 use super::tcp::{TcpReadyLeaf, connect_error};
@@ -33,7 +34,7 @@ use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
 use crate::egress::scheduler::ReadyQueue;
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
-use crate::egress::tls::{TlsCounters, TlsTcpConnection};
+use crate::egress::tls::TlsCounters;
 use crate::hls::HlsStore;
 use crate::hls::upload_policy::{
     self, Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest,

@@ -32,11 +32,11 @@ use restream_rtmp::parse_rtmp_url;
 
 #[cfg(test)]
 use super::compio_tcp::CompioTcpPoller;
+use super::compio_tcp::TlsTcpConnection;
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
 #[cfg(test)]
 use super::tcp::TcpEgressPollError;
 use super::tcp::TcpReadyLeaf;
-use crate::egress::tls::TlsTcpConnection;
 
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
 pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
