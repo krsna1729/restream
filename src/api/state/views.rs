@@ -103,7 +103,7 @@ impl AppState {
     }
 
     /// The configured output reconnect policy.
-    pub(crate) fn output_retry_policy(&self) -> crate::application::reconcile::OutputRetryPolicy {
+    pub(crate) fn output_retry_policy(&self) -> crate::config::OutputRetryPolicy {
         self.config.tuning.output_retry_policy()
     }
 

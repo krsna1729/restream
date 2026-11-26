@@ -19,12 +19,12 @@ use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
 use crate::application::reconcile::{
-    OutputFailureWindow, OutputRetryPolicy, OutputStartAction, OutputStopAction,
-    decide_output_start_action, decide_output_stop_action, load_output_runtime_snapshot,
+    OutputFailureWindow, OutputStartAction, OutputStopAction, decide_output_start_action,
+    decide_output_stop_action, load_output_runtime_snapshot,
 };
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::topology::ReconcileRequests;
-use crate::config::RuntimeTuning;
+use crate::config::{OutputRetryPolicy, RuntimeTuning};
 use crate::db::DeadlineDb;
 use restream_domain::domain::output_spec::OutputUrlScheme;
 use restream_domain::domain::state::DesiredOutputState;

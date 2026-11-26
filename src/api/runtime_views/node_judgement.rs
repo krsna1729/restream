@@ -188,7 +188,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::application::capacity::{CapacityLimits, Workload};
+    use crate::application::capacity::Workload;
+    use crate::config::CapacityLimits;
 
     fn priors(stages: u32) -> CapacitySnapshot {
         // Four FFmpeg stages fit the limit: 1 stage is 25%, 4 are 100%.

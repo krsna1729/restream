@@ -8,9 +8,8 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, CapacityLimits, LimitSources};
 use restream_engine::engine::MediaEngine;
-use restream_engine::host_capacity::HostCapacity;
 
 /// The projection's formula. 5: MoQ outputs cost their measured share of
 /// an RTMP output instead of the RTMP prior (4: HLS PUT, sink and pipeline
@@ -158,39 +157,6 @@ impl Workload {
             fanout_pps: self.fanout_pps + count_f * protocol.egress_work_pps(ingest),
             ..self
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapacityLimits {
-    pub ingress_pps: f64,
-    pub egress_pps: f64,
-    pub nic_bps: f64,
-    pub memory_bytes: f64,
-    pub ffmpeg_stages: f64,
-    pub disk_bps: f64,
-}
-
-impl CapacityLimits {
-    /// Conservative starting calibration. Deployments can replace these
-    /// values through `AppConfig::from_env` after measuring their host.
-    pub fn from_parallelism(parallelism: u32) -> Self {
-        let cores = f64::from(parallelism.max(1));
-        Self {
-            ingress_pps: cores * 100_000.0,
-            egress_pps: cores * 250_000.0,
-            nic_bps: 10_000_000_000.0,
-            memory_bytes: 1_000_000_000.0,
-            ffmpeg_stages: cores,
-            disk_bps: 500_000_000.0,
-        }
-    }
-}
-
-impl Default for CapacityLimits {
-    fn default() -> Self {
-        Self::from_parallelism(HostCapacity::get().cpus as u32)
     }
 }
 
@@ -438,29 +404,6 @@ pub struct Scenario {
 /// The scenario named a pipeline with no live ingest: its rate is unknown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoLiveIngest(pub String);
-
-/// Where each limit comes from.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LimitSource {
-    /// `CapacityLimits::from_parallelism`: a conservative prior from the CPU
-    /// count, not a measurement of this host.
-    #[default]
-    Prior,
-    /// Set by the operator (`RESTREAM_CAPACITY_*`), presumably measured.
-    Configured,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LimitSources {
-    pub ingress_pps: LimitSource,
-    pub egress_pps: LimitSource,
-    pub nic_bps: LimitSource,
-    pub memory_bytes: LimitSource,
-    pub ffmpeg_stages: LimitSource,
-    pub disk_bps: LimitSource,
-}
 
 /// What a projection was priced on: the formula, each limit and where it
 /// came from, the CPU count the priors scale with, and the safe threshold.
