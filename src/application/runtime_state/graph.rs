@@ -160,14 +160,7 @@ impl GraphRuntime {
             .iter()
             .map(|(key, stage)| (key.clone(), !stage.muxer.cancel.is_cancelled()))
             .collect();
-        let recordings = engine
-            .recordings
-            .cancel_tokens
-            .read()
-            .await
-            .iter()
-            .map(|(pipeline_id, token)| (pipeline_id.clone(), !token.is_cancelled()))
-            .collect();
+        let recordings = engine.recording_activity().await;
         let mut hls = HashMap::new();
         for pipeline_id in pipeline_ids {
             let snapshot = engine.hls_dependency_snapshot(pipeline_id).await;
