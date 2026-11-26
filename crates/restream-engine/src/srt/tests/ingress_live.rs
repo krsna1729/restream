@@ -199,7 +199,7 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
 
     // Keep the pipeline live for the whole test (about 15 s of paced media);
     // the reader attaches at the live edge whenever it connects.
-    let feeder_server = server.server.clone();
+    let feeder_engine = server.engine.clone();
     let feeder = tokio::spawn(async move {
         let stats = crate::snapshots::SrtIngressOwnerStats::default();
         let mut media = super::super::ingress_media::IngressMedia::<u64>::default();
@@ -207,7 +207,7 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
         for chunk in ts_chunks(5000) {
             if let Some(probe) = media.on_payload(0, chunk, &stats) {
                 let identity = media.probe_identity(0).unwrap();
-                let ring = feeder_server.apply_probe(&session, identity, probe).await;
+                let ring = session.apply_probe(&feeder_engine, identity, probe).await;
                 media.probe_applied(0, identity, ring, &stats);
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
@@ -602,7 +602,7 @@ async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
         }
     }
     let old_identity = media.probe_identity(1).unwrap();
-    server.server.finish_publisher(old_session).await;
+    old_session.finish().await;
     media.discard(1);
 
     let (replacement, replacement_media) = start().await.unwrap();
@@ -615,18 +615,16 @@ async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
     }
     let identity = media.probe_identity(2).unwrap();
     assert_ne!(identity.attempt_id, old_identity.attempt_id);
-    let ring = server
-        .server
-        .apply_probe(&replacement, identity, replacement_probe.unwrap())
+    let ring = replacement
+        .apply_probe(&server.engine, identity, replacement_probe.unwrap())
         .await;
     media.probe_applied(2, identity, ring, &stats);
     let before = server.engine.ingests.pipelines.read().await[PIPELINE].clone();
     assert_eq!(before.codec_hint_str(), "h264");
 
     assert!(
-        server
-            .server
-            .apply_probe(&replacement, old_identity, old_probe.unwrap())
+        replacement
+            .apply_probe(&server.engine, old_identity, old_probe.unwrap())
             .await
             .is_none()
     );
@@ -642,7 +640,7 @@ async fn stale_control_probe_cannot_modify_a_replacement_publisher() {
             .await,
         Some(true),
     );
-    server.server.finish_publisher(replacement).await;
+    replacement.finish().await;
     server.stop().await;
 }
 
@@ -692,9 +690,8 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
         }
     }
     let first_identity = media.probe_identity(1).unwrap();
-    let first_handoff = server
-        .server
-        .apply_probe(&session, first_identity, first.unwrap())
+    let first_handoff = session
+        .apply_probe(&engine, first_identity, first.unwrap())
         .await;
     let replacement = engine.ingests.pipelines.read().await[PIPELINE].clone();
     assert!(
@@ -715,9 +712,8 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
         new_write,
         "superseded ack cannot release held media"
     );
-    let second_handoff = server
-        .server
-        .apply_probe(&session, second_identity, second.clone())
+    let second_handoff = session
+        .apply_probe(&engine, second_identity, second.clone())
         .await;
     assert!(
         Arc::ptr_eq(second_handoff.as_ref().unwrap(), &replacement),
@@ -755,10 +751,7 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
         .await;
     let current = engine.ingests.pipelines.read().await[PIPELINE].clone();
     assert!(!Arc::ptr_eq(&replacement, &current));
-    let standby_handoff = server
-        .server
-        .apply_probe(&session, second_identity, second)
-        .await;
+    let standby_handoff = session.apply_probe(&engine, second_identity, second).await;
     assert!(
         Arc::ptr_eq(standby_handoff.as_ref().unwrap(), &current),
         "a deselected session must not retain a retired producer ring"
@@ -769,7 +762,7 @@ async fn superseded_resize_ack_keeps_current_ring_through_deselection() {
         "standby metadata cannot alter the selected source"
     );
     media.probe_applied(1, second_identity, standby_handoff, &stats);
-    server.server.finish_publisher(session).await;
+    session.finish().await;
     server.stop().await;
 }
 

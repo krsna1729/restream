@@ -115,6 +115,46 @@ pub(super) struct PublisherSession {
     ingest: Arc<ActiveIngest>,
 }
 
+impl PublisherSession {
+    /// Apply an authoritative container snapshot and adapt the selected ring.
+    /// The engine serializes the attempt/selection check and complete metadata
+    /// replacement with the pipeline's selection and origin resolution, and
+    /// reports the probe recorded. Resize precedes the metadata that opens
+    /// the output start gate.
+    pub(super) async fn apply_probe(
+        &self,
+        engine: &MediaEngine,
+        identity: super::ingress_media::ProbeIdentity,
+        probe: DemuxProbe,
+    ) -> Option<Arc<RingBuffer>> {
+        let registration = self.lease.registration();
+        if registration.attempt_id != identity.attempt_id {
+            return None;
+        }
+        engine
+            .replace_ingest_session_tracks(
+                &self.ingest,
+                registration,
+                probe.video,
+                probe.audio_tracks,
+                probe.video_track_count,
+                probe.video_sequence_header,
+            )
+            .await
+    }
+
+    /// Ingest bookkeeping after the Owner has flushed the publisher's media.
+    pub(super) async fn finish(self) {
+        self.lease
+            .finish(IngestEnd::Disconnected {
+                phase: "disconnect",
+                reason: "SRT peer disconnected".to_string(),
+                had_error: false,
+            })
+            .await;
+    }
+}
+
 /// What the loop keeps about an attached publisher; its lease lives in its
 /// task (`peer_work`), which finishes it once this is dropped.
 struct Publisher {
@@ -522,33 +562,6 @@ impl SrtServer {
         Ok((PublisherSession { lease, ingest }, media))
     }
 
-    /// Apply an authoritative container snapshot and adapt the selected ring.
-    /// The engine serializes the attempt/selection check and complete metadata
-    /// replacement with the pipeline's selection and origin resolution, and
-    /// reports the probe recorded. Resize precedes the metadata that opens
-    /// the output start gate.
-    pub(super) async fn apply_probe(
-        &self,
-        publisher: &PublisherSession,
-        identity: super::ingress_media::ProbeIdentity,
-        probe: DemuxProbe,
-    ) -> Option<Arc<RingBuffer>> {
-        let registration = publisher.lease.registration();
-        if registration.attempt_id != identity.attempt_id {
-            return None;
-        }
-        self.engine
-            .replace_ingest_session_tracks(
-                &publisher.ingest,
-                registration,
-                probe.video,
-                probe.audio_tracks,
-                probe.video_track_count,
-                probe.video_sequence_header,
-            )
-            .await
-    }
-
     async fn start_reader(&self, pipeline_id: &str) -> Result<SrtReaderMedia, String> {
         if !self
             .engine
@@ -569,18 +582,6 @@ impl SrtServer {
             TsChunkReader::new(format!("srt_play:{pipeline_id}"), &muxer),
             lease,
         ))
-    }
-
-    /// Ingest bookkeeping after the Owner has flushed the publisher's media.
-    pub(super) async fn finish_publisher(&self, publisher: PublisherSession) {
-        publisher
-            .lease
-            .finish(IngestEnd::Disconnected {
-                phase: "disconnect",
-                reason: "SRT peer disconnected".to_string(),
-                had_error: false,
-            })
-            .await;
     }
 }
 
