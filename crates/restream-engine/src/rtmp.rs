@@ -27,7 +27,7 @@ pub mod fuzz_entry;
 mod handshake;
 // RTMP ingest reads every publisher byte: no unchecked indexing, arithmetic
 // or unwrapping (isolation audit F6). The attribute sits here to keep
-// ingest.rs under the line cap; it covers ingest/session.rs as well.
+// ingest.rs under the line cap; it covers the ingest/ children as well.
 #[deny(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,

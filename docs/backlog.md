@@ -10,7 +10,7 @@ the [assurance roadmap](assurance-roadmap.md).
 - [Q-025 SRT shard law cross-host](#q-025-performance-opus-re-qualify-the-srt-shard-law-after-transport-convergence)
 - [Q-122 deepen AppState and engine metric interfaces](#q-122-architecture-opus-deepen-appstate-and-engine-metric-interfaces)
 - [Q-123 break the smallest module cycles](#q-123-architecture-opus-break-the-smallest-module-cycles)
-- [Q-124 untangle HLS egress and triage the remaining deslop findings](#q-124-architecture-opus-untangle-hls-egress-and-triage-the-remaining-deslop-findings)
+- [Q-124 untangle the engine composition root and triage the remaining deslop findings](#q-124-architecture-opus-untangle-the-engine-composition-root-and-triage-the-remaining-deslop-findings)
 - [Not planned](#not-planned)
   - [Q-033 host-level shard pool](#q-033-host-level-shard-pool)
   - [Q-071 HLS-to-HLS passthrough](#q-071-hls-to-hls-passthrough)
@@ -24,14 +24,18 @@ the [assurance roadmap](assurance-roadmap.md).
   change without measured evidence.
 
 ### Q-122 [architecture] [opus] Deepen AppState and engine metric interfaces
-- Goal: remove the 189 `field-leak` findings, starting with `AppState` (23),
-  `ShardMetrics` (21), `IoBuffers` (13), `GeneralizedSinkMetrics` (11),
-  `LeafCommon` (8) and `MediaEngine` (7). Hide fields behind operations or
+- Goal: remove the 151 `field-leak` findings, starting with `AppState`,
+  `ShardMetrics` (14), `IoBuffers` (13), `GeneralizedSinkMetrics` (11),
+  `LeafCommon` (8) and `SrtFabricLeaf` (7). Hide fields behind operations or
   snapshot queries; do not replace each field with a mechanical getter.
+  The shard loop already counts through `ShardMetrics` operations; the
+  remaining `ShardMetrics` writes are the backends' `observe_metrics`
+  snapshot fill. `TlsCounters` counts through `record(TlsEvent)`.
 - Why open: `deslop-please` 0.1.4 reports code outside each owner reading or
   mutating its fields. `AppState` is the API surface; the engine metrics are
-  shared across modules. The remaining top owners are listed in the audit
-  output, not duplicated here.
+  shared across modules. `IoBuffers` and `SrtFabricLeaf` leak only to their
+  owner's own stream/leaf modules. The remaining top owners are listed in
+  the audit output, not duplicated here.
 - Gates: scoped `deslop-please` has no `field-leak` for those owners; API and
   engine tests pass; any hot metric path keeps its benchmark evidence.
 
@@ -47,8 +51,12 @@ the [assurance roadmap](assurance-roadmap.md).
   applied-init state; the push registry takes the pull spawner instead of
   importing `hls_pull`; `config` owns the capacity and retry value types; and
   the recording/stream-check meta keys sit in one leaf module for the
-  reconciler and their owners. The 32-module engine cycle and the 16-module
-  `test_harness` cycle still need their own design, not a mechanical import
+  reconciler and their owners. The last pass removed the db/logging,
+  migrations/schema, `restream_sync` reader, xtask qualify/release,
+  `restream_mcp` session, `application` service-error, SRT ingress-types,
+  RTMP connection and client/session, and egress TLS/Compio TCP cycles.
+  Left: the 32-module engine cycle and six `test_harness` cycles (16, 8, 7,
+  3, 2 and 2 modules), which need their own design, not a mechanical import
   shuffle.
 - Design: the engine modules target this order, low to high: vocabulary and
   configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`);
@@ -70,15 +78,18 @@ the [assurance roadmap](assurance-roadmap.md).
 - Gates: scoped `deslop-please` reports no cycle for each changed area;
   affected lifecycle/protocol tests pass; public API changes are documented.
 
-### Q-124 [architecture] [opus] Untangle HLS egress and triage the remaining deslop findings
-- Goal: reduce the `hls_put_shard` tangle (58 things across 37 modules) and
-  the `hls_ingest::registry` tangle (6 across 3), then decide the remaining
-  17 `shallow-module` and 15 `wide-directory` findings by ownership rather
-  than file moves. Treat the 69 predominantly test-only findings in
-  `test_harness` as lower priority.
-- Why open: `hls_put_shard` crosses most of the egress module graph; several
-  shallow `lib.rs` modules may be deliberate public façades. No `long-file`
-  finding exists, so file length alone is not the problem.
+### Q-124 [architecture] [opus] Untangle the engine composition root and triage the remaining deslop findings
+- Goal: reduce the remaining tangles, the `MediaEngine`/`StageRegistry`
+  tangle (35 things across 17 modules, reported at `hls/preview.rs`) and the
+  test-only `test_harness::resource_sweep` tangle (5 across 2), then decide
+  the remaining 18 `shallow-module` and 15 `wide-directory` findings by
+  ownership rather than file moves. The `hls_put_shard`, EgressTask/FabricRun
+  and SRT `tokio_ingress` tangles are gone: fabric runs hold the engine, and
+  SRT publisher tasks hold the engine instead of the server.
+- Why open: the engine tangle is the union of subsystem back-references into
+  `MediaEngine` (see Q-123's design); several shallow `lib.rs` modules may be
+  deliberate public façades. No `long-file` finding exists, so file length
+  alone is not the problem.
 - Design: [Backend module layers](egress-architecture.md#backend-module-layers)
   names the order: leaf/visit and feeds, protocol backends, shard runtime,
   then the engine fabric/factory that constructs a backend with its context.
@@ -94,7 +105,7 @@ the [assurance roadmap](assurance-roadmap.md).
   `srt`, benches, `api`, `runtime_views`, `application`, `db`, `bootstrap`,
   `tests`) match their current owners; no file move is planned without a
   new owner.
-- Gates: a design note names the intended layers for the HLS tangle; RTMP,
+- Gates: a design note names the intended layers for the engine tangle; RTMP,
   SRT, HLS, and harness tests pass; scoped `deslop-please` shows the intended
   reduction; no wide-directory move without an owning module.
 
