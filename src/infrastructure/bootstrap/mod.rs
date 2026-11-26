@@ -40,7 +40,6 @@ mod listener_supervisor;
 mod reconcile;
 mod runtime;
 mod shutdown;
-pub(crate) mod supervised_task;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -49,6 +48,8 @@ pub use auth::initialize_auth_for_test;
 use std::sync::Arc;
 
 use tracing::{info, warn};
+
+use crate::infrastructure::supervised_task;
 
 use crate::config::AppConfig;
 use crate::db;

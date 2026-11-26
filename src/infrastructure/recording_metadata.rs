@@ -23,7 +23,7 @@ use restream_engine::recording::{
 };
 
 use crate::db::DeadlineDb;
-use crate::infrastructure::bootstrap::supervised_task::spawn_supervised;
+use crate::infrastructure::supervised_task::spawn_supervised;
 
 /// Starts the supervised writer on `db` and returns the reporter recorders
 /// use. The writer ends once every reporter clone is gone and the queue is
