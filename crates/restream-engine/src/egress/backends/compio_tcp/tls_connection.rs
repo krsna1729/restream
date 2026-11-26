@@ -9,13 +9,11 @@ use std::net::Shutdown;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 
+use super::{CompioTcpStream, TxPart};
 use crate::egress::backend::Interest;
-use crate::egress::backends::compio_tcp::CompioTcpStream;
+use crate::egress::tls::{TlsCounters, TlsEvent, ktls, supports_cipher_suite};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, ProtocolVersion, StreamOwned};
-
-use super::ktls;
-use super::telemetry::TlsCounters;
 
 enum ConnectionState {
     Plain(CompioTcpStream),
@@ -259,7 +257,12 @@ impl TlsTcpConnection {
     #[cfg(test)]
     pub(crate) fn tls(stream: impl Into<CompioTcpStream>, host: &str) -> Result<Self, String> {
         static TEST_COUNTERS: TlsCounters = TlsCounters::new();
-        Self::tls_with_config(stream, host, super::rustls_client_config(), &TEST_COUNTERS)
+        Self::tls_with_config(
+            stream,
+            host,
+            crate::egress::tls::rustls_client_config(),
+            &TEST_COUNTERS,
+        )
     }
 
     /// Same as [`Self::tls`] but with an explicit `ClientConfig` and the
@@ -277,8 +280,8 @@ impl TlsTcpConnection {
         config.enable_secret_extraction = true;
         let connection = ClientConnection::new(Arc::new(config), server_name)
             .map_err(|error| format!("rustls client connection init failed: {error}"))?;
-        TlsCounters::add(&counters.connections);
-        TlsCounters::add(&counters.ktls_requested);
+        counters.record(TlsEvent::Connection);
+        counters.record(TlsEvent::KtlsRequested);
         let stream: CompioTcpStream = stream.into();
         stream.set_ancillary_mode();
         Ok(Self {
@@ -410,16 +413,16 @@ impl TlsTcpConnection {
         };
         if !self.tls_version_recorded {
             match version {
-                ProtocolVersion::TLSv1_2 => TlsCounters::add(&counters.tls12),
-                ProtocolVersion::TLSv1_3 => TlsCounters::add(&counters.tls13),
+                ProtocolVersion::TLSv1_2 => counters.record(TlsEvent::Tls12),
+                ProtocolVersion::TLSv1_3 => counters.record(TlsEvent::Tls13),
                 _ => {}
             }
             self.tls_version_recorded = true;
         }
-        let supported = super::supports_cipher_suite(version, suite.suite())
-            && ktls::supports(version, suite.suite());
+        let supported =
+            supports_cipher_suite(version, suite.suite()) && ktls::supports(version, suite.suite());
         if !supported {
-            TlsCounters::add(&counters.ktls_attempts);
+            counters.record(TlsEvent::KtlsAttempt);
             let tls_stream = match &mut self.state {
                 ConnectionState::Tls(stream) => {
                     stream.take().expect("TLS stream was checked above")
@@ -433,7 +436,7 @@ impl TlsTcpConnection {
             let (_, socket) = tls_stream.into_parts();
             self.state = ConnectionState::Failed(socket);
             self.ktls_state = KtlsState::Unsupported;
-            TlsCounters::add(&counters.ktls_unsupported);
+            counters.record(TlsEvent::KtlsUnsupported);
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!(
@@ -446,7 +449,7 @@ impl TlsTcpConnection {
         if !ready_to_handoff {
             return Ok(());
         }
-        TlsCounters::add(&counters.ktls_attempts);
+        counters.record(TlsEvent::KtlsAttempt);
         let mut stream = match &mut self.state {
             ConnectionState::Tls(stream) => stream.take().expect("TLS stream was checked above"),
             ConnectionState::Plain(_) | ConnectionState::Ktls(_) | ConnectionState::Failed(_) => {
@@ -461,14 +464,14 @@ impl TlsTcpConnection {
             Err(error) => {
                 self.state = ConnectionState::Failed(socket);
                 self.ktls_state = KtlsState::SetupFailed;
-                TlsCounters::add(&counters.ktls_error);
+                counters.record(TlsEvent::KtlsError);
                 return Err(io::Error::other(format!("rustls kTLS handoff: {error}")));
             }
         };
         if let Err(error) = ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets) {
             self.state = ConnectionState::Failed(socket);
             self.ktls_state = KtlsState::SetupFailed;
-            TlsCounters::add(&counters.ktls_error);
+            counters.record(TlsEvent::KtlsError);
             return Err(error);
         }
         socket.set_ktls_mode();
@@ -481,7 +484,7 @@ impl TlsTcpConnection {
             peer_closed: false,
         });
         self.ktls_state = KtlsState::Enabled;
-        TlsCounters::add(&counters.ktls_success);
+        counters.record(TlsEvent::KtlsSuccess);
         Ok(())
     }
 
@@ -571,7 +574,7 @@ impl Drop for TlsTcpConnection {
             && matches!(self.state, ConnectionState::Tls(_))
             && let Some(counters) = self.counters
         {
-            TlsCounters::add(&counters.userspace_tls_connections);
+            counters.record(TlsEvent::UserspaceConnection);
         }
     }
 }
@@ -592,10 +595,7 @@ impl TlsTcpConnection {
     /// Zero-copy counterpart of `write_vectored` for media: shared payload
     /// slices are queued by reference. Only plain and kTLS connections carry
     /// media; Rustls-owned sockets refuse like `write` does.
-    pub(crate) fn write_shared(
-        &mut self,
-        parts: &[crate::egress::backends::compio_tcp::TxPart<'_>],
-    ) -> io::Result<usize> {
+    pub(crate) fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
             ConnectionState::Plain(stream) => stream.write_shared(parts),
@@ -620,10 +620,7 @@ impl TlsTcpConnection {
     /// `write_shared` for the rest of one message (an HTTP request): sends
     /// carry `MSG_MORE` until its last byte is staged, so kTLS records and
     /// TCP segments fill instead of each record being pushed alone.
-    pub(crate) fn write_shared_message(
-        &mut self,
-        parts: &[crate::egress::backends::compio_tcp::TxPart<'_>],
-    ) -> io::Result<usize> {
+    pub(crate) fn write_shared_message(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
         self.advance_tls_handshake()?;
         match &mut self.state {
             ConnectionState::Plain(stream) => stream.write_shared_message(parts),

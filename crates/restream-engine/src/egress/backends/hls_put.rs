@@ -12,9 +12,9 @@ use std::time::Instant;
 use bytes::Bytes;
 use reqwest::Url;
 
+use super::compio_tcp::TlsTcpConnection;
 use super::compio_tcp::TxPart;
 use crate::egress::http1::{HttpError, RequestHead, Response, ResponseReader, write_request_head};
-use crate::egress::tls::TlsTcpConnection;
 use crate::hls::upload_policy::{UploadRequest, UploadTarget};
 
 /// `<manufacturer> / <model> / <version>`, as YouTube asks and Akamai

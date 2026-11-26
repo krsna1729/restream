@@ -41,9 +41,10 @@ use restream_rtmp::RtmpUrlParts;
 use restream_rtmp::resolve_deferred_audio_sequence_header;
 use restream_rtmp::validate_rtmp_output_audio_packet_track;
 
+use super::compio_tcp::TlsTcpConnection;
 use super::compio_tcp::TxPart;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
-use crate::egress::tls::{TlsCounters, TlsTcpConnection};
+use crate::egress::tls::TlsCounters;
 use rtmp_negotiation::{SessionAdvanceOutcome, SessionNegotiation};
 
 #[path = "rtmp_negotiation.rs"]

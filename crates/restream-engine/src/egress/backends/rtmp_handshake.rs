@@ -10,7 +10,7 @@ use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 
 use crate::egress::backend::{Interest, Readiness};
 
-use crate::egress::tls::TlsTcpConnection;
+use super::compio_tcp::TlsTcpConnection;
 
 const HANDSHAKE_READ_BUFFER: usize = 4096;
 

@@ -24,16 +24,30 @@ pub struct TlsTelemetrySnapshot {
     pub ktls_tls13_aes256_gcm: bool,
 }
 
+/// One connection event a [`TlsCounters`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TlsEvent {
+    Connection,
+    KtlsRequested,
+    Tls12,
+    Tls13,
+    KtlsAttempt,
+    KtlsSuccess,
+    KtlsUnsupported,
+    KtlsError,
+    UserspaceConnection,
+}
+
 pub struct TlsCounters {
-    pub(super) connections: AtomicU64,
-    pub(super) tls12: AtomicU64,
-    pub(super) tls13: AtomicU64,
-    pub(super) ktls_requested: AtomicU64,
-    pub(super) ktls_attempts: AtomicU64,
-    pub(super) ktls_success: AtomicU64,
-    pub(super) ktls_unsupported: AtomicU64,
-    pub(super) ktls_error: AtomicU64,
-    pub(super) userspace_tls_connections: AtomicU64,
+    connections: AtomicU64,
+    tls12: AtomicU64,
+    tls13: AtomicU64,
+    ktls_requested: AtomicU64,
+    ktls_attempts: AtomicU64,
+    ktls_success: AtomicU64,
+    ktls_unsupported: AtomicU64,
+    ktls_error: AtomicU64,
+    userspace_tls_connections: AtomicU64,
 }
 
 impl TlsCounters {
@@ -51,7 +65,18 @@ impl TlsCounters {
         }
     }
 
-    pub(super) fn add(counter: &AtomicU64) {
+    pub(crate) fn record(&self, event: TlsEvent) {
+        let counter = match event {
+            TlsEvent::Connection => &self.connections,
+            TlsEvent::KtlsRequested => &self.ktls_requested,
+            TlsEvent::Tls12 => &self.tls12,
+            TlsEvent::Tls13 => &self.tls13,
+            TlsEvent::KtlsAttempt => &self.ktls_attempts,
+            TlsEvent::KtlsSuccess => &self.ktls_success,
+            TlsEvent::KtlsUnsupported => &self.ktls_unsupported,
+            TlsEvent::KtlsError => &self.ktls_error,
+            TlsEvent::UserspaceConnection => &self.userspace_tls_connections,
+        };
         counter.fetch_add(1, Ordering::Relaxed);
     }
 

@@ -8,8 +8,8 @@ use restream_rtmp::RtmpSessionCore;
 use restream_rtmp::RtmpSessionError;
 use restream_rtmp::RtmpSessionEvent;
 
+use super::super::compio_tcp::TlsTcpConnection;
 use super::SESSION_READ_BUFFER;
-use crate::egress::tls::TlsTcpConnection;
 
 pub(super) struct PendingWrite {
     pub(super) bytes: Bytes,

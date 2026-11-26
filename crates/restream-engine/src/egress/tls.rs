@@ -1,13 +1,14 @@
-//! TLS for egress transports over the shard's Compio TCP streams: a rustls
-//! handshake, then a hand-off to kernel TLS so payload is written by
-//! reference with no userspace copy. Protocol-neutral: RTMPS uses it, and
-//! any later TLS egress (HLS PUT over HTTPS) uses the same connection.
+//! TLS policy for egress transports: the rustls client configuration, the
+//! kernel-TLS record helpers, and handshake telemetry. The connection that
+//! drives a rustls handshake and hands off to kernel TLS over the shard's
+//! Compio TCP stream lives with that stream
+//! (`backends::compio_tcp::TlsTcpConnection`); RTMPS and HLS PUT over HTTPS
+//! use it.
 pub(crate) mod client_config;
-mod connection;
 pub mod ktls;
 mod telemetry;
 
 pub(crate) use client_config::rustls_client_config;
 pub(crate) use client_config::{resolve_client_config, supports_cipher_suite};
-pub(crate) use connection::TlsTcpConnection;
+pub(crate) use telemetry::TlsEvent;
 pub use telemetry::{TlsCounters, TlsTelemetrySnapshot};
