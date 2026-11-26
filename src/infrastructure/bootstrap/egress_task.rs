@@ -29,7 +29,7 @@ use super::{AttemptJob, FailureTracker};
 mod egress_fabric_run;
 #[path = "egress_moq.rs"]
 mod egress_moq;
-use self::egress_fabric_run::{FabricRun, HlsPutRun, RtmpRun, SrtRun};
+use self::egress_fabric_run::{FabricEnd, FabricRun, HlsPutRun, RtmpRun, SrtRun};
 pub(super) use egress_moq::{MoqFabricTask, prepare_moq_fabric_task};
 
 #[derive(Clone)]
@@ -435,7 +435,7 @@ impl EgressTask {
                 return;
             }
         }
-        let end = run.wait().await;
+        let end = self.wait_fabric_end(&run).await;
         if end.failed {
             self.engine
                 .record_egress_error_if_current(
@@ -449,12 +449,42 @@ impl EgressTask {
         run.stop(end.stage_ended).await;
     }
 
+    /// [`Self::wait_for_stop_or_leaf_failure`] for a fabric run, forwarding
+    /// its upload status each poll and once more after a leaf failure. A
+    /// failure the forwarded status already reported (with its HTTP status
+    /// and object) does not also get the generic leaf error.
+    async fn wait_fabric_end(&self, run: &impl FabricRun) -> FabricEnd {
+        let mut forwarded = ForwardedUploadStatus::default();
+        let own_stage = self.own_stage_ended();
+        tokio::pin!(own_stage);
+        let (failed, stage_ended) = loop {
+            if let Some(status) = run.upload_status() {
+                self.forward_upload_status(status, &mut forwarded).await;
+            }
+            if run.terminated().load(std::sync::atomic::Ordering::Acquire) {
+                if let Some(status) = run.upload_status() {
+                    self.forward_upload_status(status, &mut forwarded).await;
+                }
+                break (true, false);
+            }
+            tokio::select! {
+                _ = self.registration.cancel_token.cancelled() => break (false, false),
+                () = &mut own_stage => break (false, true),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        };
+        FabricEnd {
+            failed: failed && forwarded.failures == 0,
+            stage_ended,
+        }
+    }
+
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
-        self.run_fabric(SrtRun::new(self, fabric)).await;
+        self.run_fabric(SrtRun::new(&self.engine, fabric)).await;
     }
 
     async fn run_rtmp_fabric(&self, fabric: RtmpFabricTask) {
-        self.run_fabric(RtmpRun::new(self, fabric)).await;
+        self.run_fabric(RtmpRun::new(&self.engine, fabric)).await;
     }
 
     async fn run_hls_put_fabric(
@@ -462,7 +492,13 @@ impl EgressTask {
         fabric: HlsPutFabricTask,
         store: Arc<restream_engine::hls::HlsStore>,
     ) {
-        self.run_fabric(HlsPutRun::new(self, fabric, store)).await;
+        self.run_fabric(HlsPutRun::new(
+            &self.engine,
+            &self.pipeline_id,
+            fabric,
+            store,
+        ))
+        .await;
     }
 
     /// Pass the leaf's new failures and retry changes to the engine, as the
