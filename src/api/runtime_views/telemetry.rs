@@ -124,20 +124,20 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         )
     };
     let egress_arr: Vec<serde_json::Value> = engine
-        .egresses
-        .active
-        .read()
-        .await
-        .values()
-        .map(|egress| {
-            api_view_models::egress_runtime_json(
-                egress,
-                true,
-                ingest_pipelines.contains(egress.pipeline_id.as_str()),
-                None,
-            )
+        .with_active_egresses(|active| {
+            active
+                .values()
+                .map(|egress| {
+                    api_view_models::egress_runtime_json(
+                        egress,
+                        true,
+                        ingest_pipelines.contains(egress.pipeline_id.as_str()),
+                        None,
+                    )
+                })
+                .collect()
         })
-        .collect();
+        .await;
     let source_rings: Vec<serde_json::Value> = engine
         .ingests
         .pipelines
@@ -235,20 +235,23 @@ pub(crate) async fn pipeline_telemetry(
         .await
         .get(pipeline_id)
         .map(|ring| api_view_models::pipeline_source_ring_json(ring));
-    let (pipeline_egresses, delivery): (Vec<serde_json::Value>, _) = {
-        let egresses = engine.egresses.active.read().await;
-        let pipeline_egresses = || {
-            egresses
-                .values()
-                .filter(|egress| egress.pipeline_id == pipeline_id)
-        };
-        (
-            pipeline_egresses()
-                .map(|egress| api_view_models::egress_runtime_json(egress, true, has_ingest, None))
-                .collect(),
-            feed_delivery(pipeline_egresses().map(delivery_input)),
-        )
-    };
+    let (pipeline_egresses, delivery): (Vec<serde_json::Value>, _) = engine
+        .with_active_egresses(|egresses| {
+            let pipeline_egresses = || {
+                egresses
+                    .values()
+                    .filter(|egress| egress.pipeline_id == pipeline_id)
+            };
+            (
+                pipeline_egresses()
+                    .map(|egress| {
+                        api_view_models::egress_runtime_json(egress, true, has_ingest, None)
+                    })
+                    .collect(),
+                feed_delivery(pipeline_egresses().map(delivery_input)),
+            )
+        })
+        .await;
     let stage_maps = StageMaps::read(engine, Some(pipeline_id)).await;
     let stage_keys = stage_maps.keys();
     let lifecycle_snapshots = lifecycle_snapshots(engine, &stage_keys).await;

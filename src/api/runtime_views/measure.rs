@@ -96,27 +96,28 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         .values()
         .map(|stage| stage.muxer.ring.payload_stats().payload_bytes as u64)
         .sum::<u64>();
-    let (egresses, delivery) = {
-        let active = engine.egresses.active.read().await;
-        // Feeds are grouped per pipeline, as each pipeline's telemetry does.
-        let mut by_pipeline: std::collections::BTreeMap<&str, Vec<_>> =
-            std::collections::BTreeMap::new();
-        for egress in active.values() {
-            by_pipeline
-                .entry(egress.pipeline_id.as_str())
-                .or_default()
-                .push(delivery_input(egress));
-        }
-        let mut totals = DeliveryTotals::default();
-        for feed in by_pipeline.into_values().flat_map(feed_delivery) {
-            totals.destinations += feed.destinations;
-            totals.rated += feed.rated;
-            totals.delivered += feed.delivered;
-            totals.ratio_min = min_option(totals.ratio_min, feed.ratio_min);
-            totals.jain_min = min_option(totals.jain_min, feed.jain);
-        }
-        (active.len(), totals)
-    };
+    let (egresses, delivery) = engine
+        .with_active_egresses(|active| {
+            // Feeds are grouped per pipeline, as each pipeline's telemetry does.
+            let mut by_pipeline: std::collections::BTreeMap<&str, Vec<_>> =
+                std::collections::BTreeMap::new();
+            for egress in active.values() {
+                by_pipeline
+                    .entry(egress.pipeline_id.as_str())
+                    .or_default()
+                    .push(delivery_input(egress));
+            }
+            let mut totals = DeliveryTotals::default();
+            for feed in by_pipeline.into_values().flat_map(feed_delivery) {
+                totals.destinations += feed.destinations;
+                totals.rated += feed.rated;
+                totals.delivered += feed.delivered;
+                totals.ratio_min = min_option(totals.ratio_min, feed.ratio_min);
+                totals.jain_min = min_option(totals.jain_min, feed.jain);
+            }
+            (active.len(), totals)
+        })
+        .await;
     MeasureSnapshot {
         pipelines,
         ingests,

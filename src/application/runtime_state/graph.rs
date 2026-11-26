@@ -131,17 +131,18 @@ impl GraphRuntime {
             .cloned()
             .collect();
         let egresses = engine
-            .egresses
-            .active
-            .read()
-            .await
-            .iter()
-            .map(|(output_id, egress)| {
-                let has_ingest = ingests.contains_key(&egress.pipeline_id);
-                let running = MediaEngine::egress_effective_status(egress, has_ingest) == "running";
-                (output_id.clone(), running)
+            .with_active_egresses(|active| {
+                active
+                    .iter()
+                    .map(|(output_id, egress)| {
+                        let has_ingest = ingests.contains_key(&egress.pipeline_id);
+                        let running =
+                            MediaEngine::egress_effective_status(egress, has_ingest) == "running";
+                        (output_id.clone(), running)
+                    })
+                    .collect()
             })
-            .collect();
+            .await;
         let mut stages: Vec<(StageKey, bool)> = engine
             .stages
             .runtimes

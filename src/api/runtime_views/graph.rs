@@ -94,26 +94,27 @@ impl<'g> GraphReadings<'g> {
             .await
             .get(pipeline_id)
             .cloned();
-        let egresses = {
-            let active = engine.egresses.active.read().await;
-            nodes
-                .iter()
-                .filter_map(|node| node.output_id.as_deref())
-                .filter_map(|output_id| {
-                    let egress = active.get(output_id)?;
-                    Some((
-                        output_id,
-                        (
-                            api_view_models::processing_graph_egress_details(
-                                egress,
-                                ingest.is_some(),
+        let egresses = engine
+            .with_active_egresses(|active| {
+                nodes
+                    .iter()
+                    .filter_map(|node| node.output_id.as_deref())
+                    .filter_map(|output_id| {
+                        let egress = active.get(output_id)?;
+                        Some((
+                            output_id,
+                            (
+                                api_view_models::processing_graph_egress_details(
+                                    egress,
+                                    ingest.is_some(),
+                                ),
+                                serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default(),
                             ),
-                            serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default(),
-                        ),
-                    ))
-                })
-                .collect()
-        };
+                        ))
+                    })
+                    .collect()
+            })
+            .await;
         let output_stage_metrics = {
             let metrics = engine.stages.metrics.read().await;
             nodes

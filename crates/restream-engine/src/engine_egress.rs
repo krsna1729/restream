@@ -26,6 +26,27 @@ impl MediaEngine {
         egresses.get(output_id).map(f)
     }
 
+    /// Runs `f` over a consistent read of every active egress.
+    pub async fn with_active_egresses<R>(
+        &self,
+        f: impl FnOnce(&std::collections::HashMap<String, ActiveEgress>) -> R,
+    ) -> R {
+        let egresses = self.egresses.active.read().await;
+        f(&egresses)
+    }
+
+    /// Every recent egress outcome, keyed by output.
+    pub async fn recent_egress_outcomes(
+        &self,
+    ) -> std::collections::HashMap<String, RecentEgressOutcome> {
+        self.egresses.recent.read().await.clone()
+    }
+
+    /// Every egress retry state, keyed by output.
+    pub async fn retry_egress_states(&self) -> std::collections::HashMap<String, EgressRetryState> {
+        self.egresses.retry.read().await.clone()
+    }
+
     pub(super) async fn with_current_egress<R>(
         &self,
         output_id: &str,
