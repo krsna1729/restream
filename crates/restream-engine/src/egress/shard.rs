@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::egress::journal::WakeGate;
-use crate::egress::metrics::ShardMetrics;
+use crate::egress::metrics::{LoopIteration, ShardMetrics};
 use crate::egress::timer::TimerWheel;
 use crate::timing::thread_cpu_ns;
 
@@ -745,7 +745,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
-        self.metrics.ready_visits = self.metrics.ready_visits.saturating_add(processed as u64);
+        self.metrics.record_ready_visits(processed);
         processed
     }
 
@@ -779,7 +779,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 fire_at,
             } => {
                 if !self.timers.insert(fire_at, output_id, generation) {
-                    self.metrics.queue_overflows = self.metrics.queue_overflows.saturating_add(1);
+                    self.metrics.record_queue_overflow();
                 }
                 EgressShardCommandEffect::Continue
             }
@@ -790,10 +790,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                     .saturating_sub(self.ready_backlog.len());
                 let accepted = count.min(available);
                 self.ready_backlog.extend(std::iter::repeat_n((), accepted));
-                self.metrics.ready_overflows = self
-                    .metrics
-                    .ready_overflows
-                    .saturating_add((count - accepted) as u64);
+                self.metrics.record_ready_overflows(count - accepted);
                 EgressShardCommandEffect::Continue
             }
             effect => effect,
@@ -806,22 +803,15 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         commands_processed: usize,
         timers_processed: usize,
     ) {
-        self.metrics
-            .record_loop_iteration(loop_started_at.elapsed());
-        self.metrics.commands_processed = self
-            .metrics
-            .commands_processed
-            .saturating_add(commands_processed as u64);
-        self.metrics.timers_processed = self
-            .metrics
-            .timers_processed
-            .saturating_add(timers_processed as u64);
-        self.metrics.pending_timers = u32::try_from(self.timers.len()).unwrap_or(u32::MAX);
-        self.metrics
-            .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
-        self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
-        self.metrics.feed_resyncs = self.backend.resync_count();
-        self.metrics.budget_exhaustions = self.backend.budget_exhaustion_count();
+        self.metrics.record_iteration(LoopIteration {
+            duration: loop_started_at.elapsed(),
+            commands: commands_processed,
+            timers: timers_processed,
+            pending_timers: self.timers.len(),
+            ready_depth: self.ready_backlog.len(),
+            feed_resyncs: self.backend.resync_count(),
+            budget_exhaustions: self.backend.budget_exhaustion_count(),
+        });
         self.backend.observe_metrics(&mut self.metrics);
         let collected_at = Instant::now();
         self.metrics.collected_at = Some(collected_at);
