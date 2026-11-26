@@ -87,10 +87,8 @@ pub async fn evaluate_alerts(state: &AppState) -> Vec<restream_health::alerts::A
         .map(|o| (o.id, o.name))
         .collect();
     alerts::name_subjects(&mut alert_list, &pipeline_names, &output_names);
-    state.alert_tracker.track(&mut alert_list);
-    state
-        .alert_tracker
-        .publish(snapshot_generated_at(&snapshot), &alert_list);
+    state.track_alerts(&mut alert_list);
+    state.publish_alerts(snapshot_generated_at(&snapshot), &alert_list);
     alert_list
 }
 
@@ -152,18 +150,18 @@ pub async fn aggregate_alerts_handler(
 
     // The evaluator publishes within one interval of start; a read that
     // comes before it evaluates once so it is never served "no alerts".
-    let evaluation = match state.alert_tracker.latest() {
+    let evaluation = match state.latest_alerts() {
         Some(evaluation) => evaluation,
         None => {
             evaluate_alerts(&state).await;
-            state.alert_tracker.latest().unwrap_or_default()
+            state.latest_alerts().unwrap_or_default()
         }
     };
     let resolved = query.since.map(|since| {
         // Every jiff timestamp fits a 64-bit Unix `SystemTime`.
         let since =
             std::time::SystemTime::try_from(since).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        state.alert_tracker.resolved_since(since)
+        state.resolved_alerts_since(since)
     });
     alerts_response(evaluation, resolved)
 }

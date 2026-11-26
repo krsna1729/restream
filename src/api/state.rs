@@ -29,6 +29,7 @@ use restream_health::alerts;
 
 use super::AppServices;
 
+mod alert_tracker;
 mod endpoints;
 mod identity;
 mod ingests;
@@ -168,7 +169,7 @@ pub struct AppState {
     file_ingest_service: FileIngestService,
     media_library_service: MediaLibraryService,
     pub agent_service: AgentService,
-    pub alert_tracker: alerts::AlertTracker,
+    alert_tracker: alerts::AlertTracker,
     /// Mutation handlers persist, then ask the reconciler to converge here.
     pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
     /// The revisioned runtime state behind `/api/v1/state`.
