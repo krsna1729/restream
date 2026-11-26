@@ -167,16 +167,10 @@ async fn take_owned_child(
     runtime: &ExternalFileIngestRuntime,
     child_pid: Option<u32>,
 ) -> Option<tokio::process::Child> {
-    let mut children = runtime.engine.file_ingests.children.write().await;
-    if child_pid.is_some()
-        && children
-            .get(&runtime.ingest_id)
-            .is_some_and(|child| child.id() == child_pid)
-    {
-        children.remove(&runtime.ingest_id)
-    } else {
-        None
-    }
+    runtime
+        .engine
+        .take_file_ingest_child(&runtime.ingest_id, child_pid)
+        .await
 }
 
 async fn stop_owned_child(runtime: &ExternalFileIngestRuntime, child_pid: Option<u32>) {
@@ -204,20 +198,7 @@ async fn cleanup_runtime(runtime: &ExternalFileIngestRuntime, child_pid: Option<
                 && session.attempt_id == runtime.registration.attempt_id
         })
     {
-        runtime
-            .engine
-            .file_ingests
-            .active
-            .write()
-            .await
-            .remove(&runtime.ingest_id);
-        runtime
-            .engine
-            .file_ingests
-            .positions
-            .write()
-            .await
-            .remove(&runtime.ingest_id);
+        runtime.engine.clear_file_ingest(&runtime.ingest_id).await;
     }
 }
 
@@ -240,11 +221,8 @@ async fn register_current_child(
     }
     runtime
         .engine
-        .file_ingests
-        .children
-        .write()
-        .await
-        .insert(runtime.ingest_id.clone(), child);
+        .register_file_ingest_child(&runtime.ingest_id, child)
+        .await;
     Ok(())
 }
 

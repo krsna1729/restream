@@ -192,6 +192,39 @@ impl MediaEngine {
             .collect()
     }
 
+    /// Takes this attempt's file-ingest child when it still owns it.
+    pub async fn take_file_ingest_child(
+        &self,
+        ingest_id: &str,
+        child_pid: Option<u32>,
+    ) -> Option<tokio::process::Child> {
+        let mut children = self.file_ingests.children.write().await;
+        if child_pid.is_some()
+            && children
+                .get(ingest_id)
+                .is_some_and(|child| child.id() == child_pid)
+        {
+            children.remove(ingest_id)
+        } else {
+            None
+        }
+    }
+
+    /// Clears one attempt's file-ingest state.
+    pub async fn clear_file_ingest(&self, ingest_id: &str) {
+        self.file_ingests.active.write().await.remove(ingest_id);
+        self.file_ingests.positions.write().await.remove(ingest_id);
+    }
+
+    /// Registers one attempt's running file-ingest child.
+    pub async fn register_file_ingest_child(&self, ingest_id: &str, child: tokio::process::Child) {
+        self.file_ingests
+            .children
+            .write()
+            .await
+            .insert(ingest_id.to_string(), child);
+    }
+
     /// Registers a pipeline's stream checks, or returns `None` if they run
     /// already; check-and-insert under one lock, as for recordings.
     pub fn register_stream_qa(
