@@ -29,11 +29,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::ObjectOutcome;
 use super::ordering::{
-    Counters, Payload, PlaylistOutcome, Reanchor, Release, SegmentOutcome, Session, SessionLimits,
+    Counters, MAX_RENDITIONS, Payload, PlaylistOutcome, Reanchor, Release, SegmentOutcome, Session,
+    SessionLimits,
 };
 use super::pacing::Pacer;
 use super::playlist;
-use super::registry::{AppliedInit, AppliedInits};
 use crate::engine::{IngestRegistration, MediaEngine};
 use crate::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 use crate::ingest_publisher::{
@@ -97,6 +97,54 @@ pub(super) enum SessionEnd {
     Idle,
     Cancelled,
     Failed(String),
+}
+
+/// The last init a stream key applied, and the `EXT-X-MAP` it belongs to.
+/// FFmpeg uploads its `EXT-X-MAP` init once per run, so the key keeps it:
+/// a session that starts after an idle timeout, a retry or a failure
+/// applies the same init again. The registry keeps the key's copy, so it
+/// can never be evicted while the key exists. The reconciler releases it
+/// when the input's row is gone (`HlsIngest::forget_input`), so a deleted
+/// input's init (at most `max_init_bytes`) is not held until the process
+/// restarts.
+#[derive(Clone)]
+pub(super) struct AppliedInit {
+    pub(super) uri: String,
+    pub(super) bytes: bytes::Bytes,
+}
+
+/// The init each followed rendition applied last: the variant's and its
+/// separate audio rendition's demuxers each hold their own.
+#[derive(Clone, Default)]
+pub(super) struct AppliedInits([Option<AppliedInit>; MAX_RENDITIONS]);
+
+impl AppliedInits {
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+
+    pub(super) fn set(&mut self, rendition: usize, init: AppliedInit) {
+        if let Some(slot) = self.0.get_mut(rendition) {
+            *slot = Some(init);
+        }
+    }
+
+    /// Forget the init applied under `uri` (a refused re-upload of it).
+    pub(super) fn forget_uri(&mut self, uri: &str) {
+        for slot in &mut self.0 {
+            if slot.as_ref().is_some_and(|init| init.uri == uri) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// Each rendition's init, by rendition.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &AppliedInit)> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(rendition, init)| init.as_ref().map(|init| (rendition, init)))
+    }
 }
 
 pub(super) async fn run(
