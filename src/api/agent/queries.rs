@@ -138,14 +138,13 @@ pub async fn agent_investigation_handler(
     };
     let process =
         crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
-    let resource_map = crate::api::runtime_views::resource_map(
-        &state.engine,
-        &state.config,
-        process,
-        request.pipeline_id.as_deref(),
-        ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
-    )
-    .await;
+    let resource_map = state
+        .resource_map(
+            process,
+            request.pipeline_id.as_deref(),
+            ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
+        )
+        .await;
     let events = state.engine.recent_events(
         request.event_limit.min(events::MAX_EVENTS),
         request.pipeline_id.as_deref(),

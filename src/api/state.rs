@@ -40,6 +40,7 @@ mod observability;
 mod runtime;
 mod settings;
 mod shares;
+mod views;
 
 pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_URL_LEN: usize = 2048;
@@ -155,7 +156,7 @@ pub struct AppState {
     /// See [`AppStateRuntimeConfig::moq_certificate_sha256`].
     pub moq_certificate_sha256: Option<String>,
     /// See [`AppStateRuntimeConfig::config`].
-    pub config: Arc<AppConfig>,
+    config: Arc<AppConfig>,
     pub media_dir: String,
     pub db_path: String,
     srt_passphrase: Option<String>,

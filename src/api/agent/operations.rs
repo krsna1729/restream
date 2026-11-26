@@ -647,9 +647,7 @@ async fn verify_operation(
         restream_agent::plane::new_critical_alerts(&before.critical_ids, &after_critical),
         restream_agent::plane::capacity_state(
             before.projected_utilization,
-            crate::application::capacity::capacity_priors(&state.engine, &state.config)
-                .await
-                .projected_utilization,
+            state.capacity_priors().await.projected_utilization,
             crate::application::capacity::CapacityModel::default().safe_utilization,
         ),
     ];
@@ -745,12 +743,7 @@ async fn apply_baseline(
     restream_agent::execution::ApplyBaseline {
         alerts_total: alerts.len(),
         critical_ids: restream_agent::plane::critical_ids_on(&alerts, changed),
-        projected_utilization: crate::application::capacity::capacity_priors(
-            &state.engine,
-            &state.config,
-        )
-        .await
-        .projected_utilization,
+        projected_utilization: state.capacity_priors().await.projected_utilization,
     }
 }
 

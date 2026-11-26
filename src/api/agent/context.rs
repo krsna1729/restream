@@ -31,14 +31,9 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let engine_telemetry = crate::api::runtime_views::engine_telemetry(&state.engine).await;
     let process =
         crate::host::system_sampling::sampled_system(process_resource_snapshot).unwrap_or_default();
-    let resource_map = crate::api::runtime_views::resource_map(
-        &state.engine,
-        &state.config,
-        process,
-        None,
-        ResourceMapOptions::summary(),
-    )
-    .await;
+    let resource_map = state
+        .resource_map(process, None, ResourceMapOptions::summary())
+        .await;
     let mut pipeline_telemetry = Vec::new();
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
