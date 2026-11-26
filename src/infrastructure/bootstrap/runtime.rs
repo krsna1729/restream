@@ -91,7 +91,7 @@ impl RuntimeTasks {
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
         let http_stop = HttpStop {
             listener: CancellationToken::new(),
-            streams: state.runtime_state.clone(),
+            streams: state.runtime_state_handle(),
         };
         let app = crate::api::create_router(state).merge(crate::api::create_hls_ingest_router(
             hls_ingest,

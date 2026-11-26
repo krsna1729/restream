@@ -85,7 +85,7 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
                 }
             }
             state.wake_reconciler();
-            state.runtime_state.mark_changed();
+            state.mark_runtime_changed();
             let verb = if start { "wanted running" } else { "stopped" };
             if failed == targets.len() {
                 Err(format!("0 of {} destinations {verb}", targets.len()))

@@ -741,7 +741,7 @@ async fn wake_reconciler_after_mutation(
     let response = next.run(request).await;
     if mutating && response.status().is_success() {
         state.wake_reconciler();
-        state.runtime_state.mark_changed();
+        state.mark_runtime_changed();
     }
     response
 }

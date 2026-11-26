@@ -75,7 +75,7 @@ pub async fn evaluate_alerts(state: &AppState) -> Vec<restream_health::alerts::A
         &state.flight_recorder_anomalies(),
         &snapshot_generated_at(&snapshot),
     ));
-    let runtime = state.runtime_state.snapshot().await;
+    let runtime = state.runtime_snapshot().await;
     let pipeline_names = runtime
         .pipelines
         .into_iter()

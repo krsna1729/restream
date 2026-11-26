@@ -967,7 +967,7 @@ async fn closing_state_streams_ends_an_open_stream() {
         .expect("a first frame")
         .unwrap();
 
-    state.runtime_state.close_streams();
+    state.close_runtime_state_streams();
     loop {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(2), body.frame())
             .await
