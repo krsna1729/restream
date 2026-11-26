@@ -50,6 +50,21 @@ impl StageMaps {
         Self { runtimes, metrics }
     }
 
+    /// Every stage runtime, for ring telemetry.
+    fn runtime_entries(&self) -> impl Iterator<Item = (&StageKey, &StageRuntime)> {
+        self.runtimes.iter()
+    }
+
+    /// One stage runtime.
+    fn runtime(&self, key: &StageKey) -> Option<&StageRuntime> {
+        self.runtimes.get(key)
+    }
+
+    /// Number of stage runtimes.
+    fn runtime_count(&self) -> usize {
+        self.runtimes.len()
+    }
+
     fn keys(&self) -> Vec<StageKey> {
         let keys: HashSet<&StageKey> = self.runtimes.keys().chain(self.metrics.keys()).collect();
         let mut keys: Vec<StageKey> = keys.into_iter().cloned().collect();
@@ -165,8 +180,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .collect();
 
     let transcoder_rings: Vec<serde_json::Value> = stages
-        .runtimes
-        .iter()
+        .runtime_entries()
         .filter_map(|(key, runtime)| {
             runtime.ring.as_ref().map(|ring| {
                 api_view_models::transcoder_ring_telemetry_json(
@@ -190,7 +204,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         input_arr,
         stage_arr,
         egress_arr,
-        stages.runtimes.len(),
+        stages.runtime_count(),
         api_view_models::memory_accounting_json(
             retained_payload_bytes,
             source_rings,
@@ -252,7 +266,7 @@ pub(crate) async fn pipeline_telemetry(
             None,
             lifecycle_snapshots.get(key),
         );
-        if let Some(runtime) = stage_maps.runtimes.get(key) {
+        if let Some(runtime) = stage_maps.runtime(key) {
             val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
             if let Some(ring) = runtime.ring.as_ref() {
                 val["payloadStats"] = api_view_models::ring_payload_stats_json(ring);
