@@ -124,13 +124,8 @@ impl AppState {
     }
 
     /// Drops one pipeline's replay history.
-    pub(crate) async fn forget_flight_history(&self, pipeline_id: &str) -> Result<(), sqlx::Error> {
-        let pipeline_id = pipeline_id.to_owned();
-        self.db
-            .write(move |pool| async move {
-                crate::db::flight_repo::forget(&pool, &pipeline_id).await
-            })
-            .await
+    pub(crate) async fn forget_flight_history(&self, pipeline_id: &str) -> ServiceResult<()> {
+        crate::application::flight_recorder::forget_history(&self.db, pipeline_id).await
     }
 
     /// A handle for bootstrap-owned runtime loops.

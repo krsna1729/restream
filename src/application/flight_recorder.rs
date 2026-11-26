@@ -24,8 +24,17 @@ use tokio_util::sync::CancellationToken;
 use crate::application::fleet_history::is_delivering;
 use crate::application::runtime_state::hub::StateHub;
 use crate::application::runtime_state::{Convergence, Flow, OutputState};
+use crate::application::services::error::{ServiceError, ServiceResult};
 use restream_domain::domain::state::DesiredOutputState;
 use restream_engine::engine::MediaEngine;
+
+/// Drops one deleted pipeline's persisted history.
+pub async fn forget_history(db: &DeadlineDb, pipeline_id: &str) -> ServiceResult<()> {
+    let pipeline_id = pipeline_id.to_owned();
+    db.write(move |pool| async move { crate::db::flight_repo::forget(&pool, &pipeline_id).await })
+        .await
+        .map_err(|error| ServiceError::internal(format!("forget flight history: {error}")))
+}
 
 /// How often the recorder samples: the dashboard's own sampling clock.
 pub const FLIGHT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
