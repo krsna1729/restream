@@ -84,7 +84,7 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
                     failed += 1;
                 }
             }
-            state.reconcile.wake();
+            state.wake_reconciler();
             state.runtime_state.mark_changed();
             let verb = if start { "wanted running" } else { "stopped" };
             if failed == targets.len() {

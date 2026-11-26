@@ -29,6 +29,7 @@ use restream_health::alerts;
 
 use super::AppServices;
 
+mod agent;
 mod alert_tracker;
 mod endpoints;
 mod identity;
@@ -168,10 +169,10 @@ pub struct AppState {
     settings_service: SettingsService,
     file_ingest_service: FileIngestService,
     media_library_service: MediaLibraryService,
-    pub agent_service: AgentService,
+    agent_service: AgentService,
     alert_tracker: alerts::AlertTracker,
     /// Mutation handlers persist, then ask the reconciler to converge here.
-    pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
+    reconcile: Arc<crate::application::topology::ReconcileRequests>,
     /// The revisioned runtime state behind `/api/v1/state`.
     pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     /// The fleet's sampled signals behind `/api/v1/fleet/history`.
@@ -184,7 +185,7 @@ pub struct AppState {
     log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
-    pub agent_execution: Arc<restream_agent::execution::AgentExecutionStore>,
+    agent_execution: Arc<restream_agent::execution::AgentExecutionStore>,
 }
 
 impl AppState {

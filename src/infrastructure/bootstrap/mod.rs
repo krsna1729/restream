@@ -201,7 +201,7 @@ async fn serve(
         config.clone(),
         lifecycle.clone(),
         engine.clone(),
-        state.reconcile.clone(),
+        state.reconcile_handle(),
         state.runtime_state.clone(),
         hls_ingest.clone(),
     );
@@ -351,7 +351,7 @@ fn spawn_runtime_event_consumer(
     state: &crate::api::AppState,
     config: &AppConfig,
 ) {
-    let requests = state.reconcile.clone();
+    let requests = state.reconcile_handle();
     let runtime_state = state.runtime_state.clone();
     let disconnect_grace =
         std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);

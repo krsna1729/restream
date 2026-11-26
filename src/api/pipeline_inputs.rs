@@ -682,7 +682,7 @@ pub async fn pipeline_input_promote_handler(
     };
     // The reconciler switches the forwarded input; report whether the
     // target has a live session to switch to.
-    state.reconcile.input_selection_changed(&pipeline_id);
+    state.input_selection_changed(&pipeline_id);
     let connected = state
         .engine
         .input_has_session(&pipeline_id, &input_id)
