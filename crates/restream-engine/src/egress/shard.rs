@@ -443,6 +443,12 @@ impl EgressShardHandle {
         restream_sync::lock::lock(&self.snapshot).clone()
     }
 
+    /// The shared snapshot slot, for callers that keep observing after the
+    /// shard's control job waits for a new backend.
+    pub(crate) fn snapshot_handle(&self) -> Arc<Mutex<EgressShardSnapshot>> {
+        Arc::clone(&self.snapshot)
+    }
+
     pub fn shutdown_and_join(mut self) -> EgressShardSnapshot {
         let _ = self.sender.send(EgressCommand::Shutdown);
         if let Some(join) = self.join.take() {
