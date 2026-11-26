@@ -134,6 +134,42 @@ async fn list_media_files_groups_recording_companions_and_ingest_counts() {
 }
 
 #[tokio::test]
+async fn list_media_files_reads_conversion_state_without_a_converted_mp4() {
+    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    let service = sqlite_media_library_service(&pool);
+    let temp_dir = tempfile_dir("media-list-conversion-state");
+    let source = temp_dir.join("recording_20260709T010203_demo.ts");
+    let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+    std::fs::write(&source, b"source").unwrap();
+    std::fs::write(
+        &state,
+        serde_json::to_vec(&restream_engine::recording::RecordingConversionState {
+            status: restream_engine::recording::RecordingConversionStatus::Failed,
+            updated_at: "2026-07-09T01:02:03Z".to_string(),
+            error: Some("ffmpeg exited 1".to_string()),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let files = service.list_media_files(temp_dir.to_str().unwrap()).await;
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].conversion_status.as_deref(), Some("failed"));
+    assert_eq!(
+        files[0].conversion_error.as_deref(),
+        Some("ffmpeg exited 1")
+    );
+    assert_eq!(
+        files[0].conversion_updated_at.as_deref(),
+        Some("2026-07-09T01:02:03Z")
+    );
+    assert!(files[0].converted_name.is_none());
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+#[tokio::test]
 async fn delete_paths_for_media_includes_recording_companions() {
     let service = service_with_pipeline().await;
     let temp_dir = tempfile_dir("media-delete-plan");

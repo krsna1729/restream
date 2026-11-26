@@ -183,6 +183,7 @@ impl MediaLibraryService {
             .recording_metadata_by_filename(names.clone())
             .await
             .unwrap_or_default();
+        let conversion_states = load_conversion_states(media_dir, &names, &entries).await;
 
         for name in names {
             if !consumed.insert(name.clone()) {
@@ -222,6 +223,7 @@ impl MediaLibraryService {
                     source_modified_ms,
                     media_dir,
                     &entries,
+                    &conversion_states,
                     &mut consumed,
                 );
             }
@@ -623,6 +625,35 @@ fn media_file(
     }
 }
 
+/// Loads each recording source's conversion state on the blocking pool, once
+/// for the whole listing.
+async fn load_conversion_states(
+    media_dir: &str,
+    names: &[String],
+    entries: &HashMap<String, MediaDirEntry>,
+) -> HashMap<String, Option<restream_engine::recording::RecordingConversionState>> {
+    let paths: Vec<(String, PathBuf)> = names
+        .iter()
+        .filter(|name| restream_engine::recording::is_recording_source_filename(name))
+        .filter(|name| entries.contains_key(*name))
+        .map(|name| (name.clone(), Path::new(media_dir).join(name)))
+        .collect();
+    if paths.is_empty() {
+        return HashMap::new();
+    }
+    tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|(name, path)| {
+                let state = restream_engine::recording::load_conversion_state(&path);
+                (name, state)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Folds a recording source's MP4 conversion into its row: the MP4 (only
 /// when it exists) is what plays, its size adds to the row's, the newer
 /// time wins, and the conversion state is shown. The MP4 is marked consumed.
@@ -631,6 +662,10 @@ fn apply_conversion(
     source_modified_ms: i64,
     media_dir: &str,
     entries: &HashMap<String, MediaDirEntry>,
+    conversion_states: &HashMap<
+        String,
+        Option<restream_engine::recording::RecordingConversionState>,
+    >,
     consumed: &mut HashSet<String>,
 ) {
     let source_path = Path::new(media_dir).join(&file.name);
@@ -641,11 +676,11 @@ fn apply_conversion(
     if let Some(converted) = converted {
         consumed.insert(converted.name.clone());
     }
-    let conversion_state = restream_engine::recording::load_conversion_state(&source_path);
+    let conversion_state = conversion_states.get(&file.name).and_then(Option::as_ref);
     file.conversion_status = if converted.is_some() {
         Some("ready".to_string())
     } else {
-        conversion_state.as_ref().map(|state| {
+        conversion_state.map(|state| {
             match state.status {
                 restream_engine::recording::RecordingConversionStatus::Converting => "converting",
                 restream_engine::recording::RecordingConversionStatus::Ready => "ready",
@@ -654,10 +689,8 @@ fn apply_conversion(
             .to_string()
         })
     };
-    file.conversion_error = conversion_state
-        .as_ref()
-        .and_then(|state| state.error.clone());
-    file.conversion_updated_at = conversion_state.map(|state| state.updated_at);
+    file.conversion_error = conversion_state.and_then(|state| state.error.clone());
+    file.conversion_updated_at = conversion_state.map(|state| state.updated_at.clone());
     file.converted_name = converted.map(|value| value.name.clone());
     file.converted_size = converted.map(|value| value.size);
     file.play_name = file.converted_name.clone();
