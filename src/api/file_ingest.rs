@@ -158,8 +158,7 @@ pub async fn apply_pipeline_file_ingest_payload(
 ) -> Result<crate::application::ingest::PipelineFileIngestState, Response> {
     let payload = payload.map(|payload| payload.map(file_ingest_config_input));
     state
-        .file_ingest_service
-        .apply_file_ingest_payload(&state.engine, pipeline, previous_stream_key, payload)
+        .apply_file_ingest(pipeline, previous_stream_key, payload)
         .await
         .map_err(|error| ApiError::from(error).into_response())
 }
@@ -175,11 +174,8 @@ pub async fn pipeline_file_ingest_get_handler(
         return Ok(response);
     }
 
-    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
-    let file_ingest_state = state
-        .file_ingest_service
-        .load_pipeline_file_ingest_state(&state.engine, &pipeline)
-        .await?;
+    let pipeline = state.file_ingest_pipeline(&pipeline_id).await?;
+    let file_ingest_state = state.file_ingest_state(&pipeline).await?;
 
     Ok(file_ingest_state_response(file_ingest_state))
 }
@@ -200,11 +196,9 @@ pub async fn pipeline_file_ingest_put_handler(
         return Ok(r);
     }
 
-    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
+    let pipeline = state.file_ingest_pipeline(&pipeline_id).await?;
     let file_ingest_state = state
-        .file_ingest_service
-        .apply_file_ingest_payload(
-            &state.engine,
+        .apply_file_ingest(
             &pipeline,
             None,
             Some(Some(file_ingest_config_input(payload))),
@@ -224,11 +218,8 @@ pub async fn pipeline_file_ingest_delete_handler(
         return Ok(response);
     }
 
-    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
-    state
-        .file_ingest_service
-        .apply_file_ingest_payload(&state.engine, &pipeline, None, Some(None))
-        .await?;
+    let pipeline = state.file_ingest_pipeline(&pipeline_id).await?;
+    state.apply_file_ingest(&pipeline, None, Some(None)).await?;
 
     Ok(deleted_response())
 }

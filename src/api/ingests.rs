@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use crate::application::services::{ServiceError, file_ingest_service::FileIngestStartError};
@@ -212,10 +211,7 @@ pub async fn ingests_delete_handler(
         return Ok(response);
     }
 
-    state
-        .file_ingest_service
-        .delete_ingest_with_runtime_cleanup(&state.engine, &id)
-        .await?;
+    state.delete_ingest_with_cleanup(&id).await?;
     Ok(Json(serde_json::json!({"deleted": true})).into_response())
 }
 
@@ -232,11 +228,7 @@ pub async fn ingests_start_handler(
 
     // Starting a file ingest touches both persisted ingest metadata and the
     // engine's active runtime state, so transport-level errors are mapped here.
-    let ingest = match state
-        .file_ingest_service
-        .start_ingest(state.engine.clone(), FsPath::new(&state.media_dir), &id)
-        .await
-    {
+    let ingest = match state.start_ingest(&id).await {
         Ok(ingest) => ingest,
         Err(error) => return map_start_ingest_error(error),
     };
@@ -255,11 +247,7 @@ pub async fn ingests_stop_handler(
         return response;
     }
 
-    let ingest = match state
-        .file_ingest_service
-        .stop_ingest_with_runtime_cleanup(&state.engine, &id)
-        .await
-    {
+    let ingest = match state.stop_ingest_with_cleanup(&id).await {
         Ok(ingest) => ingest,
         Err(error) => return map_stop_ingest_error(error),
     };

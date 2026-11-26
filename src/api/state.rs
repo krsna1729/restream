@@ -165,7 +165,7 @@ pub struct AppState {
     team_service: crate::application::services::TeamService,
     notify_service: NotifyService,
     settings_service: SettingsService,
-    pub file_ingest_service: FileIngestService,
+    file_ingest_service: FileIngestService,
     media_library_service: MediaLibraryService,
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
