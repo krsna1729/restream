@@ -25,6 +25,10 @@ impl PendingWrite {
         }
     }
 
+    pub(super) fn advance(&mut self, written: usize) {
+        self.offset = self.offset.saturating_add(written);
+    }
+
     pub(super) fn remaining(&self) -> &[u8] {
         &self.bytes[self.offset..]
     }
@@ -128,7 +132,7 @@ impl SessionNegotiation {
                 "peer closed during write".to_string(),
             )),
             Ok(n) => {
-                pending.offset += n;
+                pending.advance(n);
                 if !pending.is_complete() {
                     return Err(SessionAdvanceOutcome::Pending(Interest::WRITE));
                 }

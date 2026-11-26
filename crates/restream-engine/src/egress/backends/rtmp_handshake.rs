@@ -43,6 +43,10 @@ impl PendingWrite {
         }
     }
 
+    fn advance(&mut self, written: usize) {
+        self.offset = self.offset.saturating_add(written);
+    }
+
     fn remaining(&self) -> &[u8] {
         &self.bytes[self.offset..]
     }
@@ -92,7 +96,7 @@ impl NonBlockingRtmpHandshake {
             match stream.write(pending.remaining()) {
                 Ok(0) => return HandshakeOutcome::Failed("peer closed during write".to_string()),
                 Ok(n) => {
-                    pending.offset += n;
+                    pending.advance(n);
                     if !pending.is_complete() {
                         return HandshakeOutcome::Pending(Interest::WRITE);
                     }
