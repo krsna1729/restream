@@ -1,5 +1,6 @@
 //! Process, listener, file-ingest, recording, and shutdown resources.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -166,6 +167,29 @@ impl MediaEngine {
         tokens
             .get(pipeline_id)
             .is_some_and(|token| !token.is_cancelled())
+    }
+
+    /// Every recording pipeline with its running flag.
+    pub async fn recording_activity(&self) -> HashMap<String, bool> {
+        self.recordings
+            .cancel_tokens
+            .read()
+            .await
+            .iter()
+            .map(|(pipeline_id, token)| (pipeline_id.clone(), !token.is_cancelled()))
+            .collect()
+    }
+
+    /// The pipelines whose recordings are still running.
+    pub async fn active_recording_pipelines(&self) -> HashSet<String> {
+        self.recordings
+            .cancel_tokens
+            .read()
+            .await
+            .iter()
+            .filter(|(_, token)| !token.is_cancelled())
+            .map(|(pipeline_id, _)| pipeline_id.clone())
+            .collect()
     }
 
     /// Registers a pipeline's stream checks, or returns `None` if they run

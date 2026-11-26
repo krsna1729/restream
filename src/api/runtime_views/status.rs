@@ -410,14 +410,7 @@ pub(crate) async fn health_snapshot_view(
     let recent_ingests = engine.ingests.recent.read().await.clone();
     let recent_egresses = engine.egresses.recent.read().await.clone();
     let retry_egresses = engine.egresses.retry.read().await.clone();
-    let rec_active_by_pipeline: HashMap<String, bool> = engine
-        .recordings
-        .cancel_tokens
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, token)| (pipeline_id.clone(), !token.is_cancelled()))
-        .collect();
+    let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_metrics_by_pipeline = reader_metrics_by_pipeline(engine).await;
     let active_ingest_ids: HashSet<String> =
         engine.ingests.active.read().await.keys().cloned().collect();
@@ -737,14 +730,7 @@ pub(crate) async fn health_summary_snapshot(
     let recent_ingests = engine.ingests.recent.read().await.clone();
     let recent_egresses = engine.egresses.recent.read().await.clone();
     let retry_egresses = engine.egresses.retry.read().await.clone();
-    let rec_active_by_pipeline: HashMap<String, bool> = engine
-        .recordings
-        .cancel_tokens
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, token)| (pipeline_id.clone(), !token.is_cancelled()))
-        .collect();
+    let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_counts: HashMap<String, usize> = engine
         .ingests
         .pipelines

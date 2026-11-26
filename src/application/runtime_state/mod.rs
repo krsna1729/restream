@@ -234,15 +234,7 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
     } = *rows;
     let ingests = read_ingests(engine).await;
     let standby = count_standby_inputs(engine, &ingests).await;
-    let recording: std::collections::HashSet<String> = engine
-        .recordings
-        .cancel_tokens
-        .read()
-        .await
-        .iter()
-        .filter(|(_, token)| !token.is_cancelled())
-        .map(|(pipeline_id, _)| pipeline_id.clone())
-        .collect();
+    let recording: std::collections::HashSet<String> = engine.active_recording_pipelines().await;
     let retries = engine.egresses.retry.read().await.clone();
     // Read one map at a time: no new lock nesting between egress maps.
     let recent_evidence: HashMap<String, FailureEvidence> = engine
