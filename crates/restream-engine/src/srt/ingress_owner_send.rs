@@ -10,7 +10,7 @@ use bytes::Bytes;
 use srt_proto::Timestamp;
 use srt_transport::advanced::admission::LogicalPeerId;
 
-use super::super::ingress_bridge::SessionId;
+use super::super::ingress_types::SessionId;
 use tracing::warn;
 
 use super::{DEFERRED_PER_PEER, DEFERRED_TOTAL, OwnerLoop, READER_SENDS_PER_VISIT};

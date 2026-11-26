@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use super::egress_connect::egress_connect_spec;
-use super::ingress_bridge::{CallToken, IngressCommand, IngressPeer};
+use super::ingress_types::{CallToken, IngressCommand, IngressPeer};
 use crate::resolver::{DEFAULT_RESOLVE_TIMEOUT, split_host_port};
 use std::hash::Hash;
 

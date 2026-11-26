@@ -16,6 +16,7 @@ mod ingress_quality;
 #[cfg(test)]
 #[path = "srt/ingress_test_support.rs"]
 pub(crate) mod ingress_test_support;
+mod ingress_types;
 #[path = "srt/knobs.rs"]
 mod knobs;
 mod shared_muxer;

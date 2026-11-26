@@ -10,9 +10,8 @@ use srt_transport::compio::Owner;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
 use super::super::ingress_admission::{AdmissionGuard, ReceiverGroupId};
-use super::super::ingress_owner::{
-    IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle,
-};
+use super::super::ingress_bridge::SrtIngressHandle;
+use super::super::ingress_types::{IngressCommand, IngressConfig, SrtIngressEvent};
 use super::super::tokio_ingress::SrtIngestPolicyStore;
 
 use super::super::ingress_test_support::*;

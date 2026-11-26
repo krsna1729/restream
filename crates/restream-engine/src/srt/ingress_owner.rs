@@ -49,12 +49,11 @@ use tracing::error;
 
 use crate::snapshots::ListenerSocketStats;
 
-pub(crate) use super::ingress_bridge::{
-    CallToken, INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY,
-    IngressCommand, IngressConfig, IngressExit, IngressPeer, OwnerSeat, SessionId, SrtIngressEvent,
-    SrtIngressHandle,
-};
 use super::ingress_media::IngressMedia;
+use super::ingress_types::{
+    CallToken, IngressCommand, IngressConfig, IngressExit, IngressPeer, OwnerSeat, SessionId,
+    SrtIngressEvent,
+};
 use crate::snapshots::SrtIngressOwnerStats;
 
 #[path = "ingress_owner_calls.rs"]
