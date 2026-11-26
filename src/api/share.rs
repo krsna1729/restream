@@ -51,7 +51,7 @@ pub async fn create_share_link_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    if let Err(error) = state.file_ingest_service.get_pipeline(&pipeline_id).await {
+    if let Err(error) = state.file_ingest_pipeline(&pipeline_id).await {
         return ApiError::from(error).into_response();
     }
     use rand::RngExt;
@@ -128,8 +128,7 @@ pub async fn watch_page_handler(
     };
     drop(state.count_share_link_view(link.id));
     let title = state
-        .file_ingest_service
-        .get_pipeline(&link.pipeline_id)
+        .file_ingest_pipeline(&link.pipeline_id)
         .await
         .map(|pipeline| pipeline.name)
         .unwrap_or_else(|_| link.label.clone());

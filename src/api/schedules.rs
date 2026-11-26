@@ -12,7 +12,6 @@ use axum::{
 };
 use futures_util::FutureExt as _;
 use std::collections::HashMap;
-use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -100,13 +99,11 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
         }
         ScheduleAction::StartFile | ScheduleAction::StopFile => {
             let pipeline = state
-                .file_ingest_service
-                .get_pipeline(&schedule.pipeline_id)
+                .file_ingest_pipeline(&schedule.pipeline_id)
                 .await
                 .map_err(|err| err.to_string())?;
             let file = state
-                .file_ingest_service
-                .load_pipeline_file_ingest_state(&state.engine, &pipeline)
+                .file_ingest_state(&pipeline)
                 .await
                 .map_err(|err| err.to_string())?;
             let Some(ingest) = file.ingest else {
@@ -117,19 +114,13 @@ pub async fn execute(state: &AppState, schedule: &Schedule) -> Result<String, St
                     return Ok("the file source was already playing".to_string());
                 }
                 state
-                    .file_ingest_service
-                    .start_ingest(
-                        state.engine.clone(),
-                        FsPath::new(&state.media_dir),
-                        &ingest.id,
-                    )
+                    .start_ingest(&ingest.id)
                     .await
                     .map_err(|err| format!("could not start the file source: {err:?}"))?;
                 Ok(format!("started {}", ingest.files().join(", ")))
             } else {
                 state
-                    .file_ingest_service
-                    .stop_ingest_with_runtime_cleanup(&state.engine, &ingest.id)
+                    .stop_ingest_with_cleanup(&ingest.id)
                     .await
                     .map_err(|err| err.to_string())?;
                 Ok("stopped the file source".to_string())
@@ -379,11 +370,7 @@ pub async fn create_schedule_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    if let Err(error) = state
-        .file_ingest_service
-        .get_pipeline(&draft.pipeline_id)
-        .await
-    {
+    if let Err(error) = state.file_ingest_pipeline(&draft.pipeline_id).await {
         return ApiError::from(error).into_response();
     }
     use rand::RngExt;

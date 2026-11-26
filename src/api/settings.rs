@@ -203,11 +203,7 @@ pub async fn config_get_handler(
 
     let mut pipelines = Vec::with_capacity(raw_pipelines.len());
     for pipeline in &raw_pipelines {
-        let file_ingest = match state
-            .file_ingest_service
-            .load_pipeline_file_ingest_state(&state.engine, pipeline)
-            .await
-        {
+        let file_ingest = match state.file_ingest_state(pipeline).await {
             Ok(file_ingest) => file_ingest,
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };

@@ -114,12 +114,7 @@ pub async fn build_file_diagnostics_context(
     pipeline_id: &str,
 ) -> Option<diag::FileDiagnosticsContext> {
     let pipeline = state.pipeline_service.get_by_id(pipeline_id).await.ok()?;
-    let ingest = state
-        .file_ingest_service
-        .load_pipeline_file_ingest_state(&state.engine, &pipeline)
-        .await
-        .ok()?
-        .ingest?;
+    let ingest = state.file_ingest_state(&pipeline).await.ok()?.ingest?;
     let path = expected_media_path(&state.media_dir, &ingest.filename);
     let metadata = std::fs::metadata(&path).ok();
     let file_exists = metadata.is_some();
