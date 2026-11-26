@@ -128,11 +128,6 @@ impl AppState {
         crate::application::flight_recorder::forget_history(&self.db, pipeline_id).await
     }
 
-    /// A handle for bootstrap-owned runtime loops.
-    pub(crate) fn db_handle(&self) -> crate::db::DeadlineDb {
-        self.db.clone()
-    }
-
     /// Lists persisted application logs.
     pub(crate) async fn app_logs(&self, filters: &AppLogFilters) -> ServiceResult<Vec<AppLogRow>> {
         crate::application::logs::list_logs(&self.db, filters).await
