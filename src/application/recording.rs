@@ -1,6 +1,9 @@
 //! Application-layer recording control that owns persisted recording settings
 //! and translates them into engine-facing recording commands.
 
+use crate::application::housekeeping_keys::{
+    RECORDING_ENABLED_META_PREFIX, RECORDING_SETTINGS_META_KEY,
+};
 use crate::application::reconcile::RecordingCommand;
 use crate::db::DeadlineDb;
 use restream_domain::domain::recording::RecordingSettings;
@@ -9,9 +12,6 @@ use restream_engine::recording::{RecordingMetadataReporter, RecordingStart};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
-pub const RECORDING_SETTINGS_META_KEY: &str = "recording_settings";
-pub const RECORDING_ENABLED_META_PREFIX: &str = "recording_enabled:";
 
 pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
     format!("{RECORDING_ENABLED_META_PREFIX}{pipeline_id}")
