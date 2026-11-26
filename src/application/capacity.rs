@@ -507,7 +507,7 @@ async fn capacity_workload(engine: &MediaEngine, rates: &HashMap<String, IngestR
         .await
         .len()
         .min(u32::MAX as usize) as u32;
-    workload.shard_count = engine.config.egress_fabric.shards.max(1);
+    workload.shard_count = engine.egress_shard_count();
     workload
 }
 
