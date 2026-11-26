@@ -8,7 +8,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::logging::types::AppLogFilters;
+use crate::db::log_types::AppLogFilters;
 use restream_domain::domain::state::StageBackendKind;
 use restream_domain::runtime::graph::{GraphRole, StageGraphPlan};
 use restream_health::alerts;

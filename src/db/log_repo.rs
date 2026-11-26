@@ -1,9 +1,11 @@
 use sqlx::{AssertSqlSafe, SqlitePool};
 
+use super::log_types::{AppLogEntry, AppLogFilters, AppLogRow};
+
 /// Batch-insert log entries. Called by the DbLayer drain task every 100 ms.
 pub async fn append_app_log_batch(
     pool: &SqlitePool,
-    entries: &[crate::logging::types::AppLogEntry],
+    entries: &[AppLogEntry],
 ) -> Result<(), sqlx::Error> {
     append_app_log_batch_returning(pool, entries).await?;
     Ok(())
@@ -13,8 +15,8 @@ pub async fn append_app_log_batch(
 /// The logging drain uses this to publish SSE only after the transaction commits.
 pub async fn append_app_log_batch_returning(
     pool: &SqlitePool,
-    entries: &[crate::logging::types::AppLogEntry],
-) -> Result<Vec<crate::logging::types::AppLogRow>, sqlx::Error> {
+    entries: &[AppLogEntry],
+) -> Result<Vec<AppLogRow>, sqlx::Error> {
     if entries.is_empty() {
         return Ok(Vec::new());
     }
@@ -37,7 +39,7 @@ pub async fn append_app_log_batch_returning(
             .bind(&e.event_class)
             .execute(&mut *tx)
             .await?;
-            rows.push(crate::logging::types::AppLogRow {
+            rows.push(AppLogRow {
                 id: result.last_insert_rowid(),
                 ts: e.ts.clone(),
                 level: e.level.clone(),
@@ -65,9 +67,7 @@ enum LogParam<'a> {
 
 /// The `WHERE` conditions for `filters`, each pushed with the values its
 /// placeholders bind, so the two cannot fall out of order.
-fn app_log_conditions(
-    filters: &crate::logging::types::AppLogFilters,
-) -> (Vec<String>, Vec<LogParam<'_>>) {
+fn app_log_conditions(filters: &AppLogFilters) -> (Vec<String>, Vec<LogParam<'_>>) {
     let mut clauses: Vec<String> = vec![];
     let mut params = vec![];
 
@@ -133,8 +133,8 @@ fn scope_conditions(scope: Option<&str>) -> impl Iterator<Item = &'static str> {
 /// event_class, prefix (message LIKE), time range, limit, order.
 pub async fn list_app_logs(
     pool: &SqlitePool,
-    filters: &crate::logging::types::AppLogFilters,
-) -> Result<Vec<crate::logging::types::AppLogRow>, sqlx::Error> {
+    filters: &AppLogFilters,
+) -> Result<Vec<AppLogRow>, sqlx::Error> {
     let (clauses, params) = app_log_conditions(filters);
 
     let order = if filters.order.as_deref() == Some("asc") {
@@ -161,7 +161,7 @@ pub async fn list_app_logs(
         where_clause, order_clause, limit
     );
 
-    let mut q = sqlx::query_as::<_, crate::logging::types::AppLogRow>(AssertSqlSafe(sql));
+    let mut q = sqlx::query_as::<_, AppLogRow>(AssertSqlSafe(sql));
     for param in params {
         q = match param {
             LogParam::Text(value) => q.bind(value),

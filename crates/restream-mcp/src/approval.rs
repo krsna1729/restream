@@ -2,7 +2,7 @@
 //! the prompt names what the change touches, and only an explicit approval
 //! lets the apply go ahead.
 
-use crate::transport::{CallContext, ClientRequestError};
+use crate::session::{CallContext, ClientRequestError};
 use restream_agent_contract::ApprovalRequest;
 use serde_json::{Value, json};
 

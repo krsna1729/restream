@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 pub(crate) const PROGRESS_EVERY: Duration = Duration::from_secs(5);
 
 /// Messages a tool call may queue for its client before it waits.
-pub(super) const CALL_OUTBOX: usize = 32;
+pub(crate) const CALL_OUTBOX: usize = 32;
 
 #[derive(Default)]
 pub(crate) struct Session {
@@ -43,7 +43,7 @@ struct Waiters {
 }
 
 impl Session {
-    pub(super) fn on_initialize(&self, params: &Value) {
+    pub(crate) fn on_initialize(&self, params: &Value) {
         let capabilities = &params["capabilities"];
         let elicitation = capabilities
             .get("elicitation")
@@ -57,11 +57,11 @@ impl Session {
     }
 
     /// Whether the client renders panels: only then do tools name theirs.
-    pub(super) fn renders_panels(&self) -> bool {
+    pub(crate) fn renders_panels(&self) -> bool {
         self.panels.load(Ordering::Relaxed)
     }
 
-    pub(super) fn on_initialized(&self) {
+    pub(crate) fn on_initialized(&self) {
         if self.initialize_seen.load(Ordering::Relaxed) {
             self.initialized.store(true, Ordering::Relaxed);
         }
@@ -69,7 +69,7 @@ impl Session {
 
     /// `(initialize seen, initialized)`, for transports that require the
     /// handshake before normal operations.
-    pub(super) fn handshake(&self) -> (bool, bool) {
+    pub(crate) fn handshake(&self) -> (bool, bool) {
         (
             self.initialize_seen.load(Ordering::Relaxed),
             self.initialized.load(Ordering::Relaxed),
@@ -78,7 +78,7 @@ impl Session {
 
     /// Hand a client's response to the request awaiting it. `false` when no
     /// request of this session has that id (a stale or foreign answer).
-    pub(super) fn route_response(&self, message: &Value) -> bool {
+    pub(crate) fn route_response(&self, message: &Value) -> bool {
         let Some(id) = message.get("id").and_then(Value::as_str) else {
             return false;
         };
@@ -96,7 +96,7 @@ impl Session {
 
     /// The connection ended: every waiting request fails as disconnected,
     /// and so does any request made later.
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         let mut pending = lock(&self.pending);
         pending.closed = true;
         pending.by_id.clear();
@@ -150,7 +150,7 @@ impl CallContext {
         }
     }
 
-    pub(super) fn streaming(
+    pub(crate) fn streaming(
         session: Option<Arc<Session>>,
         out: mpsc::Sender<Value>,
         progress_token: Option<Value>,

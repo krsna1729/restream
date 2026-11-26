@@ -6,7 +6,6 @@
 //! requests such as an approval prompt, whose answers the transport routes
 //! back. Tool execution stays in handlers and backends.
 
-mod session;
 mod stdio;
 mod streamable_http;
 
@@ -18,8 +17,7 @@ use restream_agent_contract::{AgentBackend, AgentError, tool_panel};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use session::Session;
-pub use session::{CallContext, ClientRequestError};
+use crate::session::{CallContext, Session};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportMode {

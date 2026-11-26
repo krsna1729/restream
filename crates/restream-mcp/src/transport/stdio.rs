@@ -2,9 +2,9 @@
 //! tasks so the read loop keeps routing the client's answers to requests a
 //! running call made (an approval prompt) while that call waits.
 
-use super::session::{CALL_OUTBOX, CallContext, Session};
 use super::{Handshake, Inbound, classify, error_response, run_tool_call};
 use crate::handlers::AgentToolHandler;
+use crate::session::{CALL_OUTBOX, CallContext, Session};
 use restream_agent_contract::{AgentBackend, AgentError};
 use serde_json::Value;
 use std::sync::Arc;

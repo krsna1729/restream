@@ -6,7 +6,7 @@
 use crate::db::DeadlineDb;
 
 use crate::application::service_error::{ServiceError, ServiceResult};
-use crate::logging::types::{AppLogFilters, AppLogRow};
+use crate::db::log_types::{AppLogFilters, AppLogRow};
 
 /// Lists persisted application logs using the caller-supplied filters
 /// without applying any stream-specific merge behavior.
@@ -53,7 +53,7 @@ fn should_merge_restream_backfill(filters: &AppLogFilters, include_restream: boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logging::types::AppLogEntry;
+    use crate::db::log_types::AppLogEntry;
     use sqlx::SqlitePool;
 
     fn entry(message: &str, pipeline_id: Option<&str>) -> AppLogEntry {

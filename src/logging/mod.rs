@@ -13,7 +13,6 @@
 
 mod nonblocking;
 mod panic_report;
-pub mod types;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +31,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use self::nonblocking::NonBlocking;
-pub use self::types::{AppLogEntry, AppLogFilters, AppLogRow};
+use crate::db::log_types::{AppLogEntry, AppLogRow};
 
 /// Lines each console stream and the file sink queue while their collector
 /// is slow; more are dropped and counted.
@@ -163,14 +162,9 @@ impl FieldCollector {
     }
 
     /// Consumes the collector into a history row.
-    fn into_entry(
-        mut self,
-        level: String,
-        target: String,
-        span: SpanFields,
-    ) -> crate::logging::types::AppLogEntry {
+    fn into_entry(mut self, level: String, target: String, span: SpanFields) -> AppLogEntry {
         let fields = self.fields_json();
-        crate::logging::types::AppLogEntry {
+        AppLogEntry {
             ts: restream_domain::timestamp::rfc3339_utc(
                 std::time::SystemTime::now(),
                 restream_domain::timestamp::Precision::Millis,
@@ -494,7 +488,7 @@ async fn persist_and_broadcast_log_batch(
 #[cfg(test)]
 mod tests {
     use super::{dropped_lines, history_level_enabled, persist_and_broadcast_log_batch};
-    use crate::logging::AppLogEntry;
+    use crate::db::log_types::{AppLogEntry, AppLogFilters};
 
     fn entry(message: &str) -> AppLogEntry {
         AppLogEntry {
@@ -586,7 +580,7 @@ mod tests {
 
         let persisted = crate::db::list_app_logs(
             &pool,
-            &crate::logging::AppLogFilters {
+            &AppLogFilters {
                 after_id: None,
                 level: Some("info".to_string()),
                 since: None,

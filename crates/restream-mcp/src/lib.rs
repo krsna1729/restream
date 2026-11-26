@@ -11,10 +11,12 @@ pub mod handlers;
 pub mod http;
 pub(crate) mod inputs;
 pub(crate) mod panels;
+pub mod session;
 pub mod tools;
 pub mod transport;
 
 pub use auth::McpAuthContext;
 pub use handlers::AgentToolHandler;
+pub use session::CallContext;
 pub use tools::{McpToolDefinition, available_tool_catalog, tool_catalog};
-pub use transport::{CallContext, TransportConfig, TransportMode, run_server};
+pub use transport::{TransportConfig, TransportMode, run_server};

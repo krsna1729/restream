@@ -1,7 +1,7 @@
 use super::core::test_pool;
 use restream::{
     db,
-    logging::types::{AppLogEntry, AppLogFilters},
+    db::log_types::{AppLogEntry, AppLogFilters},
 };
 use restream_domain::domain::{output_spec::OutputConfig, state::DesiredOutputState};
 

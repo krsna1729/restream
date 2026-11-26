@@ -8,6 +8,7 @@ pub(crate) mod flight_repo;
 mod ingest_repo;
 mod job_repo;
 pub mod log_repo;
+pub mod log_types;
 pub(crate) mod meta_repo;
 pub(crate) mod migrations;
 pub(crate) mod notify_repo;

@@ -11,7 +11,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::logging::types::AppLogFilters;
+use crate::db::log_types::{AppLogFilters, AppLogRow};
 
 use super::state::{AppState, require_authenticated};
 
@@ -215,7 +215,7 @@ pub fn log_broadcast_matches_stream_filters(
 
 // SSE frames keep the persisted row id so reconnect backfill can resume from
 // the last delivered event rather than replaying the full stream.
-fn log_row_sse_frame(row: &crate::logging::AppLogRow) -> String {
+fn log_row_sse_frame(row: &AppLogRow) -> String {
     let data = serde_json::to_string(row).unwrap_or_default();
     format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data)
 }
@@ -368,6 +368,7 @@ mod tests {
         LogsQuery, LogsStreamFilter, LogsStreamQuery, MAX_STREAM_BACKFILL_PAGE_SIZE,
         build_logs_filters, log_level_passes, log_row_sse_frame, should_include_restream_stream,
     };
+    use crate::db::log_types::AppLogRow;
 
     #[test]
     fn build_logs_filters_preserves_limit_and_scope_fields() {
@@ -451,7 +452,7 @@ mod tests {
 
     #[test]
     fn sse_frame_preserves_persisted_id_and_lifecycle_metadata() {
-        let frame = log_row_sse_frame(&crate::logging::AppLogRow {
+        let frame = log_row_sse_frame(&AppLogRow {
             id: 42,
             ts: "2026-07-10T00:00:00Z".to_string(),
             level: "INFO".to_string(),

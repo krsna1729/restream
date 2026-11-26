@@ -21,7 +21,6 @@ pub(crate) fn run(args: &[&str]) -> WorkflowResult {
         "app-native" => native::run(args),
         "package-binaries" => package::package_binaries(version_arg(command, args)?),
         "tag-and-publish" => publish::tag_and_publish(args),
-        "shards" => crate::qualify::shards::run(args),
         "-h" | "--help" | "help" => {
             println!("{}", usage());
             Ok(())
