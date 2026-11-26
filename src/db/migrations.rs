@@ -1,6 +1,6 @@
 //! Schema versions. A new database is created at [`CURRENT_SCHEMA_VERSION`].
 //! A database from an earlier version is rebuilt onto the canonical table
-//! definitions (`schema::TABLES`) in one transaction: each table is
+//! definitions the schema setup passes in, in one transaction: each table is
 //! recreated and every column the new definition still has is copied, so
 //! dropped columns go, new ones take their defaults, and widened CHECKs,
 //! new foreign keys and indexes apply to every database the same way.
@@ -10,9 +10,13 @@ use sqlx::{Acquire, AssertSqlSafe, Row, SqlitePool};
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 3;
 const CURRENT_SCHEMA_NAME: &str = "canonical_tables_v3";
 
-/// Bring an existing database to the current version; a new one is left for
-/// the schema setup to create.
-pub(crate) async fn upgrade(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+/// Bring an existing database to the current version, rebuilding the tables
+/// it already has onto `definitions` (name, CREATE statement; parents before
+/// children); a new one is left for the schema setup to create.
+pub(crate) async fn upgrade(
+    pool: &SqlitePool,
+    definitions: &[(&str, &str)],
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
@@ -41,7 +45,7 @@ pub(crate) async fn upgrade(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
             .fetch_all(pool)
             .await?;
-    let tables: Vec<(&str, &str)> = super::schema::TABLES
+    let tables: Vec<(&str, &str)> = definitions
         .iter()
         .copied()
         .filter(|(name, _)| existing.iter().any(|table| table == name))

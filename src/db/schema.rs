@@ -267,7 +267,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     sqlx::query("PRAGMA journal_size_limit = 67108864;")
         .execute(pool)
         .await?;
-    super::migrations::upgrade(pool).await?;
+    super::migrations::upgrade(pool, TABLES).await?;
     for (_, create) in TABLES {
         sqlx::query(*create).execute(pool).await?;
     }

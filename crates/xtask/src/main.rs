@@ -101,6 +101,9 @@ fn command(args: &[&str]) -> workflow::WorkflowResult {
         ["parallel-fast-breadth", ref rest @ ..] => harness::parallel_fast_breadth(rest),
         ["harness-segregated", ref rest @ ..] => harness::segregated(rest),
         ["frontend", ref rest @ ..] => frontend::run(rest),
+        // The release shard matrix is qualification data; dispatching it
+        // here keeps `release` free of a `qualify` dependency.
+        ["release", "shards", ref rest @ ..] => qualify::shards::run(rest),
         ["release", ref rest @ ..] => release::run(rest),
         ["qualify", ref rest @ ..] => qualify::run(rest),
         ["container", ref rest @ ..] => container::run(rest),

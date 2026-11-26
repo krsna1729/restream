@@ -1,5 +1,4 @@
 use super::*;
-use crate::frame_units::VideoConfigFollower;
 use crate::reader::Reader;
 use bytes::Bytes;
 use restream_core::CONFIG_HISTORY;

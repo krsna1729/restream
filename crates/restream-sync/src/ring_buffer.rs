@@ -77,7 +77,7 @@ use restream_core::{
 
 use crate::frame_units::TrackConfigs;
 use crate::lock::lock;
-use crate::reader::{ReaderInfo, ReaderSnapshot};
+use crate::reader_info::{ReaderInfo, ReaderSnapshot};
 use crate::subscribers::PublishSubscribers;
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
@@ -96,23 +96,6 @@ pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
 #[repr(align(64))]
 pub struct AlignedAtomicUsize {
     val: AtomicUsize,
-}
-
-/// Compact histogram for `pull_burst` yield sizes.
-///
-/// Buckets cover [1], [2], [3-4], [5-8], [9-16], [17-32].
-/// Burst size 0 (nothing available) is not counted — callers skip stat
-/// recording when `available == 0`.
-pub const BURST_HIST_BUCKETS: usize = 6;
-pub(crate) const fn burst_bucket(n: usize) -> usize {
-    match n {
-        1 => 0,
-        2 => 1,
-        3..=4 => 2,
-        5..=8 => 3,
-        9..=16 => 4,
-        _ => 5,
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -955,9 +938,11 @@ fn average_payload_bps(grouped: &[(i64, u64)]) -> Option<u64> {
     )
 }
 
+mod config_follower;
 mod sequence_reads;
 mod slot;
 
+pub use config_follower::VideoConfigFollower;
 pub use slot::RingSlot;
 
 #[cfg(test)]

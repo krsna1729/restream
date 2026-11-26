@@ -10,7 +10,7 @@ use restream_domain::models::Output;
 use super::AppState;
 use crate::application::schedules::{Schedule, ScheduleDraft};
 use crate::application::services::ServiceResult;
-use crate::logging::types::{AppLogFilters, AppLogRow};
+use crate::db::log_types::{AppLogFilters, AppLogRow};
 
 impl AppState {
     /// Every output in the catalog.

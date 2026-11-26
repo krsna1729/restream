@@ -2,7 +2,7 @@
 
 use crate::approval::{self, Approval};
 use crate::inputs::{OperationApprovalInput, OperationIdInput};
-use crate::transport::CallContext;
+use crate::session::CallContext;
 use restream_agent_contract::{
     AgentBackend, AgentError, InvestigationRequest, OperationCreateRequest, PlanRequest,
     VerifyRequest,

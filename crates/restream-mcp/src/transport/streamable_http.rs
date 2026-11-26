@@ -5,11 +5,11 @@
 //! POSTs its answers to those requests under the same session. Without a
 //! session or SSE, a request is answered statelessly as plain JSON.
 
-use super::session::{CALL_OUTBOX, CallContext, Session};
 use super::{
     Handshake, Inbound, PROTOCOL_VERSION, TransportConfig, classify, error_response, run_tool_call,
 };
 use crate::handlers::AgentToolHandler;
+use crate::session::{CALL_OUTBOX, CallContext, Session};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
