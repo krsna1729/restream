@@ -32,6 +32,7 @@ use super::AppServices;
 mod endpoints;
 mod identity;
 mod ingests;
+mod media;
 mod notifications;
 mod observability;
 mod shares;
@@ -164,7 +165,7 @@ pub struct AppState {
     notify_service: NotifyService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
-    pub media_library_service: MediaLibraryService,
+    media_library_service: MediaLibraryService,
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
     /// Mutation handlers persist, then ask the reconciler to converge here.

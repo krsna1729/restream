@@ -133,10 +133,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
 }
 
 async fn media_inventory(state: &AppState) -> serde_json::Value {
-    let files = state
-        .media_library_service
-        .list_media_files(&state.media_dir)
-        .await;
+    let files = state.media_files().await;
     serde_json::json!({
         "mediaDir": state.media_dir,
         "files": files,
