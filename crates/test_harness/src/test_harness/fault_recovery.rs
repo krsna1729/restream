@@ -4,8 +4,6 @@ mod boundary_target;
 mod destination_stall;
 #[path = "fault_recovery/egress.rs"]
 mod egress;
-#[path = "fault_recovery/observe.rs"]
-mod observe;
 #[path = "fault_recovery/resilience.rs"]
 mod resilience;
 #[path = "fault_recovery/rtmps_egress.rs"]
@@ -22,19 +20,8 @@ mod srt_stall;
 pub(crate) use siblings::fault_sibling_isolation;
 
 #[cfg(test)]
-pub(crate) use egress::{
-    OutputRetryObservation, effective_fault_output_stall_siblings, output_retry_or_cleanup_phase_ok,
-};
-pub(crate) use egress::{
-    fault_egress_retry, fault_output_stall, wait_for_output_retry_observation,
-    wait_for_outputs_live_and_progressing,
-};
-pub(crate) use observe::{
-    RECOVERY_WARM_VIDEO_MIN, create_pipeline, create_pipeline_with_stream_key, delete_pipeline_v1,
-    disconnect_grace_remaining_bounded, health_input_snapshot, input_disconnect_cleared,
-    observe_final_output, wait_for_output_running, wait_for_output_running_and_sink_video_above,
-    wait_for_sink_video_above,
-};
+pub(crate) use egress::effective_fault_output_stall_siblings;
+pub(crate) use egress::{fault_egress_retry, fault_output_stall};
 pub(crate) use resilience::{fault_resilience, recovery};
 pub(crate) use srt_stall::fault_srt_output_stall;
 

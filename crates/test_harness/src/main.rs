@@ -38,6 +38,8 @@ use tokio_util::sync::CancellationToken;
 
 #[path = "test_harness/api_client.rs"]
 mod api_client;
+#[path = "test_harness/api_waits.rs"]
+mod api_waits;
 #[path = "test_harness/catalog.rs"]
 mod catalog;
 #[path = "test_harness/catalog_cli.rs"]
@@ -84,6 +86,8 @@ mod moq_impairment;
 mod moq_moxygen_interop;
 #[path = "test_harness/moq_relay_interop.rs"]
 mod moq_relay_interop;
+#[path = "test_harness/observe.rs"]
+mod observe;
 #[path = "test_harness/output_helpers.rs"]
 mod output_helpers;
 #[path = "test_harness/output_progress.rs"]
@@ -121,6 +125,7 @@ mod udp_drain;
 
 use admission::*;
 use api_client::*;
+use api_waits::*;
 use catalog_cli::*;
 use core::*;
 use fault_case_routines::*;
@@ -138,6 +143,7 @@ pub(crate) use mixed_adaptive_ring::*;
 use mixed_manifest::*;
 use mixed_runner::*;
 pub(crate) use mode_specs::*;
+use observe::*;
 use output_helpers::*;
 use output_progress::*;
 use resource_sweep::*;

@@ -46,8 +46,8 @@ pub(super) use mixed_artifact_index::{
 pub(super) use mixed_artifacts::write_json_pretty_atomic;
 pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
 pub(super) use mixed_checks::{
-    preflight_mixed_rtmps_capabilities, preflight_rtmps_ktls_capabilities,
-    verify_mixed_output_cases_inner, verify_mixed_output_dimensions,
+    preflight_mixed_rtmps_capabilities, verify_mixed_output_cases_inner,
+    verify_mixed_output_dimensions,
 };
 pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate,

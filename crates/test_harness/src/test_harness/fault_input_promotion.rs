@@ -3,63 +3,6 @@ use super::*;
 const LONG_GOP_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 const BUFFERED_PROMOTION_DEADLINE: Duration = Duration::from_secs(5);
 
-pub(crate) struct HarnessInput {
-    pub(crate) id: String,
-    pub(crate) stream_key: String,
-}
-
-pub(crate) async fn create_backup_input(
-    api: &RampApi,
-    pipeline_id: &str,
-) -> Result<HarnessInput, String> {
-    let response = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/inputs"),
-            json!({"label": "Warm standby"}),
-        )
-        .await?;
-    let input = &response["input"];
-    Ok(HarnessInput {
-        id: input["id"]
-            .as_str()
-            .ok_or_else(|| "created backup input is missing id".to_string())?
-            .to_string(),
-        stream_key: input["streamKey"]
-            .as_str()
-            .ok_or_else(|| "created backup input is missing stream key".to_string())?
-            .to_string(),
-    })
-}
-
-pub(crate) async fn wait_for_input_state(
-    api: &RampApi,
-    pipeline_id: &str,
-    input_id: &str,
-    state: &str,
-    timeout: Duration,
-) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let response = api
-            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/inputs"))
-            .await?;
-        if let Some(input) = response["inputs"].as_array().and_then(|inputs| {
-            inputs
-                .iter()
-                .find(|input| input["id"].as_str() == Some(input_id))
-        }) && input["runtime"]["connected"] == true
-            && input["runtime"]["forwardingState"].as_str() == Some(state)
-            && input["runtime"]["bytesReceived"].as_u64().unwrap_or(0) > 0
-        {
-            return Ok(input.clone());
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    Err(format!(
-        "input {input_id} did not reach connected {state} state"
-    ))
-}
-
 async fn wait_for_input_preview(
     api: &RampApi,
     input_id: &str,
