@@ -28,7 +28,7 @@ flowchart LR
     env[Process environment] --> from_env["AppConfig::from_env (src/config/mod.rs)"]
     env --> engine["EngineConfig::from_env (crates/restream-engine/src/config.rs)"]
     env --> moq["MoqIngestSetting::from_env (crates/restream-engine/src/config/moq.rs)"]
-    env --> knobs["restream_engine::srt::knobs (OnceLock)"]
+    env --> knobs["restream_engine::egress::backends::srt::knobs (OnceLock)"]
     env --> malloc["malloc_tuning::apply_from_env"]
     moq --> engine
     engine --> from_env
@@ -132,8 +132,8 @@ the output fails. There is no userspace-TLS fallback.
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` | `0` (off) | `0..=10000` | When set, a new shared TS muxer shard is created as each pipeline+encoding cohort crosses this many outputs |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` | `64` | `1..=64` | Muxer shard limit; beyond it new outputs join the least-loaded shard (warning logged) |
 | `RESTREAM_TS_RING_CAPACITY` | `256` chunks | `32..=16384` | Shared SRT TS ring between muxer and socket write |
-| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`crates/restream-engine/src/srt/knobs.rs`). Unset: 8 MiB (`DESIRED_UDP_BUF`) for ingress and egress Owner sockets |
-| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | unset | positive | Test-harness SRT sinks only (`crates/restream-engine/src/srt/knobs.rs`); production Owner work is bounded by `OwnerServiceBudget` |
+| `RESTREAM_SRT_UDP_BUF_BYTES` | unset | positive bytes | UDP socket buffer for ingress and egress Owners (`crates/restream-engine/src/egress/backends/srt/knobs.rs`). Unset: 8 MiB (`DESIRED_UDP_BUF`) for ingress and egress Owner sockets |
+| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | unset | positive | Test-harness SRT sinks only (`crates/restream-engine/src/egress/backends/srt/knobs.rs`); production Owner work is bounded by `OwnerServiceBudget` |
 
 ### HLS
 
@@ -642,7 +642,7 @@ None of these change a production server.
 | `RESTREAM_AGENT_BASE_URL`, `RESTREAM_AGENT_SESSION_COOKIE`, `RESTREAM_AGENT_BEARER_TOKEN`, `RESTREAM_MCP_ALLOWED_ORIGINS`, `RESTREAM_MCP_VERSION_CHECK` | `crates/restream-mcp/src/main.rs` | MCP bridge; see [agent plane integration](agent-plane-integration.md) |
 | `RESTREAM_BENCH_SRT_SHARDS` | `crates/restream-engine/src/config.rs`, only with the engine's `srt-shard-bench` feature (`RESTREAM_BENCH_FEATURES=restream-engine/srt-shard-bench cargo xtask build-bench`) | Pins SRT shard count `1..=4` for benchmarks |
 | `RESTREAM_BENCH_SRT_ADMISSION` | `crates/restream-engine/src/config.rs`, only with the `srt-shard-bench` feature | `0` skips SRT admission, so a shard can be measured past its admission ceiling |
-| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `crates/restream-engine/src/srt/knobs.rs` | Harness SRT sink receive budget |
+| `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` | `crates/restream-engine/src/egress/backends/srt/knobs.rs` | Harness SRT sink receive budget |
 | `RESTREAM_BUILD_GIT_COMMIT` (else `GITHUB_SHA`), `RESTREAM_BUILD_TIMESTAMP` (else `SOURCE_DATE_EPOCH`) | `build_identity.rs` (root and `restream-mcp` build scripts) | Commit and timestamp stamped into the binary |
 | `RESTREAM_HARNESS_*`, `RESTREAM_BENCH_*`, `SUBSTRATE_*`, `MOQ_BROWSER_*`, `TEST_HARNESS_USE_HOST_NET`, `WORK_DIR` | `crates/test_harness/` | Harness runs; see [testing](testing.md) |
 | Release and container variables (`RESTREAM_BUILD_*`, `RESTREAM_RELEASE_*`, `RESTREAM_CONTAINER_*`, `RESTREAM_SBOM_PATH`, ...) | `scripts/` | Build and release scripts; documented in each script's usage text |

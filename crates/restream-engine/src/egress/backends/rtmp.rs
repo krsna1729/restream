@@ -150,8 +150,8 @@ impl MediaPendingWrite {
 /// `advance()` call, since they run once and are not hot), this batches
 /// multiple feed units and their wire packets into one visit, bounded by the
 /// visit's [`WorkBudget`] — mirroring the SRT fabric engine's fragment
-/// batching (`crates/restream-engine/src/srt/egress_engine.rs`), because one wake per unit
-/// costs measurably more CPU.
+/// batching (`crates/restream-engine/src/egress/backends/srt/engine.rs`),
+/// because one wake per unit costs measurably more CPU.
 struct MediaPublisher {
     core: RtmpSessionCore,
     encoder: RtmpMediaEncoder,

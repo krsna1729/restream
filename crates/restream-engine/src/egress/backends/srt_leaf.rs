@@ -6,11 +6,11 @@ use crate::egress::leaf::LeafCommon;
 use crate::egress::policy::{LeafStallClass, WorkBudget, classify_stall};
 use crate::egress::visit::{EngineVisitResult, visit_leaf};
 use crate::snapshots::PublisherQuality;
-use crate::srt::SrtEgressEngine;
-use crate::srt::egress_stats::SenderQualitySampler;
 use restream_srt::egress_stats::SrtSendBacklog;
 use srt_transport::advanced::caller::{LogicalCallerState, LogicalCallerStats};
 
+use super::engine::SrtEgressEngine;
+use super::stats::SenderQualitySampler;
 use super::{SrtCaller, SrtLeafPressure, SrtOwners, apply_send_backlog};
 
 /// One SRT output as Restream product state. It holds the transport only as

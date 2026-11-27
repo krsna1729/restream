@@ -16,6 +16,7 @@ use srt_transport::{ListenerConfig, OwnerListenerPlan, RuntimeFlavor, owner_plan
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use crate::egress::backends::srt::knobs::desired_udp_buf;
 use crate::egress::backends::srt::owner_set::{
     SRT_OWNER_WIRE_CEILING, production_runtime, substrate_diagnosis,
 };
@@ -52,7 +53,7 @@ pub(in crate::srt) fn listener_plans(
             // kernel default (208 KB) the listener dropped 5,876 publisher
             // datagrams in one SRT x150 run (`ss -uam`), which ARQ then had to
             // recover.
-            if let Some(bytes) = std::num::NonZeroUsize::new(super::super::desired_udp_buf()) {
+            if let Some(bytes) = std::num::NonZeroUsize::new(desired_udp_buf()) {
                 transport.socket_buffers = srt_transport::SocketBufferConfig::Bytes(bytes);
             }
             transport.promotion = promotion;

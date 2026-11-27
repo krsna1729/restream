@@ -35,11 +35,13 @@ use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake};
 use crate::egress::visit::EngineVisitResult;
 use crate::resolver::{ResolveError, Resolver};
-use crate::srt::egress_connect::egress_connect_spec;
 use restream_srt::address_family::AddressFamily;
 use restream_srt::egress_connect::SrtFabricEgressConnectSpec;
 use restream_srt::egress_stats::SrtSendBacklog;
 
+pub(crate) mod connect;
+mod engine;
+pub(crate) mod knobs;
 pub(crate) mod owner_set;
 mod resolve;
 #[path = "srt_drain.rs"]
@@ -48,7 +50,9 @@ mod srt_drain;
 mod srt_events;
 #[path = "srt_leaf.rs"]
 mod srt_leaf;
+mod stats;
 
+use connect::egress_connect_spec;
 pub(crate) use owner_set::{SrtCaller, SrtOwnerSettings, SrtOwners};
 pub(crate) use resolve::srt_shard_backend;
 pub(crate) use srt_leaf::SrtFabricLeaf;
