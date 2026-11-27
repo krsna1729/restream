@@ -61,11 +61,9 @@ pub(crate) mod hls_sink;
 mod peer_ports;
 #[path = "resource_sweep/thread_cpu.rs"]
 mod thread_cpu;
-use peer_ports::{
-    instance_suffixed_path, peer_instance_ports, resource_output_url, srt_peer_ports,
-};
+use peer_ports::instance_suffixed_path;
 #[cfg(test)]
-use peer_ports::{peer_instance_for, srt_url_on_host, validate_peer_instance_ports};
+use peer_ports::{peer_instance_for, srt_url_on_host};
 #[path = "resource_sweep/packet_contract.rs"]
 mod packet_contract;
 #[path = "resource_sweep/packet_contract_peers.rs"]
@@ -247,7 +245,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
 }
 
 async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, String> {
-    let (rtmp, rtmps, srt, api) = peer_instance_ports(env, index);
+    let (rtmp, rtmps, srt, api) = env.peer_ports().instance(index);
     let log_path = instance_suffixed_path(&env.mediamtx_log, index);
     let config_path = instance_suffixed_path(&env.mediamtx_config, index);
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
@@ -305,7 +303,7 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
     let mut children = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
         let spawned = if skip_start {
-            let (_, _, _, api) = peer_instance_ports(env, index);
+            let (_, _, _, api) = env.peer_ports().instance(index);
             verify_preexisting_mediamtx_peer(index, api).await
         } else {
             spawn_mediamtx_peer(env, index).await
@@ -338,7 +336,7 @@ async fn start_harness_sink_peers(
     let mut rtmp_metrics = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
-        let (rtmp_port, rtmps_port, _, _api) = peer_instance_ports(env, index);
+        let (rtmp_port, rtmps_port, _, _api) = env.peer_ports().instance(index);
         if needs.rtmp
             && let Some((cert, key)) = &env.rtmps_tls
         {
@@ -380,7 +378,7 @@ async fn start_harness_sink_peers(
                 }
             }
         }
-        srt_ports.extend(srt_peer_ports(env, index));
+        srt_ports.extend(env.peer_ports().srt_ports(index));
     }
 
     let srt_pool = if needs.srt {
@@ -785,7 +783,7 @@ async fn start_growth_feed(
     let mut output_ids = Vec::with_capacity(outputs_per_feed);
     for output in 1..=outputs_per_feed {
         let name = format!("{stream_key}-{}-{output}", kind.label());
-        let (url, encoding) = resource_output_url(env, config, kind, &name);
+        let (url, encoding) = env.output_url(config, kind, &name);
         let output_id = create_output_with_rtmp_mode(
             api,
             &pipeline_id,
@@ -865,7 +863,7 @@ async fn start_egress_burst(
     let specs: Vec<burst::BurstSpec> = planned
         .iter()
         .map(|(_, kind, name)| {
-            let (url, encoding) = resource_output_url(env, config, *kind, name);
+            let (url, encoding) = env.output_url(config, *kind, name);
             (name.clone(), url, encoding, kind.rtmp_mode())
         })
         .collect();
@@ -886,7 +884,7 @@ async fn start_egress_outputs(
         .iter()
         .filter(|(planned_index, ..)| *planned_index == index)
     {
-        let (url, encoding) = resource_output_url(env, config, *kind, name);
+        let (url, encoding) = env.output_url(config, *kind, name);
         let output_id =
             create_output_with_rtmp_mode(api, pipeline_id, name, &url, &encoding, kind.rtmp_mode())
                 .await?;

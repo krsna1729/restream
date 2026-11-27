@@ -124,44 +124,6 @@ pub(crate) fn mixed_output_read_url(
     }
 }
 
-pub(crate) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> {
-    cases
-        .iter()
-        .map(|case| {
-            let mut value = json!({
-                "id": case.id(),
-                "protocol": mixed_output_protocol_name(case.protocol()),
-                "encoding": case.encoding(),
-                "rtmpMode": case.rtmp_mode_name(),
-                "expectedDimensions": case.expected_dimensions(),
-                "expectedVideoCodecByInput": {
-                    "h264": case.expected_video_codec_for_input(MixedInputCase::new(
-                        "mixed.asset.file.h264.a1.bf0",
-                        MixedInputProtocol::File,
-                        MixedVideoCodec::H264,
-                        MixedInputAudioLayout::A1,
-                        MixedInputReorder::Bf0,
-                        false,
-                    )),
-                    "h265": case.expected_video_codec_for_input(MixedInputCase::new(
-                        "mixed.asset.file.h265.a1.bf0",
-                        MixedInputProtocol::File,
-                        MixedVideoCodec::H265,
-                        MixedInputAudioLayout::A1,
-                        MixedInputReorder::Bf0,
-                        false,
-                    )),
-                },
-                "expectedAudioTracks": case.expected_audio_tracks(),
-            });
-            if let Some(track) = case.selected_audio_track() {
-                value["selectedAudioTrack"] = json!(track);
-            }
-            value
-        })
-        .collect()
-}
-
 pub(crate) async fn add_mixed_output_matrix_rows(
     env: &MixedEnv,
     api: &RampApi,

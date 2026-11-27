@@ -776,15 +776,3 @@ async fn stop_mixed_live_run(
     }
     Ok(())
 }
-
-pub(in super::super) fn mixed_input_fixture(case: MixedInputCase) -> Result<PathBuf, String> {
-    let codec = match case.codec() {
-        MixedVideoCodec::H264 => "h264",
-        MixedVideoCodec::H265 => "h265",
-    };
-    restream_engine::test_fixtures::av_marker_transport_fixture_for_bframes(
-        codec,
-        case.is_multi_track(),
-        case.fixture_bframe_mode(),
-    )
-}

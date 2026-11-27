@@ -263,7 +263,7 @@ impl Session {
         let source_pipeline_id =
             create_resource_pipeline(&self.api, "hls-pull-source", "sk-hls-pull-source").await?;
         self.source_pipeline_id = source_pipeline_id.clone();
-        let publisher_args = crate::hls_push_duty::run::rtmp_publisher_args(
+        let publisher_args = crate::media_probes::rtmp_publisher_args(
             &plan.fixture,
             &plan.rtmp_publish_url("sk-hls-pull-source"),
         );

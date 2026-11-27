@@ -9,6 +9,8 @@ use super::super::{
     harness_port_defaults, harness_srt_crypto_from_env,
 };
 use super::packet_contract_peers::PeerStateConfig;
+use super::peer_ports::PeerPorts;
+use crate::harness_srt_sink::configured_ports_per_peer;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResourceSweepLifecycle {
@@ -201,7 +203,7 @@ impl ResourceSweepEnv {
             },
             work_dir,
         };
-        super::peer_ports::validate_peer_instance_ports(&env)?;
+        env.peer_ports().validate()?;
         if let Some(filter) = &env.scenario_filter {
             let unknown = unknown_scenarios(filter);
             if !unknown.is_empty() {
@@ -253,6 +255,31 @@ impl ResourceSweepEnv {
             hash.wrapping_mul(31).wrapping_add(usize::from(byte))
         }) % self.srt_peer_hosts.len();
         Some(self.srt_peer_hosts[index].as_str())
+    }
+
+    /// The peer instances' port bands this env binds.
+    pub(super) fn peer_ports(&self) -> PeerPorts {
+        let srt_per_peer = match self.peer_mode {
+            ResourceSweepPeer::Mediamtx => 1,
+            ResourceSweepPeer::Sink => configured_ports_per_peer(),
+        };
+        PeerPorts::new(
+            [self.mtx_rtmp, self.mtx_rtmps, self.mtx_srt, self.mtx_api],
+            self.peer_count,
+            srt_per_peer,
+        )
+    }
+
+    /// The publish URL and encoding for output `name` (see
+    /// [`PeerPorts::output_url`]).
+    pub(super) fn output_url(
+        &self,
+        config: super::SweepConfig,
+        kind: super::SweepOutputKind,
+        name: &str,
+    ) -> (String, String) {
+        self.peer_ports()
+            .output_url(self.srt_peer_host_for(name), config, kind, name)
     }
 
     pub(super) fn scenario_enabled(&self, scenario: &str) -> bool {

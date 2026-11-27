@@ -9,6 +9,7 @@ pub(crate) use mixed_manifest_loader::*;
 use restream_domain::domain::output_spec::OutputConfig;
 use restream_domain::domain::output_spec::RtmpOutputMode;
 use restream_engine::test_fixtures::AvMarkerBframeMode;
+use serde_json::{Value, json};
 
 /// Input transport family for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -631,6 +632,56 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
         MixedOutputProtocol::Rtmps => "rtmps",
         MixedOutputProtocol::Srt => "srt",
     }
+}
+
+pub(crate) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> {
+    cases
+        .iter()
+        .map(|case| {
+            let mut value = json!({
+                "id": case.id(),
+                "protocol": mixed_output_protocol_name(case.protocol()),
+                "encoding": case.encoding(),
+                "rtmpMode": case.rtmp_mode_name(),
+                "expectedDimensions": case.expected_dimensions(),
+                "expectedVideoCodecByInput": {
+                    "h264": case.expected_video_codec_for_input(MixedInputCase::new(
+                        "mixed.asset.file.h264.a1.bf0",
+                        MixedInputProtocol::File,
+                        MixedVideoCodec::H264,
+                        MixedInputAudioLayout::A1,
+                        MixedInputReorder::Bf0,
+                        false,
+                    )),
+                    "h265": case.expected_video_codec_for_input(MixedInputCase::new(
+                        "mixed.asset.file.h265.a1.bf0",
+                        MixedInputProtocol::File,
+                        MixedVideoCodec::H265,
+                        MixedInputAudioLayout::A1,
+                        MixedInputReorder::Bf0,
+                        false,
+                    )),
+                },
+                "expectedAudioTracks": case.expected_audio_tracks(),
+            });
+            if let Some(track) = case.selected_audio_track() {
+                value["selectedAudioTrack"] = json!(track);
+            }
+            value
+        })
+        .collect()
+}
+
+pub(crate) fn mixed_input_fixture(case: MixedInputCase) -> Result<PathBuf, String> {
+    let codec = match case.codec() {
+        MixedVideoCodec::H264 => "h264",
+        MixedVideoCodec::H265 => "h265",
+    };
+    restream_engine::test_fixtures::av_marker_transport_fixture_for_bframes(
+        codec,
+        case.is_multi_track(),
+        case.fixture_bframe_mode(),
+    )
 }
 
 #[cfg(test)]

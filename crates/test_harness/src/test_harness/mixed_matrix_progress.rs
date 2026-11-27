@@ -277,16 +277,6 @@ fn matrix_case_artifact_index_json(root: &Path, rows: &[MatrixCaseProgress]) -> 
         .collect()
 }
 
-pub(crate) fn write_json_pretty_atomic(path: &Path, value: &Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let tmp_path = path.with_extension("json.tmp");
-    let payload = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    std::fs::write(&tmp_path, payload).map_err(|error| error.to_string())?;
-    std::fs::rename(tmp_path, path).map_err(|error| error.to_string())
-}
-
 pub(crate) fn write_matrix_scenario_progress(
     path: &Path,
     execution: &str,

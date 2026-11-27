@@ -580,26 +580,6 @@ impl Session {
     }
 }
 
-/// The RTMP baseline publisher: real-time copy of the checked-in fixture.
-pub(crate) fn rtmp_publisher_args(fixture: &Path, url: &str) -> Vec<String> {
-    vec![
-        "-re".to_string(),
-        "-stream_loop".to_string(),
-        "-1".to_string(),
-        "-i".to_string(),
-        fixture.display().to_string(),
-        "-map".to_string(),
-        "0:v".to_string(),
-        "-map".to_string(),
-        "0:a:0".to_string(),
-        "-c".to_string(),
-        "copy".to_string(),
-        "-f".to_string(),
-        "flv".to_string(),
-        url.to_string(),
-    ]
-}
-
 /// The HLS treatment publisher: real-time HLS push over HTTP PUT.
 pub(crate) fn hls_publisher_args(
     fixture: &Path,

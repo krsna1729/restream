@@ -2,7 +2,7 @@ use super::super::*;
 use super::egress::{
     output_retry_or_cleanup_phase_ok, wait_for_output_retry_or_cleanup_observation,
 };
-use super::resilience::{create_pipeline, observe_final_output, wait_for_sink_video_above};
+use super::observe::{create_pipeline, observe_final_output, wait_for_sink_video_above};
 
 pub(super) async fn fault_rtmps_egress_sink_disappear(
     api: &RampApi,

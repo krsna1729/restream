@@ -396,12 +396,12 @@ pub(super) fn msr_peer_instance(ordinal: usize, peer_count: usize) -> usize {
 }
 
 fn msr_srt_port(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> u16 {
-    super::super::peer_ports::srt_peer_port(env, output.ordinal as u64)
+    env.peer_ports().srt_port(output.ordinal as u64)
 }
 
 pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
     let instance = msr_peer_instance(output.ordinal, env.peer_count);
-    let rtmp_port = super::super::peer_ports::peer_instance_ports(env, instance).0;
+    let rtmp_port = env.peer_ports().instance(instance).0;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
         MsrProtocol::Srt => {
@@ -413,7 +413,7 @@ pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> 
 /// The peer instance's mediamtx API port, from the same mapping the publish and
 /// read URLs use.
 pub(super) fn msr_api_port(env: &ResourceSweepEnv, instance: usize) -> u16 {
-    super::super::peer_ports::peer_instance_ports(env, instance).3
+    env.peer_ports().instance(instance).3
 }
 
 pub(super) fn msr_mediamtx_path(output: &MsrOutputSpec) -> String {
@@ -446,7 +446,7 @@ pub(super) fn msr_group_expected_paths_by_instance(
 
 pub(super) fn msr_read_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
     let instance = msr_peer_instance(output.ordinal, env.peer_count);
-    let rtmp_port = super::super::peer_ports::peer_instance_ports(env, instance).0;
+    let rtmp_port = env.peer_ports().instance(instance).0;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
         MsrProtocol::Srt => {

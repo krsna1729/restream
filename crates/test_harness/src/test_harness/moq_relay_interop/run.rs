@@ -277,7 +277,7 @@ impl Session {
         );
         self.spawn_publisher(
             "egress-publisher",
-            &crate::hls_push_duty::run::rtmp_publisher_args(&self.fixture, &publish_url),
+            &crate::media_probes::rtmp_publisher_args(&self.fixture, &publish_url),
         )?;
         wait_for_api_input_live(&self.api, &pipeline, INPUT_TIMEOUT).await?;
         wait_for_api_input_media_ready(&self.api, &pipeline, INPUT_TIMEOUT).await?;

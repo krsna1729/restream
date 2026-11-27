@@ -17,8 +17,7 @@ use mixed_matrix_progress::{
 };
 pub(crate) use mixed_matrix_progress::{
     matrix_case_progress_rows, mixed_matrix_default_check_names, mixed_matrix_fail_fast,
-    plan_shared_waves, verify_mixed_runtime_log_hygiene, write_json_pretty_atomic,
-    write_matrix_scenario_progress,
+    plan_shared_waves, verify_mixed_runtime_log_hygiene, write_matrix_scenario_progress,
 };
 #[cfg(test)]
 pub(crate) use mixed_matrix_progress::{
