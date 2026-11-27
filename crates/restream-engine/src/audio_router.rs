@@ -15,12 +15,12 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFol
 /// The stage an audio router runs as: its key, cancellation, lifecycle and
 /// metrics (the stage runtime's handle) and the event log its
 /// `StageStopped` goes to.
-pub struct AudioRouterStage {
-    pub key: StageKey,
-    pub cancel: CancellationToken,
-    pub lifecycle: Arc<StageLifecycle>,
-    pub metrics: Arc<StageMetrics>,
-    pub events: Arc<EventLog>,
+pub(crate) struct AudioRouterStage {
+    pub(crate) key: StageKey,
+    pub(crate) cancel: CancellationToken,
+    pub(crate) lifecycle: Arc<StageLifecycle>,
+    pub(crate) metrics: Arc<StageMetrics>,
+    pub(crate) events: Arc<EventLog>,
 }
 
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.
@@ -28,7 +28,7 @@ pub struct AudioRouterStage {
 /// `SelectTracks` filters and reindexes reference-counted packets in a tight
 /// async loop. `Remap` and `Downmix` require DSP and run on the external FFmpeg
 /// backend.
-pub async fn start_audio_router(
+pub(crate) async fn start_audio_router(
     stage: AudioRouterStage,
     routing: AudioRouting,
     input_buffer: Arc<RingBuffer>,

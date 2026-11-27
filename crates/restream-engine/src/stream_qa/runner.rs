@@ -290,7 +290,7 @@ impl Drop for SoundSocket {
 
 /// Runs the checks for `pipeline_id` until `cancel`: one child at a time,
 /// restarted with backoff when it exits.
-pub async fn run(
+pub(crate) async fn run(
     ingests: Arc<IngestRegistry>,
     pipeline_id: String,
     ring: Arc<RingBuffer>,
