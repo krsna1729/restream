@@ -1,10 +1,6 @@
 //! SRT API surface backed by the external `srt-rs` protocol implementation.
 
 mod calls;
-#[path = "srt/egress_connect.rs"]
-pub(crate) mod egress_connect;
-#[path = "srt/egress_stats.rs"]
-pub(crate) mod egress_stats;
 #[path = "srt/ingress_admission.rs"]
 mod ingress_admission;
 #[path = "srt/ingress_bridge.rs"]
@@ -17,11 +13,7 @@ mod ingress_quality;
 #[path = "srt/ingress_test_support.rs"]
 pub(crate) mod ingress_test_support;
 mod ingress_types;
-#[path = "srt/knobs.rs"]
-mod knobs;
 mod shared_muxer;
-#[path = "srt/egress_engine.rs"]
-pub(crate) mod srt_egress_engine;
 #[path = "srt_policy.rs"]
 mod srt_policy;
 #[cfg(test)]
@@ -29,15 +21,13 @@ mod tests;
 mod tokio_ingress;
 
 pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;
-pub(crate) use knobs::desired_udp_buf;
 pub(crate) use shared_muxer::start_shared_ts_muxer;
-pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 pub use tokio_ingress::*;
 
 /// Public A/B knob accessors for the test harness (a separate crate).
 pub mod srt_knobs {
-    pub use super::knobs::{recv_budget, recv_budget_or};
+    pub use crate::egress::backends::srt::knobs::{recv_budget, recv_budget_or};
 }
 
 /// The production SRT Owner runtime, datagram ceiling and listener shape, so
