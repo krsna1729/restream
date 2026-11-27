@@ -28,8 +28,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use continuity::ContinuousTimestampState;
 
-use crate::engine::MediaEngine;
-use crate::ingest_registry::IngestRegistration;
+use crate::ingest_registry::{IngestRegistration, IngestRegistry};
 use crate::input_gate::{InputPacketBoundary, InputTimestampMapper};
 use crate::stage_metrics::StageMetrics;
 use restream_core::{MediaPacket, MediaType};
@@ -189,7 +188,7 @@ impl SegmentDemux for TsDemux {
 
 /// Where one registered ingest attempt publishes. Resolved once per attempt.
 pub struct PublishTarget {
-    engine: Arc<MediaEngine>,
+    ingests: Arc<IngestRegistry>,
     pipeline_id: String,
     registration: IngestRegistration,
     ring: Arc<RingBuffer>,
@@ -206,12 +205,12 @@ impl PublishTarget {
     /// Resolve the attempt's counters; fails once the attempt is no longer
     /// the input's current session.
     pub async fn open(
-        engine: Arc<MediaEngine>,
+        ingests: Arc<IngestRegistry>,
         pipeline_id: String,
         registration: IngestRegistration,
         ring: Arc<RingBuffer>,
     ) -> Result<Self, String> {
-        let (bytes_received, first_media_ms, metrics, last_progress_ms, keyframe_times) = engine
+        let (bytes_received, first_media_ms, metrics, last_progress_ms, keyframe_times) = ingests
             .with_ingest_session(&registration, |ingest| {
                 (
                     ingest.bytes_received.clone(),
@@ -224,7 +223,7 @@ impl PublishTarget {
             .await
             .ok_or_else(|| format!("Active ingest missing for pipeline {pipeline_id}"))?;
         Ok(Self {
-            engine,
+            ingests,
             pipeline_id,
             registration,
             ring,
@@ -383,7 +382,7 @@ impl SegmentPublisher {
         self.take_probe(target).await;
 
         let read = chunk.len() as u64;
-        let now_ms = MediaEngine::now_epoch_ms();
+        let now_ms = crate::timing::epoch_ms();
         crate::ingest_registry::note_media_bytes(
             &target.bytes_received,
             &target.first_media_ms,
@@ -804,15 +803,15 @@ fn merged_probe(renditions: &mut [Rendition], expected: usize) -> Option<DemuxPr
 /// start gate (`MediaEngine::ingest_tracks_ready`), so the audio tracks, the
 /// track selection and the sequence header must already be in place.
 async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
-    let engine = &target.engine;
+    let ingests = &target.ingests;
     let first_audio = probe.audio_tracks.first().cloned();
     let selected_video_track_index = probe.video.as_ref().map(|_| 0);
     if let Some(sequence_header) = probe.video_sequence_header {
-        engine
+        ingests
             .cache_ingest_session_sequence_header(&target.registration, true, sequence_header)
             .await;
     }
-    engine
+    ingests
         .update_ingest_session_video_track_selection(
             &target.registration,
             probe.video_track_count,
@@ -820,7 +819,7 @@ async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
         )
         .await;
     if !probe.audio_tracks.is_empty() {
-        engine
+        ingests
             .update_ingest_session_audio_tracks(
                 &target.pipeline_id,
                 &target.registration,
@@ -828,7 +827,7 @@ async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
             )
             .await;
     }
-    engine
+    ingests
         .update_ingest_session_meta(
             &target.pipeline_id,
             &target.registration,
@@ -837,7 +836,7 @@ async fn record_probe(target: &PublishTarget, probe: DemuxProbe) {
             None,
         )
         .await;
-    engine
+    ingests
         .note_ingest_session_probed(&target.registration)
         .await;
 }

@@ -52,7 +52,7 @@ async fn pump_stdout_inner(
     publisher: &mut SegmentPublisher,
 ) -> Result<(), String> {
     let target = PublishTarget::open(
-        runtime.engine.clone(),
+        runtime.engine.ingests.clone(),
         runtime.pipeline_id.clone(),
         runtime.registration.clone(),
         runtime.ring_buffer.clone(),

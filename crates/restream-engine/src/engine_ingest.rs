@@ -19,7 +19,7 @@ use restream_sync::RingBuffer;
 impl MediaEngine {
     /// Registers the pipeline's only publisher, unless one is active.
     pub async fn try_register_ingest(
-        self: &Arc<Self>,
+        &self,
         pipeline_id: &str,
         stream_key: &str,
         protocol: &str,
@@ -45,7 +45,7 @@ impl MediaEngine {
         reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `ingest_registry`); no engine-wide guard is held across the gate wait, and every write guard is taken before the first insert (below)"
     )]
     pub async fn try_register_pipeline_input_attempt(
-        self: &Arc<Self>,
+        &self,
         pipeline_id: &str,
         input_id: &str,
         stream_key: &str,
@@ -184,43 +184,20 @@ impl MediaEngine {
                 protocol: protocol.to_string(),
                 stream_key: stream_key.to_string(),
             });
-        self.start_ingest_release_drain();
-        Some(IngestLease::new(
-            self,
-            self.ingests.releases.clone(),
-            pipeline_id,
-            registration,
-        ))
+        self.ingests.start_release_drain();
+        Some(IngestLease::new(&self.ingests, pipeline_id, registration))
     }
 
-    /// Starts the task that ends dropped ingest leases' attempts on the
-    /// current Tokio runtime, unless one runs; it first empties the backlog.
-    /// Bootstrap starts it on the main runtime. A registration starts it when
-    /// none runs (tests, or a task whose runtime stopped): an attempt queued
-    /// meanwhile stays queued until then.
-    pub fn start_ingest_release_drain(self: &Arc<Self>) {
-        let mut drain = restream_sync::lock::lock(&self.ingests.release_drain);
-        if drain.as_ref().is_some_and(|task| !task.is_finished()) {
-            return;
-        }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        *drain = Some(runtime.spawn(crate::ingest_lease::drain_releases(
-            Arc::downgrade(self),
-            self.ingests.releases.clone(),
-        )));
+    /// Starts the task that ends dropped ingest leases' attempts
+    /// (`IngestRegistry::start_release_drain`).
+    pub fn start_ingest_release_drain(&self) {
+        self.ingests.start_release_drain();
     }
 
     /// Shutdown, once no session remains: stops the release task, then ends
     /// the backlog it left.
     pub async fn stop_ingest_release_drain(&self) {
-        let task = restream_sync::lock::lock(&self.ingests.release_drain).take();
-        if let Some(task) = task {
-            task.abort();
-            let _ = task.await;
-        }
-        crate::ingest_lease::release_backlog(self, &self.ingests.releases).await;
+        self.ingests.stop_release_drain().await;
     }
 
     #[expect(
@@ -387,34 +364,11 @@ impl MediaEngine {
         reason: Option<String>,
         had_error: bool,
     ) {
-        let ingest = self.ingests.active.read().await.get(pipeline_id).cloned();
-        let Some(ingest) = ingest else {
-            return;
-        };
-
-        let previous = self.ingests.recent.read().await.get(pipeline_id).cloned();
-        let metadata = ingest.metadata();
-        let snapshot = Self::build_recent_ingest_outcome(
-            previous.as_ref(),
-            ingest.protocol.clone(),
-            phase,
-            reason,
-            had_error,
-            metadata.remote_addr.clone(),
-            ingest.bytes_received.load(Ordering::Relaxed),
-        );
-
         self.ingests
-            .recent
-            .write()
-            .await
-            .insert(pipeline_id.to_string(), snapshot);
+            .record_ingest_disconnect(pipeline_id, phase, reason, had_error)
+            .await;
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "this pipeline's `selection` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
-    )]
     pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
         pipeline_id: &str,
@@ -423,50 +377,15 @@ impl MediaEngine {
         reason: Option<String>,
         had_error: bool,
     ) -> bool {
-        let _selection = self.ingests.selection.lock(pipeline_id).await;
-        let ingest = self
-            .ingests
-            .sessions
-            .read()
-            .await
-            .get(&registration.input_id)
-            .cloned();
-        let Some(ingest) = ingest else {
-            return false;
-        };
-        if ingest.pipeline_id != pipeline_id || ingest.attempt_id != registration.attempt_id {
-            return false;
-        }
-
-        let is_selected = self
-            .ingests
-            .active
-            .read()
-            .await
-            .get(pipeline_id)
-            .is_some_and(|active| active.attempt_id == registration.attempt_id);
-        if !is_selected {
-            return true;
-        }
-
-        let previous = self.ingests.recent.read().await.get(pipeline_id).cloned();
-        let metadata = ingest.metadata();
-        let snapshot = Self::build_recent_ingest_outcome(
-            previous.as_ref(),
-            ingest.protocol.clone(),
-            phase,
-            reason,
-            had_error,
-            metadata.remote_addr.clone(),
-            ingest.bytes_received.load(Ordering::Relaxed),
-        );
-
         self.ingests
-            .recent
-            .write()
+            .record_ingest_disconnect_if_current(
+                pipeline_id,
+                registration,
+                phase,
+                reason,
+                had_error,
+            )
             .await
-            .insert(pipeline_id.to_string(), snapshot);
-        true
     }
 
     /// Releases every ingest session of the pipeline and forgets its input
@@ -563,76 +482,6 @@ impl MediaEngine {
                     protocol,
                 });
         }
-    }
-
-    /// Unregisters one attempt, if it is still its input's current attempt.
-    /// Every write guard is taken first, in registration's lock order
-    /// (`cancel_tokens` -> `sessions` -> `active`), and no await follows the
-    /// first removal: a caller cancelled at an await leaves the attempt
-    /// either whole (a retry ends it) or gone with its token cancelled, never
-    /// a session removed with its token still live (the input then refused
-    /// as a duplicate forever, the retry finding nothing to end).
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `active` (module docs of `ingest_registry`); every write guard is taken before the first removal (above)"
-    )]
-    pub(crate) async fn unregister_ingest_if_current(
-        &self,
-        pipeline_id: &str,
-        registration: &IngestRegistration,
-    ) -> bool {
-        let _selection = self.ingests.selection.lock(pipeline_id).await;
-        let mut tokens = self.ingests.cancel_tokens.write().await;
-        let mut sessions = self.ingests.sessions.write().await;
-        let mut active = self.ingests.active.write().await;
-        let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
-            ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
-        });
-        if !is_current {
-            return false;
-        }
-        sessions.remove(&registration.input_id);
-        if let Some(token) = tokens.remove(&registration.input_id) {
-            token.cancel();
-        }
-        let is_selected = active
-            .get(pipeline_id)
-            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
-        let removed_selected = is_selected.then(|| active.remove(pipeline_id)).flatten();
-        drop((tokens, sessions, active));
-        let protocol = removed_selected
-            .as_ref()
-            .map(|ingest| ingest.protocol.clone())
-            .unwrap_or_default();
-        if let Some(ingest) = removed_selected {
-            let remote_addr = restream_sync::lock::read(&ingest.metadata)
-                .remote_addr
-                .clone();
-            let mut recent = self.ingests.recent.write().await;
-            recent
-                .entry(pipeline_id.to_string())
-                .or_insert_with(|| RecentIngestOutcome {
-                    protocol: ingest.protocol.clone(),
-                    disconnected_at_ms: Self::now_epoch_ms(),
-                    first_disconnect_at_ms: Self::now_epoch_ms(),
-                    disconnect_count: 1,
-                    reason: None,
-                    failure_phase: None,
-                    had_error: false,
-                    remote_addr,
-                    bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
-                });
-        }
-
-        if !protocol.is_empty() {
-            self.runtime
-                .event_log
-                .emit(crate::events::EventKind::IngestDisconnected {
-                    pipeline_id: pipeline_id.to_string(),
-                    protocol,
-                });
-        }
-        true
     }
 
     pub async fn recent_ingest_outcome(&self, pipeline_id: &str) -> Option<RecentIngestOutcome> {

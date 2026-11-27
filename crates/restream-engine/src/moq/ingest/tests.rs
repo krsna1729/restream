@@ -311,7 +311,7 @@ async fn an_unfinished_owner_session_frees_its_stream_key() {
         .expect("the abandoned end is recorded");
     assert_eq!(
         outcome.failure_phase.as_deref(),
-        Some(crate::ingest_lease::ABANDONED_PHASE)
+        Some(crate::ingest_registry::ABANDONED_PHASE)
     );
     let end = admit_on_owner(lifecycle, |_, admission| admission.end).await;
     end.finish("done".to_string());

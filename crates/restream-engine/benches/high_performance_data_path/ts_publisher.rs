@@ -28,7 +28,7 @@ fn bench_ts_publisher(c: &mut Criterion) {
             .unwrap_or_else(|| panic!("bench input registers"));
         let ring = engine.get_or_create_pipeline("bench").await;
         let target = PublishTarget::open(
-            engine.clone(),
+            engine.ingests.clone(),
             "bench".to_string(),
             lease.registration().clone(),
             ring,

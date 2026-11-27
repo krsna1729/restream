@@ -1,6 +1,7 @@
 //! Ingest state owned by `MediaEngine`: pipeline rings, input sessions and
 //! their selection, the records stored in them, and the queue of dropped
-//! ingest leases' attempts awaiting release.
+//! ingest leases' attempts awaiting release; and the operations that end an
+//! attempt (its disconnect outcome, its unregistration, the release task).
 //!
 //! The registry access rules in the `engine_registries` module docs apply.
 //! The few sections that must hold more than one ingest guard take them in
@@ -25,8 +26,8 @@
 //! cannot interleave a check and its change.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use arc_swap::ArcSwapOption;
@@ -36,9 +37,20 @@ use restream_sync::keyed_lock::KeyedLock;
 use tokio::sync::{Mutex as TokioMutex, Notify, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
+use crate::events::{EventKind, EventLog};
 use crate::input_gate::InputPacketGate;
 use crate::snapshots::PublisherQuality;
 use crate::stage_metrics::StageMetrics;
+
+mod metadata;
+
+pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
+
+/// The failure phase recorded for an attempt whose lease was dropped without
+/// `IngestLease::finish`.
+pub const ABANDONED_PHASE: &str = "abandoned";
+const ABANDONED_REASON: &str =
+    "the input attempt ended without an orderly finish (its task panicked or was cancelled)";
 
 pub struct IngestRegistry {
     pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
@@ -59,17 +71,13 @@ pub struct IngestRegistry {
     /// Dropped ingest leases' attempts awaiting release (`ingest_lease`),
     /// and the task releasing them.
     pub(crate) releases: Arc<ReleaseQueue>,
-    pub(crate) release_drain: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl Default for IngestRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    release_drain: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The engine's event log (`RuntimeInfra::event_log`).
+    events: Arc<EventLog>,
 }
 
 impl IngestRegistry {
-    pub fn new() -> Self {
+    pub fn new(events: Arc<EventLog>) -> Self {
         Self {
             pipelines: TokioRwLock::new(HashMap::new()),
             cancel_tokens: TokioRwLock::new(HashMap::new()),
@@ -85,7 +93,303 @@ impl IngestRegistry {
             srt_calls: Default::default(),
             releases: Arc::default(),
             release_drain: std::sync::Mutex::new(None),
+            events,
         }
+    }
+
+    pub async fn with_ingest_session<R>(
+        &self,
+        registration: &IngestRegistration,
+        f: impl FnOnce(&ActiveIngest) -> R,
+    ) -> Option<R> {
+        self.current_ingest_session(registration)
+            .await
+            .map(|ingest| f(ingest.as_ref()))
+    }
+
+    pub(crate) async fn current_ingest_session(
+        &self,
+        registration: &IngestRegistration,
+    ) -> Option<Arc<ActiveIngest>> {
+        let sessions = self.sessions.read().await;
+        let ingest = sessions.get(&registration.input_id)?;
+        (ingest.attempt_id == registration.attempt_id).then(|| ingest.clone())
+    }
+
+    pub async fn is_ingest_session_selected(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+    ) -> bool {
+        self.active
+            .read()
+            .await
+            .get(pipeline_id)
+            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id)
+    }
+
+    /// Starts the task that ends dropped ingest leases' attempts on the
+    /// current Tokio runtime, unless one runs; it first empties the backlog.
+    /// Bootstrap starts it on the main runtime. A registration starts it when
+    /// none runs (tests, or a task whose runtime stopped): an attempt queued
+    /// meanwhile stays queued until then.
+    pub fn start_release_drain(self: &Arc<Self>) {
+        let mut drain = restream_sync::lock::lock(&self.release_drain);
+        if drain.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        *drain = Some(runtime.spawn(drain_releases(Arc::downgrade(self), self.releases.clone())));
+    }
+
+    /// Shutdown, once no session remains: stops the release task, then ends
+    /// the backlog it left.
+    pub async fn stop_release_drain(&self) {
+        let task = restream_sync::lock::lock(&self.release_drain).take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        self.release_backlog(&self.releases).await;
+    }
+
+    /// Ends every queued attempt, oldest first. Each leaves the queue only
+    /// once ended, so a pass cancelled midway leaves it for the next one, and
+    /// two passes over one queue release every entry.
+    pub(crate) async fn release_backlog(&self, queue: &ReleaseQueue) {
+        while let Some(attempt) = queue.front() {
+            self.release(&attempt).await;
+            queue.complete(&attempt);
+        }
+    }
+
+    /// Record (unless `finish` already did) and unregister one attempt;
+    /// attempt-checked, so repeating it is harmless.
+    async fn release(&self, attempt: &AbandonedAttempt) {
+        if attempt.record {
+            self.record_ingest_disconnect_if_current(
+                &attempt.pipeline_id,
+                &attempt.registration,
+                Some(ABANDONED_PHASE),
+                Some(ABANDONED_REASON.to_string()),
+                true,
+            )
+            .await;
+        }
+        self.unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
+            .await;
+    }
+
+    pub async fn record_ingest_disconnect(
+        &self,
+        pipeline_id: &str,
+        phase: Option<&str>,
+        reason: Option<String>,
+        had_error: bool,
+    ) {
+        let ingest = self.active.read().await.get(pipeline_id).cloned();
+        let Some(ingest) = ingest else {
+            return;
+        };
+
+        let previous = self.recent.read().await.get(pipeline_id).cloned();
+        let metadata = ingest.metadata();
+        let snapshot = Self::build_recent_ingest_outcome(
+            previous.as_ref(),
+            ingest.protocol.clone(),
+            phase,
+            reason,
+            had_error,
+            metadata.remote_addr.clone(),
+            ingest.bytes_received.load(Ordering::Relaxed),
+        );
+
+        self.recent
+            .write()
+            .await
+            .insert(pipeline_id.to_string(), snapshot);
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "this pipeline's `selection` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs)"
+    )]
+    pub(crate) async fn record_ingest_disconnect_if_current(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+        phase: Option<&str>,
+        reason: Option<String>,
+        had_error: bool,
+    ) -> bool {
+        let _selection = self.selection.lock(pipeline_id).await;
+        let ingest = self
+            .sessions
+            .read()
+            .await
+            .get(&registration.input_id)
+            .cloned();
+        let Some(ingest) = ingest else {
+            return false;
+        };
+        if ingest.pipeline_id != pipeline_id || ingest.attempt_id != registration.attempt_id {
+            return false;
+        }
+
+        let is_selected = self
+            .active
+            .read()
+            .await
+            .get(pipeline_id)
+            .is_some_and(|active| active.attempt_id == registration.attempt_id);
+        if !is_selected {
+            return true;
+        }
+
+        let previous = self.recent.read().await.get(pipeline_id).cloned();
+        let metadata = ingest.metadata();
+        let snapshot = Self::build_recent_ingest_outcome(
+            previous.as_ref(),
+            ingest.protocol.clone(),
+            phase,
+            reason,
+            had_error,
+            metadata.remote_addr.clone(),
+            ingest.bytes_received.load(Ordering::Relaxed),
+        );
+
+        self.recent
+            .write()
+            .await
+            .insert(pipeline_id.to_string(), snapshot);
+        true
+    }
+
+    /// Unregisters one attempt, if it is still its input's current attempt.
+    /// Every write guard is taken first, in registration's lock order
+    /// (`cancel_tokens` -> `sessions` -> `active`), and no await follows the
+    /// first removal: a caller cancelled at an await leaves the attempt
+    /// either whole (a retry ends it) or gone with its token cancelled, never
+    /// a session removed with its token still live (the input then refused
+    /// as a duplicate forever, the retry finding nothing to end).
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `active` (module docs); every write guard is taken before the first removal (above)"
+    )]
+    pub(crate) async fn unregister_ingest_if_current(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+    ) -> bool {
+        let _selection = self.selection.lock(pipeline_id).await;
+        let mut tokens = self.cancel_tokens.write().await;
+        let mut sessions = self.sessions.write().await;
+        let mut active = self.active.write().await;
+        let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
+            ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
+        });
+        if !is_current {
+            return false;
+        }
+        sessions.remove(&registration.input_id);
+        if let Some(token) = tokens.remove(&registration.input_id) {
+            token.cancel();
+        }
+        let is_selected = active
+            .get(pipeline_id)
+            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
+        let removed_selected = is_selected.then(|| active.remove(pipeline_id)).flatten();
+        drop((tokens, sessions, active));
+        let protocol = removed_selected
+            .as_ref()
+            .map(|ingest| ingest.protocol.clone())
+            .unwrap_or_default();
+        if let Some(ingest) = removed_selected {
+            let remote_addr = restream_sync::lock::read(&ingest.metadata)
+                .remote_addr
+                .clone();
+            let mut recent = self.recent.write().await;
+            recent
+                .entry(pipeline_id.to_string())
+                .or_insert_with(|| RecentIngestOutcome {
+                    protocol: ingest.protocol.clone(),
+                    disconnected_at_ms: crate::timing::epoch_ms(),
+                    first_disconnect_at_ms: crate::timing::epoch_ms(),
+                    disconnect_count: 1,
+                    reason: None,
+                    failure_phase: None,
+                    had_error: false,
+                    remote_addr,
+                    bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
+                });
+        }
+
+        if !protocol.is_empty() {
+            self.events.emit(EventKind::IngestDisconnected {
+                pipeline_id: pipeline_id.to_string(),
+                protocol,
+            });
+        }
+        true
+    }
+
+    pub(crate) fn build_recent_ingest_outcome(
+        previous: Option<&RecentIngestOutcome>,
+        protocol: String,
+        phase: Option<&str>,
+        reason: Option<String>,
+        had_error: bool,
+        remote_addr: Option<String>,
+        bytes_received: u64,
+    ) -> RecentIngestOutcome {
+        let disconnected_at_ms = crate::timing::epoch_ms();
+        let (first_disconnect_at_ms, disconnect_count) = previous
+            .filter(|previous| {
+                disconnected_at_ms.saturating_sub(previous.disconnected_at_ms)
+                    <= INGEST_FLAP_WINDOW_MS
+            })
+            .map(|previous| {
+                (
+                    previous.first_disconnect_at_ms,
+                    previous.disconnect_count.saturating_add(1),
+                )
+            })
+            .unwrap_or((disconnected_at_ms, 1));
+
+        RecentIngestOutcome {
+            protocol,
+            disconnected_at_ms,
+            first_disconnect_at_ms,
+            disconnect_count,
+            reason,
+            failure_phase: phase.map(ToOwned::to_owned),
+            had_error,
+            remote_addr,
+            bytes_received,
+        }
+    }
+}
+
+/// The registry's release task: on each wake, hands every unclaimed queued
+/// attempt to a task of its own, until the registry is dropped.
+async fn drain_releases(registry: Weak<IngestRegistry>, queue: Arc<ReleaseQueue>) {
+    loop {
+        let Some(strong) = registry.upgrade() else {
+            return;
+        };
+        for (attempt, claim) in queue.claim_unclaimed() {
+            let registry = strong.clone();
+            let queue = queue.clone();
+            tokio::spawn(async move {
+                registry.release(&attempt).await;
+                queue.complete(&attempt);
+                drop(claim);
+            });
+        }
+        drop(strong);
+        queue.woken().await;
     }
 }
 
@@ -181,7 +485,7 @@ pub struct RecentIngestOutcome {
     pub bytes_received: u64,
 }
 
-/// One dropped lease's attempt, for the engine's release task.
+/// One dropped lease's attempt, for the release task.
 #[derive(Clone)]
 pub(crate) struct AbandonedAttempt {
     pub(crate) pipeline_id: String,
@@ -191,7 +495,7 @@ pub(crate) struct AbandonedAttempt {
     pub(crate) record: bool,
 }
 
-/// The engine's queue of dropped leases' attempts. Unbounded so a drop never
+/// The registry's queue of dropped leases' attempts. Unbounded so a drop never
 /// blocks or fails: it holds at most one entry per registration made, and
 /// each entry leaves it only once its release completed.
 #[derive(Default)]
