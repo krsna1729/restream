@@ -159,13 +159,10 @@ pub(super) async fn run(
     for (rendition, applied) in restream_sync::lock::lock(&context.init).clone().iter() {
         session.seed_init(rendition, &applied.uri, applied.bytes.clone());
     }
-    let end = match PublishTarget::open(
-        context.engine.ingests.clone(),
-        context.pipeline_id,
-        context.registration,
-        context.ring,
-    )
-    .await
+    let end = match context
+        .engine
+        .open_publish_target(context.pipeline_id, context.registration, context.ring)
+        .await
     {
         Ok(target) => {
             let mut state = Publishing {

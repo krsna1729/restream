@@ -188,14 +188,11 @@ async fn each_publish_unit_converts_at_most_one_fmp4_step() {
     let (context, _lease) = context().await;
     let ring = context.ring.clone();
     let shared_init = context.init.clone();
-    let target = PublishTarget::open(
-        context.engine.ingests.clone(),
-        context.pipeline_id,
-        context.registration,
-        context.ring,
-    )
-    .await
-    .expect("the test's target opens");
+    let target = context
+        .engine
+        .open_publish_target(context.pipeline_id, context.registration, context.ring)
+        .await
+        .expect("the test's target opens");
     let mut state = Publishing {
         outbox: Outbox::default(),
         outbox_limit: usize::MAX,

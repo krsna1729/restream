@@ -419,16 +419,19 @@ pub struct Calibration {
 
 /// Each live pipeline's ingest rate, by pipeline id.
 async fn ingest_rates(engine: &MediaEngine) -> HashMap<String, IngestRate> {
-    let ingests = engine.ingests.active.read().await;
-    ingests
-        .iter()
-        .map(|(pipeline_id, ingest)| {
-            let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
-                .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
-            let pps = ingest.metrics.snapshot().packets_per_sec;
-            (pipeline_id.clone(), IngestRate { bps, pps })
+    engine
+        .with_active_ingests(|ingests| {
+            ingests
+                .iter()
+                .map(|(pipeline_id, ingest)| {
+                    let bps = MediaEngine::sample_ingest_bitrate_kbps(ingest)
+                        .map_or(0.0, |rate| (rate * 1_000.0).max(0.0));
+                    let pps = ingest.metrics.snapshot().packets_per_sec;
+                    (pipeline_id.clone(), IngestRate { bps, pps })
+                })
+                .collect()
         })
-        .collect()
+        .await
 }
 
 /// The observed workload: ingest rates, each output's fan-out of its

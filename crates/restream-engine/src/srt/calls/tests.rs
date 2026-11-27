@@ -1,5 +1,5 @@
 use super::*;
-use restream_srt::calls::validate_srt_call_url;
+use restream_srt::calls::{SrtCallInputs, validate_srt_call_url};
 
 fn spec(input: &str, url: &str) -> SrtCallSpec {
     SrtCallSpec {
@@ -15,6 +15,13 @@ type Calls = CallSupervisor<u64>;
 
 fn caller_peer(raw: u64) -> u64 {
     raw
+}
+
+/// The wanted-set source a tick reads, over `inputs`.
+fn wanted_since(
+    inputs: &SrtCallInputs,
+) -> impl FnOnce(u64) -> Option<(u64, HashMap<String, SrtCallSpec>)> + '_ {
+    |seen| inputs.snapshot_since(seen)
 }
 
 /// One call taken through resolution to the Owner command.
@@ -78,16 +85,20 @@ async fn a_failed_call_redials_after_its_backoff_and_a_connected_one_publishes()
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000?streamid=cam")]);
     let mut calls = Calls::new();
     let t0 = Instant::now();
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let first = dialed(&mut calls, t0).await;
 
     calls.failed(first, "refused", t0);
-    calls.tick(&inputs, t0 + Duration::from_millis(900), |_| true);
+    calls.tick(
+        wanted_since(&inputs),
+        t0 + Duration::from_millis(900),
+        |_| true,
+    );
     assert!(
         calls.resolved.try_recv().is_err(),
         "no redial inside the backoff"
     );
-    calls.tick(&inputs, t0 + Duration::from_secs(1), |_| true);
+    calls.tick(wanted_since(&inputs), t0 + Duration::from_secs(1), |_| true);
     let second = dialed(&mut calls, t0).await;
     assert_ne!(first, second, "each attempt has its own token");
     calls.failed(first, "late verdict for the old attempt", t0);
@@ -107,7 +118,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
     let mut calls = Calls::new();
     let t0 = Instant::now();
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let token = dialed(&mut calls, t0).await;
     let peer = caller_peer(1);
     calls.started(token, peer);
@@ -116,7 +127,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     // A call that ran redials after the first backoff step, not a long one.
     calls.disconnected(peer, "listener closed", t0);
     assert!(!calls.owns(&peer));
-    calls.tick(&inputs, t0 + Duration::from_secs(1), |_| true);
+    calls.tick(wanted_since(&inputs), t0 + Duration::from_secs(1), |_| true);
     let token = dialed(&mut calls, t0).await;
     let peer = caller_peer(2);
     calls.started(token, peer);
@@ -124,7 +135,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     // The row goes away: the live session is hung up.
     inputs.converge(Vec::new());
     let mut hung_up = Vec::new();
-    calls.tick(&inputs, t0, |peer| {
+    calls.tick(wanted_since(&inputs), t0, |peer| {
         hung_up.push(peer);
         true
     });
@@ -139,10 +150,10 @@ async fn a_call_admitted_after_its_row_left_is_refused() {
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
     let mut calls = Calls::new();
     let t0 = Instant::now();
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let token = dialed(&mut calls, t0).await;
     inputs.converge(Vec::new());
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     assert!(
         !calls.started(token, caller_peer(3)),
         "the pool's late admission is hung up, not published"
@@ -155,15 +166,15 @@ async fn a_busy_command_slot_defers_the_hang_up_to_the_next_tick() {
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
     let mut calls = Calls::new();
     let t0 = Instant::now();
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let token = dialed(&mut calls, t0).await;
     let peer = caller_peer(4);
     calls.started(token, peer);
     inputs.converge(Vec::new());
-    calls.tick(&inputs, t0, |_| false);
+    calls.tick(wanted_since(&inputs), t0, |_| false);
     assert!(calls.owns(&peer), "nothing changes while the slot is taken");
     let mut hung_up = Vec::new();
-    calls.tick(&inputs, t0, |peer| {
+    calls.tick(wanted_since(&inputs), t0, |peer| {
         hung_up.push(peer);
         true
     });
@@ -176,11 +187,11 @@ async fn a_replaced_calls_late_admission_is_refused_while_its_successor_dials() 
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
     let mut calls = Calls::new();
     let t0 = Instant::now();
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let old = dialed(&mut calls, t0).await;
     // The row changes while the first dial is still in the pool's queue.
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000?streamid=new")]);
-    calls.tick(&inputs, t0, |_| true);
+    calls.tick(wanted_since(&inputs), t0, |_| true);
     let new = dialed(&mut calls, t0).await;
     assert!(
         !calls.started(old, caller_peer(5)),

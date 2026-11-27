@@ -279,8 +279,8 @@ impl StageRuntimeManager {
             // per-packet payload instead).
             let (video_seq_header, _) =
                 match crate::preview_ids::input_id_from_hls_preview_resource_id(&pipeline_id) {
-                    Some(input_id) => engine.get_input_sequence_headers(input_id).await,
-                    None => engine.get_sequence_headers(&pipeline_id).await,
+                    Some(input_id) => engine.ingests.get_input_sequence_headers(input_id).await,
+                    None => engine.ingests.get_sequence_headers(&pipeline_id).await,
                 };
 
             let input_pump = StageInputPump::new(
@@ -450,7 +450,7 @@ pub(crate) async fn wait_for_stage_metadata(
         }
 
         let ingest_result = {
-            let ingest = engine.stage_source_ingest(pipeline_id).await;
+            let ingest = engine.ingests.stage_source_ingest(pipeline_id).await;
             ingest.and_then(|ingest| {
                 let metadata = ingest.metadata();
                 let mut video = metadata.video?;

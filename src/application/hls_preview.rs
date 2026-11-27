@@ -38,7 +38,7 @@ pub async fn ensure_hls_preview(
     pipeline_id: &str,
 ) -> Result<Arc<Fmp4HlsStore>, HlsPreviewError> {
     let source = restream_engine::preview_ids::preview_pipeline(pipeline_id).0;
-    let has_ingest = engine.ingests.active.read().await.contains_key(source);
+    let has_ingest = engine.has_active_ingest(source).await;
 
     if has_ingest {
         return Ok(engine.ensure_hls_preview_runtime(pipeline_id).await);

@@ -45,7 +45,7 @@ pub async fn resolve_hls_preview_graph(
     cancel: CancellationToken,
 ) -> Option<HlsPreviewGraph> {
     let (pipeline_id, passthrough) = crate::preview_ids::preview_pipeline(preview_id);
-    let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
+    let source_ring = engine.ingests.get_or_create_pipeline(pipeline_id).await;
     if passthrough {
         return Some(HlsPreviewGraph {
             video_ring: source_ring,
@@ -309,7 +309,11 @@ mod tests {
             .try_register_pipeline_input_attempt("pipe", "input-a", "key", "srt", true)
             .await
             .expect("register input");
-        let ring = engine.ensure_input_preview_ring("input-a").await.unwrap();
+        let ring = engine
+            .ingests
+            .ensure_input_preview_ring("input-a")
+            .await
+            .unwrap();
         ring.set_codec_hint("hevc");
         let copy = crate::preview_ids::input_hls_preview_resource_id("input-a");
         let passthrough = crate::preview_ids::input_hls_preview_resource_id(
@@ -334,13 +338,18 @@ mod tests {
         engine.shutdown_hls_preview_segmenter(&passthrough).await;
         assert!(
             engine
+                .ingests
                 .ensure_input_preview_ring("input-a")
                 .await
                 .is_some_and(|kept| Arc::ptr_eq(&kept, &ring)),
             "the copy still plays from the same ring"
         );
         engine.shutdown_hls_preview_segmenter(&copy).await;
-        let after = engine.ensure_input_preview_ring("input-a").await.unwrap();
+        let after = engine
+            .ingests
+            .ensure_input_preview_ring("input-a")
+            .await
+            .unwrap();
         assert!(!Arc::ptr_eq(&after, &ring), "released once neither plays");
     }
 

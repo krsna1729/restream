@@ -25,13 +25,13 @@ async fn unprobed_media_opens_the_start_gate_only_after_the_probe_grace_from_its
 
     // Just inside the bound, then at it; later bytes never move the anchor.
     first_media_ms.store(
-        MediaEngine::now_epoch_ms() - (crate::engine_ingest_metadata::PROBE_GRACE_MS - 1_000),
+        MediaEngine::now_epoch_ms() - (crate::ingest_registry::PROBE_GRACE_MS - 1_000),
         Ordering::Relaxed,
     );
     engine.update_ingest_bytes("p1", 1316).await;
     assert_eq!(engine.ingest_tracks_ready("p1").await, Some(false));
     first_media_ms.store(
-        MediaEngine::now_epoch_ms() - crate::engine_ingest_metadata::PROBE_GRACE_MS,
+        MediaEngine::now_epoch_ms() - crate::ingest_registry::PROBE_GRACE_MS,
         Ordering::Relaxed,
     );
     engine.update_ingest_bytes("p1", 1316).await;

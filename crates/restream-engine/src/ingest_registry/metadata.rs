@@ -1,14 +1,88 @@
-//! Per-attempt ingest metadata writes: a probe's tracks, selection and
-//! sequence headers, and the report that the probe is recorded.
+//! Ingest progress, metadata, track, quality and sequence-header state:
+//! per-pipeline writes to the selected ingest, per-attempt writes (a probe's
+//! tracks, selection and sequence headers, and the report that the probe is
+//! recorded), and the reads outputs and stages make of it.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use restream_core::metadata::{AudioMeta, VideoMeta};
+use restream_core::metadata::{AudioMeta, DeclaredEncoder, VideoMeta};
 
-use super::{ActiveIngest, IngestRegistration, IngestRegistry};
+use super::{ActiveIngest, IngestRegistration, IngestRegistry, PROBE_GRACE_MS};
 use crate::events::EventKind;
+use crate::snapshots::PublisherQuality;
 
 impl IngestRegistry {
+    pub async fn update_ingest_bytes(&self, pipeline_id: &str, bytes: u64) {
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let now_ms = crate::timing::epoch_ms();
+            super::note_media_bytes(
+                &ingest.bytes_received,
+                &ingest.first_media_ms,
+                bytes,
+                now_ms,
+            );
+            ingest.last_progress_ms.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    pub async fn record_keyframe(&self, pipeline_id: &str, pts: i64) {
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let mut times = restream_sync::lock::lock(&ingest.keyframe_times);
+            times.push(pts);
+            if times.len() > 30 {
+                times.remove(0);
+            }
+        }
+    }
+
+    pub async fn update_ingest_meta(
+        &self,
+        pipeline_id: &str,
+        video: Option<VideoMeta>,
+        audio: Option<AudioMeta>,
+        remote_addr: Option<String>,
+    ) {
+        if let Some(video_meta) = video.as_ref() {
+            let pipelines = self.pipelines.read().await;
+            if let Some(ring) = pipelines.get(pipeline_id) {
+                ring.set_codec_hint(&video_meta.codec);
+            }
+        }
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
+            if video.is_some() {
+                metadata.video = video;
+                if metadata.video_track_count == 0 {
+                    metadata.video_track_count = 1;
+                }
+                if metadata.selected_video_track_index.is_none() {
+                    metadata.selected_video_track_index = Some(0);
+                }
+            }
+            if audio.is_some() {
+                metadata.audio = audio;
+            }
+            if remote_addr.is_some() {
+                metadata.remote_addr = remote_addr;
+            }
+        }
+    }
+
+    /// Records what the session's encoder declared (`onMetaData`).
+    pub async fn update_ingest_session_declared(
+        &self,
+        registration: &IngestRegistration,
+        declared: DeclaredEncoder,
+    ) {
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            restream_sync::lock::write(&ingest.metadata).declared = Some(declared);
+        }
+    }
+
     pub async fn update_ingest_session_meta(
         &self,
         pipeline_id: &str,
@@ -54,6 +128,86 @@ impl IngestRegistry {
                 ring.set_codec_hint(&video.codec);
             }
         }
+    }
+
+    /// Replace an authoritative container track snapshot, rather than merge
+    /// optional probe fields, then report the probe recorded
+    /// ([`Self::note_ingest_session_probed`]). The pipeline's selection,
+    /// registration replacement and origin resolution share its `selection`
+    /// lock: an old attempt can neither clear a new session's metadata nor
+    /// resize/change its selected ring.
+    ///
+    /// `ingest` is the attempt's own state, so no `sessions` lookup is made
+    /// (a held `sessions` map does not stall a probe). Under the selection an
+    /// uncancelled token proves the attempt current: every path that removes
+    /// a session cancels its token and holds that pipeline's selection.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "this pipeline's `selection` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
+    )]
+    pub(crate) async fn replace_ingest_session_tracks(
+        &self,
+        ingest: &ActiveIngest,
+        registration: &IngestRegistration,
+        video: Option<VideoMeta>,
+        audio_tracks: Vec<AudioMeta>,
+        video_track_count: usize,
+        video_sequence_header: Option<bytes::Bytes>,
+    ) -> Option<Arc<restream_sync::RingBuffer>> {
+        let _selection = self.selection.lock(&ingest.pipeline_id).await;
+        if ingest.attempt_id != registration.attempt_id || registration.cancel_token.is_cancelled()
+        {
+            return None;
+        }
+        let selected = self
+            .is_ingest_session_selected(&ingest.pipeline_id, registration)
+            .await;
+        if selected {
+            self.adapt_pipeline_ring(
+                &ingest.pipeline_id,
+                video.as_ref().map_or(0.0, |video| video.fps),
+                audio_tracks.len(),
+            )
+            .await;
+        }
+        {
+            let mut metadata = restream_sync::lock::write(&ingest.metadata);
+            metadata.video = video.clone();
+            metadata.audio = audio_tracks.first().cloned();
+            metadata.video_track_count = video_track_count;
+            metadata.selected_video_track_index = video.as_ref().map(|_| 0);
+            metadata.tracks_authoritative = true;
+        }
+        *restream_sync::lock::lock(&ingest.audio_tracks) = Arc::new(audio_tracks.clone());
+        *restream_sync::lock::lock(&ingest.video_sequence_header) = video_sequence_header;
+        if audio_tracks.is_empty() {
+            *restream_sync::lock::lock(&ingest.audio_sequence_header) = None;
+        }
+        let update_ring = |ring: &restream_sync::RingBuffer| {
+            if let Some(video) = &video {
+                ring.set_codec_hint(&video.codec);
+            } else {
+                ring.remove_video_track();
+            }
+            ring.set_audio_tracks(audio_tracks.clone());
+        };
+        if let Some(preview) = registration.preview_ring.load_full() {
+            update_ring(&preview);
+        }
+        // A superseding snapshot may not resize again, and the source may
+        // have been deselected. Its next accepted ack must still hand off to
+        // the current shared ring, not strand its Owner on a sealed ancestor.
+        let ring = self
+            .pipelines
+            .read()
+            .await
+            .get(&ingest.pipeline_id)
+            .cloned();
+        if selected && let Some(ring) = &ring {
+            update_ring(ring);
+        }
+        self.emit_ingest_probed(ingest);
+        ring
     }
 
     /// Report that a session's probe has been recorded in full: its video
@@ -130,6 +284,143 @@ impl IngestRegistry {
             *restream_sync::lock::lock(&ingest.video_sequence_header) = Some(data);
         } else {
             *restream_sync::lock::lock(&ingest.audio_sequence_header) = Some(data);
+        }
+    }
+
+    pub async fn cache_sequence_header(
+        &self,
+        pipeline_id: &str,
+        is_video: bool,
+        data: bytes::Bytes,
+    ) {
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            if is_video {
+                *restream_sync::lock::lock(&ingest.video_sequence_header) = Some(data);
+            } else {
+                *restream_sync::lock::lock(&ingest.audio_sequence_header) = Some(data);
+            }
+        }
+    }
+
+    pub async fn get_ingest_session_sequence_headers(
+        &self,
+        registration: &IngestRegistration,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return (None, None);
+        };
+        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
+        (video, audio)
+    }
+
+    /// The ingest's cached video sequence header, read without waiting: for
+    /// codec threads, which must not enter async engine state. `None` when
+    /// the pipeline has no ingest, no header yet, or the ingest map is being
+    /// written at this instant (the caller retries on a later packet).
+    pub fn try_video_sequence_header(&self, pipeline_id: &str) -> Option<bytes::Bytes> {
+        let ingests = self.active.try_read().ok()?;
+        restream_sync::lock::lock(&ingests.get(pipeline_id)?.video_sequence_header).clone()
+    }
+
+    pub async fn get_sequence_headers(
+        &self,
+        pipeline_id: &str,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+            let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
+            (video, audio)
+        } else {
+            (None, None)
+        }
+    }
+
+    /// The sequence headers of one input's live session, selected or not.
+    pub(crate) async fn get_input_sequence_headers(
+        &self,
+        input_id: &str,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let ingest = self.sessions.read().await.get(input_id).cloned();
+        let Some(ingest) = ingest else {
+            return (None, None);
+        };
+        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
+        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
+        (video, audio)
+    }
+
+    pub async fn update_ingest_audio_tracks(&self, pipeline_id: &str, tracks: Vec<AudioMeta>) {
+        {
+            let ingests = self.active.read().await;
+            if let Some(ingest) = ingests.get(pipeline_id) {
+                *restream_sync::lock::lock(&ingest.audio_tracks) = Arc::new(tracks.clone());
+            }
+        }
+        if !tracks.is_empty() {
+            let pipelines = self.pipelines.read().await;
+            if let Some(ring) = pipelines.get(pipeline_id) {
+                ring.set_audio_tracks(tracks);
+            }
+        }
+    }
+
+    pub async fn update_publisher_quality(&self, pipeline_id: &str, quality: PublisherQuality) {
+        let ingests = self.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            restream_sync::lock::write(&ingest.metadata).quality = quality;
+        }
+    }
+
+    /// Whether the pipeline's active ingest has the probe an output needs
+    /// before it plans its tracks, or `None` when no ingest is active (the
+    /// caller decides from the disconnect grace).
+    ///
+    /// A direct egress resolves its track plan once, when it starts: the
+    /// RTMP leaf builds the audio track, the AAC sequence header and the
+    /// stream metadata from it, and drops raw AAC packets it cannot
+    /// announce. HLS push ingest registers its input on the first uploaded
+    /// object — the playlist, which carries no media — so an output started
+    /// on that `IngestConnected` plans video-only tracks and then loses the
+    /// whole stream's audio. Wait for the probe instead.
+    ///
+    /// The probe is the video or audio metadata, which every probe recorder
+    /// writes after the audio tracks, the track selection and the sequence
+    /// headers, so an open gate never shows a half-recorded probe.
+    ///
+    /// A source that publishes media without ever reporting one (no
+    /// sequence header an ingest parses) is treated as track-less once its
+    /// media has flowed for [`PROBE_GRACE_MS`], so its output starts
+    /// video-only rather than never. That grace counts from the first media
+    /// byte, never from registration: an SRT publisher reconnecting mid-GOP
+    /// sends bytes at once and completes its TS probe only on the next SPS,
+    /// and an HLS session whose first object is a playlist uploads its first
+    /// segment one target duration later.
+    pub async fn ingest_tracks_ready(&self, pipeline_id: &str) -> Option<bool> {
+        let ingests = self.active.read().await;
+        let ingest = ingests.get(pipeline_id)?;
+        {
+            let metadata = restream_sync::lock::read(&ingest.metadata);
+            if metadata.video.is_some() || metadata.audio.is_some() {
+                return Some(true);
+            }
+        }
+        let first_media_ms = ingest.first_media_ms.load(Ordering::Relaxed);
+        if first_media_ms == 0 {
+            return Some(false);
+        }
+        Some(crate::timing::epoch_ms().saturating_sub(first_media_ms) >= PROBE_GRACE_MS)
+    }
+
+    pub async fn update_ingest_session_quality(
+        &self,
+        registration: &IngestRegistration,
+        quality: PublisherQuality,
+    ) {
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            restream_sync::lock::write(&ingest.metadata).quality = quality;
         }
     }
 }

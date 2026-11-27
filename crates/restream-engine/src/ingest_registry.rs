@@ -1,7 +1,9 @@
 //! Ingest state owned by `MediaEngine`: pipeline rings, input sessions and
 //! their selection, the records stored in them, and the queue of dropped
-//! ingest leases' attempts awaiting release; and the operations that end an
-//! attempt (its disconnect outcome, its unregistration, the release task).
+//! ingest leases' attempts awaiting release; the queries over that state,
+//! and the operations that end an attempt (its disconnect outcome, its
+//! unregistration, the release task). Metadata, track and sequence-header
+//! operations are in `metadata`, ring creation and resizing in `rings`.
 //!
 //! The registry access rules in the `engine_registries` module docs apply.
 //! The few sections that must hold more than one ingest guard take them in
@@ -43,8 +45,19 @@ use crate::snapshots::PublisherQuality;
 use crate::stage_metrics::StageMetrics;
 
 mod metadata;
+mod rings;
 
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
+
+/// How long a source may publish media without reporting a probe before an
+/// output stops waiting for one and starts video-only.
+///
+/// Ten seconds: longer than a long GOP, so an SRT publisher that reconnects
+/// mid-GOP and completes its TS probe on the next SPS is still covered, and
+/// longer than an HLS target duration. A source that never probes is the
+/// exception this bound exists for; starting it a few seconds late costs far
+/// less than a silent run without audio.
+pub(crate) const PROBE_GRACE_MS: u64 = 10_000;
 
 /// The failure phase recorded for an attempt whose lease was dropped without
 /// `IngestLease::finish`.
@@ -74,10 +87,16 @@ pub struct IngestRegistry {
     release_drain: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The engine's event log (`RuntimeInfra::event_log`).
     events: Arc<EventLog>,
+    /// A new source or preview ring's capacity, and the floor of a resize
+    /// (`EngineConfig::ring_capacity`).
+    ring_capacity: usize,
+    /// The jitter a resized source ring holds, in seconds
+    /// (`EngineConfig::ring_headroom_secs`).
+    ring_headroom_secs: f64,
 }
 
 impl IngestRegistry {
-    pub fn new(events: Arc<EventLog>) -> Self {
+    pub fn new(events: Arc<EventLog>, ring_capacity: usize, ring_headroom_secs: f64) -> Self {
         Self {
             pipelines: TokioRwLock::new(HashMap::new()),
             cancel_tokens: TokioRwLock::new(HashMap::new()),
@@ -94,6 +113,8 @@ impl IngestRegistry {
             releases: Arc::default(),
             release_drain: std::sync::Mutex::new(None),
             events,
+            ring_capacity,
+            ring_headroom_secs,
         }
     }
 
@@ -126,6 +147,96 @@ impl IngestRegistry {
             .await
             .get(pipeline_id)
             .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id)
+    }
+
+    pub async fn with_active_ingest<R>(
+        &self,
+        pipeline_id: &str,
+        f: impl FnOnce(&ActiveIngest) -> R,
+    ) -> Option<R> {
+        let ingests = self.active.read().await;
+        ingests.get(pipeline_id).map(|ingest| f(ingest.as_ref()))
+    }
+
+    pub async fn has_active_ingest(&self, pipeline_id: &str) -> bool {
+        self.active.read().await.contains_key(pipeline_id)
+    }
+
+    /// Runs `f` over every selected ingest, keyed by pipeline id, under the
+    /// `active` read guard; `f` must not wait.
+    pub async fn with_active_ingests<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<ActiveIngest>>) -> R,
+    ) -> R {
+        f(&*self.active.read().await)
+    }
+
+    /// Runs `f` over every live input session, keyed by input id, under the
+    /// `sessions` read guard; `f` must not wait.
+    pub async fn with_ingest_sessions<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<ActiveIngest>>) -> R,
+    ) -> R {
+        f(&*self.sessions.read().await)
+    }
+
+    /// Runs `f` over every source ring, keyed by pipeline (or input preview
+    /// resource) id, under the `pipelines` read guard; `f` must not wait.
+    pub async fn with_source_rings<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<RingBuffer>>) -> R,
+    ) -> R {
+        f(&*self.pipelines.read().await)
+    }
+
+    /// [`Self::with_source_rings`] without waiting: `None` while the ring map
+    /// is being written (a ring created, resized or removed).
+    pub fn try_with_source_rings<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<RingBuffer>>) -> R,
+    ) -> Option<R> {
+        Some(f(&*self.pipelines.try_read().ok()?))
+    }
+
+    /// The pipeline's source ring, if one exists.
+    pub async fn source_ring(&self, pipeline_id: &str) -> Option<Arc<RingBuffer>> {
+        self.pipelines.read().await.get(pipeline_id).cloned()
+    }
+
+    /// Every pipeline's last ingest disconnect outcome, copied.
+    pub async fn recent_ingest_outcomes(&self) -> HashMap<String, RecentIngestOutcome> {
+        self.recent.read().await.clone()
+    }
+
+    /// Runs `f` on the pipeline's source ring with that pipeline's
+    /// `selection` held, so what `f` reads of the ring and the selected
+    /// ingest comes from one selected input. `None` when the pipeline has no
+    /// ring.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs)"
+    )]
+    pub async fn with_selected_source_ring<T>(
+        &self,
+        pipeline_id: &str,
+        f: impl AsyncFnOnce(Arc<RingBuffer>) -> T,
+    ) -> Option<T> {
+        let _selection = self.selection.lock(pipeline_id).await;
+        let ring = self.pipelines.read().await.get(pipeline_id).cloned()?;
+        Some(f(ring).await)
+    }
+
+    /// The ingest a stage keyed by `stage_pipeline` reads: the pipeline's
+    /// live ingest, or for an input preview's stage (`__input__:<input>`)
+    /// that input's session.
+    pub(crate) async fn stage_source_ingest(
+        &self,
+        stage_pipeline: &str,
+    ) -> Option<Arc<ActiveIngest>> {
+        match crate::preview_ids::input_id_from_hls_preview_resource_id(stage_pipeline) {
+            Some(input_id) => self.sessions.read().await.get(input_id).cloned(),
+            None => self.active.read().await.get(stage_pipeline).cloned(),
+        }
     }
 
     /// Starts the task that ends dropped ingest leases' attempts on the

@@ -90,6 +90,7 @@ mod tests {
             .expect("register standby input");
         let expected = Bytes::from(high_profile_sequence_header());
         engine
+            .ingests
             .cache_ingest_session_sequence_header(lease.registration(), true, expected.clone())
             .await;
         let resource_id = crate::preview_ids::input_hls_preview_resource_id("standby-input");

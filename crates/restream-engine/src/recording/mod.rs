@@ -435,9 +435,8 @@ async fn drain_ready_bursts(
         for pkt in packets.iter() {
             // Lazily create the feeder from engine metadata.
             if feeder.is_none() {
-                let metadata = {
-                    let ingests = engine.ingests.active.read().await;
-                    ingests.get(pipeline_id).and_then(|ingest| {
+                let metadata = engine
+                    .with_active_ingest(pipeline_id, |ingest| {
                         let metadata = ingest.metadata();
                         let video = metadata.video;
                         let lock = restream_sync::lock::lock(&ingest.audio_tracks);
@@ -452,7 +451,8 @@ async fn drain_ready_bursts(
                         };
                         (video.is_some() || !tracks.is_empty()).then_some((video, tracks))
                     })
-                };
+                    .await
+                    .flatten();
                 let Some((video, tracks)) = metadata else {
                     continue;
                 };

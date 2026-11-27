@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistration;
 use crate::snapshots::ListenerSocketStats;
 
 impl MediaEngine {
@@ -226,19 +227,55 @@ impl MediaEngine {
         }
     }
 
-    /// Clears one attempt's file-ingest state.
-    pub async fn clear_file_ingest(&self, ingest_id: &str) {
-        self.file_ingests.active.write().await.remove(ingest_id);
-        self.file_ingests.positions.write().await.remove(ingest_id);
+    /// Clears one attempt's file-ingest state, unless a newer attempt holds
+    /// its input. A replacement registration needs `sessions.write()`, so the
+    /// `sessions` guard is held through the removal and a newer generation
+    /// cannot be cleared. `children` is not held here: its order is
+    /// `children` -> `active`.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `ingests.sessions` -> file-ingest `active`, then `positions`, one at a time (module docs of `engine_registries`); `sessions` is held so a newer generation cannot be cleared"
+    )]
+    pub async fn clear_file_ingest_if_current(
+        &self,
+        ingest_id: &str,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+    ) {
+        let sessions = self.ingests.sessions.read().await;
+        if sessions.get(&registration.input_id).is_none_or(|session| {
+            session.pipeline_id == pipeline_id && session.attempt_id == registration.attempt_id
+        }) {
+            self.file_ingests.active.write().await.remove(ingest_id);
+            self.file_ingests.positions.write().await.remove(ingest_id);
+        }
     }
 
-    /// Registers one attempt's running file-ingest child.
-    pub async fn register_file_ingest_child(&self, ingest_id: &str, child: tokio::process::Child) {
+    /// Registers one attempt's running file-ingest child, unless a newer
+    /// attempt holds its input; the child comes back then.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `ingests.sessions` -> file-ingest `children` (module docs of `engine_registries`): `sessions` is held so a replaced attempt registers no child"
+    )]
+    pub async fn register_file_ingest_child_if_current(
+        &self,
+        ingest_id: &str,
+        registration: &IngestRegistration,
+        child: tokio::process::Child,
+    ) -> Result<(), tokio::process::Child> {
+        let sessions = self.ingests.sessions.read().await;
+        if sessions
+            .get(&registration.input_id)
+            .is_none_or(|session| session.attempt_id != registration.attempt_id)
+        {
+            return Err(child);
+        }
         self.file_ingests
             .children
             .write()
             .await
             .insert(ingest_id.to_string(), child);
+        Ok(())
     }
 
     /// Registers a pipeline's stream checks, or returns `None` if they run

@@ -83,7 +83,7 @@ impl StageInputPump {
     /// keyframe, before any annex-B data appears in the ring.
     ///
     /// This is the sequence header returned by
-    /// `engine.get_sequence_headers(pipeline_id)`.
+    /// `IngestRegistry::get_sequence_headers(pipeline_id)`.
     pub fn with_video_sequence_header(mut self, header: Option<bytes::Bytes>) -> Self {
         if let Some(h) = header {
             self.feeder.set_video_sequence_header_from_avcc(&h);
@@ -156,7 +156,7 @@ impl StageInputPump {
                 } else if let Some((engine, pipeline_id)) = &self.engine_refresh {
                     // Fallback: fetch AVCC sequence header from engine
                     // ingest state (set by RTMP handler on connect/reconnect).
-                    if let Some(header) = engine.try_video_sequence_header(pipeline_id) {
+                    if let Some(header) = engine.ingests.try_video_sequence_header(pipeline_id) {
                         self.feeder.set_video_sequence_header_from_avcc(&header);
                     }
                 }

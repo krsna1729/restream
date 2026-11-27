@@ -1,5 +1,6 @@
 //! Central media engine state and public runtime contracts.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -12,6 +13,7 @@ use crate::ingest_registry::{
     ActiveIngest, INGEST_FLAP_WINDOW_MS, IngestRegistration, IngestRegistry, RecentIngestOutcome,
 };
 use crate::snapshots::PublisherQuality;
+use restream_sync::RingBuffer;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,7 +60,11 @@ impl MediaEngine {
     pub fn new_with_config(config: Arc<crate::config::EngineConfig>) -> Self {
         let runtime = RuntimeInfra::new(&config);
         Self {
-            ingests: Arc::new(IngestRegistry::new(runtime.event_log.clone())),
+            ingests: Arc::new(IngestRegistry::new(
+                runtime.event_log.clone(),
+                config.ring_capacity,
+                config.ring_headroom_secs,
+            )),
             egresses: EgressRegistry::new(),
             fabric: FabricRegistry::new(),
             recordings: RecordingRegistry::new(),
@@ -123,8 +129,64 @@ impl MediaEngine {
         pipeline_id: &str,
         f: impl FnOnce(&ActiveIngest) -> R,
     ) -> Option<R> {
-        let ingests = self.ingests.active.read().await;
-        ingests.get(pipeline_id).map(|ingest| f(ingest.as_ref()))
+        self.ingests.with_active_ingest(pipeline_id, f).await
+    }
+
+    /// Runs `f` over every selected ingest, keyed by pipeline id; `f` runs
+    /// under the ingest map's read guard and must not wait.
+    pub async fn with_active_ingests<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<ActiveIngest>>) -> R,
+    ) -> R {
+        self.ingests.with_active_ingests(f).await
+    }
+
+    /// Runs `f` over every live input session, keyed by input id; `f` runs
+    /// under the session map's read guard and must not wait.
+    pub async fn with_ingest_sessions<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<ActiveIngest>>) -> R,
+    ) -> R {
+        self.ingests.with_ingest_sessions(f).await
+    }
+
+    /// Runs `f` over every source ring, keyed by pipeline (or input preview
+    /// resource) id; `f` runs under the ring map's read guard and must not
+    /// wait.
+    pub async fn with_source_rings<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<RingBuffer>>) -> R,
+    ) -> R {
+        self.ingests.with_source_rings(f).await
+    }
+
+    /// [`Self::with_source_rings`] without waiting: `None` while the ring map
+    /// is being written.
+    pub fn try_with_source_rings<R>(
+        &self,
+        f: impl FnOnce(&HashMap<String, Arc<RingBuffer>>) -> R,
+    ) -> Option<R> {
+        self.ingests.try_with_source_rings(f)
+    }
+
+    /// The pipeline's source ring, if one exists.
+    pub async fn source_ring(&self, pipeline_id: &str) -> Option<Arc<RingBuffer>> {
+        self.ingests.source_ring(pipeline_id).await
+    }
+
+    /// Every pipeline's last ingest disconnect outcome, copied.
+    pub async fn recent_ingest_outcomes(&self) -> HashMap<String, RecentIngestOutcome> {
+        self.ingests.recent_ingest_outcomes().await
+    }
+
+    /// Runs `f` on the pipeline's source ring with the pipeline's ingest
+    /// selection held (`IngestRegistry::with_selected_source_ring`).
+    pub async fn with_selected_source_ring<T>(
+        &self,
+        pipeline_id: &str,
+        f: impl AsyncFnOnce(Arc<RingBuffer>) -> T,
+    ) -> Option<T> {
+        self.ingests.with_selected_source_ring(pipeline_id, f).await
     }
 
     /// The selected active ingest for a pipeline.
@@ -234,7 +296,7 @@ impl MediaEngine {
     }
 
     pub async fn has_active_ingest(&self, pipeline_id: &str) -> bool {
-        self.ingests.active.read().await.contains_key(pipeline_id)
+        self.ingests.has_active_ingest(pipeline_id).await
     }
 
     pub async fn has_recent_ingest_disconnect(&self, pipeline_id: &str, grace_ms: u64) -> bool {

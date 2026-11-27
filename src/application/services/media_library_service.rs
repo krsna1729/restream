@@ -270,7 +270,7 @@ impl MediaLibraryService {
             .await
             .map_err(|e| ServiceError::internal(format!("set recording enabled: {e}")))?;
 
-        let has_ingest = engine.ingests.active.read().await.contains_key(pipeline_id);
+        let has_ingest = engine.has_active_ingest(pipeline_id).await;
         if has_ingest && !engine.is_recording_active(pipeline_id).await {
             let recording_settings = load_recording_settings(&self.db).await;
             spawn_recording_task(

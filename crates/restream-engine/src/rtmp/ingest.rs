@@ -116,13 +116,7 @@ async fn authorize_play(
         .await
     {
         Ok(pipeline) => {
-            if engine
-                .ingests
-                .active
-                .read()
-                .await
-                .contains_key(&pipeline.id)
-            {
+            if engine.has_active_ingest(&pipeline.id).await {
                 PlayAuthorization::Accepted {
                     pipeline_id: pipeline.id,
                 }

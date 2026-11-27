@@ -8,12 +8,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::MediaEngine;
 use crate::ingest_lease::IngestLease;
+use crate::ingest_publisher::PublishTarget;
 use crate::ingest_registry::{
     ActiveIngest, IngestMetadata, IngestRegistration, RecentIngestOutcome,
 };
 use crate::input_gate::InputForwardState;
 use crate::stage_metrics::StageMetrics;
-use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_sync::RingBuffer;
 
 impl MediaEngine {
@@ -296,65 +296,34 @@ impl MediaEngine {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "`preview_lock` serializes preview-ring creation; under it `sessions` and `preview_slots` are read one at a time"
-    )]
-    pub async fn ensure_input_preview_ring(&self, input_id: &str) -> Option<Arc<RingBuffer>> {
-        let _preview = self.ingests.preview_lock.lock().await;
-        let ingest = self.ingests.sessions.read().await.get(input_id).cloned()?;
-        let slot = self
-            .ingests
-            .preview_slots
-            .read()
-            .await
-            .get(input_id)
-            .cloned()?;
-        if let Some(ring) = slot.load_full() {
-            return Some(ring);
-        }
-
-        let ring = Arc::new(RingBuffer::new(self.config.ring_capacity));
-        let metadata = ingest.metadata();
-        if let Some(video) = metadata.video {
-            ring.set_codec_hint(&video.codec);
-        }
-        let audio_tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
-        if !audio_tracks.is_empty() {
-            ring.set_audio_tracks(audio_tracks.as_ref().clone());
-        }
-        let video_header = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
-        let audio_header = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
-        if let Some(payload) = video_header {
-            ring.push(MediaPacket {
-                media_type: MediaType::Video,
-                track_index: 0,
-                pts: 0,
-                dts: 0,
-                is_keyframe: false,
-                format: PayloadFormat::Flv,
-                payload,
-            });
-        }
-        if let Some(payload) = audio_header {
-            ring.push(MediaPacket {
-                media_type: MediaType::Audio,
-                track_index: 0,
-                pts: 0,
-                dts: 0,
-                is_keyframe: false,
-                format: PayloadFormat::Flv,
-                payload,
-            });
-        }
-        slot.store(Some(ring.clone()));
-        Some(ring)
+    /// Opens the publish target of one registered ingest attempt (see
+    /// `PublishTarget::open`); fails once the attempt is no longer its
+    /// input's current session.
+    pub async fn open_publish_target(
+        &self,
+        pipeline_id: String,
+        registration: IngestRegistration,
+        ring: Arc<RingBuffer>,
+    ) -> Result<PublishTarget, String> {
+        PublishTarget::open(self.ingests.clone(), pipeline_id, registration, ring).await
     }
 
-    pub async fn release_input_preview_ring(&self, input_id: &str) {
-        if let Some(slot) = self.ingests.preview_slots.read().await.get(input_id) {
-            slot.store(None);
-        }
+    /// Replace the wanted `srt_call` inputs the SRT server dials; returns
+    /// the inputs whose call is new or changed (`SrtCallInputs::converge`).
+    pub fn converge_srt_calls(&self, specs: Vec<restream_srt::calls::SrtCallSpec>) -> Vec<String> {
+        self.ingests.srt_calls.converge(specs)
+    }
+
+    /// The wanted `srt_call` inputs and their generation, when `seen` is out
+    /// of date (`SrtCallInputs::snapshot_since`).
+    pub fn srt_calls_since(
+        &self,
+        seen: u64,
+    ) -> Option<(
+        u64,
+        std::collections::HashMap<String, restream_srt::calls::SrtCallSpec>,
+    )> {
+        self.ingests.srt_calls.snapshot_since(seen)
     }
 
     pub async fn record_ingest_disconnect(

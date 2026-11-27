@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::ChildStdout;
 
-use crate::ingest_publisher::{
-    Container, IngestTimestamps, PUBLISH_CHUNK_BYTES, PublishTarget, SegmentPublisher,
-};
+use crate::ingest_publisher::{Container, IngestTimestamps, PUBLISH_CHUNK_BYTES, SegmentPublisher};
 
 use super::ExternalFileIngestRuntime;
 
@@ -51,13 +49,14 @@ async fn pump_stdout_inner(
     mut stdout: ChildStdout,
     publisher: &mut SegmentPublisher,
 ) -> Result<(), String> {
-    let target = PublishTarget::open(
-        runtime.engine.ingests.clone(),
-        runtime.pipeline_id.clone(),
-        runtime.registration.clone(),
-        runtime.ring_buffer.clone(),
-    )
-    .await?;
+    let target = runtime
+        .engine
+        .open_publish_target(
+            runtime.pipeline_id.clone(),
+            runtime.registration.clone(),
+            runtime.ring_buffer.clone(),
+        )
+        .await?;
     let mut buf = vec![0u8; PUBLISH_CHUNK_BYTES];
 
     loop {

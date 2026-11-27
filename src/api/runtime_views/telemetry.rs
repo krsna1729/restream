@@ -117,23 +117,24 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     // One registry at a time, each guard released before the next await
     // (see `StageMaps`).
     let input_arr: Vec<serde_json::Value> = engine
-        .ingests
-        .sessions
-        .read()
-        .await
-        .values()
-        .map(|session| api_view_models::input_telemetry_json(session))
-        .collect();
-    let (ingest_arr, ingest_pipelines): (Vec<serde_json::Value>, HashSet<String>) = {
-        let ingests = engine.ingests.active.read().await;
-        (
-            ingests
-                .iter()
-                .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
-                .collect(),
-            ingests.keys().cloned().collect(),
-        )
-    };
+        .with_ingest_sessions(|sessions| {
+            sessions
+                .values()
+                .map(|session| api_view_models::input_telemetry_json(session))
+                .collect()
+        })
+        .await;
+    let (ingest_arr, ingest_pipelines): (Vec<serde_json::Value>, HashSet<String>) = engine
+        .with_active_ingests(|ingests| {
+            (
+                ingests
+                    .iter()
+                    .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
+                    .collect(),
+                ingests.keys().cloned().collect(),
+            )
+        })
+        .await;
     let egress_arr: Vec<serde_json::Value> = engine
         .with_active_egresses(|active| {
             active
@@ -150,13 +151,15 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         })
         .await;
     let source_rings: Vec<serde_json::Value> = engine
-        .ingests
-        .pipelines
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, ring)| api_view_models::source_ring_telemetry_json(pipeline_id, ring))
-        .collect();
+        .with_source_rings(|rings| {
+            rings
+                .iter()
+                .map(|(pipeline_id, ring)| {
+                    api_view_models::source_ring_telemetry_json(pipeline_id, ring)
+                })
+                .collect()
+        })
+        .await;
     let ts_muxer_rings: Vec<serde_json::Value> = engine
         .stages
         .ts_muxers
@@ -220,21 +223,20 @@ pub(crate) async fn pipeline_telemetry(
 ) -> serde_json::Value {
     let generated_at = restream_domain::timestamp::now_rfc3339();
     // One registry at a time (see `StageMaps`).
-    let (ingest, has_ingest) = {
-        let ingests = engine.ingests.active.read().await;
-        let ingest = ingests.get(pipeline_id);
-        (
-            ingest.map(|ingest| api_view_models::pipeline_ingest_telemetry_json(ingest.as_ref())),
-            ingest.is_some(),
-        )
-    };
+    let (ingest, has_ingest) = engine
+        .with_active_ingests(|ingests| {
+            let ingest = ingests.get(pipeline_id);
+            (
+                ingest
+                    .map(|ingest| api_view_models::pipeline_ingest_telemetry_json(ingest.as_ref())),
+                ingest.is_some(),
+            )
+        })
+        .await;
     let ring_info = engine
-        .ingests
-        .pipelines
-        .read()
+        .source_ring(pipeline_id)
         .await
-        .get(pipeline_id)
-        .map(|ring| api_view_models::pipeline_source_ring_json(ring));
+        .map(|ring| api_view_models::pipeline_source_ring_json(&ring));
     let (pipeline_egresses, delivery): (Vec<serde_json::Value>, _) = engine
         .with_active_egresses(|egresses| {
             let pipeline_egresses = || {

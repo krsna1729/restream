@@ -204,7 +204,7 @@ async fn remove_pipeline_frees_source_ring_buffer() {
         "ring buffer should still be alive"
     );
 
-    engine.remove_pipeline("pipe-rm").await;
+    engine.ingests.remove_pipeline("pipe-rm").await;
     // Now only the weak ref remains — the Arc should be freed
     assert!(
         weak.upgrade().is_none(),

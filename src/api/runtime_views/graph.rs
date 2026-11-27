@@ -86,14 +86,8 @@ impl<'g> GraphReadings<'g> {
             .into_iter()
             .map(|snapshot| (snapshot.key.clone(), snapshot))
             .collect();
-        let ingest = engine.ingests.active.read().await.get(pipeline_id).cloned();
-        let ring = engine
-            .ingests
-            .pipelines
-            .read()
-            .await
-            .get(pipeline_id)
-            .cloned();
+        let ingest = engine.active_ingest(pipeline_id).await;
+        let ring = engine.source_ring(pipeline_id).await;
         let egresses = engine
             .with_active_egresses(|active| {
                 nodes

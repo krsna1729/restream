@@ -341,7 +341,7 @@ async fn run_child(
     if !has_video && !has_audio {
         return Err("the source has reported no track yet".to_string());
     }
-    let (sequence_header, _) = engine.get_sequence_headers(pipeline_id).await;
+    let (sequence_header, _) = engine.ingests.get_sequence_headers(pipeline_id).await;
     let pump = StageInputPump::new(
         format!("qa:{pipeline_id}"),
         ring.clone(),

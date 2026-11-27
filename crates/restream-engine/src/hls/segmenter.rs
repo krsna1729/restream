@@ -98,7 +98,7 @@ async fn run_hls_segmenter(
     // Pre-populate SPS/PPS cache from the engine's stored FLV sequence header.
     // This handles the case where the HLS task starts after the seq header has
     // already passed through the ring buffer (e.g. late-joining consumers).
-    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
+    let (video_sequence_header, _) = engine.ingests.get_sequence_headers(&pipeline_id).await;
     let config = store.config();
     let mut segmenter = HlsSegmenter {
         accumulator: BytesMut::with_capacity(config.segment_capacity),

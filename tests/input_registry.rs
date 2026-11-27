@@ -116,11 +116,12 @@ async fn input_preview_ring_exists_only_while_preview_is_requested() {
     assert!(registration.preview_ring.load_full().is_none());
 
     let ring = engine
+        .ingests
         .ensure_input_preview_ring("backup")
         .await
         .expect("connected input preview ring");
     assert!(registration.preview_ring.load_full().is_some());
-    engine.release_input_preview_ring("backup").await;
+    engine.ingests.release_input_preview_ring("backup").await;
 
     assert!(registration.preview_ring.load_full().is_none());
     assert_eq!(Arc::strong_count(&ring), 1);

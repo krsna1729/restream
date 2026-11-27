@@ -12,38 +12,6 @@ use crate::preview_ids::{
 };
 
 impl MediaEngine {
-    /// The ingest a stage keyed by `stage_pipeline` reads: the pipeline's
-    /// live ingest, or for an input preview's stage (`__input__:<input>`)
-    /// that input's session.
-    pub(crate) async fn stage_source_ingest(
-        &self,
-        stage_pipeline: &str,
-    ) -> Option<Arc<crate::ingest_registry::ActiveIngest>> {
-        match input_id_from_hls_preview_resource_id(stage_pipeline) {
-            Some(input_id) => self.ingests.sessions.read().await.get(input_id).cloned(),
-            None => self
-                .ingests
-                .active
-                .read()
-                .await
-                .get(stage_pipeline)
-                .cloned(),
-        }
-    }
-
-    pub(crate) async fn get_input_sequence_headers(
-        &self,
-        input_id: &str,
-    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
-        let ingest = self.ingests.sessions.read().await.get(input_id).cloned();
-        let Some(ingest) = ingest else {
-            return (None, None);
-        };
-        let video = restream_sync::lock::lock(&ingest.video_sequence_header).clone();
-        let audio = restream_sync::lock::lock(&ingest.audio_sequence_header).clone();
-        (video, audio)
-    }
-
     pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
         let already_running = {
             let mut consumers = self.hls.consumers.write().await;
@@ -135,7 +103,7 @@ impl MediaEngine {
         if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
             && !sibling_running
         {
-            self.release_input_preview_ring(input_id).await;
+            self.ingests.release_input_preview_ring(input_id).await;
         }
     }
 
@@ -205,7 +173,7 @@ impl MediaEngine {
     }
 
     pub async fn should_shutdown_hls_segmenter(&self, pipeline_id: &str, timeout_ms: u64) -> bool {
-        let has_ingest = self.has_active_ingest(pipeline_id).await;
+        let has_ingest = self.ingests.has_active_ingest(pipeline_id).await;
         let consumers = self.hls.consumers.read().await;
         match consumers.get(pipeline_id) {
             Some(consumer) => !has_ingest || consumer.is_idle(timeout_ms),
@@ -223,7 +191,8 @@ impl MediaEngine {
             self.ingests.sessions.read().await.contains_key(input_id)
         } else {
             // A passthrough preview id names its pipeline with a suffix.
-            self.has_active_ingest(preview_pipeline(pipeline_id).0)
+            self.ingests
+                .has_active_ingest(preview_pipeline(pipeline_id).0)
                 .await
         };
         let preview_key = hls_preview_registry_key(pipeline_id);

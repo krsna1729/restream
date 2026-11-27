@@ -352,9 +352,10 @@ pub(super) async fn resolve_hls_sequence_headers(
     pipeline_id: &str,
 ) -> (Option<Bytes>, Option<Bytes>) {
     if let Some(input_id) = crate::preview_ids::input_id_from_hls_preview_resource_id(pipeline_id) {
-        engine.get_input_sequence_headers(input_id).await
+        engine.ingests.get_input_sequence_headers(input_id).await
     } else {
         engine
+            .ingests
             .get_sequence_headers(crate::preview_ids::preview_pipeline(pipeline_id).0)
             .await
     }

@@ -406,13 +406,14 @@ pub(crate) async fn health_snapshot_view(
         );
     }
 
-    let recent_ingests = engine.ingests.recent.read().await.clone();
+    let recent_ingests = engine.recent_ingest_outcomes().await;
     let recent_egresses = engine.recent_egress_outcomes().await;
     let retry_egresses = engine.retry_egress_states().await;
     let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_metrics_by_pipeline = reader_metrics_by_pipeline(engine).await;
-    let active_ingest_ids: HashSet<String> =
-        engine.ingests.active.read().await.keys().cloned().collect();
+    let active_ingest_ids: HashSet<String> = engine
+        .with_active_ingests(|active| active.keys().cloned().collect())
+        .await;
 
     let ActiveEgressViews {
         total_bytes_by_pipeline,
@@ -426,37 +427,39 @@ pub(crate) async fn health_snapshot_view(
     )
     .await;
 
-    let active_inputs: HashMap<String, serde_json::Value> = {
-        let ingests = engine.ingests.active.read().await;
-        pipeline_ids
-            .iter()
-            .filter_map(|pipeline_id| {
-                let ingest = ingests.get(pipeline_id.as_str())?;
-                let (readers_count, reader_metrics) = reader_metrics_by_pipeline
-                    .get(pipeline_id)
-                    .cloned()
-                    .unwrap_or_default();
-                let total_bytes_sent = total_bytes_by_pipeline
-                    .get(pipeline_id)
-                    .copied()
-                    .unwrap_or(0);
-                let mut input = api_view_models::active_pipeline_input_json(
-                    ingest,
-                    recent_ingests.get(pipeline_id.as_str()),
-                    total_bytes_sent,
-                    readers_count,
-                    reader_metrics,
-                );
-                // The picture and sound checks, where they run.
-                if let Some(qa) = engine.stream_qa(pipeline_id)
-                    && let Ok(held) = serde_json::to_value(qa.held_at(MediaEngine::now_epoch_ms()))
-                {
-                    input["qa"] = held;
-                }
-                Some((pipeline_id.clone(), input))
-            })
-            .collect()
-    };
+    let active_inputs: HashMap<String, serde_json::Value> = engine
+        .with_active_ingests(|ingests| {
+            pipeline_ids
+                .iter()
+                .filter_map(|pipeline_id| {
+                    let ingest = ingests.get(pipeline_id.as_str())?;
+                    let (readers_count, reader_metrics) = reader_metrics_by_pipeline
+                        .get(pipeline_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let total_bytes_sent = total_bytes_by_pipeline
+                        .get(pipeline_id)
+                        .copied()
+                        .unwrap_or(0);
+                    let mut input = api_view_models::active_pipeline_input_json(
+                        ingest,
+                        recent_ingests.get(pipeline_id.as_str()),
+                        total_bytes_sent,
+                        readers_count,
+                        reader_metrics,
+                    );
+                    // The picture and sound checks, where they run.
+                    if let Some(qa) = engine.stream_qa(pipeline_id)
+                        && let Ok(held) =
+                            serde_json::to_value(qa.held_at(MediaEngine::now_epoch_ms()))
+                    {
+                        input["qa"] = held;
+                    }
+                    Some((pipeline_id.clone(), input))
+                })
+                .collect()
+        })
+        .await;
 
     let mut pipelines: BTreeMap<String, api_view_models::PipelineHealthView> = BTreeMap::new();
     for pipeline_id in pipeline_ids {
@@ -549,21 +552,21 @@ async fn reader_metrics_by_pipeline(
     engine: &MediaEngine,
 ) -> HashMap<String, (usize, Vec<serde_json::Value>)> {
     engine
-        .ingests
-        .pipelines
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, rb)| {
-            let reader_snapshots = rb.reader_snapshots();
-            let readers_count = reader_snapshots.len();
-            let reader_metrics = reader_snapshots
+        .with_source_rings(|rings| {
+            rings
                 .iter()
-                .map(api_view_models::reader_snapshot_json)
-                .collect();
-            (pipeline_id.clone(), (readers_count, reader_metrics))
+                .map(|(pipeline_id, rb)| {
+                    let reader_snapshots = rb.reader_snapshots();
+                    let readers_count = reader_snapshots.len();
+                    let reader_metrics = reader_snapshots
+                        .iter()
+                        .map(api_view_models::reader_snapshot_json)
+                        .collect();
+                    (pipeline_id.clone(), (readers_count, reader_metrics))
+                })
+                .collect()
         })
-        .collect()
+        .await
 }
 
 /// The active egresses' views by pipeline, each pipeline's bytes sent, and
@@ -730,20 +733,21 @@ pub(crate) async fn health_summary_snapshot(
     recording_enabled: &HashMap<String, bool>,
     disconnect_grace_ms: u64,
 ) -> serde_json::Value {
-    let recent_ingests = engine.ingests.recent.read().await.clone();
+    let recent_ingests = engine.recent_ingest_outcomes().await;
     let recent_egresses = engine.recent_egress_outcomes().await;
     let retry_egresses = engine.retry_egress_states().await;
     let rec_active_by_pipeline = engine.recording_activity().await;
     let reader_counts: HashMap<String, usize> = engine
-        .ingests
-        .pipelines
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, rb)| (pipeline_id.clone(), rb.reader_snapshots().len()))
-        .collect();
-    let active_ingest_ids: HashSet<String> =
-        engine.ingests.active.read().await.keys().cloned().collect();
+        .with_source_rings(|rings| {
+            rings
+                .iter()
+                .map(|(pipeline_id, rb)| (pipeline_id.clone(), rb.reader_snapshots().len()))
+                .collect()
+        })
+        .await;
+    let active_ingest_ids: HashSet<String> = engine
+        .with_active_ingests(|active| active.keys().cloned().collect())
+        .await;
 
     let (total_bytes_by_pipeline, mut outputs_by_pipeline) = engine
         .with_active_egresses(|egresses| {
@@ -779,28 +783,29 @@ pub(crate) async fn health_summary_snapshot(
         })
         .await;
 
-    let active_inputs: HashMap<String, serde_json::Value> = {
-        let ingests = engine.ingests.active.read().await;
-        pipeline_ids
-            .iter()
-            .filter_map(|pipeline_id| {
-                let ingest = ingests.get(pipeline_id.as_str())?;
-                let total_bytes_sent = total_bytes_by_pipeline
-                    .get(pipeline_id)
-                    .copied()
-                    .unwrap_or(0);
-                let reader_count = reader_counts.get(pipeline_id).copied().unwrap_or(0);
-                Some((
-                    pipeline_id.clone(),
-                    api_view_models::active_pipeline_input_summary_json(
-                        ingest,
-                        total_bytes_sent,
-                        reader_count,
-                    ),
-                ))
-            })
-            .collect()
-    };
+    let active_inputs: HashMap<String, serde_json::Value> = engine
+        .with_active_ingests(|ingests| {
+            pipeline_ids
+                .iter()
+                .filter_map(|pipeline_id| {
+                    let ingest = ingests.get(pipeline_id.as_str())?;
+                    let total_bytes_sent = total_bytes_by_pipeline
+                        .get(pipeline_id)
+                        .copied()
+                        .unwrap_or(0);
+                    let reader_count = reader_counts.get(pipeline_id).copied().unwrap_or(0);
+                    Some((
+                        pipeline_id.clone(),
+                        api_view_models::active_pipeline_input_summary_json(
+                            ingest,
+                            total_bytes_sent,
+                            reader_count,
+                        ),
+                    ))
+                })
+                .collect()
+        })
+        .await;
 
     let mut pipelines_json = serde_json::Map::new();
 
