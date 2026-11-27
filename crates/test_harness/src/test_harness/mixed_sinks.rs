@@ -163,12 +163,12 @@ pub(crate) async fn add_mixed_outputs_and_gate(
         // can still be wiring up. Waiting once for real bytes-out keeps the
         // first probed cell from turning a startup lag into a false codec or
         // output failure.
-        wait_for_outputs_progress_with_env(
+        wait_for_outputs_progress_labeled(
             api,
             pipeline_id,
             output_ids,
             mixed_output_progress_timeout_for_case(case, output_ids.len()),
-            Some(env),
+            |output_id| env.output_cell_label(output_id),
         )
         .await?;
     }

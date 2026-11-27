@@ -13,14 +13,15 @@ use super::{
     RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
     create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
-    default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
-    file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
-    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, mediamtx_udp_read_buffer_line,
-    parse_srt_crypto_variants, pinned_mediamtx, plain_mediamtx_config, probe_dims_ramp, round2,
-    run_ffmpeg_filter_log, safe_artifact_stem, signal_report_json, spawn_mediamtx,
+    default_restream_bin, default_work_db_path, env_secs, env_usize, ffmpeg_children_stats,
+    ffprobe_live_sample, file_tail_lines, harness_admin_password, harness_port_defaults,
+    harness_srt_crypto_from_env, harness_srt_ffmpeg_url, harness_srt_standard_publish_url,
+    mediamtx_udp_read_buffer_line, parse_srt_crypto_variants, pinned_mediamtx,
+    plain_mediamtx_config, probe_dims_ramp, read_proc_status_kb, round2, run_ffmpeg_filter_log,
+    safe_artifact_stem, scaled_output_progress_timeout, signal_report_json, spawn_mediamtx,
     spawn_publisher_with_selection, start_generalized_sink_server, start_output, stop_child,
-    stop_generalized_sink_server, sweep_fixture, validate_signal_quality_with_tolerances,
-    wait_for_api_input_live, wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
+    stop_generalized_sink_server, validate_signal_quality_with_tolerances, wait_for_api_input_live,
+    wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -53,7 +54,6 @@ mod delivery;
 mod first_progress;
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
-pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
 #[path = "resource_sweep/hls_sink.rs"]
 pub(crate) mod hls_sink;
@@ -1075,14 +1075,10 @@ fn resource_output_progress_timeout(output_count: usize) -> Duration {
     scaled_output_progress_timeout(output_count, base_secs, per_output_secs, cap_secs)
 }
 
-pub(crate) fn scaled_output_progress_timeout(
-    output_count: usize,
-    base_secs: u64,
-    per_output_secs: u64,
-    cap_secs: u64,
-) -> Duration {
-    let cap_secs = cap_secs.max(base_secs);
-    let extra_outputs = output_count.saturating_sub(1) as u64;
-    let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
-    Duration::from_secs(scaled_secs.min(cap_secs))
+fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<PathBuf, String> {
+    restream_engine::test_fixtures::bench_transport_fixture(
+        config.video_codec,
+        bitrate_label,
+        config.multi_audio,
+    )
 }

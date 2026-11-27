@@ -57,9 +57,11 @@ the [assurance roadmap](assurance-roadmap.md).
   RTMP connection and client/session, and egress TLS/Compio TCP cycles.
   The harness `hls_*_duty`, `fault_recovery`, `mixed_runner` and
   `resource_sweep` cycles were broken by moving shared helpers into leaf
-  modules. Left: the
-  32-module engine cycle and the 16-module `test_harness` cycle, which need
-  their own design, not a mechanical import shuffle.
+  modules, and the 16-module `test_harness` cycle by moving the API waits,
+  pipeline/output observation, process stats and output helpers into
+  top-level leaf modules (`api_waits`, `observe`, `core/process`,
+  `output_helpers`). Left: the 32-module engine cycle, which needs its own
+  design, not a mechanical import shuffle.
 - Design: the engine modules target this order, low to high: vocabulary and
   configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`);
   runtime storage (`engine_registries`, `stage_registry_access`,
@@ -72,11 +74,9 @@ the [assurance roadmap](assurance-roadmap.md).
   manager, egress context) instead of `Arc<MediaEngine>`. The reported
   32-module cycle is the union of those subsystem back-references, so it
   closes only when the last one is gone; each slice removes one back-reference
-  and is checked with the same scoped audit. The harness cycle follows after
-  the production cycles.
-- Why open: the remaining cycles are wider than the removed pairs, and the
-  engine and harness cycles need ownership boundaries rather than a move of
-  one shared item.
+  and is checked with the same scoped audit.
+- Why open: the engine cycle is wider than the removed pairs and needs
+  ownership boundaries rather than a move of one shared item.
 - Gates: scoped `deslop-please` reports no cycle for each changed area;
   affected lifecycle/protocol tests pass; public API changes are documented.
 

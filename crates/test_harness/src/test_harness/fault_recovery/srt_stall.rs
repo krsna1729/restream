@@ -46,8 +46,6 @@
 //! signature remain evidence, rather than an additional pass gate.
 
 use super::super::*;
-use super::egress::wait_for_outputs_live_and_progressing;
-use super::observe::{create_pipeline, delete_pipeline_v1};
 
 #[path = "srt_stall_sampler.rs"]
 mod sampler;

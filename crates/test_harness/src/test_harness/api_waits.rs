@@ -364,3 +364,130 @@ pub(crate) async fn wait_for_probe_shape(
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
+
+pub(crate) async fn wait_for_input_state(
+    api: &RampApi,
+    pipeline_id: &str,
+    input_id: &str,
+    state: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let response = api
+            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/inputs"))
+            .await?;
+        if let Some(input) = response["inputs"].as_array().and_then(|inputs| {
+            inputs
+                .iter()
+                .find(|input| input["id"].as_str() == Some(input_id))
+        }) && input["runtime"]["connected"] == true
+            && input["runtime"]["forwardingState"].as_str() == Some(state)
+            && input["runtime"]["bytesReceived"].as_u64().unwrap_or(0) > 0
+        {
+            return Ok(input.clone());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err(format!(
+        "input {input_id} did not reach connected {state} state"
+    ))
+}
+
+pub(crate) async fn wait_for_api_recording_state(
+    api: &RampApi,
+    pipeline_id: &str,
+    expected_active: bool,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let health = api.get_json("/api/v1/engine/health").await?;
+        let recording = &health["pipelines"][pipeline_id]["recording"];
+        let enabled = recording["enabled"].as_bool().unwrap_or(false);
+        let active = recording["active"].as_bool().unwrap_or(false);
+        if active == expected_active {
+            return Ok(json!({
+                "enabled": enabled,
+                "active": active,
+            }));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "recording state for pipeline {pipeline_id} did not reach active={expected_active}; enabled={enabled} active={active}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+pub(crate) async fn wait_for_api_hls_preview_state(
+    api: &RampApi,
+    pipeline_id: &str,
+    expected_active: bool,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let health = api.get_json("/api/v1/engine/health").await?;
+        let preview = &health["pipelines"][pipeline_id]["hlsPreview"];
+        let active = preview["active"].as_bool().unwrap_or(false);
+        if active == expected_active {
+            return Ok(preview.clone());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "HLS preview state for pipeline {pipeline_id} did not reach active={expected_active}; preview={preview}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+pub(crate) async fn wait_for_pipeline_file_ingest_running_state(
+    api: &RampApi,
+    pipeline_id: &str,
+    expected_running: bool,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let ingest = api
+            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/file-ingest"))
+            .await?;
+        let running = ingest["running"].as_bool().unwrap_or(false);
+        if running == expected_running {
+            return Ok(ingest);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "file ingest state for pipeline {pipeline_id} did not reach running={expected_running}; ingest={ingest}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+pub(crate) async fn wait_for_hls_playlist_ready(
+    api: &RampApi,
+    pipeline_id: &str,
+    timeout: Duration,
+) -> Result<(reqwest::StatusCode, String), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let (status, body) = api
+            .get_text_response(&format!("/hls/{pipeline_id}/master.m3u8"))
+            .await?;
+        if status.is_success() && body.contains("#EXTM3U") {
+            return Ok((status, body));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "HLS playlist for pipeline {pipeline_id} did not become ready within {}s; last_status={} body={body}",
+                timeout.as_secs(),
+                status
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}

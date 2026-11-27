@@ -298,12 +298,12 @@ async fn gate_anchor_output_progress(
     // rows. Gate the external reads on the actual RTMP/SRT egress rows so
     // the first ffprobe does not race outputs that are still starting up.
     let progress_output_ids = mixed_progress_output_ids(output_ids, hls_output);
-    wait_for_outputs_progress_with_env(
+    wait_for_outputs_progress_labeled(
         api,
         pipeline_id,
         &progress_output_ids,
         mixed_output_progress_timeout_for_case(case, progress_output_ids.len()),
-        Some(env),
+        |output_id| env.output_cell_label(output_id),
     )
     .await?;
     Ok(())

@@ -6,10 +6,7 @@ mod file_signal;
 mod protocol;
 #[path = "live_modes/ramp.rs"]
 mod ramp;
-#[path = "live_modes/shared.rs"]
-mod shared;
 
 pub(crate) use file_signal::*;
 pub(crate) use protocol::*;
 pub(crate) use ramp::*;
-pub(crate) use shared::*;

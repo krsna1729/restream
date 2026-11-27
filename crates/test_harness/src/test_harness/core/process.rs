@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};
 
-use crate::{RampApi, cleanup_ramp_db, harness_admin_password, harness_http_client, stop_child};
+use crate::{RampApi, harness_admin_password, harness_http_client, stop_child};
 
 use super::ports::TestPorts;
 use super::setup::{absolute_path, command_with_optional_cgroup, remove_mediamtx_config_env};
@@ -399,6 +399,58 @@ pub(crate) async fn ffmpeg_pipe1_stats() -> FfmpegStats {
     }
 }
 
+pub(crate) fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
+    let status =
+        std::fs::read_to_string(format!("/proc/{pid}/status")).map_err(|e| e.to_string())?;
+    for line in status.lines() {
+        if let Some(value) = line.strip_prefix(&format!("{key}:")) {
+            return value
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u64>().ok())
+                .ok_or_else(|| format!("failed to parse {key}"));
+        }
+    }
+    Err(format!("{key} missing in /proc/{pid}/status"))
+}
+
+pub(crate) fn ffmpeg_children_stats(parent_pid: u32) -> Result<FfmpegStats, String> {
+    let mut count = 0u64;
+    let mut rss_kb = 0u64;
+    let mut pids = Vec::new();
+    for entry in std::fs::read_dir("/proc").map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let Some(pid) = name.to_string_lossy().parse::<u32>().ok() else {
+            continue;
+        };
+        let status_path = format!("/proc/{pid}/status");
+        let Ok(status) = std::fs::read_to_string(&status_path) else {
+            continue;
+        };
+        let ppid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:"))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        if ppid != parent_pid {
+            continue;
+        }
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let text = String::from_utf8_lossy(&cmdline);
+        if text.contains("ffmpeg") {
+            count += 1;
+            rss_kb += read_proc_status_kb(pid, "VmRSS").unwrap_or(0);
+            pids.push(pid);
+        }
+    }
+    Ok(FfmpegStats {
+        count,
+        rss_kb,
+        pids,
+    })
+}
+
 pub(crate) async fn process_cpu_pct(pid: u32) -> Option<String> {
     let output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "%cpu="])
@@ -426,4 +478,18 @@ pub(crate) async fn process_rss_kb(pid: u32) -> Option<u64> {
         return None;
     }
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+pub(crate) fn cleanup_ramp_db(path: &Path) {
+    let path_string = path.to_string_lossy();
+    let db_path = path_string
+        .strip_prefix("sqlite:")
+        .unwrap_or(path_string.as_ref())
+        .split('?')
+        .next()
+        .unwrap_or("data.db");
+    let db_path = PathBuf::from(db_path);
+    let _ = std::fs::remove_file(&db_path);
+    let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
+    let _ = std::fs::remove_file(format!("{}-wal", db_path.display()));
 }

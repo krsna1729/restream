@@ -8,15 +8,15 @@ pub(crate) async fn wait_for_outputs_progress(
     output_ids: &[String],
     timeout: Duration,
 ) -> Result<(), String> {
-    wait_for_outputs_progress_with_env(api, pipeline_id, output_ids, timeout, None).await
+    wait_for_outputs_progress_labeled(api, pipeline_id, output_ids, timeout, |_| None).await
 }
 
-pub(crate) async fn wait_for_outputs_progress_with_env(
+pub(crate) async fn wait_for_outputs_progress_labeled(
     api: &RampApi,
     pipeline_id: &str,
     output_ids: &[String],
     timeout: Duration,
-    mixed_env: Option<&MixedEnv>,
+    cell_label: impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     let started = Instant::now();
@@ -35,9 +35,8 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
             let status = match ApiOutputStatus::from_value(output_id, entry) {
                 Ok(status) => status,
                 Err(error) if entry.is_null() => {
-                    let cell = mixed_env
-                        .and_then(|env| env.output_cell_label(output_id))
-                        .unwrap_or_else(|| "unregistered-cell".to_string());
+                    let cell =
+                        cell_label(output_id).unwrap_or_else(|| "unregistered-cell".to_string());
                     stalled.push(format!(
                         "{cell}\n  outputId={output_id}\n  healthRow=missing\n  lastError={error}"
                     ));
@@ -53,9 +52,7 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
                     .and_then(|blocked| blocked.capacity_wait_ms)
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "none".to_string());
-                let cell = mixed_env
-                    .and_then(|env| env.output_cell_label(output_id))
-                    .unwrap_or_else(|| "unregistered-cell".to_string());
+                let cell = cell_label(output_id).unwrap_or_else(|| "unregistered-cell".to_string());
                 stalled.push(format!(
                     "{}\n  outputName={} outputId={} encoding={} url={}\n  phase={}\n  terminalStage={}\n  blockedBy={}\n  blockedByPhase={}\n  backend={} waitMs={}\n  blockedMetrics=packetsIn:{} packetsOut:{} bytesIn:{} bytesOut:{}\n  lastError={}",
                     cell,
@@ -175,4 +172,16 @@ async fn pipeline_stage_diagnostics(api: &RampApi, pipeline_id: &str) -> Result<
     } else {
         Ok(format!("; stageDiagnostics=[{}]", rows.join(" | ")))
     }
+}
+
+pub(crate) fn scaled_output_progress_timeout(
+    output_count: usize,
+    base_secs: u64,
+    per_output_secs: u64,
+    cap_secs: u64,
+) -> Duration {
+    let cap_secs = cap_secs.max(base_secs);
+    let extra_outputs = output_count.saturating_sub(1) as u64;
+    let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
+    Duration::from_secs(scaled_secs.min(cap_secs))
 }
