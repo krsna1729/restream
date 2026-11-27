@@ -8,10 +8,10 @@ pub(crate) async fn wait_for_outputs_progress(
     output_ids: &[String],
     timeout: Duration,
 ) -> Result<(), String> {
-    wait_for_outputs_progress_with_env(api, pipeline_id, output_ids, timeout, |_| None).await
+    wait_for_outputs_progress_labeled(api, pipeline_id, output_ids, timeout, |_| None).await
 }
 
-pub(crate) async fn wait_for_outputs_progress_with_env(
+pub(crate) async fn wait_for_outputs_progress_labeled(
     api: &RampApi,
     pipeline_id: &str,
     output_ids: &[String],

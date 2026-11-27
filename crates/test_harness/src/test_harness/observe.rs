@@ -1,4 +1,4 @@
-//! Pipeline setup and output/sink observation shared by the fault cells.
+//! Pipeline setup and output/input/sink observation shared across harness modes.
 
 use super::*;
 
