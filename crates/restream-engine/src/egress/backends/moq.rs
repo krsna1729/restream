@@ -7,7 +7,8 @@
 //! - [`publish`]: a hang broadcast fed from a ring (groups, catalog
 //!   republish, retention).
 //! - [`startup`]: the per-broadcast snapshot (tracks, decoder
-//!   configuration, relay trust) built on Tokio before `Add`.
+//!   configuration, relay trust) built on Tokio before `Add`; the engine
+//!   query that fills its media part is `publish_startup` in `moq/egress.rs`.
 //! - [`leaf`] / [`backend`]: the connection task and the fabric shard
 //!   backend that drives it.
 
@@ -22,4 +23,4 @@ pub mod startup;
 mod tests;
 
 pub(crate) use backend::moq_shard_backend;
-pub use startup::{MoqPublishStartup, SharedMoqStartupSource, publish_startup};
+pub use startup::{MoqPublishStartup, SharedMoqStartupSource};

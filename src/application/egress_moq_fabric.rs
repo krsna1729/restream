@@ -8,11 +8,12 @@ use std::sync::Arc;
 
 use crate::application::egress::PreparedOutput;
 use restream_domain::models::Output;
+use restream_engine::egress::backends::moq::MoqPublishStartup;
 use restream_engine::egress::journal::{FeedEpoch, RingFeed};
 use restream_engine::egress::policy::LeafPolicy;
 use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use restream_engine::engine::MediaEngine;
-use restream_engine::moq::egress::{MoqPublishStartup, publish_startup};
+use restream_engine::moq::egress::publish_startup;
 use restream_moq::url::parse_moq_url;
 
 pub(crate) struct PreparedMoqFabricFeed {

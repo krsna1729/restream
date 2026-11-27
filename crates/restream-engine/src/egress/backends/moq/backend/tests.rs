@@ -6,13 +6,13 @@ use bytes::Bytes;
 use futures_util::future::LocalBoxFuture;
 
 use super::*;
+use crate::egress::backends::moq::fake_session::FakeSession;
+use crate::egress::backends::moq::leaf::LinkState;
+use crate::egress::backends::moq::startup::{MoqPublishStartup, MoqVideoStartup};
 use crate::egress::command::FeedId;
 use crate::egress::journal::FeedEpoch;
 use crate::egress::leaf::EgressProgressSink;
 use crate::egress::policy::LeafPolicy;
-use crate::moq::egress::fake_session::FakeSession;
-use crate::moq::egress::leaf::LinkState;
-use crate::moq::egress::startup::{MoqPublishStartup, MoqVideoStartup};
 use restream_core::codec::build_avcc_sequence_header;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_moq::media::VideoCodec;

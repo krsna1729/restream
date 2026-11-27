@@ -128,9 +128,9 @@ fn a_later_catalog_that_removes_retypes_or_repeats_tracks_changes_nothing() {
 /// lists only audio, a later version adds video, and both reach the ring.
 #[test]
 fn a_publisher_adding_video_in_a_later_catalog_gets_both_tracks_ingested() {
-    use crate::moq::egress::media::MediaFrame;
-    use crate::moq::egress::publish::HangBroadcast;
-    use crate::moq::transport::test_support::{Loopback, run};
+    use crate::egress::backends::moq::media::MediaFrame;
+    use crate::egress::backends::moq::publish::HangBroadcast;
+    use crate::moq_transport::test_support::{Loopback, run};
     use restream_moq::media::LocBuffer;
     use restream_moq::media::TrackKind;
     use restream_moq::media::hang_catalog;

@@ -50,11 +50,12 @@ use crate::engine::MediaEngine;
 use restream_core::metadata::AudioMeta;
 use restream_sync::{PublishSubscribers, PublishWake};
 
-use super::egress::media::MediaConverter;
-use super::egress::publish::{HangBroadcast, Pump, RingPublisher};
-use super::egress::{MoqPublishStartup, publish_startup};
-use super::transport::{self, Accepted};
+use super::egress::publish_startup;
+use crate::egress::backends::moq::MoqPublishStartup;
+use crate::egress::backends::moq::media::MediaConverter;
+use crate::egress::backends::moq::publish::{HangBroadcast, Pump, RingPublisher};
 use crate::egress::visit::live_start_cursor;
+use crate::moq_transport::{self as transport, Accepted};
 use restream_moq::media::VideoCodec;
 
 pub(crate) use token::TokenError;

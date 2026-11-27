@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use super::*;
-use crate::moq::transport::test_support::{Loopback, run};
+use crate::moq_transport::test_support::{Loopback, run};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_moq::media::AUDIO_TRACK;

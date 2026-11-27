@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use bytes::Bytes;
 
 use super::*;
+use crate::egress::backends::moq::media::MediaFrame;
+use crate::egress::backends::moq::publish::HangBroadcast;
 use crate::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessError, PipelineAccessFuture, PipelineAccessMode,
 };
-use crate::moq::egress::media::MediaFrame;
-use crate::moq::egress::publish::HangBroadcast;
 use crate::moq::ingest::session::INJECTED_PANIC_STREAM_KEY;
-use crate::moq::transport::test_support::{
+use crate::moq_transport::test_support::{
     LOOPBACK_CERT, LOOPBACK_SERVER_NAME, loopback_client_tls, run,
 };
 use restream_domain::domain::ingest_security::IngestSecurityConfig;

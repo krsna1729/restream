@@ -163,7 +163,7 @@ pub(crate) fn spawn_moq_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     budget: WorkBudgetConfig,
-    startup_source: crate::moq::egress::SharedMoqStartupSource,
+    startup_source: super::backends::moq::SharedMoqStartupSource,
     mut feed_for: F,
 ) -> Result<EgressShardGroup, MoqFabricShardGroupError>
 where
@@ -175,7 +175,7 @@ where
         let feed = feed_for(shard_id);
         let startup_source = startup_source.clone();
         move || {
-            crate::moq::egress::moq_shard_backend(
+            super::backends::moq::moq_shard_backend(
                 feed,
                 budget,
                 startup_source,

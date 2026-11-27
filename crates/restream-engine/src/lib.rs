@@ -78,6 +78,7 @@ pub use moq::bench_entry as moq_bench_entry;
 pub use moq::fuzz_entry as moq_fuzz_entry;
 #[doc(hidden)]
 pub use moq::subscribe_entry as moq_subscribe_entry;
+pub mod moq_transport;
 pub mod panic_boundary;
 pub mod pipe_metrics;
 pub mod preview_ids;

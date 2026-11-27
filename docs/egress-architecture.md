@@ -38,7 +38,7 @@ path by URL scheme. Each fabric output becomes an `OutputSpec` with one
 | `rtmp://`, `rtmps://` | `Rtmp` | `RtmpShardBackend` | `RingFeed` | Compio TCP; RTMPS via Rustls then kTLS |
 | `srt://` | `Srt` | `SrtShardBackend` | `TsFeed` | `srt-rs` Compio `Owner` per address family |
 | `http://`, `https://` HLS PUT | `HlsPut` | `HlsPutShardBackend` | `HlsStore` | Compio TCP; HTTPS needs kTLS |
-| `moqt://` | `Moq` | `MoqShardBackend` | `RingFeed` | Compio QUIC (`crates/restream-engine/src/moq/egress/`) |
+| `moqt://` | `Moq` | `MoqShardBackend` | `RingFeed` | Compio QUIC (`crates/restream-engine/src/egress/backends/moq/`) |
 | `sink://` | `Sink` | `SinkShardBackend` | `RingFeed` | none: discards after accounting |
 | `pipeline://` | `Pipeline` | `PipelineShardBackend` | `RingFeed` | in-process publish to another pipeline |
 
@@ -566,7 +566,7 @@ order, low to high:
 
 1. leaf contract: `egress::leaf`, `egress::visit`, feeds and wire helpers.
    These own cursors, progress, clocks and the end-of-visit report.
-2. protocol backends: `egress::backends::*` and `moq::egress`. A backend may
+2. protocol backends: `egress::backends::*`. A backend may
    use the leaf contract and its feed; it must not import `engine` or
    `engine_*`.
 3. shard runtime: `egress::shard`, `egress::manager`, `egress::runtime`.

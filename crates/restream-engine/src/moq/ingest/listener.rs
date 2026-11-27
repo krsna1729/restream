@@ -37,7 +37,7 @@ use crate::config::{MoqIngestConfig, MoqIngestSetting};
 use crate::engine::MediaEngine;
 use crate::ingest_auth::PipelineAccessAuthenticator;
 use crate::moq::origin::{Origin, request_token};
-use crate::moq::transport;
+use crate::moq_transport as transport;
 use crate::security::IngestSecurityService;
 use restream_moq::tls;
 use restream_sync::client_slots::ClientSlots;

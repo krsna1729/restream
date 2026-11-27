@@ -163,7 +163,7 @@ engine-owned; leaf crates do not depend on the engine to find fixtures.
 
 Engine test helpers that root tests also call (`restream_engine::test_support`,
 `restream_engine::hls_ingest::test_support`,
-`restream_engine::moq::transport::test_support`, the
+`restream_engine::moq_transport::test_support`, the
 `restream_engine::config::env` overlay) build under `cfg(test)` or the
 engine's `test-support` Cargo feature. The root enables that feature only
 through its dev-dependency on `restream-engine`, so `cargo test` gets the

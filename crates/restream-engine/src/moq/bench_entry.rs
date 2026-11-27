@@ -12,11 +12,11 @@ use std::sync::Arc;
 use bytes::{BufMut, Bytes, BytesMut};
 use moq_net::origin;
 
+use crate::egress::backends::moq::media::MediaConverter;
+use crate::egress::backends::moq::publish::{HangBroadcast, Pump, RingPublisher};
+use crate::egress::backends::moq::startup::{MoqAudioStartup, MoqPublishStartup, MoqVideoStartup};
 use crate::egress::feed::{EgressFeed, FeedCursor, ReadBudget};
 use crate::egress::journal::{FeedEpoch, RingFeed};
-use crate::moq::egress::media::MediaConverter;
-use crate::moq::egress::publish::{HangBroadcast, Pump, RingPublisher};
-use crate::moq::egress::startup::{MoqAudioStartup, MoqPublishStartup, MoqVideoStartup};
 use restream_core::codec::build_avcc_sequence_header;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_moq::media::AudioConfig;
