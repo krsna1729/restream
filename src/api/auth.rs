@@ -547,6 +547,7 @@ pub async fn stream_keys_handler(
     }
 
     let host = state.ingest_host().await;
+    let endpoints = state.publish_endpoints(&host);
     match state.list_pipelines().await {
         Ok(pipelines) => {
             let keys = pipelines
@@ -556,10 +557,7 @@ pub async fn stream_keys_handler(
                     serde_json::json!({
                         "key": key.clone(),
                         "label": pipeline.name,
-                        "ingestUrls": {
-                            "rtmp": format!("rtmp://{}:{}/live/{}", host, state.rtmp_port(), key),
-                            "srt": format!("srt://{}:{}?streamid=publish:{}", host, state.srt_port(), key)
-                        }
+                        "ingestUrls": endpoints.ingest_urls(&key),
                     })
                 })
                 .collect::<Vec<_>>();

@@ -1,19 +1,10 @@
 //! Runtime-state queries and the dashboard event-stream pump.
 
-use std::sync::Arc;
-
 use super::AppState;
 use crate::application::runtime_state::hub::Since;
 use crate::application::runtime_state::{RuntimeState, StateDelta};
 
 impl AppState {
-    /// The runtime-state hub used by the projector and stream tasks.
-    pub(crate) fn runtime_state_handle(
-        &self,
-    ) -> Arc<crate::application::runtime_state::hub::StateHub> {
-        Arc::clone(&self.runtime_state)
-    }
-
     /// Returns the current runtime snapshot without refreshing it.
     pub(crate) async fn runtime_snapshot(&self) -> RuntimeState {
         self.runtime_state.snapshot().await

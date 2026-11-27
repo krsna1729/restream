@@ -143,6 +143,37 @@ impl From<Arc<AppConfig>> for AppStateRuntimeConfig {
     }
 }
 
+/// The runtime components `AppState` serves and the bootstrap loops drive.
+/// The composition root builds one set, keeps a clone for the loops it spawns,
+/// and hands the other to [`AppState::new`].
+#[derive(Clone)]
+pub struct AppStateShared {
+    /// Mutation handlers persist, then ask the reconciler to converge here.
+    pub reconcile: Arc<crate::application::topology::ReconcileRequests>,
+    /// The revisioned runtime state behind `/api/v1/state`.
+    pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
+    /// The fleet's sampled signals behind `/api/v1/fleet/history`.
+    pub fleet_history: Arc<crate::application::fleet_history::FleetHistory>,
+    /// Each pipeline's recorded health behind
+    /// `/api/v1/pipelines/:id/flight-recorder`.
+    pub flight_recorder: Arc<crate::application::flight_recorder::FlightRecorder>,
+}
+
+impl AppStateShared {
+    /// A fresh set for `runtime`'s listener ports and output retry budget.
+    pub fn new(runtime: &AppStateRuntimeConfig) -> Self {
+        Self {
+            reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
+            runtime_state: Arc::new(crate::application::runtime_state::hub::StateHub::new(
+                runtime.ports.server_ports(),
+                runtime.config.tuning.output_max_retries,
+            )),
+            fleet_history: Arc::new(crate::application::fleet_history::FleetHistory::new()),
+            flight_recorder: Arc::new(crate::application::flight_recorder::FlightRecorder::new()),
+        }
+    }
+}
+
 // Bound work that outlives its HTTP caller, not tenant accounting.
 const API_MUTATION_PERMITS: usize = 64;
 
@@ -205,6 +236,7 @@ impl AppState {
         engine: Arc<MediaEngine>,
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
         runtime: AppStateRuntimeConfig,
+        shared: AppStateShared,
     ) -> Self {
         let AppServices {
             db,
@@ -228,10 +260,12 @@ impl AppState {
         );
 
         let share_links = Arc::new(crate::application::share::ShareLinks::new(db.clone()));
-        let runtime_state = Arc::new(crate::application::runtime_state::hub::StateHub::new(
-            runtime.ports.server_ports(),
-            runtime.config.tuning.output_max_retries,
-        ));
+        let AppStateShared {
+            reconcile,
+            runtime_state,
+            fleet_history,
+            flight_recorder,
+        } = shared;
         Self {
             security,
             ingest_policy_store,
@@ -259,10 +293,10 @@ impl AppState {
             media_library_service,
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
-            reconcile: Arc::new(crate::application::topology::ReconcileRequests::new()),
+            reconcile,
             runtime_state,
-            fleet_history: Arc::new(crate::application::fleet_history::FleetHistory::new()),
-            flight_recorder: Arc::new(crate::application::flight_recorder::FlightRecorder::new()),
+            fleet_history,
+            flight_recorder,
             share_links,
             log_broadcast,
             secure_session_cookies: runtime.secure_session_cookies,
@@ -294,10 +328,6 @@ impl AppState {
 
     pub const fn secure_session_cookies(&self) -> bool {
         self.secure_session_cookies
-    }
-
-    pub fn set_secure_session_cookies_for_test(&mut self, secure: bool) {
-        self.secure_session_cookies = secure;
     }
 
     pub fn ingest_security_config(&self) -> IngestSecurityConfig {
@@ -444,7 +474,7 @@ impl AppState {
         engine: Arc<MediaEngine>,
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     ) -> Self {
-        Self::new(
+        Self::test_new_with_runtime(
             services,
             security,
             ingest_policy_store,
@@ -470,6 +500,30 @@ impl AppState {
             media_dir,
             ..AppStateRuntimeConfig::default()
         };
+        Self::test_new_with_runtime(
+            services,
+            security,
+            ingest_policy_store,
+            sessions,
+            engine,
+            log_broadcast,
+            runtime,
+        )
+    }
+
+    /// Construct an AppState for testing with the given runtime settings and
+    /// a fresh set of shared runtime components.
+    #[allow(clippy::too_many_arguments)]
+    pub fn test_new_with_runtime(
+        services: AppServices,
+        security: Arc<IngestSecurityService>,
+        ingest_policy_store: Arc<SrtIngestPolicyStore>,
+        sessions: Arc<TokioRwLock<HashSet<String>>>,
+        engine: Arc<MediaEngine>,
+        log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+        runtime: AppStateRuntimeConfig,
+    ) -> Self {
+        let shared = AppStateShared::new(&runtime);
         Self::new(
             services,
             security,
@@ -478,6 +532,7 @@ impl AppState {
             engine,
             log_broadcast,
             runtime,
+            shared,
         )
     }
 }

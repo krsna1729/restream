@@ -150,16 +150,10 @@ pub async fn pipelines_get_handler(
     match state.list_pipelines().await {
         Ok(pipelines) => {
             let ingest_host = state.ingest_host().await;
+            let endpoints = state.publish_endpoints(&ingest_host);
             let pipelines = pipelines
                 .iter()
-                .map(|pipeline| {
-                    view_models::pipeline_response_json(
-                        pipeline,
-                        &ingest_host,
-                        state.rtmp_port(),
-                        state.srt_port(),
-                    )
-                })
+                .map(|pipeline| view_models::pipeline_response_json(pipeline, &endpoints))
                 .collect::<Vec<_>>();
             Json(serde_json::json!({ "pipelines": pipelines })).into_response()
         }
@@ -191,9 +185,7 @@ pub async fn pipeline_detail_handler(
     Json(serde_json::json!({
         "pipeline": view_models::pipeline_response_json(
             &pipeline,
-            &ingest_host,
-            state.rtmp_port(),
-            state.srt_port()
+            &state.publish_endpoints(&ingest_host),
         ),
         "outputs": view_models::output_response_json_list(&outputs),
     }))
@@ -268,9 +260,7 @@ pub async fn pipelines_post_handler(
                         "message": "Pipeline created",
                         "pipeline": view_models::pipeline_response_json_with_file_ingest(
                             &pipeline,
-                            &ingest_host,
-                            state.rtmp_port(),
-                            state.srt_port(),
+                            &state.publish_endpoints(&ingest_host),
                             file_ingest.ingest,
                             file_ingest.running,
                         )
@@ -372,9 +362,7 @@ pub async fn pipelines_update_handler(
                 "message": "Pipeline updated",
                 "pipeline": view_models::pipeline_response_json_with_file_ingest(
                     &updated,
-                    &ingest_host,
-                    state.rtmp_port(),
-                    state.srt_port(),
+                    &state.publish_endpoints(&ingest_host),
                     file_ingest.ingest,
                     file_ingest.running,
                 )
@@ -453,7 +441,7 @@ pub async fn pipeline_moq_token_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    let Some(port) = state.moq_port() else {
+    let Some(port) = state.server_ports().moq else {
         return (StatusCode::CONFLICT, "The MoQ listener is off").into_response();
     };
     if let Err(error) = state.pipeline(&pipeline_id).await {

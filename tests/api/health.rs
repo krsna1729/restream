@@ -362,18 +362,20 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
     ));
     let (log_broadcast, _) = broadcast::channel(32);
     let engine = Arc::new(MediaEngine::new());
-    let mut state = api::AppState::test_new(
-        restream::infrastructure::service_wiring::ControlPlane::on_pool(&auth_pool).services,
+    let state = api::AppState::test_new(
+        api::AppServices {
+            pipeline_service: restream::infrastructure::service_wiring::ControlPlane::on_pool(
+                &pipeline_pool,
+            )
+            .services
+            .pipeline_service,
+            ..restream::infrastructure::service_wiring::ControlPlane::on_pool(&auth_pool).services
+        },
         security,
         ingest_policy_store,
         sessions,
         engine,
         log_broadcast,
-    );
-    state.replace_pipeline_service(
-        restream::infrastructure::service_wiring::ControlPlane::on_pool(&pipeline_pool)
-            .services
-            .pipeline_service,
     );
     pipeline_pool.close().await;
     let app = api::create_router(Arc::new(state));

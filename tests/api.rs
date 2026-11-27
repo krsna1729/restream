@@ -105,15 +105,18 @@ async fn test_app_with_secure_cookies() -> axum::Router {
     let (log_broadcast, _) = broadcast::channel(32);
     let engine = Arc::new(MediaEngine::new());
 
-    let mut state = api::AppState::test_new(
+    let state = api::AppState::test_new_with_runtime(
         restream::infrastructure::service_wiring::ControlPlane::on_pool(&pool).services,
         security,
         ingest_policy_store,
         sessions,
         engine,
         log_broadcast,
+        api::state::AppStateRuntimeConfig {
+            secure_session_cookies: true,
+            ..Default::default()
+        },
     );
-    state.set_secure_session_cookies_for_test(true);
 
     api::create_router(Arc::new(state))
 }

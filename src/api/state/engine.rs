@@ -192,9 +192,21 @@ impl AppState {
             .collect()
     }
 
-    /// Cloned engine handle for background tasks that need owned state.
-    pub(crate) fn engine_handle(&self) -> Arc<MediaEngine> {
-        self.engine.clone()
+    /// Runs one pipeline's diagnostics batch against the engine.
+    pub(crate) async fn run_diagnostics(
+        &self,
+        pipeline_id: String,
+        probe_protocol: String,
+        file_context: Option<crate::diag::FileDiagnosticsContext>,
+    ) -> crate::diag::DiagnosticsReport {
+        crate::diag::run_diagnostics(
+            self.engine.clone(),
+            pipeline_id,
+            probe_protocol,
+            self.media_dir.clone(),
+            file_context,
+        )
+        .await
     }
 
     /// The diagnostics semaphore for one pipeline.
@@ -210,11 +222,6 @@ impl AppState {
             segment_capacity_bytes: self.engine.config.hls_segment_capacity_bytes,
             max_segments: self.engine.config.hls_max_segments,
         }
-    }
-
-    /// Current RTMP and SRT ingress owner counts.
-    pub(crate) fn ingress_owner_counts(&self) -> (usize, usize) {
-        self.engine.ingress_owner_counts()
     }
 }
 

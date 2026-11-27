@@ -50,19 +50,30 @@ impl StageMaps {
         Self { runtimes, metrics }
     }
 
-    /// Every stage runtime, for ring telemetry.
-    fn runtime_entries(&self) -> impl Iterator<Item = (&StageKey, &StageRuntime)> {
-        self.runtimes.iter()
-    }
-
-    /// One stage runtime.
-    fn runtime(&self, key: &StageKey) -> Option<&StageRuntime> {
-        self.runtimes.get(key)
+    /// Ring telemetry for every stage runtime that owns a ring.
+    fn transcoder_rings_json(&self) -> Vec<serde_json::Value> {
+        self.runtimes
+            .iter()
+            .filter_map(|(key, runtime)| {
+                runtime.ring.as_ref().map(|ring| {
+                    api_view_models::transcoder_ring_telemetry_json(
+                        key,
+                        ring,
+                        !runtime.cancel.is_cancelled(),
+                    )
+                })
+            })
+            .collect()
     }
 
     /// Number of stage runtimes.
     fn runtime_count(&self) -> usize {
         self.runtimes.len()
+    }
+
+    /// One stage runtime.
+    fn runtime(&self, key: &StageKey) -> Option<&StageRuntime> {
+        self.runtimes.get(key)
     }
 
     fn keys(&self) -> Vec<StageKey> {
@@ -179,18 +190,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         })
         .collect();
 
-    let transcoder_rings: Vec<serde_json::Value> = stages
-        .runtime_entries()
-        .filter_map(|(key, runtime)| {
-            runtime.ring.as_ref().map(|ring| {
-                api_view_models::transcoder_ring_telemetry_json(
-                    key,
-                    ring,
-                    !runtime.cancel.is_cancelled(),
-                )
-            })
-        })
-        .collect();
+    let transcoder_rings = stages.transcoder_rings_json();
     let retained_payload_bytes = source_rings
         .iter()
         .chain(transcoder_rings.iter())

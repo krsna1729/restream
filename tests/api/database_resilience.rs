@@ -18,6 +18,14 @@ fn cookie(token: &str) -> String {
 }
 
 async fn fixture() -> (api::AppState, SqlitePool, Arc<TokioRwLock<HashSet<String>>>) {
+    fixture_with(|services| services).await
+}
+
+/// [`fixture`] with `wire` applied to the service graph before the state is
+/// built, so a test can swap one service for a failing one.
+async fn fixture_with(
+    wire: impl FnOnce(api::AppServices) -> api::AppServices,
+) -> (api::AppState, SqlitePool, Arc<TokioRwLock<HashSet<String>>>) {
     // One connection makes exhaustion deterministic, without relying on an
     // acquire-timeout error or an artificial repository implementation.
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -29,11 +37,13 @@ async fn fixture() -> (api::AppState, SqlitePool, Arc<TokioRwLock<HashSet<String
     let lifecycle = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&lifecycle).await.unwrap();
     let executor = db::DeadlineDb::new(pool.clone(), READ_DEADLINE);
-    let services = ControlPlane::new(
-        executor,
-        db::DeadlineDb::new(lifecycle, db::SHARED_LOOP_DEADLINE),
-    )
-    .services;
+    let services = wire(
+        ControlPlane::new(
+            executor,
+            db::DeadlineDb::new(lifecycle, db::SHARED_LOOP_DEADLINE),
+        )
+        .services,
+    );
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
     for token in [CURRENT_TOKEN, OTHER_TOKEN] {
         let hash = token_hash(token);
@@ -120,16 +130,17 @@ async fn database_failure_is_not_a_browser_login_redirect() {
 
 #[tokio::test]
 async fn unavailable_principal_store_cannot_bypass_role_checks_and_mutate() {
-    let (mut state, pool, _) = fixture().await;
     // Session validation is healthy. Only the independent role/principal
     // repository fails, exercising the middleware's separate error branch.
-    assert!(state.validate_session(CURRENT_TOKEN).await.unwrap());
     let principal_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&principal_pool).await.unwrap();
-    state.replace_team_service_for_test(TeamService::new(db::DeadlineDb::new(
-        principal_pool.clone(),
-        READ_DEADLINE,
-    )));
+    let team_service = TeamService::new(db::DeadlineDb::new(principal_pool.clone(), READ_DEADLINE));
+    let (state, pool, _) = fixture_with(|services| api::AppServices {
+        team_service,
+        ..services
+    })
+    .await;
+    assert!(state.validate_session(CURRENT_TOKEN).await.unwrap());
     principal_pool.close().await;
     let app = api::create_router(Arc::new(state));
 

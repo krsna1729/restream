@@ -69,6 +69,7 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
 
     let settings = catalog.settings;
     let custom_encoding_len = catalog.custom_encoding_len;
+    let ports = state.server_ports();
     let configuration = serde_json::json!({
         "serverName": settings
             .as_ref()
@@ -91,8 +92,8 @@ pub(super) async fn build_agent_context(state: &AppState) -> serde_json::Value {
             "byteLength": custom_encoding_len,
         },
         "ports": {
-            "rtmp": state.rtmp_port(),
-            "srt": state.srt_port(),
+            "rtmp": ports.rtmp,
+            "srt": ports.srt,
         }
     });
     let media = media_inventory(state).await;

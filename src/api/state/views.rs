@@ -107,8 +107,22 @@ impl AppState {
         self.config.tuning.output_retry_policy()
     }
 
-    /// The configured Tokio worker count.
-    pub(crate) fn tokio_worker_threads(&self) -> usize {
-        self.config.tokio_runtime.worker_threads
+    /// The CPUs every sizing law reads (`HostCapacity`) and the threads each
+    /// execution class holds now. Thread counts are not demand: an idle thread
+    /// costs no CPU. MEDIA CPU time is in `mediaExecutor`; the resource sweep
+    /// measures every thread group.
+    pub(crate) fn host_capacity_json(&self, egress_shards: usize) -> serde_json::Value {
+        let control = self.config.tokio_runtime.worker_threads;
+        let media = restream_engine::executor::configured_workers();
+        let (rtmp, srt) = self.engine.ingress_owner_counts();
+        serde_json::json!({
+            "cpus": restream_engine::host_capacity::HostCapacity::get().cpus,
+            "controlWorkers": control,
+            "mediaWorkers": media,
+            "rtmpIngressOwners": rtmp,
+            "srtIngressOwners": srt,
+            "egressShards": egress_shards,
+            "sizedThreads": control + media + rtmp + srt + egress_shards,
+        })
     }
 }
