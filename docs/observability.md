@@ -696,10 +696,11 @@ transaction commits, so every stream ID is a durable database ID.
 - SQLite history keeps every compiled `error`, `warn` and `info` event,
   independent of `RUST_LOG`.
 - Targets are module paths. The media engine logs under `restream_engine::*`
-  (for example `restream_engine::external_transcoder`,
-  `restream_engine::srt::knobs`), the shared ring, byte queue and MPEG-TS
-  crates under the fixed `restream_engine::ring_buffer`,
-  `restream_engine::byte_queue` and `restream_engine::mpegts::*` targets, and
+  (for example `restream_engine::external_transcoder`), the SRT knob
+  overrides under the fixed `restream_engine::srt::knobs` target, the shared
+  ring, byte queue and MPEG-TS crates under the fixed
+  `restream_engine::ring_buffer`, `restream_engine::byte_queue` and
+  `restream_engine::mpegts::*` targets, and
   the application under `restream::*`. A filter naming one crate does not
   cover the other: `RUST_LOG=restream=debug,restream_engine=debug`.
 

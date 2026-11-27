@@ -8,8 +8,8 @@
 //! negotiation and media encoding (both reusing
 //! [`restream_rtmp::RtmpSessionCore`]/[`restream_rtmp::RtmpMediaEncoder`]
 //! — the same pure, socket-independent state the existing Tokio-adapted
-//! egress path uses in `crates/restream-engine/src/rtmp/egress_connection.rs` and
-//! `crates/restream-engine/src/rtmp/egress_engine.rs`), here driven from non-blocking
+//! egress path uses in `crates/restream-rtmp/src/egress_connection.rs` and
+//! `crates/restream-rtmp/src/egress_engine.rs`), here driven from non-blocking
 //! readiness instead of `.await`, with shard registration and application
 //! startup handoff supplied by the surrounding RTMP backend.
 
