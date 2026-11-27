@@ -2,10 +2,10 @@ use bytes::Bytes;
 use moq_net::track;
 
 use super::*;
+use crate::egress::backends::moq::startup::{MoqPublishStartup, MoqVideoStartup};
 use crate::egress::journal::FeedEpoch;
 use crate::egress::visit::live_start_cursor;
-use crate::moq::egress::startup::{MoqPublishStartup, MoqVideoStartup};
-use crate::moq::transport::{self, test_support::run};
+use crate::moq_transport::{self as transport, test_support::run};
 use restream_core::PayloadFormat;
 use restream_core::codec::build_avcc_sequence_header;
 use restream_moq::media::CATALOG_TRACK;

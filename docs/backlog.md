@@ -41,8 +41,8 @@ the [assurance roadmap](assurance-roadmap.md).
 
 ### Q-123 [architecture] [opus] Break the smallest module cycles
 - Goal: remove the remaining `module-cycle` findings. The seven smallest are
-  removed: `moq::transport` shares close/error/header/HTTP-3 frame primitives
-  in `transport::wire`; `api::file_ingest` and `api::ingests` share the GOP
+  removed: `moq_transport` shares close/error/header/HTTP-3 frame primitives
+  in `moq_transport::wire`; `api::file_ingest` and `api::ingests` share the GOP
   sanitizer in `api::state`; `restream-mpegts` owns `StreamKind` in `probe`;
   `hls::fmp4` owns `BufferedSample` in `codec`; egress `command` and `leaf`
   share `FeedId`/`OutputId` in `egress::ids`; `metrics` owns the delivery

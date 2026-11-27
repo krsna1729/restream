@@ -10,10 +10,10 @@ use std::sync::Arc;
 use crate::application::egress::PreparedOutput;
 use restream_domain::domain::state::EgressPhase;
 use restream_domain::models::Output;
+use restream_engine::egress::backends::moq::MoqPublishStartup;
 use restream_engine::egress::journal::RingFeed;
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
 use restream_engine::engine::{EgressRegistration, MediaEngine};
-use restream_engine::moq::egress::MoqPublishStartup;
 use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
 use super::EgressTask;

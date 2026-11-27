@@ -37,8 +37,8 @@ use restream_moq::media::TrackKind;
 use restream_moq::media::VIDEO_TRACK;
 use restream_moq::media::parse_loc_frame;
 
-use crate::moq::egress::media::MediaConverter;
-use crate::moq::egress::media::MediaFrame;
+use crate::egress::backends::moq::media::MediaConverter;
+use crate::egress::backends::moq::media::MediaFrame;
 
 /// Audio group length.
 const AUDIO_GROUP_US: u64 = 1_000_000;

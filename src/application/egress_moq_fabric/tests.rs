@@ -8,8 +8,8 @@ use restream_core::metadata::AudioMeta;
 use restream_domain::domain::output_spec::{OutputConfig, VideoCodecKind};
 use restream_domain::domain::state::DesiredOutputState;
 use restream_engine::egress::EgressFeed;
-use restream_engine::moq::egress::startup::startup_video;
-use restream_engine::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
+use restream_engine::egress::backends::moq::startup::startup_video;
+use restream_engine::egress::backends::moq::startup::{MoqAudioStartup, MoqVideoStartup};
 use restream_moq::media::AudioConfig;
 use restream_moq::media::TrackContainer;
 use restream_moq::media::VideoCodec;
@@ -232,8 +232,8 @@ fn ca_test_directory(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn moq_ca_directory_trusted_tls_runtime_smoke() {
-    use restream_engine::moq::transport;
-    use restream_engine::moq::transport::test_support::{
+    use restream_engine::moq_transport as transport;
+    use restream_engine::moq_transport::test_support::{
         LOOPBACK_CERT, LOOPBACK_SERVER_NAME, Loopback, run,
     };
     use restream_moq::tls;

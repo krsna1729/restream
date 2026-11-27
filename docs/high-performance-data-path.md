@@ -169,7 +169,9 @@ it is distinct from CONTROL and from dedicated blocking I/O threads.
 Moving helpers into workspace crates does not move their callers between
 these contexts. In particular, `restream-moq` contains media/catalog,
 budget, token, URL and TLS configuration helpers, while live endpoints and
-session drivers remain under `crates/restream-engine/src/moq/{transport,ingest,origin,egress}/`.
+session drivers remain under `crates/restream-engine/src/moq_transport/`,
+`crates/restream-engine/src/moq/{ingest,origin}/` and
+`crates/restream-engine/src/egress/backends/moq/`.
 The root listener and egress-fabric code still own their Compio runtimes.
 
 The process boundary costs a process start and pipe traffic. In return it

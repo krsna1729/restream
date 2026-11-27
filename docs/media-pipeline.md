@@ -60,7 +60,7 @@ The diagram shows the shared path from each ingest to the egress readers.
 | HLS PUT | egress | `http://`, `https://` output URLs | `crates/restream-engine/src/hls/` |
 | HLS preview | serving | HTTP port, `/hls/` | `crates/restream-engine/src/hls/` |
 | MoQ | ingest and origin | UDP, off unless `RESTREAM_MOQ_INGEST_LISTEN` is set | `crates/restream-engine/src/moq/` |
-| MoQ | egress | `moqt://` output URLs | `crates/restream-engine/src/moq/egress/` |
+| MoQ | egress | `moqt://` output URLs | `crates/restream-engine/src/egress/backends/moq/` |
 | Recirculation | egress into ingest | `pipeline://` output URLs | `crates/restream-engine/src/recirculation.rs` |
 | Sink | egress | `sink://` output URLs | `crates/restream-engine/src/egress/backends/sink.rs` |
 
@@ -955,16 +955,16 @@ MoQ negotiates moq-lite (`moq-lite-03` to `moq-lite-06`) or IETF MOQT
 drafts 14–22 using `moq-net` on Compio QUIC. One listener serves publishers
 (ingest) and viewers (origin). `moq-mux` publishes both hang `catalog.json`
 (plus its compressed form) and MSF `catalog`; media tracks use LOC.
-A checked local adapter (`moq::transport::local`) preserves the `!Send`
+A checked local adapter (`moq_transport::local`) preserves the `!Send`
 transport owner while satisfying moq-net's `Send + Sync` transport bounds.
 
 `crates/restream-moq/src/` implements media/catalog conversion helpers,
 cache budgets, tokens, URL parsing and TLS configuration builders. It is
 not just a serialization package. The root application's
 `crates/restream-engine/src/moq/mod.rs` re-exports these helpers; live QUIC/WebTransport
-endpoints and session drivers remain in `crates/restream-engine/src/moq/transport/`,
+endpoints and session drivers remain in `crates/restream-engine/src/moq_transport/`,
 `crates/restream-engine/src/moq/ingest/`, `crates/restream-engine/src/moq/origin/` and
-`crates/restream-engine/src/moq/egress/`. Those root owners choose the listener or fabric
+`crates/restream-engine/src/egress/backends/moq/`. Those root owners choose the listener or fabric
 runtime; the lower-crate dependency does not imply a task or thread handoff.
 
 | Setting | Default | Notes |
@@ -1012,7 +1012,7 @@ The diagram shows a publisher connection from QUIC accept to the ring.
   a supported MoQ subprotocol (else HTTP `400` and close `0x10b`). A CONNECT
   that fails to decode closes with `0x10e`. HTTP/3 frames and capsules are
   bounded to 64 KiB. The transport handshake and SETUP each have 10 s
-  (`crates/restream-engine/src/moq/transport/`). Library drivers run on the owner, not Tokio.
+  (`crates/restream-engine/src/moq_transport/`). Library drivers run on the owner, not Tokio.
 - **Routing.** A connection with a non-empty `token` (CONNECT query or SETUP
   path query) or the subscriber role goes to the origin. Any other is a
   publisher.

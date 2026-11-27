@@ -33,7 +33,7 @@ use crate::egress::feed::{FeedCursor, ReadBudget};
 use crate::egress::journal::RingFeed;
 use crate::egress::leaf_arena::LeafKey;
 use crate::egress::policy::WorkBudget;
-use crate::moq::transport;
+use crate::moq_transport as transport;
 use crate::resolver::DEFAULT_RESOLVE_TIMEOUT;
 use restream_moq::tls;
 use restream_srt::address_family::AddressFamily;

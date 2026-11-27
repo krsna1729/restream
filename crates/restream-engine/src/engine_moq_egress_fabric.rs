@@ -2,6 +2,7 @@
 //! `moqt://` output and shut down with the last one — the RTMP fabric's
 //! lifecycle (`engine_rtmp_egress_fabric.rs`), with the MoQ shard backend.
 
+use crate::egress::backends::moq::{MoqPublishStartup, SharedMoqStartupSource, moq_shard_backend};
 use crate::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::egress::factory::{MoqFabricShardGroupError, spawn_moq_fabric_shard_group};
 use crate::egress::journal::RingFeed;
@@ -15,7 +16,6 @@ use crate::egress::runtime::{
 };
 use crate::egress::shard::{EgressShardConfig, EgressShardGroupError};
 use crate::engine::MediaEngine;
-use crate::moq::egress::{MoqPublishStartup, SharedMoqStartupSource, moq_shard_backend};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MoqFabricEnsureError {

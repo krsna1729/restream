@@ -28,7 +28,7 @@ use tracing::{debug, info, warn};
 use super::publisher::PublisherMedia;
 use super::{Admission, AttemptEnd, Lifecycle, PublisherSession, Rejection, stream_key_from_path};
 use crate::moq::ingest::media::{MoqProbe, TrackSet};
-use crate::moq::transport;
+use crate::moq_transport as transport;
 use restream_core::MediaPacket;
 use restream_moq::budget;
 use restream_moq::budget::CacheBudget;

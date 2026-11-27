@@ -221,7 +221,8 @@ pub struct MoqFabricRegistry {
     pub runtimes: HashMap<FeedId, SharedFabricRuntime>,
     pub(crate) generation: u64,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
-    pub(crate) startup_sources: HashMap<FeedId, crate::moq::egress::SharedMoqStartupSource>,
+    pub(crate) startup_sources:
+        HashMap<FeedId, crate::egress::backends::moq::SharedMoqStartupSource>,
     pub(crate) feed_wakes: HashMap<FeedId, FeedWakeSubscription>,
     pub(crate) feeds: HashMap<FeedId, crate::egress::journal::RingFeed>,
 }

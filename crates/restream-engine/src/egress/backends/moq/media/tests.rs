@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use super::*;
-use crate::moq::egress::startup::{MoqAudioStartup, MoqVideoStartup};
+use crate::egress::backends::moq::startup::{MoqAudioStartup, MoqVideoStartup};
 use restream_core::codec::build_aac_sequence_header;
 use restream_core::codec::build_avcc_sequence_header;
 use restream_moq::media::TrackContainer;

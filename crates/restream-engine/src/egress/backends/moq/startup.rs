@@ -2,11 +2,11 @@
 //! and their decoder configurations (the catalog inputs), plus, for an
 //! egress leaf, the broadcast name and the relay trust material.
 //!
-//! [`publish_startup`] assembles the media part on Tokio (it queries the
-//! engine's ingest metadata); the application adds the egress part and
-//! writes the snapshot into the shared source before dispatching
-//! `EgressCommand::Add`, and the origin builds it once per served pipeline.
-//! Shard and listener threads only read it.
+//! `publish_startup` (`moq/egress.rs`) assembles the media part on Tokio
+//! (it queries the engine's ingest metadata); the application adds the
+//! egress part and writes the snapshot into the shared source before
+//! dispatching `EgressCommand::Add`, and the origin builds it once per
+//! served pipeline. Shard and listener threads only read it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -14,8 +14,6 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 
 use crate::egress::command::OutputId;
-use crate::engine::MediaEngine;
-use crate::rtmp::{output_ring_video_codec_kind, resolved_output_audio_tracks};
 use restream_core::codec::build_aac_sequence_header;
 use restream_core::codec::parse_avcc_config;
 use restream_core::metadata::{AudioMeta, VideoMeta};
@@ -49,32 +47,6 @@ pub struct MoqPublishStartup {
     pub broadcast: String,
     /// Extra trusted CA certificates (PEM) from the URL's `ca` file.
     pub extra_ca_pem: Option<Vec<u8>>,
-}
-
-/// The tracks and configurations of `ring`, which carries `pipeline_id`'s
-/// media: H.264 or HEVC video and the first AAC track.
-pub async fn publish_startup(
-    engine: &MediaEngine,
-    pipeline_id: &str,
-    ring: &Arc<RingBuffer>,
-) -> MoqPublishStartup {
-    let codec = output_ring_video_codec_kind(engine, pipeline_id, ring).await;
-    let (ingest_video_header, ingest_audio_header) = engine.get_sequence_headers(pipeline_id).await;
-    let video_meta = engine
-        .with_active_ingest(pipeline_id, |ingest| ingest.metadata().video)
-        .await
-        .flatten();
-    let video = startup_video(codec, video_meta.as_ref(), ring, ingest_video_header);
-    let audio = resolved_output_audio_tracks(engine, pipeline_id, ring)
-        .await
-        .into_iter()
-        .find(|track| track.codec.eq_ignore_ascii_case("aac"))
-        .map(|track| startup_audio(&track, ingest_audio_header));
-    MoqPublishStartup {
-        video,
-        audio,
-        ..MoqPublishStartup::default()
-    }
 }
 
 /// The video track: H.264 or HEVC only. The configuration comes from the

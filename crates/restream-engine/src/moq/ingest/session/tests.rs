@@ -340,9 +340,9 @@ fn a_dropped_session_flushes_and_leaves_its_attempt_to_the_lease() {
 /// ring.
 #[test]
 fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
-    use crate::moq::egress::media::MediaFrame;
-    use crate::moq::egress::publish::HangBroadcast;
-    use crate::moq::transport::test_support::{Loopback, run};
+    use crate::egress::backends::moq::media::MediaFrame;
+    use crate::egress::backends::moq::publish::HangBroadcast;
+    use crate::moq_transport::test_support::{Loopback, run};
     use restream_moq::media::LocBuffer;
     use restream_moq::media::TrackKind;
     use restream_moq::media::hang_catalog;
@@ -434,7 +434,7 @@ fn a_loopback_publisher_reaches_the_ring_and_shutdown_releases_it() {
 /// off at the announce bound, before it is admitted to anything.
 #[test]
 fn a_publisher_that_never_announces_is_cut_off_at_the_announce_bound() {
-    use crate::moq::transport::test_support::{Loopback, run};
+    use crate::moq_transport::test_support::{Loopback, run};
 
     // The publish/connect futures are large in a debug build; see above.
     std::thread::Builder::new()
@@ -497,7 +497,7 @@ fn a_publisher_that_never_announces_is_cut_off_at_the_announce_bound() {
 
 #[test]
 fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         let last_frame = Cell::new(Instant::now());
         let started = Instant::now();
         let end = idle_watch(&last_frame, Duration::from_millis(50)).await;
@@ -508,7 +508,7 @@ fn a_silent_publisher_is_cut_off_after_the_idle_bound() {
 
 #[test]
 fn an_admitted_publisher_without_a_catalog_times_out() {
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         let end = compio::time::timeout(
             Duration::from_secs(2),
             first_catalog(
@@ -528,7 +528,7 @@ fn an_admitted_publisher_without_a_catalog_times_out() {
 #[test]
 fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
     let end = crate::test_support::with_expected_panic_suppressed(|| {
-        crate::moq::transport::test_support::run(first_catalog(
+        crate::moq_transport::test_support::run(first_catalog(
             std::future::poll_fn(
                 |_| -> std::task::Poll<hang::Result<Option<hang::Catalog>>> {
                     panic!("end byte index 2 is not a char boundary")
@@ -549,7 +549,7 @@ fn a_panicking_catalog_parser_ends_the_session_as_a_protocol_violation() {
 fn msf_only_catalog_maps_loc_h264_h265_and_aac_into_the_ring() {
     use restream_moq::media::LocBuffer;
 
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         for (codec, nalus) in [
             ("avc3.42001e", annexb(&[SPS, PPS, IDR])),
             ("hev1.1.6.L93.B0", annexb(&[&[19 << 1, 1, 0xaf]])),
@@ -641,7 +641,7 @@ fn a_missing_catalog_profile_falls_back_but_malformed_input_does_not() {
     assert!(!missing_catalog(&Err(CatalogError::Moq(
         Error::ProtocolViolation
     ))));
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         let broadcast = moq_net::broadcast::Info::new().produce();
         let track = broadcast
             .create_track(
@@ -667,7 +667,7 @@ fn a_missing_catalog_profile_falls_back_but_malformed_input_does_not() {
 
 #[test]
 fn a_suffix_preference_waits_for_its_catalog_instead_of_parsing_a_malformed_alternate() {
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         for (name, preferred_name, alternate_name, json) in [
             (
                 "live/moq-key.msf",
@@ -718,7 +718,7 @@ fn a_suffix_preference_waits_for_its_catalog_instead_of_parsing_a_malformed_alte
 
 #[test]
 fn a_suffix_preference_falls_back_only_when_its_catalog_is_missing() {
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         for (name, preferred_name, alternate_name, json) in [
             (
                 "moq-key.msf",
@@ -781,7 +781,7 @@ fn a_suffix_preference_falls_back_only_when_its_catalog_is_missing() {
 fn bounded_draft01_shared_init_references_reach_the_ring() {
     use restream_moq::media::LocBuffer;
 
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         let json = br#"{
             "version":"draft-01",
             "initDataList":[{"id":"aac","type":"inline","data":"EZA="}],
@@ -840,7 +840,7 @@ fn bounded_draft01_shared_init_references_reach_the_ring() {
 
 #[test]
 fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
-    crate::moq::transport::test_support::run(async {
+    crate::moq_transport::test_support::run(async {
         let broadcast = moq_net::broadcast::Info::new().produce();
         let track = broadcast
             .create_track("audio", moq_net::track::Info::default())
@@ -873,7 +873,7 @@ fn an_oversized_declared_frame_is_rejected_before_waiting_for_payload() {
 
 #[test]
 fn an_ietf_msf_preferred_publisher_reaches_the_ring() {
-    use crate::moq::transport::test_support::{Loopback, run};
+    use crate::moq_transport::test_support::{Loopback, run};
     use restream_moq::media::LocBuffer;
 
     std::thread::Builder::new()

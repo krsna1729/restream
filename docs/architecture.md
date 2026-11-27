@@ -192,7 +192,10 @@ leaf package does not validate its downstream integration.
   tokens, URLs and TLS/QUIC configuration builders. It has Compio/QUIC,
   `moq-net`, `hang`, Reqwest and `tokio-rustls` dependencies; it is not a
   dependency-free wire codec. The actual endpoints, transport/session drivers,
-  ingest, origin and egress lifecycle remain in `crates/restream-engine/src/moq/`. A
+  ingest, origin and egress lifecycle remain in the engine:
+  `crates/restream-engine/src/moq/` (ingest, origin),
+  `crates/restream-engine/src/moq_transport/` and
+  `crates/restream-engine/src/egress/backends/moq/` (egress). A
   `tokio-rustls` dependency used for rustls configuration does not move QUIC
   sockets onto Tokio.
 - **HTTP clients:** `restream-http` is the one constructor of `reqwest`
@@ -779,7 +782,7 @@ describes where their callers execute.
 | `crates/restream-moq/src/` | MoQ media/catalog helpers, budgets, tokens, URLs and TLS/QUIC configuration builders |
 | `crates/restream-engine/src/rtmp.rs`, `crates/restream-engine/src/rtmp/`, `crates/restream-engine/src/srt/` | Ingest owners, control/lifecycle integration and engine adapters |
 | `crates/restream-engine/src/hls_ingest/`, `crates/restream-engine/src/hls_pull/`, `crates/restream-engine/src/ingest_publisher/` | HLS push and pull ingest, byte-stream ingest publishing |
-| `crates/restream-engine/src/moq/` | MoQ endpoints, Compio transport/session drivers, ingest, origin and egress lifecycle |
+| `crates/restream-engine/src/moq/`, `crates/restream-engine/src/moq_transport/` | MoQ endpoints, Compio transport/session drivers, ingest, origin, and the engine query that starts an egress broadcast (the `moqt://` backend is under `egress/backends/moq/`) |
 | `crates/restream-engine/src/egress/` | Egress fabric: shards, scheduler, leaf lifecycle, protocol backends. See [Egress architecture](egress-architecture.md) |
 | `crates/restream-engine/src/hls/`, `crates/restream-engine/src/recording/` | HLS segmenting, preview, HLS PUT upload policy, recording |
 | `crates/restream-engine/src/external_transcoder/`, `crates/restream-engine/src/ffmpeg/`, `crates/restream-engine/src/audio_router.rs` | FFmpeg child stages, native audio track selection |

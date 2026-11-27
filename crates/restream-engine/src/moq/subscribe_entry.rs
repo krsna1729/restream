@@ -25,7 +25,7 @@ use moq_net::Timestamp;
 use moq_net::origin;
 use serde::Serialize;
 
-use crate::moq::transport;
+use crate::moq_transport as transport;
 use restream_moq::tls;
 use restream_srt::address_family::AddressFamily;
 

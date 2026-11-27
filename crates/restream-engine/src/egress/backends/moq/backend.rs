@@ -33,7 +33,7 @@ use super::leaf::{
 };
 use super::publish::{HangBroadcast, RingPublisher};
 use super::startup::SharedMoqStartupSource;
-use crate::moq::egress::media::MediaConverter;
+use crate::egress::backends::moq::media::MediaConverter;
 use restream_moq::url::parse_moq_url;
 
 struct MoqFabricLeaf {
