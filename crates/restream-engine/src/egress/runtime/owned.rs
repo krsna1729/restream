@@ -1,6 +1,6 @@
 //! Control jobs serialize one feed before entering the blocking pool. Shard
 //! media and read-only health snapshots never wait for that control mutex.
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -9,35 +9,29 @@ use tokio::sync::Mutex;
 
 use super::EgressFabricRuntime;
 use crate::egress::shard::{
-    EgressShardGroup, EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle,
+    EgressShardGroup, EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle, ShardSnapshotWatch,
 };
-
-type SnapshotHandle = Arc<StdMutex<EgressShardSnapshot>>;
 
 #[derive(Clone, Debug)]
 pub(super) struct FabricObserver {
-    handles: Arc<ArcSwap<Vec<SnapshotHandle>>>,
+    watch: Arc<ArcSwap<ShardSnapshotWatch>>,
     command_capacity: u32,
 }
 
 impl FabricObserver {
     pub(super) fn new(group: &EgressShardGroup, command_capacity: u32) -> Self {
         Self {
-            handles: Arc::new(ArcSwap::from_pointee(group.snapshot_handles())),
+            watch: Arc::new(ArcSwap::from_pointee(group.snapshot_watch())),
             command_capacity,
         }
     }
 
     pub(super) fn update(&self, group: &EgressShardGroup) {
-        self.handles.store(Arc::new(group.snapshot_handles()));
+        self.watch.store(Arc::new(group.snapshot_watch()));
     }
 
     fn snapshots(&self) -> Vec<EgressShardSnapshot> {
-        self.handles
-            .load()
-            .iter()
-            .map(|handle| restream_sync::lock::lock(handle).clone())
-            .collect()
+        self.watch.load().snapshots()
     }
 
     pub(super) fn heartbeat(

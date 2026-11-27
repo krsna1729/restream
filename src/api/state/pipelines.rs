@@ -4,7 +4,6 @@ use restream_domain::models::Pipeline;
 
 use super::AppState;
 use crate::application::services::ServiceResult;
-use crate::application::services::pipeline_service::PipelineService;
 
 impl AppState {
     /// All pipelines in the catalog.
@@ -58,10 +57,5 @@ impl AppState {
     /// The configured ingest host for publish URLs.
     pub(crate) async fn ingest_host(&self) -> String {
         self.pipeline_service.get_ingest_host().await
-    }
-
-    /// Replaces the pipeline service, used by failure-injection tests.
-    pub fn replace_pipeline_service(&mut self, service: PipelineService) {
-        self.pipeline_service = service;
     }
 }

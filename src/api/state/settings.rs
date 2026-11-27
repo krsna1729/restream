@@ -2,17 +2,11 @@
 //! security, and transcode profiles.
 
 use super::AppState;
-use crate::application::services::SettingsService;
 use restream_domain::domain::ingest_security::IngestSecurityConfig;
 use restream_domain::domain::recording::RecordingSettings;
 use restream_domain::domain::transcode_profile::TranscodeProfiles;
 
 impl AppState {
-    /// Replaces the settings service for failure-injection tests.
-    #[doc(hidden)]
-    pub fn replace_settings_service_for_test(&mut self, settings_service: SettingsService) {
-        self.settings_service = settings_service;
-    }
     /// Lists background conversion jobs.
     pub(crate) async fn settings_jobs(
         &self,

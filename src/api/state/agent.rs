@@ -1,8 +1,6 @@
 //! Agent-plane operations: output catalog reads, gated output mutations,
 //! operation-store transitions, and reconciler wakeups.
 
-use std::sync::Arc;
-
 use super::AppState;
 
 #[cfg(feature = "agent-execution")]
@@ -11,11 +9,6 @@ use restream_agent::execution::{
 };
 
 impl AppState {
-    /// The shared reconciler request handle used by runtime tasks.
-    pub(crate) fn reconcile_handle(&self) -> Arc<crate::application::topology::ReconcileRequests> {
-        Arc::clone(&self.reconcile)
-    }
-
     /// Wakes the reconciler after a persisted mutation.
     pub(crate) fn wake_reconciler(&self) {
         self.reconcile.wake();

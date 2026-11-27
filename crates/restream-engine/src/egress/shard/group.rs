@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use crate::egress::command::{EgressCommand, ShardId};
 use crate::egress::shard::{
     EgressShardBackend, EgressShardConfig, EgressShardHandle, EgressShardSendError,
-    EgressShardSnapshot,
+    EgressShardSnapshot, ShardSnapshotWatch,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,14 +162,9 @@ impl EgressShardGroup {
     }
 
     /// Read-only snapshots remain observable while a feed's control job waits
-    /// for a new backend. These handles do not keep command channels alive.
-    pub(crate) fn snapshot_handles(
-        &self,
-    ) -> Vec<std::sync::Arc<std::sync::Mutex<EgressShardSnapshot>>> {
-        self.handles
-            .iter()
-            .map(EgressShardHandle::snapshot_handle)
-            .collect()
+    /// for a new backend; the watch does not keep command channels alive.
+    pub(crate) fn snapshot_watch(&self) -> ShardSnapshotWatch {
+        EgressShardHandle::snapshot_watch(&self.handles)
     }
 
     pub fn heartbeat(&self, now: Instant, stall_after: Duration) -> Vec<EgressShardHeartbeat> {

@@ -35,7 +35,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let egress_shards = state
         .egress_shard_statuses(std::time::Duration::from_secs(5))
         .await;
-    let host_capacity = host_capacity_json(state, egress_shards.len());
+    let host_capacity = state.host_capacity_json(egress_shards.len());
     let io_uring = uring_capabilities();
     let rtmps = RTMPS_TLS_COUNTERS.snapshot();
     let hls_put_tls = HLS_PUT_TLS_COUNTERS.snapshot();
@@ -340,25 +340,6 @@ fn is_external_interface(name: &str) -> bool {
     !virtual_prefixes
         .iter()
         .any(|prefix| lower.starts_with(prefix))
-}
-
-/// The CPUs every sizing law reads (`HostCapacity`) and the threads each
-/// execution class holds now. Thread counts are not demand: an idle thread
-/// costs no CPU. MEDIA CPU time is in `mediaExecutor`; the resource sweep
-/// measures every thread group.
-fn host_capacity_json(state: &AppState, egress_shards: usize) -> serde_json::Value {
-    let control = state.tokio_worker_threads();
-    let media = restream_engine::executor::configured_workers();
-    let (rtmp, srt) = state.ingress_owner_counts();
-    serde_json::json!({
-        "cpus": restream_engine::host_capacity::HostCapacity::get().cpus,
-        "controlWorkers": control,
-        "mediaWorkers": media,
-        "rtmpIngressOwners": rtmp,
-        "srtIngressOwners": srt,
-        "egressShards": egress_shards,
-        "sizedThreads": control + media + rtmp + srt + egress_shards,
-    })
 }
 
 pub fn system_status(sys: &System) -> serde_json::Value {

@@ -176,6 +176,8 @@ async fn serve(
     // housekeeping's recordings report to it.
     let recording_metadata = control_plane.recording_metadata.clone();
     let services = control_plane.services;
+    let runtime_config = crate::api::state::AppStateRuntimeConfig::from(config.clone());
+    let shared = crate::api::state::AppStateShared::new(&runtime_config);
     let state = Arc::new(crate::api::AppState::new(
         services,
         security.clone(),
@@ -183,10 +185,11 @@ async fn serve(
         sessions,
         engine.clone(),
         log_broadcast,
-        crate::api::state::AppStateRuntimeConfig::from(config.clone()),
+        runtime_config,
+        shared.clone(),
     ));
 
-    spawn_runtime_event_consumer(event_rx, &state, &config);
+    spawn_runtime_event_consumer(event_rx, &shared, &config);
 
     // Created before the reconciler because the reconciler converges HLS
     // pull inputs through it; the router gets the same registry from the
@@ -203,8 +206,8 @@ async fn serve(
         config.clone(),
         lifecycle.clone(),
         engine.clone(),
-        state.reconcile_handle(),
-        state.runtime_state_handle(),
+        shared.reconcile.clone(),
+        shared.runtime_state.clone(),
         hls_ingest.clone(),
     );
     let projector_stop = tokio_util::sync::CancellationToken::new();
@@ -229,13 +232,22 @@ async fn serve(
                 .reload_periodically(crate::application::catalog_auth::PERIODIC_RELOAD_INTERVAL)
         }
     });
-    spawn_state_loops(&state, &lifecycle, &api_db, &config, &projector_stop);
+    spawn_state_loops(
+        &state,
+        &shared,
+        &engine,
+        &lifecycle,
+        &api_db,
+        &config,
+        &projector_stop,
+    );
     let runtime::RuntimeTasks {
         http_stop,
         listeners,
     } = runtime::RuntimeTasks::launch(runtime::RuntimeLaunch {
         config,
         state,
+        runtime_state: shared.runtime_state.clone(),
         engine: engine.clone(),
         security,
         pipeline_access: ingest_authenticator,
@@ -350,11 +362,11 @@ async fn load_srt_ingest_policy_store(
 /// Starts the one runtime-event consumer over the engine's event channel.
 fn spawn_runtime_event_consumer(
     event_rx: tokio::sync::mpsc::UnboundedReceiver<restream_engine::events::Event>,
-    state: &crate::api::AppState,
+    shared: &crate::api::state::AppStateShared,
     config: &AppConfig,
 ) {
-    let requests = state.reconcile_handle();
-    let runtime_state = state.runtime_state_handle();
+    let requests = shared.reconcile.clone();
+    let runtime_state = shared.runtime_state.clone();
     let disconnect_grace =
         std::time::Duration::from_millis(config.tuning.ingest_disconnect_grace_ms);
     // Shared so a restart after a panic resumes the same channel; a tokio
@@ -374,6 +386,8 @@ fn spawn_runtime_event_consumer(
 /// ends when `stop` is cancelled.
 fn spawn_state_loops(
     state: &Arc<crate::api::AppState>,
+    shared: &crate::api::state::AppStateShared,
+    engine: &Arc<restream_engine::engine::MediaEngine>,
     lifecycle: &db::DeadlineDb,
     main_db: &db::DeadlineDb,
     config: &Arc<AppConfig>,
@@ -381,9 +395,9 @@ fn spawn_state_loops(
 ) {
     supervised_task::spawn_supervised("runtime_state_projector", {
         let (hub, db, engine, stop) = (
-            state.runtime_state_handle(),
+            shared.runtime_state.clone(),
             main_db.clone(),
-            state.engine_handle(),
+            engine.clone(),
             stop.clone(),
         );
         let interval = std::time::Duration::from_millis(config.tuning.reconciler_interval_ms);
@@ -399,10 +413,10 @@ fn spawn_state_loops(
     });
     supervised_task::spawn_supervised("fleet_sampler", {
         let (history, hub, db, engine, config, stop) = (
-            state.fleet_history_sampler_handle(),
-            state.runtime_state_handle(),
+            shared.fleet_history.clone(),
+            shared.runtime_state.clone(),
             main_db.clone(),
-            state.engine_handle(),
+            engine.clone(),
             config.clone(),
             stop.clone(),
         );
@@ -420,10 +434,10 @@ fn spawn_state_loops(
     });
     supervised_task::spawn_supervised("flight_recorder", {
         let (recorder, hub, db, engine, stop) = (
-            state.flight_recorder_sampler_handle(),
-            state.runtime_state_handle(),
+            shared.flight_recorder.clone(),
+            shared.runtime_state.clone(),
             main_db.clone(),
-            state.engine_handle(),
+            engine.clone(),
             stop.clone(),
         );
         let retention = (config.flight_history_hours > 0)

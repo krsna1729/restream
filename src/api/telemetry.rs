@@ -172,7 +172,6 @@ pub async fn pipeline_diagnostics_run_handler(
     };
 
     let sem = state.diag_semaphore(&pipeline_id).await;
-    let engine = state.engine_handle();
     let permit = match sem.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -200,14 +199,9 @@ pub async fn pipeline_diagnostics_run_handler(
 
         // These checks form one short batch. Restore streaming only if genuinely
         // progressive, multi-second probes return.
-        diag::run_diagnostics(
-            engine,
-            pipeline_id,
-            probe_protocol,
-            run_state.media_dir.clone(),
-            file_context,
-        )
-        .await
+        run_state
+            .run_diagnostics(pipeline_id, probe_protocol, file_context)
+            .await
     })
     .await
     {

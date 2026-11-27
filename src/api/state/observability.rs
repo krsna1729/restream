@@ -1,8 +1,6 @@
 //! Read-only observability surfaces: logs, fleet history, and the flight
 //! recorder.
 
-use std::sync::Arc;
-
 use super::AppState;
 
 impl AppState {
@@ -20,13 +18,6 @@ impl AppState {
         until_ms: u64,
     ) -> crate::application::fleet_history::FleetHistoryWindow {
         self.fleet_history.window(since_ms, until_ms)
-    }
-
-    /// The shared history handle used by the fleet sampler task.
-    pub(crate) fn fleet_history_sampler_handle(
-        &self,
-    ) -> Arc<crate::application::fleet_history::FleetHistory> {
-        Arc::clone(&self.fleet_history)
     }
 
     /// The pipeline's flight trace over `[since_ms, until_ms]`.
@@ -53,12 +44,5 @@ impl AppState {
         &self,
     ) -> Vec<restream_health::destination_baselines::Anomaly> {
         self.flight_recorder.baseline_anomalies()
-    }
-
-    /// The shared recorder handle used by the flight-recorder task.
-    pub(crate) fn flight_recorder_sampler_handle(
-        &self,
-    ) -> Arc<crate::application::flight_recorder::FlightRecorder> {
-        Arc::clone(&self.flight_recorder)
     }
 }

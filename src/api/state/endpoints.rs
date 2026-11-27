@@ -4,19 +4,13 @@ use super::AppState;
 use restream_domain::domain::pipeline_input::{PipelineInput, PipelineInputSource};
 
 impl AppState {
-    /// The RTMP listener port.
-    pub(crate) fn rtmp_port(&self) -> u16 {
-        self.ports.rtmp
-    }
-
-    /// The SRT listener port.
-    pub(crate) fn srt_port(&self) -> u16 {
-        self.ports.srt
-    }
-
-    /// The MoQ listener port, while MoQ ingest is on.
-    pub(crate) fn moq_port(&self) -> Option<u16> {
-        self.ports.moq
+    /// The publish endpoints for `host` on this server's RTMP and SRT
+    /// listeners.
+    pub(crate) fn publish_endpoints<'a>(
+        &self,
+        host: &'a str,
+    ) -> crate::api::view_models::PublishEndpoints<'a> {
+        crate::api::view_models::PublishEndpoints::new(host, self.ports.rtmp, self.ports.srt)
     }
 
     /// Every listener port in the dashboard's wire shape.

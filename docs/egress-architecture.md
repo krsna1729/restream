@@ -103,7 +103,7 @@ Periodic sizing only schedules eligible idle control owners. It skips a busy
 feed instead of waiting for it, and never waits for a scheduled job before
 checking other feeds or continuing housekeeping. Read-only shard snapshots
 and direct publication wakes do not acquire the control mutex; topology
-changes update their shared handle lists.
+changes replace the shard snapshot watch and the shared wake handles.
 
 A held control job still occupies one blocking worker and serializes that
 feed's other control operations. It does not stop already-running shard media.

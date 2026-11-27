@@ -3,11 +3,35 @@ use restream_domain::models::{Ingest, Job, Output, Pipeline};
 
 pub(crate) use crate::api::runtime_views::probe_snapshot;
 
-pub(crate) fn pipeline_response_json(
-    pipeline: &Pipeline,
-    effective_ingest_host: &str,
+/// Where publishers reach this server: the advertised ingest host and the
+/// RTMP/SRT listener ports.
+pub(crate) struct PublishEndpoints<'a> {
+    host: &'a str,
     rtmp_port: u16,
     srt_port: u16,
+}
+
+impl<'a> PublishEndpoints<'a> {
+    pub(crate) const fn new(host: &'a str, rtmp_port: u16, srt_port: u16) -> Self {
+        Self {
+            host,
+            rtmp_port,
+            srt_port,
+        }
+    }
+
+    /// The RTMP and SRT publish URLs for one stream key.
+    pub(crate) fn ingest_urls(&self, stream_key: &str) -> serde_json::Value {
+        serde_json::json!({
+            "rtmp": format!("rtmp://{}:{}/live/{}", self.host, self.rtmp_port, stream_key),
+            "srt": format!("srt://{}:{}?streamid=publish:{}", self.host, self.srt_port, stream_key)
+        })
+    }
+}
+
+pub(crate) fn pipeline_response_json(
+    pipeline: &Pipeline,
+    endpoints: &PublishEndpoints<'_>,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": pipeline.id,
@@ -17,22 +41,17 @@ pub(crate) fn pipeline_response_json(
         "srtIngestPolicy": parse_persisted_srt_ingest_policy(
             pipeline.srt_ingest_policy.as_deref()
         ),
-        "ingestUrls": {
-            "rtmp": format!("rtmp://{}:{}/live/{}", effective_ingest_host, rtmp_port, pipeline.stream_key),
-            "srt": format!("srt://{}:{}?streamid=publish:{}", effective_ingest_host, srt_port, pipeline.stream_key)
-        }
+        "ingestUrls": endpoints.ingest_urls(&pipeline.stream_key),
     })
 }
 
 pub(crate) fn pipeline_response_json_with_file_ingest(
     pipeline: &Pipeline,
-    effective_ingest_host: &str,
-    rtmp_port: u16,
-    srt_port: u16,
+    endpoints: &PublishEndpoints<'_>,
     ingest: Option<Ingest>,
     running: bool,
 ) -> serde_json::Value {
-    let mut value = pipeline_response_json(pipeline, effective_ingest_host, rtmp_port, srt_port);
+    let mut value = pipeline_response_json(pipeline, endpoints);
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "fileIngest".to_string(),
@@ -152,12 +171,11 @@ mod tests {
             playlist: Vec::new(),
         };
 
-        let pipeline_json = pipeline_response_json(&pipeline, "ingest.example", 1935, 10080);
+        let endpoints = PublishEndpoints::new("ingest.example", 1935, 10080);
+        let pipeline_json = pipeline_response_json(&pipeline, &endpoints);
         let pipeline_with_ingest = pipeline_response_json_with_file_ingest(
             &pipeline,
-            "ingest.example",
-            1935,
-            10080,
+            &endpoints,
             Some(ingest.clone()),
             true,
         );

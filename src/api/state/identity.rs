@@ -2,18 +2,11 @@
 //! and the audit trail.
 
 use super::AppState;
-use crate::application::services::TeamService;
 use crate::application::services::team_service::StoredUser;
 use crate::application::team::{AuditEntry, Principal, UserRecord};
 use restream_domain::domain::role::Role;
 
 impl AppState {
-    /// Replaces the team service for failure-injection tests.
-    #[doc(hidden)]
-    pub fn replace_team_service_for_test(&mut self, team_service: TeamService) {
-        self.team_service = team_service;
-    }
-
     /// Persists one auth-specific meta entry.
     pub(crate) async fn set_auth_meta(
         &self,

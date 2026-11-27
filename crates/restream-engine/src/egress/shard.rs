@@ -296,6 +296,24 @@ impl FeedWakeHandle {
     }
 }
 
+/// Read-only view of a set of shards' snapshot slots. It stays observable
+/// while a feed's control job waits for a new backend, and it does not keep
+/// the shards' command channels alive.
+#[derive(Debug)]
+pub(crate) struct ShardSnapshotWatch {
+    slots: Vec<Arc<Mutex<EgressShardSnapshot>>>,
+}
+
+impl ShardSnapshotWatch {
+    /// A copy of every shard's latest snapshot.
+    pub(crate) fn snapshots(&self) -> Vec<EgressShardSnapshot> {
+        self.slots
+            .iter()
+            .map(|slot| restream_sync::lock::lock(slot).clone())
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 pub struct EgressShardHandle {
     shard_id: ShardId,
@@ -306,6 +324,16 @@ pub struct EgressShardHandle {
 }
 
 impl EgressShardHandle {
+    /// A read-only watch over `handles`' snapshot slots.
+    fn snapshot_watch(handles: &[Self]) -> ShardSnapshotWatch {
+        ShardSnapshotWatch {
+            slots: handles
+                .iter()
+                .map(|handle| Arc::clone(&handle.snapshot))
+                .collect(),
+        }
+    }
+
     /// Spawn a shard whose backend is built on the shard thread by `factory`.
     ///
     /// Only `factory` (and what it captures) crosses the thread boundary and
@@ -441,12 +469,6 @@ impl EgressShardHandle {
 
     pub fn snapshot(&self) -> EgressShardSnapshot {
         restream_sync::lock::lock(&self.snapshot).clone()
-    }
-
-    /// The shared snapshot slot, for callers that keep observing after the
-    /// shard's control job waits for a new backend.
-    pub(crate) fn snapshot_handle(&self) -> Arc<Mutex<EgressShardSnapshot>> {
-        Arc::clone(&self.snapshot)
     }
 
     pub fn shutdown_and_join(mut self) -> EgressShardSnapshot {

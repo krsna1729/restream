@@ -22,6 +22,8 @@ use super::listener_supervisor::SupervisedListener;
 pub(super) struct RuntimeLaunch {
     pub config: Arc<AppConfig>,
     pub state: Arc<AppState>,
+    /// The runtime-state hub whose streams close first at shutdown.
+    pub runtime_state: Arc<crate::application::runtime_state::hub::StateHub>,
     pub engine: Arc<MediaEngine>,
     pub security: Arc<IngestSecurityService>,
     pub pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
@@ -80,6 +82,7 @@ impl RuntimeTasks {
         let RuntimeLaunch {
             config,
             state,
+            runtime_state,
             engine,
             security,
             pipeline_access,
@@ -91,7 +94,7 @@ impl RuntimeTasks {
         let http_addr = format!("{}:{}", config.http_bind_addr, config.ports.http);
         let http_stop = HttpStop {
             listener: CancellationToken::new(),
-            streams: state.runtime_state_handle(),
+            streams: runtime_state,
         };
         let app = crate::api::create_router(state).merge(crate::api::create_hls_ingest_router(
             hls_ingest,
