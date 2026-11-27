@@ -62,6 +62,7 @@ async fn the_snapshot_equals_the_sums_of_the_payloads_it_replaces() {
 
     // A stage known only by its metrics (no runtime) still counts as a stage.
     let _ = engine
+        .stages
         .get_or_create_stage_metrics(StageKey::new("pipe-b", StageKind::video_preset("480p")))
         .await;
     for (pipeline, bytes) in [("pipe-a", 1_234_u64), ("pipe-b", 4_321)] {

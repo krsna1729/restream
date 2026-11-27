@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 
 use crate::engine::MediaEngine;
 use crate::engine_registries::ActiveEgress;
-use crate::pipe_metrics::PipeMetrics;
 use crate::preview_ids::{
     hls_preview_registry_key, input_id_from_hls_preview_resource_id, preview_pipeline,
 };
@@ -52,10 +51,6 @@ impl MediaEngine {
         self.stages.with_ts_muxers(f).await
     }
 
-    pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
-        self.stages.register_pipe_metrics(key, metrics).await;
-    }
-
     pub async fn get_or_create_non_ring_stage_runtime(
         &self,
         key: StageKey,
@@ -68,22 +63,8 @@ impl MediaEngine {
             .await
     }
 
-    pub async fn get_or_create_stage_metrics(&self, key: StageKey) -> Arc<StageMetrics> {
-        self.stages.get_or_create_stage_metrics(key).await
-    }
-
     pub async fn remove_stage_runtime(&self, key: &StageKey) {
         self.stages.remove_stage_runtime(key).await;
-    }
-
-    pub async fn get_or_create_stage_lifecycle(
-        &self,
-        key: StageKey,
-        initial: StagePhase,
-    ) -> Arc<StageLifecycle> {
-        self.stages
-            .get_or_create_stage_lifecycle(key, initial)
-            .await
     }
 
     /// The shared TS muxer for `stage_key`, and the caller's lease on it: the

@@ -457,6 +457,7 @@ mod tests {
         let pipe_metrics = Arc::new(PipeMetrics::default());
         pipe_metrics.record_stall(1_500);
         engine
+            .stages
             .register_pipe_metrics(key.clone(), pipe_metrics.clone())
             .await;
 

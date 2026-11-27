@@ -30,7 +30,9 @@ disallowed-methods = [
 # behind a queued writer, or two locks taken in opposite orders, deadlock the
 # control plane. Copy into owned data and release first; a section that must
 # hold more than one guard carries `#[expect(..., reason = "lock order ...")]`
-# in the order documented in `crates/restream-engine/src/engine_registries.rs`.
+# in the order documented in the owning registry's module docs
+# (`crates/restream-engine/src/{ingest_registry,stage_registry,engine_registries}.rs`;
+# `engine_registries.rs` links them and holds the cross-registry orders).
 await-holding-invalid-types = [
   { path = "tokio::sync::RwLockReadGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
   { path = "tokio::sync::RwLockWriteGuard", reason = "release the guard before the next await (lock order: engine_registries.rs)" },
