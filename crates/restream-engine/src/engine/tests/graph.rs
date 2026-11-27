@@ -8,7 +8,7 @@ async fn pipeline_create_and_remove() {
     // Same pipeline returns same buffer
     assert!(Arc::ptr_eq(&rb1, &rb2));
 
-    engine.remove_pipeline("p1").await;
+    engine.ingests.remove_pipeline("p1").await;
     let rb3 = engine.get_or_create_pipeline("p1").await;
     // After removal, new buffer is created
     assert!(!Arc::ptr_eq(&rb1, &rb3));

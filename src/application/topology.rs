@@ -349,7 +349,7 @@ pub async fn converge_srt_call_inputs(
             })
         })
         .collect();
-    let started = engine.ingests.srt_calls.converge(wanted);
+    let started = engine.converge_srt_calls(wanted);
     for input_id in &started {
         info!(input_id = %input_id, "SRT call input (re)dialled");
     }

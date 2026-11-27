@@ -101,6 +101,7 @@ async fn wait_for_ingest_metadata(
             return None;
         }
         let result = engine
+            .ingests
             .with_active_ingest(pipeline_id, |ingest| {
                 let metadata = ingest.metadata();
                 let video = metadata.video;
@@ -127,7 +128,7 @@ async fn wait_for_ingest_metadata(
             return result;
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        if !engine.has_active_ingest(pipeline_id).await {
+        if !engine.ingests.has_active_ingest(pipeline_id).await {
             error!(
                 "[srt-shared-muxer] Ingest gone while waiting for probe: {}",
                 pipeline_id
@@ -179,7 +180,7 @@ impl TsPayloadConverter {
         let sps_pps_cache = if let Some(parameter_sets) = source_ring.video_parameter_sets() {
             parameter_sets
         } else {
-            match engine.get_sequence_headers(pipeline_id).await.0 {
+            match engine.ingests.get_sequence_headers(pipeline_id).await.0 {
                 Some(flv_sh) if flv_sh.len() > 5 => {
                     let (nls, annexb) = restream_core::codec::parse_avcc_config(&flv_sh[5..]);
                     nalu_len_size = nls;

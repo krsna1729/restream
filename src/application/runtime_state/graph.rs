@@ -107,29 +107,24 @@ impl GraphRuntime {
     /// Reads what the graphs of `pipeline_ids` need.
     pub(crate) async fn read(engine: &MediaEngine, pipeline_ids: &[&str]) -> Self {
         let ingests: HashMap<String, GraphIngest> = engine
-            .ingests
-            .active
-            .read()
-            .await
-            .iter()
-            .map(|(pipeline_id, ingest)| {
-                (
-                    pipeline_id.clone(),
-                    GraphIngest {
-                        protocol: ingest.protocol.clone(),
-                        video_codec: ingest.metadata().video.map(|video| video.codec),
-                    },
-                )
+            .with_active_ingests(|active| {
+                active
+                    .iter()
+                    .map(|(pipeline_id, ingest)| {
+                        (
+                            pipeline_id.clone(),
+                            GraphIngest {
+                                protocol: ingest.protocol.clone(),
+                                video_codec: ingest.metadata().video.map(|video| video.codec),
+                            },
+                        )
+                    })
+                    .collect()
             })
-            .collect();
+            .await;
         let rings = engine
-            .ingests
-            .pipelines
-            .read()
-            .await
-            .keys()
-            .cloned()
-            .collect();
+            .with_source_rings(|rings| rings.keys().cloned().collect())
+            .await;
         let egresses = engine
             .with_active_egresses(|active| {
                 active

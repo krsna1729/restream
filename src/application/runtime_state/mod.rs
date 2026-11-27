@@ -297,25 +297,25 @@ pub async fn project(engine: &MediaEngine, rows: &Rows<'_>, output_max_retries: 
 
 async fn read_ingests(engine: &MediaEngine) -> HashMap<String, IngestState> {
     engine
-        .ingests
-        .active
-        .read()
-        .await
-        .iter()
-        .map(|(pipeline_id, ingest)| {
-            let metadata = ingest.metadata();
-            (
-                pipeline_id.clone(),
-                IngestState {
-                    input_id: ingest.input_id.clone(),
-                    protocol: ingest.protocol.clone(),
-                    video_codec: metadata.video.map(|video| video.codec),
-                    bonded: metadata.quality.srt_bonded == Some(true),
-                    since_ms: 0,
-                },
-            )
+        .with_active_ingests(|active| {
+            active
+                .iter()
+                .map(|(pipeline_id, ingest)| {
+                    let metadata = ingest.metadata();
+                    (
+                        pipeline_id.clone(),
+                        IngestState {
+                            input_id: ingest.input_id.clone(),
+                            protocol: ingest.protocol.clone(),
+                            video_codec: metadata.video.map(|video| video.codec),
+                            bonded: metadata.quality.srt_bonded == Some(true),
+                            since_ms: 0,
+                        },
+                    )
+                })
+                .collect()
         })
-        .collect()
+        .await
 }
 
 /// Every connected input session (a configured file source too) that is
@@ -324,16 +324,20 @@ async fn count_standby_inputs(
     engine: &MediaEngine,
     ingests: &HashMap<String, IngestState>,
 ) -> HashMap<String, u32> {
-    let mut standby: HashMap<String, u32> = HashMap::new();
-    for session in engine.ingests.sessions.read().await.values() {
-        let selected = ingests
-            .get(&session.pipeline_id)
-            .is_some_and(|ingest| ingest.input_id == session.input_id);
-        if !selected {
-            *standby.entry(session.pipeline_id.clone()).or_default() += 1;
-        }
-    }
-    standby
+    engine
+        .with_ingest_sessions(|sessions| {
+            let mut standby: HashMap<String, u32> = HashMap::new();
+            for session in sessions.values() {
+                let selected = ingests
+                    .get(&session.pipeline_id)
+                    .is_some_and(|ingest| ingest.input_id == session.input_id);
+                if !selected {
+                    *standby.entry(session.pipeline_id.clone()).or_default() += 1;
+                }
+            }
+            standby
+        })
+        .await
 }
 
 /// Feed id -> shard index -> health.

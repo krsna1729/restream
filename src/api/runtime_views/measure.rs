@@ -42,26 +42,27 @@ pub(crate) struct DeliveryTotals {
 
 /// `pipelines` is the persisted pipeline count, as the health view reports it.
 pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> MeasureSnapshot {
-    let (ingests, ingest_bytes_received) = {
-        let active = engine.ingests.active.read().await;
-        let bytes = active
-            .values()
-            .map(|ingest| {
-                ingest
-                    .bytes_received
-                    .load(std::sync::atomic::Ordering::Relaxed)
-            })
-            .sum();
-        (active.len(), bytes)
-    };
+    let (ingests, ingest_bytes_received) = engine
+        .with_active_ingests(|active| {
+            let bytes = active
+                .values()
+                .map(|ingest| {
+                    ingest
+                        .bytes_received
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                })
+                .sum();
+            (active.len(), bytes)
+        })
+        .await;
     let source_ring_payload_bytes = engine
-        .ingests
-        .pipelines
-        .read()
-        .await
-        .values()
-        .map(|ring| ring.payload_stats().payload_bytes as u64)
-        .sum::<u64>();
+        .with_source_rings(|rings| {
+            rings
+                .values()
+                .map(|ring| ring.payload_stats().payload_bytes as u64)
+                .sum::<u64>()
+        })
+        .await;
     let (stages, active_transcoder_buffers, transcoder_ring_payload_bytes) = {
         // One map at a time, never nested. A stage counts once: by its
         // runtime, or by its side-map metrics when it has no runtime.

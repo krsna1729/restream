@@ -133,34 +133,34 @@ pub(super) async fn project_inputs(
     endpoints: &IngestEndpoints,
 ) -> BTreeMap<String, InputState> {
     let sessions: HashMap<String, InputRuntimeState> = engine
-        .ingests
-        .sessions
-        .read()
-        .await
-        .iter()
-        .map(|(input_id, session)| {
-            let metadata = session.metadata();
-            (
-                input_id.clone(),
-                InputRuntimeState {
-                    connected: true,
-                    forwarding_state: Some(session.gate.state()),
-                    protocol: Some(session.protocol.clone()),
-                    remote_addr: metadata.remote_addr,
-                    video: metadata.video.map(|video| VideoDescriptor {
-                        codec: video.codec,
-                        width: video.width,
-                        height: video.height,
-                    }),
-                    audio: metadata.audio.map(|audio| AudioDescriptor {
-                        codec: audio.codec,
-                        sample_rate: audio.sample_rate,
-                        channels: audio.channels,
-                    }),
-                },
-            )
+        .with_ingest_sessions(|sessions| {
+            sessions
+                .iter()
+                .map(|(input_id, session)| {
+                    let metadata = session.metadata();
+                    (
+                        input_id.clone(),
+                        InputRuntimeState {
+                            connected: true,
+                            forwarding_state: Some(session.gate.state()),
+                            protocol: Some(session.protocol.clone()),
+                            remote_addr: metadata.remote_addr,
+                            video: metadata.video.map(|video| VideoDescriptor {
+                                codec: video.codec,
+                                width: video.width,
+                                height: video.height,
+                            }),
+                            audio: metadata.audio.map(|audio| AudioDescriptor {
+                                codec: audio.codec,
+                                sample_rate: audio.sample_rate,
+                                channels: audio.channels,
+                            }),
+                        },
+                    )
+                })
+                .collect()
         })
-        .collect();
+        .await;
     let mut positions: HashMap<&str, u32> = HashMap::new();
     inputs
         .iter()

@@ -631,28 +631,20 @@ fn log_generation_replace_failed(
 /// ingest but a session or disconnect record means nothing is feeding the
 /// ring, so no track survives. Same-session SRT PMT changes replace the ring's
 /// track metadata and clear removed decoder configurations.
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
-)]
 async fn resolve_pipeline(
     engine: &MediaEngine,
     pipeline_id: &str,
 ) -> Option<(Arc<restream_sync::RingBuffer>, MoqPublishStartup)> {
-    let _selection = engine.ingests.selection.lock(pipeline_id).await;
-    let ring = engine
-        .ingests
-        .pipelines
-        .read()
+    engine
+        .with_selected_source_ring(pipeline_id, async |ring| {
+            let mut startup = publish_startup(engine, pipeline_id, &ring).await;
+            if total_media_loss(engine, pipeline_id).await {
+                startup.video = None;
+                startup.audio = None;
+            }
+            (ring, startup)
+        })
         .await
-        .get(pipeline_id)
-        .cloned()?;
-    let mut startup = publish_startup(engine, pipeline_id, &ring).await;
-    if total_media_loss(engine, pipeline_id).await {
-        startup.video = None;
-        startup.audio = None;
-    }
-    Some((ring, startup))
 }
 
 /// Whether the pipeline has no selected source at all: no active ingest, but
@@ -660,17 +652,17 @@ async fn resolve_pipeline(
 /// active (even unprobed, as a recirculation publisher) or when the pipeline
 /// never had one (a ring-only stage or a test).
 async fn total_media_loss(engine: &MediaEngine, pipeline_id: &str) -> bool {
-    if engine.ingests.active.read().await.contains_key(pipeline_id) {
+    if engine.has_active_ingest(pipeline_id).await {
         return false;
     }
     let has_session = engine
-        .ingests
-        .sessions
-        .read()
-        .await
-        .values()
-        .any(|ingest| ingest.pipeline_id == pipeline_id);
-    let has_recent = engine.ingests.recent.read().await.contains_key(pipeline_id);
+        .with_ingest_sessions(|sessions| {
+            sessions
+                .values()
+                .any(|ingest| ingest.pipeline_id == pipeline_id)
+        })
+        .await;
+    let has_recent = engine.recent_ingest_outcome(pipeline_id).await.is_some();
     has_session || has_recent
 }
 

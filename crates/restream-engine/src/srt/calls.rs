@@ -1,8 +1,9 @@
 //! SRT caller inputs (`srt_call`): the engine dials a remote SRT listener and
 //! receives its stream, instead of waiting for a publisher to call in.
 //!
-//! The reconciler writes the wanted calls ([`SrtCallInputs::converge`]) from
-//! the input rows; the SRT server's Tokio loop supervises them
+//! The reconciler writes the wanted calls
+//! ([`restream_srt::calls::SrtCallInputs::converge`]) from the input rows;
+//! the SRT server's Tokio loop supervises them
 //! ([`CallSupervisor`]): resolve the host, ask ingress Owner 0 to dial on its
 //! caller socket, and once the call connects, run it as a publisher of its
 //! input exactly like a listener peer. A failed or ended call is redialled
@@ -25,7 +26,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// binds an IPv4 and an IPv6 socket as each family is first needed.
 const CALL_OWNER: u16 = 0;
 
-use restream_srt::calls::{SrtCallInputs, SrtCallSpec};
+use restream_srt::calls::SrtCallSpec;
 
 /// The next wait after `failures` consecutive failed attempts (at least one).
 fn backoff(failures: u32) -> Duration {
@@ -91,15 +92,18 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
     }
 
     /// Follow the wanted set, and start every call whose wait is over.
-    /// `disconnect` hangs up a session; it returns false when the command
-    /// slot is taken, and the rest of the work waits for the next tick.
+    /// `wanted_since` returns the wanted set and its generation when the
+    /// given generation is out of date
+    /// (`restream_srt::calls::SrtCallInputs::snapshot_since`). `disconnect`
+    /// hangs up a session; it returns false when the command slot is taken,
+    /// and the rest of the work waits for the next tick.
     pub(super) fn tick(
         &mut self,
-        inputs: &SrtCallInputs,
+        wanted_since: impl FnOnce(u64) -> Option<(u64, HashMap<String, SrtCallSpec>)>,
         now: Instant,
         mut disconnect: impl FnMut(P) -> bool,
     ) {
-        if let Some((generation, wanted)) = inputs.snapshot_since(self.seen_generation) {
+        if let Some((generation, wanted)) = wanted_since(self.seen_generation) {
             let stale: Vec<String> = self
                 .calls
                 .iter()

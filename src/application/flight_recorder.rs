@@ -620,17 +620,21 @@ async fn collect_probes(
     let mut ingests: HashMap<String, IngestProbe> = HashMap::new();
     // Each AAC track's frame length, for the inspector's clock drift.
     let mut aac_frames: HashMap<String, HashMap<u32, f64>> = HashMap::new();
-    for (pipeline_id, ingest) in engine.ingests.active.read().await.iter() {
-        let metadata = ingest.metadata();
-        aac_frames.insert(pipeline_id.clone(), aac_frame_lengths(ingest, &metadata));
-        ingests.insert(
-            pipeline_id.clone(),
-            ingest_probe(engine, inspector, pipeline_id, ingest, &metadata),
-        );
-    }
+    engine
+        .with_active_ingests(|active| {
+            for (pipeline_id, ingest) in active.iter() {
+                let metadata = ingest.metadata();
+                aac_frames.insert(pipeline_id.clone(), aac_frame_lengths(ingest, &metadata));
+                ingests.insert(
+                    pipeline_id.clone(),
+                    ingest_probe(engine, inspector, pipeline_id, ingest, &metadata),
+                );
+            }
+        })
+        .await;
     // Copied, so no engine lock is held while the next one is taken.
     let source_rings: HashMap<String, Arc<restream_sync::RingBuffer>> =
-        engine.ingests.pipelines.read().await.clone();
+        engine.with_source_rings(HashMap::clone).await;
     let mut decoders = decoder_probes(engine, &source_rings).await;
     let mut rings: HashMap<String, RingHealth> = HashMap::new();
     let mut watched = Vec::new();

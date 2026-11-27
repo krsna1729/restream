@@ -584,8 +584,8 @@ ready delivery and newly exposed gap expiry within its existing visit budget.
 ### SRT call inputs
 
 An `srtCall` input reverses the handshake: the engine is the caller.
-`converge_srt_call_inputs` writes the enabled rows into
-`engine.ingests.srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
+`converge_srt_call_inputs` writes the enabled rows through
+`MediaEngine::converge_srt_calls`; the SRT server's Tokio loop (`CallSupervisor`,
 `crates/restream-engine/src/srt/calls.rs`) resolves every listed host on the process
 resolver (`crates/restream-engine/src/resolver.rs`, one 5 s deadline) off the loop and sends
 `IngressCommand::Call` to Owner 0, whose caller side holds an IPv4 and an

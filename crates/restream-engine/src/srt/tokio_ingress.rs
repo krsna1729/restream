@@ -421,7 +421,7 @@ impl SrtServer {
         }
         close_deleted_sessions(&self.engine, ingress, sessions);
         calls.tick(
-            &self.engine.ingests.srt_calls,
+            |seen| self.engine.srt_calls_since(seen),
             std::time::Instant::now(),
             |peer| ingress.pending_command.is_none() && ingress.disconnect(peer).is_ok(),
         );
@@ -565,14 +565,7 @@ impl SrtServer {
     }
 
     async fn start_reader(&self, pipeline_id: &str) -> Result<SrtReaderMedia, String> {
-        if !self
-            .engine
-            .ingests
-            .active
-            .read()
-            .await
-            .contains_key(pipeline_id)
-        {
+        if !self.engine.has_active_ingest(pipeline_id).await {
             return Err("no active ingest".to_string());
         }
         let ring = self.engine.get_or_create_pipeline(pipeline_id).await;
@@ -631,29 +624,28 @@ fn close_deleted_sessions(
     if ingress.pending_command.is_some() {
         return;
     }
-    let Ok(live_pipelines) = engine.ingests.pipelines.try_read() else {
-        return;
-    };
-    for (peer, session) in sessions.iter_mut() {
-        let (pipeline_id, closing) = match session {
-            Session::Publish(publisher) => (
-                publisher.ingest.pipeline_id.as_str(),
-                &mut publisher.closing,
-            ),
-            Session::Read {
-                pipeline_id,
-                closing,
-            } => (pipeline_id.as_str(), closing),
-        };
-        if !*closing && !live_pipelines.contains_key(pipeline_id) {
-            if ingress.disconnect(*peer).is_ok() {
-                *closing = true;
-            }
-            if ingress.pending_command.is_some() {
-                break;
+    engine.try_with_source_rings(|live_pipelines| {
+        for (peer, session) in sessions.iter_mut() {
+            let (pipeline_id, closing) = match session {
+                Session::Publish(publisher) => (
+                    publisher.ingest.pipeline_id.as_str(),
+                    &mut publisher.closing,
+                ),
+                Session::Read {
+                    pipeline_id,
+                    closing,
+                } => (pipeline_id.as_str(), closing),
+            };
+            if !*closing && !live_pipelines.contains_key(pipeline_id) {
+                if ingress.disconnect(*peer).is_ok() {
+                    *closing = true;
+                }
+                if ingress.pending_command.is_some() {
+                    break;
+                }
             }
         }
-    }
+    });
 }
 
 #[cold]
