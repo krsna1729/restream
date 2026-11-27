@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use crate::stage_metrics::StageMetrics;
 use restream_core::metadata::{AudioMeta, VideoMeta};
@@ -64,7 +65,7 @@ pub(super) struct RtmpPublisherMedia {
 impl RtmpPublisherMedia {
     fn account(&self, len: usize) {
         let now_ms = MediaEngine::now_epoch_ms();
-        crate::engine::note_media_bytes(
+        crate::ingest_registry::note_media_bytes(
             &self.bytes_received,
             &self.first_media_ms,
             len as u64,

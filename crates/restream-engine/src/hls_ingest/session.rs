@@ -34,12 +34,13 @@ use super::ordering::{
 };
 use super::pacing::Pacer;
 use super::playlist;
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_publisher::fmp4::{Fmp4Demux, boxes};
 use crate::ingest_publisher::{
     Container, DiscontinuityKind, IngestTimestamps, MediaRejection, PUBLISH_CHUNK_BYTES,
     PublishTarget, SegmentPublisher,
 };
+use crate::ingest_registry::IngestRegistration;
 use restream_sync::RingBuffer;
 
 /// One uploaded object handed from the HTTP handler to its session.

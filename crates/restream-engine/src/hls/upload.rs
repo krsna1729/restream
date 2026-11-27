@@ -19,7 +19,8 @@ use super::upload_policy::{
     backlog_dropped_message, backoff, dropped_message, phase, rejected_message,
     status_failure_message,
 };
-use crate::engine::{EgressRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::engine_registries::EgressRegistration;
 use restream_domain::domain::stage::StageKey;
 use restream_domain::domain::state::EgressPhase;
 

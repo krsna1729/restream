@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use restream_engine::engine::{ActiveEgress, ActiveIngest, MediaEngine};
+use restream_engine::engine::MediaEngine;
+use restream_engine::engine_registries::ActiveEgress;
+use restream_engine::ingest_registry::ActiveIngest;
 use restream_engine::snapshots::PublisherQuality;
 
 use super::common::{egress_runtime_json, ingest_video_track_selection_json};
@@ -341,7 +343,7 @@ mod tests {
             first_media_ms: Arc::new(AtomicU64::new(now_ms.saturating_sub(30_000))),
             metrics: Arc::new(StageMetrics::new()),
             last_progress_ms: Arc::new(AtomicU64::new(now_ms.saturating_sub(30_000))),
-            metadata: RwLock::new(restream_engine::engine::IngestMetadata {
+            metadata: RwLock::new(restream_engine::ingest_registry::IngestMetadata {
                 remote_addr: Some("127.0.0.1:9000".to_string()),
                 quality: PublisherQuality {
                     srt_recv_buf_packets: Some(8_192),

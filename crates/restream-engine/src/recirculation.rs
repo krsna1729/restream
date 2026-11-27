@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::engine::IngestRegistration;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use restream_core::{MediaPacket, MediaType};
 use restream_sync::standby_gop::StandbyGopCache;

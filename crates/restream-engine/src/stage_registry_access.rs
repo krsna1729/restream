@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::engine::{ActiveEgress, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::engine_registries::ActiveEgress;
 use crate::engine_registries::StageRuntime;
 use crate::engine_registries::TsMuxerStage;
 use crate::pipe_metrics::PipeMetrics;

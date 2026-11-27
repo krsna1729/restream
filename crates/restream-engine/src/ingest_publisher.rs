@@ -28,7 +28,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use continuity::ContinuousTimestampState;
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::{InputPacketBoundary, InputTimestampMapper};
 use crate::stage_metrics::StageMetrics;
 use restream_core::{MediaPacket, MediaType};
@@ -383,7 +384,7 @@ impl SegmentPublisher {
 
         let read = chunk.len() as u64;
         let now_ms = MediaEngine::now_epoch_ms();
-        crate::engine::note_media_bytes(
+        crate::ingest_registry::note_media_bytes(
             &target.bytes_received,
             &target.first_media_ms,
             read,

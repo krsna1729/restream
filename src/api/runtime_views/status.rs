@@ -577,8 +577,8 @@ struct ActiveEgressViews {
 async fn active_egress_views(
     engine: &MediaEngine,
     active_ingest_ids: &HashSet<String>,
-    recent_egresses: &HashMap<String, restream_engine::engine::RecentEgressOutcome>,
-    retry_egresses: &HashMap<String, restream_engine::engine::EgressRetryState>,
+    recent_egresses: &HashMap<String, restream_engine::engine_registries::RecentEgressOutcome>,
+    retry_egresses: &HashMap<String, restream_engine::engine_registries::EgressRetryState>,
 ) -> ActiveEgressViews {
     engine
         .with_active_egresses(|egresses| {
@@ -625,8 +625,8 @@ async fn active_egress_views(
 fn add_recent_egress_views(
     outputs: &mut BTreeMap<String, api_view_models::OutputHealthView>,
     pipeline_id: &str,
-    recent_egresses: &HashMap<String, restream_engine::engine::RecentEgressOutcome>,
-    retry_egresses: &HashMap<String, restream_engine::engine::EgressRetryState>,
+    recent_egresses: &HashMap<String, restream_engine::engine_registries::RecentEgressOutcome>,
+    retry_egresses: &HashMap<String, restream_engine::engine_registries::EgressRetryState>,
 ) {
     for (output_id, outcome) in recent_egresses {
         if outcome.pipeline_id == pipeline_id && !outputs.contains_key(output_id) {

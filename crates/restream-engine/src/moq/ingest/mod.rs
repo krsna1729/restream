@@ -16,9 +16,10 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
 use crate::ingest_lease::{IngestEnd, IngestLease};
+use crate::ingest_registry::IngestRegistration;
 use crate::security::{IngestSecurityService, RateLimitScope};
 use restream_sync::RingBuffer;
 

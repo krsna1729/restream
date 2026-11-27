@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::engine::{ActiveIngest, IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::{ActiveIngest, IngestRegistration};
 use crate::snapshots::PublisherQuality;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 
@@ -22,7 +23,7 @@ impl MediaEngine {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
             let now_ms = Self::now_epoch_ms();
-            crate::engine::note_media_bytes(
+            crate::ingest_registry::note_media_bytes(
                 &ingest.bytes_received,
                 &ingest.first_media_ms,
                 bytes,
@@ -148,7 +149,7 @@ impl MediaEngine {
     /// a session cancels its token and holds that pipeline's selection.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "this pipeline's `selection` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` keeps the track replacement and ring adaptation together (above); under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
     )]
     pub(crate) async fn replace_ingest_session_tracks(
         &self,

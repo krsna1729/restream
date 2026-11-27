@@ -20,9 +20,10 @@ use std::time::Duration;
 
 use tracing::{error, info, warn};
 
-use crate::engine::{ActiveIngest, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_auth::PipelineAccessAuthenticator;
 use crate::ingest_lease::{IngestEnd, IngestLease};
+use crate::ingest_registry::ActiveIngest;
 use crate::input_gate::InputTimestampMapper;
 use crate::security::IngestSecurityService;
 use crate::ts_chunk_ring::TsChunkReader;

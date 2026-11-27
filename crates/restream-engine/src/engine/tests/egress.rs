@@ -425,7 +425,7 @@ async fn egress_attribution_is_a_no_op_for_an_unregistered_output() {
         .set_egress_fabric_attribution(
             "missing-output",
             &registration,
-            crate::engine::FabricSlot {
+            crate::engine_registries::FabricSlot {
                 feed: crate::egress::command::FeedId::new("rtmp:pipe-1:source"),
                 shard: 1,
             },

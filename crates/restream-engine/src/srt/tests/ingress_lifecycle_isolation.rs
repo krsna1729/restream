@@ -12,8 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::engine::{ActiveIngest, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_lease::IngestEnd;
+use crate::ingest_registry::ActiveIngest;
 use crate::input_gate::{InputForwardState, InputPacketBoundary, InputPacketGate};
 
 use super::super::ingress_test_support::*;

@@ -69,6 +69,7 @@ pub mod hls_pull;
 pub mod host_capacity;
 pub mod ingest_auth;
 pub mod ingest_lease;
+pub mod ingest_registry;
 pub mod input_gate;
 pub mod moq;
 #[doc(hidden)]

@@ -1,8 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use restream_engine::engine::{
-    ActiveEgress, ActiveIngest, EgressRetryState, MediaEngine, RecentEgressOutcome,
-};
+use restream_engine::engine::MediaEngine;
+use restream_engine::engine_registries::{ActiveEgress, EgressRetryState, RecentEgressOutcome};
+use restream_engine::ingest_registry::ActiveIngest;
 use restream_sync::RingBuffer;
 
 /// Retry state as an output view reports it; computed once per output.
@@ -510,7 +510,7 @@ mod tests {
             terminal_stage_key: None,
             output_name: "out-fabric-1".to_string(),
             encoding: "source".to_string(),
-            fabric: Some(restream_engine::engine::FabricSlot {
+            fabric: Some(restream_engine::engine_registries::FabricSlot {
                 feed: restream_engine::egress::command::FeedId::new("rtmp:pipe:source"),
                 shard: 2,
             }),

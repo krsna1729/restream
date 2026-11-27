@@ -4,7 +4,7 @@ use crate::egress::journal::FeedEpoch;
 use crate::egress::leaf::EgressProgressSink;
 use crate::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use crate::egress::shard::{EgressShardConfig, EgressShardHandle};
-use crate::engine::IngestRegistration;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::InputPacketGate;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_sync::RingBuffer;

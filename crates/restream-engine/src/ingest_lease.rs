@@ -26,12 +26,10 @@
 //! Media state (an Owner's publisher, a ring pusher) holds only the attempt's
 //! identity ([`IngestRegistration`]), never the lease.
 
-use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Weak};
 
-use tokio::sync::Notify;
-
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::{AbandonedAttempt, IngestRegistration, ReleaseQueue};
 
 /// The failure phase recorded for an attempt whose lease was dropped without
 /// [`IngestLease::finish`].
@@ -51,102 +49,6 @@ pub enum IngestEnd<'a> {
     /// Release it without an outcome: it was refused or withdrawn before it
     /// carried media, or its owner already recorded how it ended.
     Released,
-}
-
-/// One dropped lease's attempt, for the engine's release task.
-#[derive(Clone)]
-pub(crate) struct AbandonedAttempt {
-    pipeline_id: String,
-    registration: IngestRegistration,
-    /// Whether to record the abandoned outcome: false once a cancelled
-    /// [`IngestLease::finish`] already recorded its own.
-    record: bool,
-}
-
-/// The engine's queue of dropped leases' attempts. Unbounded so a drop never
-/// blocks or fails: it holds at most one entry per registration made, and
-/// each entry leaves it only once its release completed.
-#[derive(Default)]
-pub(crate) struct ReleaseQueue {
-    pending: std::sync::Mutex<Pending>,
-    wake: Notify,
-}
-
-#[derive(Default)]
-struct Pending {
-    queue: VecDeque<AbandonedAttempt>,
-    /// Attempts a release task is ending now, by attempt id.
-    claimed: HashSet<u64>,
-}
-
-impl ReleaseQueue {
-    fn push(&self, attempt: AbandonedAttempt) {
-        restream_sync::lock::lock(&self.pending)
-            .queue
-            .push_back(attempt);
-        // Stores a permit when no task waits, so a wake is never lost.
-        self.wake.notify_one();
-    }
-
-    /// The oldest attempt not yet released; it stays queued until
-    /// [`Self::complete`].
-    fn front(&self) -> Option<AbandonedAttempt> {
-        restream_sync::lock::lock(&self.pending)
-            .queue
-            .front()
-            .cloned()
-    }
-
-    /// Every queued attempt no release task has, claimed now.
-    fn claim_unclaimed(self: &Arc<Self>) -> Vec<(AbandonedAttempt, Claim)> {
-        let mut pending = restream_sync::lock::lock(&self.pending);
-        let Pending { queue, claimed } = &mut *pending;
-        queue
-            .iter()
-            .filter(|attempt| claimed.insert(attempt.registration.attempt_id))
-            .map(|attempt| {
-                let claim = Claim {
-                    queue: self.clone(),
-                    attempt_id: attempt.registration.attempt_id,
-                };
-                (attempt.clone(), claim)
-            })
-            .collect()
-    }
-
-    /// Removes `attempt` by its id, wherever it is now: a second pass that
-    /// released the same entry then removes nothing, never another entry.
-    fn complete(&self, attempt: &AbandonedAttempt) {
-        let mut pending = restream_sync::lock::lock(&self.pending);
-        if let Some(index) = pending
-            .queue
-            .iter()
-            .position(|queued| queued.registration.attempt_id == attempt.registration.attempt_id)
-        {
-            pending.queue.remove(index);
-        }
-    }
-
-    async fn woken(&self) {
-        self.wake.notified().await;
-    }
-}
-
-/// One release task's claim on an attempt. Dropped, it frees the claim and
-/// wakes the release task: an attempt still queued (its task cancelled) is
-/// handed out again.
-struct Claim {
-    queue: Arc<ReleaseQueue>,
-    attempt_id: u64,
-}
-
-impl Drop for Claim {
-    fn drop(&mut self) {
-        restream_sync::lock::lock(&self.queue.pending)
-            .claimed
-            .remove(&self.attempt_id);
-        self.queue.wake.notify_one();
-    }
 }
 
 /// One registered input attempt. Not `Clone`: whoever holds it owns the

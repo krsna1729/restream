@@ -18,7 +18,7 @@ impl MediaEngine {
     pub(crate) async fn stage_source_ingest(
         &self,
         stage_pipeline: &str,
-    ) -> Option<Arc<crate::engine::ActiveIngest>> {
+    ) -> Option<Arc<crate::ingest_registry::ActiveIngest>> {
         match input_id_from_hls_preview_resource_id(stage_pipeline) {
             Some(input_id) => self.ingests.sessions.read().await.get(input_id).cloned(),
             None => self

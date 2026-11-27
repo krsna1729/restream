@@ -111,7 +111,7 @@ pub(super) struct EgressTask {
     pub(super) url: String,
     pub(super) ring: Arc<restream_sync::RingBuffer>,
     pub(super) terminal_stage_key: restream_domain::domain::stage::StageKey,
-    pub(super) registration: restream_engine::engine::EgressRegistration,
+    pub(super) registration: restream_engine::engine_registries::EgressRegistration,
     pub(super) engine: Arc<MediaEngine>,
     pub(super) last_failed: FailureTracker,
     /// Leases on the shared stages this output reads through: they stop
@@ -141,7 +141,7 @@ impl EgressTask {
                 .set_egress_fabric_attribution(
                     &self.output_id,
                     &self.registration,
-                    restream_engine::engine::FabricSlot {
+                    restream_engine::engine_registries::FabricSlot {
                         feed: feed.clone(),
                         shard: shard.index(),
                     },

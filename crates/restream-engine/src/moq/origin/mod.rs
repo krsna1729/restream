@@ -633,7 +633,7 @@ fn log_generation_replace_failed(
 /// track metadata and clear removed decoder configurations.
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+    reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
 )]
 async fn resolve_pipeline(
     engine: &MediaEngine,

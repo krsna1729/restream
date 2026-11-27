@@ -63,7 +63,7 @@ struct StageView {
 /// The engine state the graph's nodes show, read once.
 struct GraphReadings<'g> {
     lifecycle_snapshots: HashMap<StageKey, restream_domain::runtime::stage::StageRuntimeSnapshot>,
-    ingest: Option<Arc<restream_engine::engine::ActiveIngest>>,
+    ingest: Option<Arc<restream_engine::ingest_registry::ActiveIngest>>,
     ring: Option<Arc<restream_sync::RingBuffer>>,
     /// Output id -> (details, metrics).
     egresses: HashMap<&'g str, (serde_json::Value, serde_json::Value)>,

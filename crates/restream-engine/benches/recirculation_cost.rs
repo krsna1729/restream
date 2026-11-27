@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
-use restream_engine::engine::IngestRegistration;
+use restream_engine::ingest_registry::IngestRegistration;
 use restream_engine::input_gate::InputPacketGate;
 use restream_engine::recirculation::RecirculationInputPublisher;
 use restream_sync::RingBuffer;

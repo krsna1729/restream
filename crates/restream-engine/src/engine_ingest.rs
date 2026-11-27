@@ -6,10 +6,11 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{
-    ActiveIngest, IngestMetadata, IngestRegistration, MediaEngine, RecentIngestOutcome,
-};
+use crate::engine::MediaEngine;
 use crate::ingest_lease::IngestLease;
+use crate::ingest_registry::{
+    ActiveIngest, IngestMetadata, IngestRegistration, RecentIngestOutcome,
+};
 use crate::input_gate::InputForwardState;
 use crate::stage_metrics::StageMetrics;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
@@ -41,7 +42,7 @@ impl MediaEngine {
     /// the engine's release task.
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `engine_registries`); no engine-wide guard is held across the gate wait, and every write guard is taken before the first insert (below)"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `ingest_registry`); no engine-wide guard is held across the gate wait, and every write guard is taken before the first insert (below)"
     )]
     pub async fn try_register_pipeline_input_attempt(
         self: &Arc<Self>,
@@ -224,7 +225,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "this pipeline's `selection` serializes the selection; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` serializes the selection; under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
     )]
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
         let _selection = self.ingests.selection.lock(pipeline_id).await;
@@ -412,7 +413,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "this pipeline's `selection` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `engine_registries`)"
+        reason = "this pipeline's `selection` keeps the current-attempt check and the outcome together; under it each ingest map is taken one at a time (module docs of `ingest_registry`)"
     )]
     pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
@@ -484,7 +485,7 @@ impl MediaEngine {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` (module docs of `engine_registries`); the later maps are taken one at a time"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` (module docs of `ingest_registry`); the later maps are taken one at a time"
     )]
     async fn release_ingest_sessions(
         &self,
@@ -573,7 +574,7 @@ impl MediaEngine {
     /// as a duplicate forever, the retry finding nothing to end).
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `active` (module docs of `engine_registries`); every write guard is taken before the first removal (above)"
+        reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `active` (module docs of `ingest_registry`); every write guard is taken before the first removal (above)"
     )]
     pub(crate) async fn unregister_ingest_if_current(
         &self,

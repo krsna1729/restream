@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use srt_transport::advanced::admission::LogicalPeerId;
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::InputTimestampMapper;
 use crate::snapshots::SrtIngressOwnerStats;
 use crate::ts_chunk_ring::TsChunkReader;
@@ -280,7 +281,12 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
         let media = &mut slot.media;
         let len = payload.len() as u64;
         let now_ms = MediaEngine::now_epoch_ms();
-        crate::engine::note_media_bytes(&media.bytes_received, &media.first_media_ms, len, now_ms);
+        crate::ingest_registry::note_media_bytes(
+            &media.bytes_received,
+            &media.first_media_ms,
+            len,
+            now_ms,
+        );
         media.ingest_metrics.record_in(len);
         media.last_progress_ms.store(now_ms, Ordering::Relaxed);
         let probe = media.demuxer.take_probe()?;

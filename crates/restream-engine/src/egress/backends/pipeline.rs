@@ -14,7 +14,7 @@ use crate::egress::backend::{
 use crate::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::egress::journal::RingFeed;
 use crate::egress::policy::WorkBudget;
-use crate::engine::IngestRegistration;
+use crate::ingest_registry::IngestRegistration;
 
 use crate::recirculation::RecirculationInputPublisher;
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, RingBuffer};

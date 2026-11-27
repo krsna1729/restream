@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use restream_domain::domain::stage::StageKey;
-use restream_engine::engine::ActiveIngest;
+use restream_engine::ingest_registry::ActiveIngest;
 use restream_sync::RingBuffer;
 
 pub(super) use super::common::{
