@@ -35,7 +35,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
         "pipe-ext-preview",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease35, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
@@ -452,7 +452,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
         "pipe-hevc-preview-input",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease42, is_new) = manager
         .ensure_stage(stage_key, source_ring.clone(), None)
         .await;
@@ -535,7 +535,7 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
         "pipe-hevc-video-only",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease43, is_new) = manager
         .ensure_stage(stage_key, source_ring.clone(), None)
         .await;

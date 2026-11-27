@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::MediaEngine;
 use bytes::Bytes;
 use restream_core::{MediaPacket, MediaType, PayloadFormat};
 use restream_domain::domain::stage::StageKind;
@@ -37,7 +38,7 @@ fn ready_audio_meta(channels: u32) -> AudioMeta {
 #[tokio::test]
 async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
 
@@ -68,7 +69,7 @@ async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
 #[tokio::test]
 async fn ensure_stage_replaces_cancelled_runtime() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-replace", StageKind::video_preset("720p"));
 
@@ -99,7 +100,7 @@ async fn ensure_stage_uses_engine_typed_transcoder_ring_capacity() {
         ..Default::default()
     });
     let engine = Arc::new(MediaEngine::new_with_config(config));
-    let manager = StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-typed", StageKind::video_preset("720p"));
 
@@ -226,7 +227,7 @@ fn video_preset_plan_separates_input_and_output_codec() {
 #[tokio::test]
 async fn snapshot_reflects_lifecycle_and_metrics() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
 
@@ -264,7 +265,15 @@ async fn wait_for_stage_metadata_returns_none_immediately_when_already_cancelled
     // hang forever instead of returning promptly.
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(200),
-        wait_for_stage_metadata(&engine, "pipe-cancel", &source, true, false, None, &cancel),
+        wait_for_stage_metadata(
+            &engine.ingests,
+            "pipe-cancel",
+            &source,
+            true,
+            false,
+            None,
+            &cancel,
+        ),
     )
     .await
     .expect("must not hang waiting on a pre-cancelled token");
@@ -289,7 +298,7 @@ async fn wait_for_stage_metadata_resolves_once_ingest_metadata_becomes_ready() {
     let cancel_clone = cancel.clone();
     let waiter = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_clone,
+            &engine_clone.ingests,
             pipeline_id,
             &source_clone,
             true,
@@ -348,7 +357,7 @@ async fn wait_for_stage_metadata_eager_parameter_sets_waits_for_ring_data() {
     let cancel_clone = cancel.clone();
     let waiter = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_clone,
+            &engine_clone.ingests,
             pipeline_id,
             &source_clone,
             false,
@@ -412,7 +421,7 @@ async fn wait_for_stage_metadata_gates_on_audio_track_readiness() {
     let cancel_clone = cancel.clone();
     let waiter = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_clone,
+            &engine_clone.ingests,
             pipeline_id,
             &source_clone,
             true,
@@ -482,7 +491,7 @@ async fn wait_for_stage_metadata_backfills_bandwidth_from_observed_ring_bitrate(
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(500),
         wait_for_stage_metadata(
-            &engine,
+            &engine.ingests,
             pipeline_id,
             &source,
             false,
@@ -522,7 +531,7 @@ async fn wait_for_stage_metadata_starts_video_only_after_audio_absence_grace() {
     let cancel_clone = cancel.clone();
     let waiter = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_clone,
+            &engine_clone.ingests,
             pipeline_id,
             &source_clone,
             true,
@@ -574,7 +583,7 @@ async fn wait_for_stage_metadata_still_prefers_late_audio_before_grace() {
     let cancel_clone = cancel.clone();
     let waiter = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_clone,
+            &engine_clone.ingests,
             pipeline_id,
             &source_clone,
             true,
@@ -629,7 +638,7 @@ async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_ses
     let resolved = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         wait_for_stage_metadata(
-            &engine,
+            &engine.ingests,
             &stage_pipeline,
             &source,
             false,

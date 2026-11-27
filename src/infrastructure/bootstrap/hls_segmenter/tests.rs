@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_engine::engine::MediaEngine;
-use restream_engine::stage_runtime::StageRuntimeManager;
 use restream_sync::RingBuffer;
 
 use super::spawn_pipeline_hls_segmenter;
@@ -13,7 +12,7 @@ use super::spawn_pipeline_hls_segmenter;
 #[tokio::test]
 async fn the_shared_hls_segmenter_holds_the_stage_it_reads_until_it_ends() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let source = Arc::new(RingBuffer::new(16));
     let key = StageKey::new("pipe", StageKind::video_preset("720p"));
     let (stage, starting_output, _) = manager
@@ -59,7 +58,8 @@ async fn the_shared_hls_segmenter_holds_the_stage_it_reads_until_it_ends() {
 async fn the_shared_hls_segmenter_ends_when_its_stage_ends_on_its_own() {
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe", StageKind::video_preset("720p"));
-    let (stage, lease, _) = StageRuntimeManager::new(engine.clone())
+    let (stage, lease, _) = engine
+        .stage_runtime()
         .ensure_stage(key.clone(), Arc::new(RingBuffer::new(16)), None)
         .await;
     let (store, _) = engine.ensure_hls_segmenter("pipe").await;

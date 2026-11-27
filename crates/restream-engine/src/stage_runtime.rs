@@ -8,10 +8,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::engine::MediaEngine;
+use crate::events::EventLog;
 use crate::ffmpeg::backend::StageRunContext;
 use crate::ffmpeg::stage_input::StageInputPump;
 use crate::ffmpeg::stage_output::StageOutputNormalizer;
@@ -19,9 +20,10 @@ use crate::ffmpeg::stage_plan::{
     AudioStageOp, CodecEdgeOp, FfmpegStagePlan, StageInputSpec, StageStartupPolicy, TimelinePolicy,
     VideoCodecKind, VideoStageOp,
 };
+use crate::ingest_registry::IngestRegistry;
 use crate::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::stage_metrics::StageMetrics;
-use crate::stage_registry::{StageLease, StageRuntime};
+use crate::stage_registry::{StageLease, StageRegistry, StageRuntime};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use restream_domain::domain::stage::{StageKey, StageKind};
@@ -39,15 +41,37 @@ pub struct StageHandle {
     pub metrics: Arc<StageMetrics>,
 }
 
-/// Runtime scheduler for media graph stages.
+/// Runtime scheduler for media graph stages. The engine builds it
+/// (`stage_runtime()`) over its registries, event log and FFmpeg capacity.
 #[derive(Clone)]
 pub struct StageRuntimeManager {
-    engine: Arc<MediaEngine>,
+    ingests: Arc<IngestRegistry>,
+    stages: Arc<StageRegistry>,
+    events: Arc<EventLog>,
+    /// The engine-wide external FFmpeg slots, of which there are
+    /// `ffmpeg_permits_total`.
+    ffmpeg_permits: Arc<Semaphore>,
+    ffmpeg_permits_total: usize,
+    transcoder_ring_capacity: usize,
 }
 
 impl StageRuntimeManager {
-    pub fn new(engine: Arc<MediaEngine>) -> Self {
-        Self { engine }
+    pub(crate) fn new(
+        ingests: Arc<IngestRegistry>,
+        stages: Arc<StageRegistry>,
+        events: Arc<EventLog>,
+        ffmpeg_permits: Arc<Semaphore>,
+        ffmpeg_permits_total: usize,
+        transcoder_ring_capacity: usize,
+    ) -> Self {
+        Self {
+            ingests,
+            stages,
+            events,
+            ffmpeg_permits,
+            ffmpeg_permits_total,
+            transcoder_ring_capacity,
+        }
     }
 
     /// Ensure a stage exists for the given key, creating its output ring,
@@ -66,7 +90,6 @@ impl StageRuntimeManager {
     ) -> (StageHandle, StageLease, bool) {
         let backend_kind = restream_domain::planner::select_backend(&key.kind);
         let mut lifecycle = self
-            .engine
             .stages
             .get_or_create_stage_lifecycle_with_backend(
                 key.clone(),
@@ -74,17 +97,13 @@ impl StageRuntimeManager {
                 backend_kind,
             )
             .await;
-        let mut metrics = self
-            .engine
-            .stages
-            .get_or_create_stage_metrics(key.clone())
-            .await;
+        let mut metrics = self.stages.get_or_create_stage_metrics(key.clone()).await;
 
         // Single write-lock acquisition to atomically check-and-insert, avoiding
         // the TOCTOU race where two callers create duplicate stages. The
         // guard is released before any await-heavy setup.
         let (output_ring, cancel, lease) = {
-            let mut runtimes = self.engine.stages.runtimes.write().await;
+            let mut runtimes = self.stages.runtimes.write().await;
             if let Some(runtime) = runtimes.get(&key)
                 && !runtime.cancel.is_cancelled()
                 && let Some(ring) = runtime.ring.as_ref()
@@ -113,10 +132,9 @@ impl StageRuntimeManager {
                 ));
                 metrics = Arc::new(StageMetrics::new());
             }
-            let output_ring =
-                Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
+            let output_ring = Arc::new(RingBuffer::new(self.transcoder_ring_capacity));
             let cancel = CancellationToken::new();
-            let lease = StageLease::runtime(&self.engine.stages, key.clone(), cancel.clone());
+            let lease = StageLease::runtime(&self.stages, key.clone(), cancel.clone());
             runtimes.insert(
                 key.clone(),
                 StageRuntime {
@@ -140,13 +158,10 @@ impl StageRuntimeManager {
             stage = %key,
             "stage registered"
         );
-        self.engine
-            .runtime
-            .event_log
-            .emit(crate::events::EventKind::StageRegistered {
-                pipeline_id: key.pipeline.to_string(),
-                encoding: key.kind.to_string(),
-            });
+        self.events.emit(crate::events::EventKind::StageRegistered {
+            pipeline_id: key.pipeline.to_string(),
+            encoding: key.kind.to_string(),
+        });
 
         (
             StageHandle {
@@ -205,7 +220,7 @@ impl StageRuntimeManager {
                 cancel: cancel.clone(),
                 lifecycle: handle.lifecycle.clone(),
                 metrics: handle.metrics.clone(),
-                events: self.engine.runtime.event_log.clone(),
+                events: self.events.clone(),
             };
             let _ = crate::executor::spawn_with_class(
                 crate::executor::MediaService {
@@ -229,11 +244,10 @@ impl StageRuntimeManager {
 
         let pipeline_id = key.pipeline.to_string();
         let output_ring = handle.ring.clone();
-        let ingests = self.engine.ingests.clone();
-        let stages = self.engine.stages.clone();
-        let ffmpeg_permits = self.engine.runtime.external_ffmpeg_semaphore.clone();
-        let events = self.engine.runtime.event_log.clone();
-        let engine = self.engine.clone();
+        let ingests = self.ingests.clone();
+        let stages = self.stages.clone();
+        let ffmpeg_permits = self.ffmpeg_permits.clone();
+        let events = self.events.clone();
         let cancel = handle.cancel.clone();
         let lifecycle = handle.lifecycle.clone();
         let metrics = handle.metrics.clone();
@@ -249,7 +263,7 @@ impl StageRuntimeManager {
             let eager_raw_parameter_sets = codec_needs_parameter_sets(probe_codec);
 
             let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
-                &engine,
+                &ingests,
                 &pipeline_id,
                 &source_ring,
                 include_audio,
@@ -350,7 +364,9 @@ impl StageRuntimeManager {
 
     /// Return a runtime snapshot for a stage, if one is registered.
     pub async fn snapshot(&self, key: &StageKey) -> Option<StageRuntimeSnapshot> {
-        self.engine.stage_runtime_snapshot(key).await
+        self.stages
+            .stage_runtime_snapshot(key, &self.ffmpeg_permits, self.ffmpeg_permits_total)
+            .await
     }
 
     async fn initialize_stage_metadata(
@@ -386,7 +402,7 @@ impl StageRuntimeManager {
         let input_tracks = if let Some(tracks) = source_ring.audio_tracks() {
             std::sync::Arc::new(tracks.to_vec())
         } else {
-            let ingests = self.engine.ingests.active.read().await;
+            let ingests = self.ingests.active.read().await;
             ingests
                 .get(key.pipeline.as_str())
                 .map(|i| {
@@ -448,7 +464,7 @@ fn stage_audio_tracks_ready(audio_tracks: &[AudioMeta]) -> bool {
 pub(crate) const AUDIO_ABSENCE_GRACE: Duration = Duration::from_secs(1);
 
 pub(crate) async fn wait_for_stage_metadata(
-    engine: &Arc<MediaEngine>,
+    ingests: &IngestRegistry,
     pipeline_id: &str,
     source_buffer: &Arc<RingBuffer>,
     include_audio: bool,
@@ -463,7 +479,7 @@ pub(crate) async fn wait_for_stage_metadata(
         }
 
         let ingest_result = {
-            let ingest = engine.ingests.stage_source_ingest(pipeline_id).await;
+            let ingest = ingests.stage_source_ingest(pipeline_id).await;
             ingest.and_then(|ingest| {
                 let metadata = ingest.metadata();
                 let mut video = metadata.video?;

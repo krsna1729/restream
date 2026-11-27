@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::engine::MediaEngine;
 use crate::stage_registry::StageLease;
+use crate::stage_runtime::StageRuntimeManager;
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 
@@ -27,17 +28,30 @@ impl MediaEngine {
             .await
     }
 
+    /// The stage runtime scheduler over this engine's ingest and stage
+    /// registries, event log and external FFmpeg capacity.
+    pub fn stage_runtime(&self) -> StageRuntimeManager {
+        StageRuntimeManager::new(
+            self.ingests.clone(),
+            self.stages.clone(),
+            self.runtime.event_log.clone(),
+            self.runtime.external_ffmpeg_semaphore.clone(),
+            self.config.external_ffmpeg_permits,
+            self.config.transcoder_ring_capacity,
+        )
+    }
+
     /// Get or create a shared transcoder stage for a typed pipeline stage, and
     /// the caller's lease on it: the stage stops when its last lease drops.
     pub async fn get_or_create_transcoder(
-        self: &Arc<Self>,
+        &self,
         pipeline_id: &str,
         stage_kind: StageKind,
         source_buffer: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (Arc<RingBuffer>, StageLease) {
         let key = StageKey::new(pipeline_id, stage_kind.clone());
-        let manager = crate::stage_runtime::StageRuntimeManager::new(self.clone());
+        let manager = self.stage_runtime();
         let (handle, lease, created) = manager
             .ensure_stage(key, source_buffer.clone(), input_codec_override)
             .await;
@@ -52,13 +66,13 @@ impl MediaEngine {
     /// Get or create a shared H.265→H.264 transcoder stage for a pipeline, and
     /// the caller's lease on it.
     pub async fn get_or_create_h264_transcoder(
-        self: &Arc<Self>,
+        &self,
         pipeline_id: &str,
         upstream: StageKind,
         source_buffer: Arc<RingBuffer>,
     ) -> (Arc<RingBuffer>, StageLease) {
         let key = StageKey::new(pipeline_id, StageKind::codec_edge("hevc_to_h264", upstream));
-        let manager = crate::stage_runtime::StageRuntimeManager::new(self.clone());
+        let manager = self.stage_runtime();
         let (handle, lease, created) = manager.ensure_stage(key, source_buffer.clone(), None).await;
 
         if created {

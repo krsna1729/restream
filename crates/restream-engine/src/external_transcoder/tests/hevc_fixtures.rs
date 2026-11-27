@@ -32,7 +32,7 @@ async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() 
         "pipe-ext-hevc-single-audio",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease31, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
@@ -126,7 +126,7 @@ async fn external_h264_stage_emits_live_packets_for_single_audio_hevc_fixture() 
         "pipe-ext-hevc-source-h264",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease32, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
@@ -227,7 +227,7 @@ async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixtu
         "pipe-ext-hevc-prebuffered",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease33, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;
@@ -304,7 +304,7 @@ async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
         "pipe-ext-preview-long",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease34, is_new) = manager
         .ensure_stage(stage_key.clone(), source_ring.clone(), None)
         .await;

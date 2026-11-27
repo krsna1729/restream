@@ -12,7 +12,6 @@ use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_engine::engine::MediaEngine;
 use restream_engine::stage_lifecycle::{StageBackendKind, StagePhase};
-use restream_engine::stage_runtime::StageRuntimeManager;
 use restream_sync::RingBuffer;
 
 #[tokio::test]
@@ -40,7 +39,7 @@ async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
         pipeline_id,
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let (handle, _lease4, _) = manager
         .ensure_stage(stage_key.clone(), Arc::new(RingBuffer::new(16)), None)
         .await;

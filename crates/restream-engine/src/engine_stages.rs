@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use crate::engine::MediaEngine;
 use crate::engine_registries::ActiveEgress;
@@ -134,45 +133,26 @@ impl MediaEngine {
     fn build_stage_runtime_snapshot(
         &self,
         key: &StageKey,
-        lifecycle: StageLifecycleSnapshot,
-        metrics: Arc<StageMetrics>,
+        lifecycle: &StageLifecycleSnapshot,
+        metrics: &StageMetrics,
     ) -> StageRuntimeSnapshot {
-        let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
-            lifecycle.phase,
-            StagePhase::WaitingForCapacity { .. } | StagePhase::CapacityAcquired { .. }
-        ) {
-            let semaphore = &self.runtime.external_ffmpeg_semaphore;
-            let total = Some(self.config.external_ffmpeg_permits);
-            let available = Some(semaphore.available_permits());
-            let wait_ms = lifecycle
-                .phase_started_at
-                .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
-            (total, available, wait_ms)
-        } else {
-            (None, None, None)
-        };
-
-        StageRuntimeSnapshot {
-            key: key.clone(),
-            backend: lifecycle.backend,
-            phase: lifecycle.phase.clone(),
-            backend_pid: lifecycle.backend_pid,
-            bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
-            bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
-            packets_in: metrics.packets_in.load(Ordering::Relaxed),
-            packets_out: metrics.packets_out.load(Ordering::Relaxed),
-            first_input_at: lifecycle.first_input_at,
-            first_output_at: lifecycle.first_output_at,
-            last_error: lifecycle.last_error.clone(),
-            capacity_permits_total,
-            capacity_permits_available,
-            capacity_wait_ms,
-        }
+        crate::stage_registry::stage_runtime_snapshot(
+            key,
+            lifecycle,
+            metrics,
+            &self.runtime.external_ffmpeg_semaphore,
+            self.config.external_ffmpeg_permits,
+        )
     }
 
     pub async fn stage_runtime_snapshot(&self, key: &StageKey) -> Option<StageRuntimeSnapshot> {
-        let (lifecycle, metrics) = self.stages.stage_snapshot_parts(key).await?;
-        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
+        self.stages
+            .stage_runtime_snapshot(
+                key,
+                &self.runtime.external_ffmpeg_semaphore,
+                self.config.external_ffmpeg_permits,
+            )
+            .await
     }
 
     /// Return runtime snapshots for all stages belonging to the given pipeline.
@@ -212,7 +192,7 @@ impl MediaEngine {
         if matches!(lifecycle.phase, StagePhase::Producing) {
             return None;
         }
-        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
+        Some(self.build_stage_runtime_snapshot(key, &lifecycle, &metrics))
     }
 
     /// Returns the blocking upstream stage snapshot for an HLS preview when
@@ -236,7 +216,7 @@ impl MediaEngine {
             if matches!(lifecycle.phase, StagePhase::Producing) {
                 continue;
             }
-            return Some(self.build_stage_runtime_snapshot(&key, lifecycle, metrics));
+            return Some(self.build_stage_runtime_snapshot(&key, &lifecycle, &metrics));
         }
         None
     }

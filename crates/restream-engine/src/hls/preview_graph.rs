@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::MediaEngine;
 use crate::stage_registry::StageLease;
-use crate::stage_runtime::StageRuntimeManager;
 use restream_core::metadata::VideoMeta;
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::planner::plan_hls_preview_graph;
@@ -163,7 +162,7 @@ async fn ensure_shared_bridge_graph(
     source_ring: Arc<RingBuffer>,
     source_video: Option<VideoMeta>,
 ) -> HlsPreviewGraph {
-    let manager = StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, lease, created) = manager.ensure_stage(key, source_ring.clone(), None).await;
     if created {
         manager.spawn_codec_edge_stage(handle.clone(), source_ring);
