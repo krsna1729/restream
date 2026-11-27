@@ -573,10 +573,11 @@ Rules for code behind a boundary:
   per-entity state into its owning map before work that can unwind.
 - An input attempt's registration is an `IngestLease` (`ingest_lease`), held
   by that attempt's session state. Orderly teardown calls `finish`; any other
-  end (a panic, a cancelled task, an early return) drops it, and the engine's
-  release task ends that attempt as `abandoned`. Releases are attempt-checked,
-  and the release queue is engine-owned, so no exit path leaves a stream key
-  locked as a duplicate publisher. Never unregister an attempt by hand.
+  end (a panic, a cancelled task, an early return) drops it, and the ingest
+  registry's release task ends that attempt as `abandoned`. Releases are
+  attempt-checked, and the release queue is owned by the ingest registry, so
+  no exit path leaves a stream key locked as a duplicate publisher. Never
+  unregister an attempt by hand.
 - Never drop a pending Compio I/O future in a losing `select!` branch. Its
   completion (an accepted socket, received bytes) is lost with it. Keep the
   operation in flight until it completes.

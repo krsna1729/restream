@@ -39,7 +39,7 @@ impl MediaEngine {
 
     /// Registers one attempt on `input_id`, unless a live attempt holds it.
     /// The returned lease ends the attempt: by `finish`, or on drop through
-    /// the engine's release task.
+    /// the ingest registry's release task.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "lock order `selection` (this pipeline's) -> `cancel_tokens` -> `sessions` -> `selected_inputs` -> `active` (module docs of `ingest_registry`); no engine-wide guard is held across the gate wait, and every write guard is taken before the first insert (below)"
