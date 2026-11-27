@@ -176,20 +176,6 @@ async fn start_ramp_restream(env: &RampEnv) -> Result<Child, String> {
     .await
 }
 
-pub(crate) fn cleanup_ramp_db(path: &Path) {
-    let path_string = path.to_string_lossy();
-    let db_path = path_string
-        .strip_prefix("sqlite:")
-        .unwrap_or(path_string.as_ref())
-        .split('?')
-        .next()
-        .unwrap_or("data.db");
-    let db_path = PathBuf::from(db_path);
-    let _ = std::fs::remove_file(&db_path);
-    let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
-    let _ = std::fs::remove_file(format!("{}-wal", db_path.display()));
-}
-
 async fn start_ramp_mediamtx(env: &RampEnv) -> Result<Child, String> {
     std::fs::write(
         &env.mediamtx_config,

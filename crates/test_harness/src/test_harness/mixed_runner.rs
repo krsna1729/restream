@@ -38,8 +38,6 @@ mod mixed_sinks;
 mod mixed_stack;
 #[path = "mixed_telemetry.rs"]
 mod mixed_telemetry;
-#[path = "output_helpers.rs"]
-mod output_helpers;
 
 pub(super) use mixed_artifact_index::{
     mixed_artifact_index_path, mixed_root_artifact_index_path, write_mixed_artifact_index,
@@ -56,9 +54,7 @@ pub(super) use mixed_control::{
     mixed_output_progress_timeout_for_case, mixed_progress_output_ids, signal_checks_only,
 };
 pub(super) use mixed_executor::{MIXED_EXECUTOR_STEPS, MixedExecutor};
-pub(super) use mixed_lifecycle::{
-    delete_and_verify_mixed_outputs, stop_mixed_outputs, wait_for_outputs_stopped,
-};
+pub(super) use mixed_lifecycle::delete_and_verify_mixed_outputs;
 pub(super) use mixed_live_scenarios::{run_mixed_anchor_config, run_mixed_live_config};
 #[cfg(test)]
 pub(super) use mixed_matrix_runner::{
@@ -111,7 +107,6 @@ pub(super) use mixed_telemetry::{
     record_mixed_rss_delta, snapshot_mixed, verify_mixed_graph_stage_sharing,
     verify_optional_mixed_adaptive_ring,
 };
-pub(super) use output_helpers::{create_output, create_output_with_rtmp_mode, start_output};
 
 /// Runtime configuration and artifact paths for one mixed-matrix scenario.
 #[derive(Clone)]

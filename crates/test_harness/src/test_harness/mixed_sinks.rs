@@ -168,7 +168,7 @@ pub(crate) async fn add_mixed_outputs_and_gate(
             pipeline_id,
             output_ids,
             mixed_output_progress_timeout_for_case(case, output_ids.len()),
-            Some(env),
+            |output_id| env.output_cell_label(output_id),
         )
         .await?;
     }

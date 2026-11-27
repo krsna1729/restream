@@ -84,6 +84,8 @@ mod moq_impairment;
 mod moq_moxygen_interop;
 #[path = "test_harness/moq_relay_interop.rs"]
 mod moq_relay_interop;
+#[path = "test_harness/output_helpers.rs"]
+mod output_helpers;
 #[path = "test_harness/output_progress.rs"]
 mod output_progress;
 #[path = "test_harness/thread_cpu.rs"]
@@ -136,6 +138,7 @@ pub(crate) use mixed_adaptive_ring::*;
 use mixed_manifest::*;
 use mixed_runner::*;
 pub(crate) use mode_specs::*;
+use output_helpers::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;

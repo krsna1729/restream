@@ -1,5 +1,4 @@
 use super::super::mixed_runner::preflight_rtmps_ktls_capabilities;
-use super::super::resource_sweep::ffmpeg_children_stats;
 use super::super::*;
 use super::egress::{
     fault_rtmp_egress_output_churn, fault_rtmp_egress_sink_disappear,

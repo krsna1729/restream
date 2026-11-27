@@ -456,21 +456,6 @@ pub(super) fn read_proc_status_text(pid: u32, key: &str) -> Option<String> {
         .map(|value| value.trim().to_string())
 }
 
-fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
-    let status =
-        std::fs::read_to_string(format!("/proc/{pid}/status")).map_err(|e| e.to_string())?;
-    for line in status.lines() {
-        if let Some(value) = line.strip_prefix(&format!("{key}:")) {
-            return value
-                .split_whitespace()
-                .next()
-                .and_then(|v| v.parse::<u64>().ok())
-                .ok_or_else(|| format!("failed to parse {key}"));
-        }
-    }
-    Err(format!("{key} missing in /proc/{pid}/status"))
-}
-
 pub(crate) fn read_proc_status_kb_checked(
     pid: u32,
     key: &str,
@@ -507,43 +492,6 @@ fn read_smaps_rollup(pid: u32) -> Result<ProcMemRollup, String> {
         shared_dirty_kb: value_for("Shared_Dirty"),
         pss_kb: value_for("Pss"),
         swap_kb: value_for("Swap"),
-    })
-}
-
-pub(crate) fn ffmpeg_children_stats(parent_pid: u32) -> Result<FfmpegStats, String> {
-    let mut count = 0u64;
-    let mut rss_kb = 0u64;
-    let mut pids = Vec::new();
-    for entry in std::fs::read_dir("/proc").map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name();
-        let Some(pid) = name.to_string_lossy().parse::<u32>().ok() else {
-            continue;
-        };
-        let status_path = format!("/proc/{pid}/status");
-        let Ok(status) = std::fs::read_to_string(&status_path) else {
-            continue;
-        };
-        let ppid = status
-            .lines()
-            .find_map(|line| line.strip_prefix("PPid:"))
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .unwrap_or(0);
-        if ppid != parent_pid {
-            continue;
-        }
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-        let text = String::from_utf8_lossy(&cmdline);
-        if text.contains("ffmpeg") {
-            count += 1;
-            rss_kb += read_proc_status_kb(pid, "VmRSS").unwrap_or(0);
-            pids.push(pid);
-        }
-    }
-    Ok(FfmpegStats {
-        count,
-        rss_kb,
-        pids,
     })
 }
 

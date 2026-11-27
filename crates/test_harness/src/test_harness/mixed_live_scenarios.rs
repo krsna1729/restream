@@ -303,7 +303,7 @@ async fn gate_anchor_output_progress(
         pipeline_id,
         &progress_output_ids,
         mixed_output_progress_timeout_for_case(case, progress_output_ids.len()),
-        Some(env),
+        |output_id| env.output_cell_label(output_id),
     )
     .await?;
     Ok(())
