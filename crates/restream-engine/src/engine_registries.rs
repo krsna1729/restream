@@ -54,7 +54,8 @@ use arc_swap::ArcSwapOption;
 use restream_sync::keyed_lock::KeyedLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Instant;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -63,7 +64,6 @@ use crate::egress::runtime::{FeedWakeSubscription, SharedFabricRuntime};
 use crate::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
-use crate::engine_hls::HlsConsumers;
 use crate::events::EventLog;
 use crate::hls::HlsStore;
 use crate::hls_fmp4::Fmp4HlsStore;
@@ -361,6 +361,77 @@ pub struct StreamQaEntry {
 #[derive(Default)]
 pub struct StreamQaRegistry {
     pub entries: std::sync::Mutex<HashMap<String, StreamQaEntry>>,
+}
+
+/// Tracks HLS consumers for a pipeline. Persistent consumers (egress outputs)
+/// hold a [`PersistentLease`]. Transient consumers (browser preview) keep the
+/// segmenter alive via playlist fetch heartbeats.
+pub struct HlsConsumers {
+    /// Live [`PersistentLease`]s taken from this entry; only leases change it.
+    persistent: Arc<AtomicU64>,
+    /// Monotonic reference time.
+    pub reference_instant: Instant,
+    /// Monotonic elapsed millis since reference_instant for the last access.
+    pub last_access_ms: AtomicU64,
+    /// Cancel token for the segmenter task.
+    pub cancel_token: CancellationToken,
+}
+
+impl HlsConsumers {
+    pub fn new(cancel_token: CancellationToken) -> Self {
+        Self {
+            persistent: Arc::new(AtomicU64::new(0)),
+            reference_instant: Instant::now(),
+            last_access_ms: AtomicU64::new(0),
+            cancel_token,
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.reference_instant.elapsed().as_millis() as u64
+    }
+
+    pub fn touch(&self) {
+        self.last_access_ms.store(self.now_ms(), Ordering::Relaxed);
+    }
+
+    /// Register a persistent consumer of this entry until the lease drops.
+    pub fn lease_persistent(&self) -> PersistentLease {
+        self.persistent.fetch_add(1, Ordering::Relaxed);
+        PersistentLease {
+            count: Arc::clone(&self.persistent),
+        }
+    }
+
+    pub fn persistent_count(&self) -> u64 {
+        self.persistent.load(Ordering::Relaxed)
+    }
+
+    pub fn is_idle(&self, timeout_ms: u64) -> bool {
+        let persistent = self.persistent.load(Ordering::Relaxed);
+        if persistent > 0 {
+            return false;
+        }
+        let last = self.last_access_ms.load(Ordering::Relaxed);
+        let now = self.now_ms();
+        now.saturating_sub(last) >= timeout_ms
+    }
+}
+
+/// One persistent HLS consumer (an HLS egress output). While it lives, the
+/// segmenter entry it came from is never idle; dropping it releases exactly
+/// that registration, on that entry, once. It is not `Clone`, so there is no
+/// unmatched release, and a lease from a segmenter that has since been
+/// replaced cannot release the replacement's consumers.
+#[must_use = "dropping the lease releases the consumer at once"]
+pub struct PersistentLease {
+    count: Arc<AtomicU64>,
+}
+
+impl Drop for PersistentLease {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub struct HlsRegistry {
@@ -676,7 +747,46 @@ impl RuntimeInfra {
 
 #[cfg(test)]
 mod tests {
-    use super::SrtMuxerShardPool;
+    use super::{HlsConsumers, SrtMuxerShardPool};
+    use std::sync::atomic::Ordering;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn is_idle_treats_never_touched_consumer_as_idle_at_zero_timeout() {
+        // last_access_ms starts at 0; a fresh consumer with no persistent
+        // outputs and a zero grace timeout must be considered idle
+        // immediately, with no implicit startup grace period.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        assert!(hc.is_idle(0));
+    }
+
+    #[test]
+    fn a_held_lease_vetoes_idle_and_its_drop_releases_it() {
+        // A persistent (egress) consumer must veto idle shutdown outright,
+        // even though the heartbeat was never touched and the timeout is 0.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        let first = hc.lease_persistent();
+        let second = hc.lease_persistent();
+        drop(first);
+        assert!(!hc.is_idle(0), "one lease is still held");
+        drop(second);
+        assert_eq!(hc.persistent_count(), 0);
+        assert!(hc.is_idle(0));
+    }
+
+    // `is_idle` compares `now_ms()` against `last_access_ms` with
+    // `saturating_sub`, not plain subtraction. If `last_access_ms` is ever
+    // ahead of `now_ms()` (state corruption, or clock skew across a
+    // hypothetical restart of `reference_instant`), plain subtraction on
+    // `u64` would panic in debug builds and wrap to a huge value in release,
+    // both of which would misreport a live consumer as idle or crash the
+    // engine. The guard must instead treat "reads as behind" as "not idle".
+    #[test]
+    fn is_idle_does_not_underflow_when_last_access_is_ahead_of_now() {
+        let hc = HlsConsumers::new(CancellationToken::new());
+        hc.last_access_ms.store(u64::MAX, Ordering::Relaxed);
+        assert!(!hc.is_idle(1000));
+    }
 
     #[test]
     fn retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes() {

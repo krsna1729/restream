@@ -266,7 +266,7 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
         .await
         .unwrap();
     // An input preview can key a ring; it is not a pipeline.
-    let preview = restream_engine::engine_hls::input_hls_preview_resource_id("input-x");
+    let preview = restream_engine::preview_ids::input_hls_preview_resource_id("input-x");
     let _ = engine.get_or_create_pipeline(&preview).await;
 
     assert!(

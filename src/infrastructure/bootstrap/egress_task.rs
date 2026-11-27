@@ -160,7 +160,7 @@ impl EgressTask {
 
         // Held for the whole run, panics included; released (dropped) after
         // the output is unregistered, as before.
-        let mut hls_lease: Option<restream_engine::engine_hls::PersistentLease> = None;
+        let mut hls_lease: Option<restream_engine::engine_registries::PersistentLease> = None;
         let panicked = std::panic::AssertUnwindSafe(async {
             self.run_scheme(url_scheme, &mut hls_lease).await;
         })
@@ -202,7 +202,7 @@ impl EgressTask {
     async fn run_scheme(
         &self,
         url_scheme: OutputUrlScheme,
-        hls_lease: &mut Option<restream_engine::engine_hls::PersistentLease>,
+        hls_lease: &mut Option<restream_engine::engine_registries::PersistentLease>,
     ) {
         match url_scheme {
             OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
@@ -256,7 +256,7 @@ impl EgressTask {
     async fn run_hls(
         &self,
         url_scheme: OutputUrlScheme,
-        hls_lease: &mut Option<restream_engine::engine_hls::PersistentLease>,
+        hls_lease: &mut Option<restream_engine::engine_registries::PersistentLease>,
     ) {
         let (store, already_running) = self.engine.ensure_hls_segmenter(&self.pipeline_id).await;
         if !already_running {

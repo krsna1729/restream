@@ -25,7 +25,9 @@ impl Fixture {
         let source = feed.clone_reader();
         let runtime = tokio::task::spawn_blocking(move || {
             let config = shard_config().with_leaf_capacity(1);
-            let budget = crate::config::EgressFabricConfig::default().work_budget();
+            let budget = crate::egress::policy::WorkBudgetConfig::from_fabric(
+                &crate::config::EgressFabricConfig::default(),
+            );
             let group = EgressShardGroup::spawn_with(NonZeroU32::MIN, config, |_| {
                 let source = source.clone_reader();
                 move || SinkShardBackend::new(source, budget).with_leaf_capacity(1)
@@ -135,7 +137,9 @@ fn held_growth_keeps_media_health_and_other_feeds_live_after_caller_cancel() {
                                 Ok::<_, String>(
                                     SinkShardBackend::new(
                                         feed,
-                                        crate::config::EgressFabricConfig::default().work_budget(),
+                                        crate::egress::policy::WorkBudgetConfig::from_fabric(
+                                            &crate::config::EgressFabricConfig::default(),
+                                        ),
                                     )
                                     .with_leaf_capacity(1),
                                 )

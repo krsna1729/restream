@@ -14,7 +14,9 @@ use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
     SharedFabricRuntime, subscribe_fabric_wakes,
 };
-use crate::egress::shard::{EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError};
+use crate::egress::shard::{
+    EgressShardConfig, EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError,
+};
 use crate::engine::MediaEngine;
 use crate::hls::HlsStore;
 
@@ -95,7 +97,7 @@ impl MediaEngine {
                 engine_config.rtmps_extra_trust_roots_pem_path.as_deref(),
             )
             .map_err(HlsPutFabricEnsureError::TrustRoots)?;
-            let shard_config = config.shard_config();
+            let shard_config = EgressShardConfig::from_fabric(config);
             let shared: Shared = (candidate_store, client_config);
             let max_events = config.tcp_poller_max_events;
             let leaf_capacity = shard_config.leaf_capacity().get();
@@ -174,7 +176,7 @@ impl MediaEngine {
                         runtime
                             .admit_add(
                                 crate::config::EgressShardProfile::HlsPutOutputCount,
-                                config.egress_fabric.shard_config(),
+                                EgressShardConfig::from_fabric(&config.egress_fabric),
                                 &spec.id,
                             )
                             .map_err(HlsPutFabricDispatchError::Saturated)?;
@@ -233,7 +235,7 @@ impl MediaEngine {
         reason: ResizeReason,
     ) {
         let config = &engine_config.egress_fabric;
-        let shard_config = config.shard_config();
+        let shard_config = EgressShardConfig::from_fabric(config);
         let max_events = config.tcp_poller_max_events;
         let leaf_capacity = shard_config.leaf_capacity().get();
         let result = runtime.rescale(

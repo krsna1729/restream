@@ -7,7 +7,8 @@ use crate::snapshots::{
 };
 use restream_domain::domain::state::{EGRESS_PROGRESS_STALE_MS, EgressStatus};
 
-use super::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
+use super::engine::{ActiveEgress, MediaEngine};
+use crate::preview_ids::hls_preview_registry_key;
 
 /// Locks without blocking, still recovering the guarded value from a
 /// poisoned mutex instead of discarding it — diagnostics reads must not
@@ -76,7 +77,7 @@ impl MediaEngine {
             (
                 consumer.is_some_and(|consumer| !consumer.cancel_token.is_cancelled()),
                 consumer
-                    .map(crate::engine_hls::HlsConsumers::persistent_count)
+                    .map(crate::engine_registries::HlsConsumers::persistent_count)
                     .unwrap_or(0),
                 consumer.map(|consumer| {
                     let now = consumer.reference_instant.elapsed().as_millis() as u64;

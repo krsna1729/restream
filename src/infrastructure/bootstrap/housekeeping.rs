@@ -202,7 +202,7 @@ impl Housekeeping {
             if self
                 .engine
                 .has_recent_ingest_disconnect(
-                    restream_engine::engine_hls::preview_pipeline(&pipeline_id).0,
+                    restream_engine::preview_ids::preview_pipeline(&pipeline_id).0,
                     grace_ms,
                 )
                 .await

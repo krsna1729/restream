@@ -152,7 +152,7 @@ where
             ready: ReadyQueue::new(),
             sweep: LeafServiceSweep::default(),
         }
-        .with_leaf_capacity(crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+        .with_leaf_capacity(crate::config::DEFAULT_EGRESS_LEAF_CAPACITY)
     }
 
     pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {

@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
-use crate::engine_hls::input_id_from_hls_preview_resource_id;
+use crate::engine::{ActiveEgress, MediaEngine};
 use crate::engine_registries::StageRuntime;
 use crate::engine_registries::TsMuxerStage;
 use crate::pipe_metrics::PipeMetrics;
+use crate::preview_ids::{
+    hls_preview_registry_key, input_id_from_hls_preview_resource_id, preview_pipeline,
+};
 use crate::stage_lease::StageLease;
 use crate::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
@@ -498,7 +500,7 @@ impl MediaEngine {
 
         for pipeline_id in active_preview_ids {
             // A passthrough preview (`<id>.hevc`) plans no stage.
-            if crate::engine_hls::preview_pipeline(&pipeline_id).1 {
+            if preview_pipeline(&pipeline_id).1 {
                 continue;
             }
             let ingest_codec =

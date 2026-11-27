@@ -12,6 +12,18 @@ pub(crate) fn epoch_ms() -> u64 {
     jiff::Timestamp::now().as_millisecond().max(0) as u64
 }
 
+/// `current - previous` as a per-second rate, or `None` when the interval is
+/// empty or the counter moved backwards (a reset is not a zero rate). Shared
+/// by the SRT ingress quality and egress sender statistics.
+pub(crate) fn per_second(
+    current: u64,
+    previous: u64,
+    interval: std::time::Duration,
+) -> Option<f64> {
+    let seconds = interval.as_secs_f64();
+    (seconds > 0.0 && current >= previous).then(|| (current - previous) as f64 / seconds)
+}
+
 /// CPU time the calling thread has consumed.
 pub(crate) fn thread_cpu_ns() -> u64 {
     let ts = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);

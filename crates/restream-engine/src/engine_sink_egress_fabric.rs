@@ -5,13 +5,14 @@ use crate::egress::journal::RingFeed;
 use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
     SharedFabricRuntime, subscribe_fabric_wakes,
 };
-use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::egress::shard::EgressShardSnapshot;
+use crate::egress::shard::{EgressShardConfig, EgressShardGroupError};
 use crate::engine::MediaEngine;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,8 +63,8 @@ impl MediaEngine {
             let config = &engine_config.egress_fabric;
             let group = spawn_sink_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
-                config.shard_config(),
-                config.work_budget(),
+                EgressShardConfig::from_fabric(config),
+                WorkBudgetConfig::from_fabric(config),
                 |_| candidate_feed.clone_reader(),
             )
             .map_err(SinkFabricEnsureError::Spawn)?;
@@ -133,7 +134,7 @@ impl MediaEngine {
                         runtime
                             .admit_add(
                                 crate::config::EgressShardProfile::SinkOutputCount,
-                                config.egress_fabric.shard_config(),
+                                EgressShardConfig::from_fabric(&config.egress_fabric),
                                 &spec.id,
                             )
                             .map_err(SinkFabricDispatchError::Saturated)?;
@@ -194,8 +195,8 @@ impl MediaEngine {
         // Price unmeasured outputs at this feed's rate, as the other fabrics do.
         runtime.forecast_feed(&feed.publication_ring());
         let config = &engine_config.egress_fabric;
-        let shard_config = config.shard_config();
-        let budget = config.work_budget();
+        let shard_config = EgressShardConfig::from_fabric(config);
+        let budget = WorkBudgetConfig::from_fabric(config);
         let result = runtime.rescale(
             crate::config::EgressShardProfile::SinkOutputCount,
             crate::host_capacity::HostCapacity::get(),

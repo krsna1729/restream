@@ -44,7 +44,7 @@ pub async fn resolve_hls_preview_graph(
     preview_id: &str,
     cancel: CancellationToken,
 ) -> Option<HlsPreviewGraph> {
-    let (pipeline_id, passthrough) = crate::engine_hls::preview_pipeline(preview_id);
+    let (pipeline_id, passthrough) = crate::preview_ids::preview_pipeline(preview_id);
     let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
     if passthrough {
         return Some(HlsPreviewGraph {
@@ -118,7 +118,7 @@ pub async fn resolve_input_hls_preview_graph(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
     // A passthrough input preview reads the input's ring as it is.
-    let passthrough = crate::engine_hls::preview_pipeline(resource_id).1;
+    let passthrough = crate::preview_ids::preview_pipeline(resource_id).1;
     if passthrough {
         return HlsPreviewGraph {
             video_ring: source_ring,
@@ -255,13 +255,13 @@ mod tests {
             .get_or_create_pipeline("pipe-preview-passthrough")
             .await;
         source.set_codec_hint("hevc");
-        let id = crate::engine_hls::hevc_passthrough_preview_id("pipe-preview-passthrough");
+        let id = crate::preview_ids::hevc_passthrough_preview_id("pipe-preview-passthrough");
         assert_eq!(
-            crate::engine_hls::preview_pipeline(&id),
+            crate::preview_ids::preview_pipeline(&id),
             ("pipe-preview-passthrough", true)
         );
         assert_eq!(
-            crate::engine_hls::preview_pipeline("pipe-preview-passthrough"),
+            crate::preview_ids::preview_pipeline("pipe-preview-passthrough"),
             ("pipe-preview-passthrough", false)
         );
         let graph = resolve_hls_preview_graph(engine.clone(), &id, CancellationToken::new())
@@ -284,7 +284,7 @@ mod tests {
     #[tokio::test]
     async fn a_passthrough_preview_stage_counts_as_its_pipeline() {
         let engine = engine_with_pipeline("pipe-preview-owner").await;
-        let id = crate::engine_hls::hevc_passthrough_preview_id("pipe-preview-owner");
+        let id = crate::preview_ids::hevc_passthrough_preview_id("pipe-preview-owner");
         let key = StageKey::new(id.as_str(), StageKind::hls());
         let _runtime = engine
             .get_or_create_non_ring_stage_runtime(
@@ -311,12 +311,12 @@ mod tests {
             .expect("register input");
         let ring = engine.ensure_input_preview_ring("input-a").await.unwrap();
         ring.set_codec_hint("hevc");
-        let copy = crate::engine_hls::input_hls_preview_resource_id("input-a");
-        let passthrough = crate::engine_hls::input_hls_preview_resource_id(
-            &crate::engine_hls::hevc_passthrough_preview_id("input-a"),
+        let copy = crate::preview_ids::input_hls_preview_resource_id("input-a");
+        let passthrough = crate::preview_ids::input_hls_preview_resource_id(
+            &crate::preview_ids::hevc_passthrough_preview_id("input-a"),
         );
         assert_eq!(
-            crate::engine_hls::input_id_from_hls_preview_resource_id(&passthrough),
+            crate::preview_ids::input_id_from_hls_preview_resource_id(&passthrough),
             Some("input-a")
         );
         let graph = resolve_input_hls_preview_graph(
@@ -349,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn a_watched_passthrough_preview_of_a_live_pipeline_is_kept() {
         let engine = engine_with_pipeline("pipe-preview-kept").await;
-        let id = crate::engine_hls::hevc_passthrough_preview_id("pipe-preview-kept");
+        let id = crate::preview_ids::hevc_passthrough_preview_id("pipe-preview-kept");
         engine.ensure_hls_preview_segmenter(&id).await;
         engine.touch_hls_preview(&id).await;
         assert!(

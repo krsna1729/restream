@@ -625,7 +625,7 @@ async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_ses
             None,
         )
         .await;
-    let stage_pipeline = crate::engine_hls::input_hls_preview_resource_id("standby");
+    let stage_pipeline = crate::preview_ids::input_hls_preview_resource_id("standby");
     let resolved = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         wait_for_stage_metadata(

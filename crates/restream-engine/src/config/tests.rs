@@ -73,7 +73,7 @@ fn rtmp_preauth_limits_are_loaded_and_clamped() {
 }
 
 #[test]
-fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
+fn egress_fabric_config_defaults_from_env() {
     with_env_overlay(
         &[],
         &[
@@ -92,10 +92,9 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
             assert_eq!(fabric.shards, HostCapacity::get().egress_shards_per_pool());
-            assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
-            let budget = fabric.work_budget();
-            assert_eq!(budget.max_units, 32);
-            assert_eq!(budget.max_bytes, 256 * 1024);
+            assert_eq!(fabric.command_channel_capacity, 1024);
+            assert_eq!(fabric.visit_max_units, 32);
+            assert_eq!(fabric.visit_max_bytes, 256 * 1024);
         },
     );
 }

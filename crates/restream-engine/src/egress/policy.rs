@@ -250,6 +250,15 @@ impl WorkBudgetConfig {
         }
     }
 
+    /// The per-visit limits of the configured egress fabric.
+    pub(crate) fn from_fabric(fabric: &crate::config::EgressFabricConfig) -> Self {
+        Self::new(
+            fabric.visit_max_units,
+            fabric.visit_max_bytes,
+            Duration::from_micros(fabric.visit_max_us),
+        )
+    }
+
     pub(crate) fn new_visit(self) -> WorkBudget {
         WorkBudget::new(self.max_units, self.max_bytes, self.window)
     }

@@ -18,7 +18,7 @@
 
 use std::time::Instant;
 
-use super::per_second;
+use crate::timing::per_second;
 
 use srt_transport::advanced::admission::LogicalPeerStats;
 

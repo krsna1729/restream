@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::config::{
+    DEFAULT_EGRESS_DRAIN_TIMEOUT, DEFAULT_EGRESS_LEAF_CAPACITY, EgressFabricConfig,
+};
 use crate::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::egress::journal::WakeGate;
 use crate::egress::metrics::{LoopIteration, ShardMetrics};
@@ -38,12 +41,6 @@ pub struct EgressShardConfig {
 }
 
 impl EgressShardConfig {
-    /// Bound on how long `Shutdown` keeps the shard loop alive draining
-    /// leaves before forcing a close, when no explicit
-    /// [`Self::with_drain_timeout`] override is given.
-    pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
-    pub const DEFAULT_LEAF_CAPACITY: usize = 4096;
-
     pub fn new(
         command_channel_capacity: usize,
         command_batch_budget: usize,
@@ -64,11 +61,25 @@ impl EgressShardConfig {
             command_batch_budget,
             readiness_batch_budget,
             timer_batch_budget,
-            leaf_capacity: NonZeroUsize::new(Self::DEFAULT_LEAF_CAPACITY)
+            leaf_capacity: NonZeroUsize::new(DEFAULT_EGRESS_LEAF_CAPACITY)
                 .expect("default leaf capacity is nonzero"),
             idle_wait,
-            drain_timeout: Self::DEFAULT_DRAIN_TIMEOUT,
+            drain_timeout: DEFAULT_EGRESS_DRAIN_TIMEOUT,
         })
+    }
+
+    /// The shard settings of the configured egress fabric.
+    pub(crate) fn from_fabric(fabric: &EgressFabricConfig) -> Self {
+        Self::new(
+            fabric.command_channel_capacity,
+            fabric.command_batch_budget,
+            fabric.readiness_batch_budget,
+            fabric.timer_batch_budget,
+            Duration::from_millis(fabric.idle_wait_ms),
+        )
+        .expect("egress fabric shard config is clamped nonzero")
+        .with_leaf_capacity(fabric.max_leaves_per_shard)
+        .with_drain_timeout(Duration::from_millis(fabric.drain_timeout_ms))
     }
 
     /// Set the fixed number of reusable network leaf slots owned by each

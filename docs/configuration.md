@@ -127,7 +127,7 @@ the output fails. There is no userspace-TLS fallback.
 | `RESTREAM_SRT_INGRESS_WINDOW_MEMORY_BYTES` | ¼ of memory limit (cgroup or host RAM) ÷ ingress owners | `0` disables | srt-rs `admission.max_window_memory_bytes` per Owner. Each publisher reserves `(flow + receive window) × 1,484` bytes. A publisher that does not fit is refused with `OVERLOAD` (1402) and counted in `ingressOwner.windowMemoryRejections`. Not a total RSS bound |
 | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` | `10000` | none | Per-output egress handshake deadline. The clock starts when the caller pool admits the request |
 | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` | `64` | `1..=4096` | Each egress Owner's caller-pool `max_in_flight`, per (shard, address family), with an equal bounded queue. A request beyond both fails and retries |
-| `RESTREAM_SRT_EGRESS_TX_CAPACITY` | `16` (`SRT_OWNER_TX_CAPACITY`, `crates/restream-engine/src/egress/backends/srt/owner_set.rs`) | `1..=4096` | Datagrams in flight per egress family Owner |
+| `RESTREAM_SRT_EGRESS_TX_CAPACITY` | `16` (`DEFAULT_SRT_EGRESS_TX_CAPACITY`, `crates/restream-engine/src/config.rs`) | `1..=4096` | Datagrams in flight per egress family Owner |
 | `RESTREAM_SRT_EGRESS_GSO` | on | bool | Coalesce equal-length datagrams to one peer into one UDP GSO `sendmsg`. A path that rejects GSO turns it off by itself |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` | `0` (off) | `0..=10000` | When set, a new shared TS muxer shard is created as each pipeline+encoding cohort crosses this many outputs |
 | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` | `64` | `1..=64` | Muxer shard limit; beyond it new outputs join the least-loaded shard (warning logged) |

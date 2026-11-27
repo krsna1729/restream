@@ -160,8 +160,8 @@ impl MediaEngine {
                 .map(|key| key.pipeline.as_str().to_string()),
         );
         ids.into_iter()
-            .filter(|id| crate::engine_hls::input_id_from_hls_preview_resource_id(id).is_none())
-            .map(|id| crate::engine_hls::preview_pipeline(&id).0.to_string())
+            .filter(|id| crate::preview_ids::input_id_from_hls_preview_resource_id(id).is_none())
+            .map(|id| crate::preview_ids::preview_pipeline(&id).0.to_string())
             .collect()
     }
 
@@ -173,7 +173,7 @@ impl MediaEngine {
         self.unregister_ingest(pipeline_id).await;
         self.cleanup_pipeline_stages(pipeline_id).await;
         self.shutdown_hls_preview_segmenter(pipeline_id).await;
-        self.shutdown_hls_preview_segmenter(&crate::engine_hls::hevc_passthrough_preview_id(
+        self.shutdown_hls_preview_segmenter(&crate::preview_ids::hevc_passthrough_preview_id(
             pipeline_id,
         ))
         .await;

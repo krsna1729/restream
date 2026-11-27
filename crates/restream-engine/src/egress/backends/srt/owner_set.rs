@@ -44,14 +44,6 @@ use restream_srt::egress_engine::SrtSendResult;
 mod dispose;
 use self::dispose::{Disposing, FamilyClosure};
 
-/// Default concurrent datagram sends per family Owner (its TX pool and lane
-/// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The default
-/// allows 16 concurrent UDP send operations per family. The runtime is sized
-/// for both families: `AddressFamily::COUNT * K`.
-/// Unsent protocol output waits in bounded protocol state, not in a Restream
-/// transport queue, so this is the whole TX envelope of one family.
-pub(crate) const SRT_OWNER_TX_CAPACITY: usize = 16;
-
 /// Largest datagram an Owner will carry: SRT live payload (1316) + header and
 /// GCM tag fit under the 1500-byte control ceiling, which therefore dominates.
 pub const SRT_OWNER_WIRE_CEILING: usize = 1500;
@@ -145,7 +137,7 @@ impl SrtOwnerSettings {
             service_budget: OwnerServiceBudget::default(),
             rx_policy: RxModePolicy::ManagedPreferred,
             runtime_builder: production_runtime,
-            tx_capacity: SRT_OWNER_TX_CAPACITY,
+            tx_capacity: crate::config::DEFAULT_SRT_EGRESS_TX_CAPACITY,
             tx_gso: true,
         }
     }

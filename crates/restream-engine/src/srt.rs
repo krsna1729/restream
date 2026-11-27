@@ -47,13 +47,6 @@ pub mod srt_owner_runtime {
     pub use super::ingress_owner::listener_shape;
     pub use crate::egress::backends::srt::owner_set::{SRT_OWNER_WIRE_CEILING, production_runtime};
 }
-/// `current - previous` as a per-second rate, or `None` when the interval is
-/// empty or the counter moved backwards (a reset is not a zero rate). Shared
-/// by the ingress quality and egress sender statistics.
-fn per_second(current: u64, previous: u64, interval: std::time::Duration) -> Option<f64> {
-    let seconds = interval.as_secs_f64();
-    (seconds > 0.0 && current >= previous).then(|| (current - previous) as f64 / seconds)
-}
 
 pub fn linked_srt_version() -> String {
     "srt-rs".to_string()

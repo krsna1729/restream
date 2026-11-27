@@ -5,8 +5,6 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::egress::policy::WorkBudgetConfig;
-use crate::egress::shard::EgressShardConfig;
 use crate::host_capacity::HostCapacity;
 
 pub mod env;
@@ -15,6 +13,21 @@ use env::{env_bool, env_u32, env_u64, env_usize, env_var};
 pub use moq::{MoqIngestConfig, MoqIngestSetting};
 
 const EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR: usize = 5;
+
+/// Bound on how long `Shutdown` keeps an egress shard loop alive draining
+/// leaves before forcing a close, when no explicit
+/// `EgressShardConfig::with_drain_timeout` override is given.
+pub const DEFAULT_EGRESS_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+/// Default number of reusable network leaf slots owned by each egress shard.
+pub const DEFAULT_EGRESS_LEAF_CAPACITY: usize = 4096;
+
+/// Default concurrent datagram sends per family Owner (its TX pool and lane
+/// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The default
+/// allows 16 concurrent UDP send operations per family. The runtime is sized
+/// for both families: `AddressFamily::COUNT * K`.
+/// Unsent protocol output waits in bounded protocol state, not in a Restream
+/// transport queue, so this is the whole TX envelope of one family.
+pub(crate) const DEFAULT_SRT_EGRESS_TX_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgressFabricConfig {
@@ -47,14 +60,13 @@ impl Default for EgressFabricConfig {
             command_batch_budget: 32,
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
-            max_leaves_per_shard: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            max_leaves_per_shard: DEFAULT_EGRESS_LEAF_CAPACITY,
             idle_wait_ms: 25,
             tcp_poller_max_events: 1024,
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
-            drain_timeout_ms: crate::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
-                .as_millis() as u64,
+            drain_timeout_ms: DEFAULT_EGRESS_DRAIN_TIMEOUT.as_millis() as u64,
             hls_put_fabric: true,
         }
     }
@@ -186,27 +198,6 @@ impl EgressFabricConfig {
 
         warnings
     }
-
-    pub(crate) fn shard_config(&self) -> EgressShardConfig {
-        EgressShardConfig::new(
-            self.command_channel_capacity,
-            self.command_batch_budget,
-            self.readiness_batch_budget,
-            self.timer_batch_budget,
-            Duration::from_millis(self.idle_wait_ms),
-        )
-        .expect("egress fabric shard config is clamped nonzero")
-        .with_leaf_capacity(self.max_leaves_per_shard)
-        .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
-    }
-
-    pub(crate) fn work_budget(&self) -> WorkBudgetConfig {
-        WorkBudgetConfig::new(
-            self.visit_max_units,
-            self.visit_max_bytes,
-            Duration::from_micros(self.visit_max_us),
-        )
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -320,7 +311,7 @@ impl Default for EngineConfig {
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
             srt_egress_connect_concurrency: 64,
-            srt_egress_tx_capacity: crate::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+            srt_egress_tx_capacity: DEFAULT_SRT_EGRESS_TX_CAPACITY,
             srt_egress_gso: true,
             srt_ingress_owners: 1,
             srt_max_peers_per_ip: 64,
@@ -387,7 +378,7 @@ impl EngineConfig {
             env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
         let srt_egress_tx_capacity = env_usize(
             "RESTREAM_SRT_EGRESS_TX_CAPACITY",
-            crate::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+            DEFAULT_SRT_EGRESS_TX_CAPACITY,
         )
         .clamp(1, 4096);
         let srt_egress_gso = env_bool("RESTREAM_SRT_EGRESS_GSO").unwrap_or(true);
