@@ -49,7 +49,7 @@ mod srt_events;
 #[path = "srt_leaf.rs"]
 mod srt_leaf;
 
-pub(crate) use owner_set::{SRT_OWNER_TX_CAPACITY, SrtCaller, SrtOwnerSettings, SrtOwners};
+pub(crate) use owner_set::{SrtCaller, SrtOwnerSettings, SrtOwners};
 pub(crate) use resolve::srt_shard_backend;
 pub(crate) use srt_leaf::SrtFabricLeaf;
 
@@ -191,7 +191,7 @@ impl SrtShardBackend {
         owners: SrtOwners,
         resolver: Option<Arc<Resolver>>,
     ) -> Self {
-        let capacity = crate::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY;
+        let capacity = crate::config::DEFAULT_EGRESS_LEAF_CAPACITY;
         let (resolved_sender, resolved_receiver) = mpsc::channel();
         let mut backend = Self {
             resolver,
@@ -215,7 +215,7 @@ impl SrtShardBackend {
             last_stall_sweep: None,
             sweep_service: Default::default(),
             service: Default::default(),
-            drain_timeout: crate::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+            drain_timeout: crate::config::DEFAULT_EGRESS_DRAIN_TIMEOUT,
             owner_shutdown_reserve: owner_set::OWNER_SHUTDOWN_RESERVE,
             resync_count: 0,
             budget_exhaustions: 0,

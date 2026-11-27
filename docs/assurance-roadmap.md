@@ -111,7 +111,7 @@ Where Restream applies these today:
   spent counts private; engines call `debit_bytes`/`debit_unit` and ask
   `is_exhausted()`/`remaining_bytes()`. Per-engine budget tests stay: they
   check where each engine consults the budget.
-- **Leases.** `PersistentLease` (`crates/restream-engine/src/engine_hls.rs`) decrements on
+- **Leases.** `PersistentLease` (`crates/restream-engine/src/engine_registries.rs`) decrements on
   `Drop`.
 - **Channel depth.** `CommandSink::free_slots`
   (`crates/restream-engine/src/egress/manager.rs`) reads the bounded channel instead of a

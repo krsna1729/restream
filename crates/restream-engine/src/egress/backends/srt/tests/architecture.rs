@@ -97,7 +97,7 @@ fn many_ipv4_outputs_share_one_owner_and_one_caller_socket() {
     let owner = harness.backend.owners.owner(AddressFamily::V4).unwrap();
     assert_eq!(
         owner.tx_pool_snapshot().capacity,
-        owner_set::SRT_OWNER_TX_CAPACITY
+        crate::config::DEFAULT_SRT_EGRESS_TX_CAPACITY
     );
     assert_eq!(
         owner.caller_pool_stats().unwrap().queued,

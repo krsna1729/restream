@@ -1,4 +1,5 @@
 mod feed_wake;
+mod from_fabric;
 mod group;
 mod group_supervision;
 mod heartbeat;

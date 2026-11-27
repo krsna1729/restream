@@ -278,7 +278,7 @@ impl StageRuntimeManager {
             // feeder obtains raw annex-B parameter sets from the ring or
             // per-packet payload instead).
             let (video_seq_header, _) =
-                match crate::engine_hls::input_id_from_hls_preview_resource_id(&pipeline_id) {
+                match crate::preview_ids::input_id_from_hls_preview_resource_id(&pipeline_id) {
                     Some(input_id) => engine.get_input_sequence_headers(input_id).await,
                     None => engine.get_sequence_headers(&pipeline_id).await,
                 };

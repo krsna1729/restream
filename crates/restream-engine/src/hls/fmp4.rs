@@ -92,7 +92,7 @@ mod tests {
         engine
             .cache_ingest_session_sequence_header(lease.registration(), true, expected.clone())
             .await;
-        let resource_id = crate::engine_hls::input_hls_preview_resource_id("standby-input");
+        let resource_id = crate::preview_ids::input_hls_preview_resource_id("standby-input");
 
         let (video, audio) = resolve_hls_sequence_headers(&engine, &resource_id).await;
 

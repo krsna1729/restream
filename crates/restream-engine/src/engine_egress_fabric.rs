@@ -5,13 +5,14 @@ use crate::egress::journal::TsFeed;
 use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, SharedFabricRuntime,
     subscribe_fabric_wakes,
 };
-use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::egress::shard::EgressShardSnapshot;
+use crate::egress::shard::{EgressShardConfig, EgressShardGroupError};
 use crate::engine::MediaEngine;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -83,8 +84,8 @@ impl MediaEngine {
             let config = &config.egress_fabric;
             let group = spawn_srt_fabric_shard_group(
                 config.srt_shard_count(),
-                config.shard_config(),
-                config.work_budget(),
+                EgressShardConfig::from_fabric(config),
+                WorkBudgetConfig::from_fabric(config),
                 |_| candidate_feed.clone_reader(),
                 owner_settings,
             )
@@ -158,7 +159,7 @@ impl MediaEngine {
                         runtime
                             .admit_add(
                                 crate::config::EgressShardProfile::SrtOutputCount,
-                                config.egress_fabric.shard_config(),
+                                EgressShardConfig::from_fabric(&config.egress_fabric),
                                 &spec.id,
                             )
                             .map_err(SrtFabricDispatchError::Saturated)?;
@@ -219,8 +220,8 @@ impl MediaEngine {
         reason: crate::egress::runtime::ResizeReason,
     ) {
         let config = &engine_config.egress_fabric;
-        let shard_config = config.shard_config();
-        let budget = config.work_budget();
+        let shard_config = EgressShardConfig::from_fabric(config);
+        let budget = WorkBudgetConfig::from_fabric(config);
         let owner_settings = Self::srt_owner_settings(engine_config);
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(

@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) use crate::engine_hls::hls_preview_registry_key;
 use crate::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
     RecordingRegistry, RuntimeInfra, StageRegistry, StreamQaRegistry,

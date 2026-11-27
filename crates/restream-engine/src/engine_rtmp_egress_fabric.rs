@@ -11,13 +11,14 @@ use crate::egress::journal::RingFeed;
 use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, SharedFabricRuntime,
     subscribe_fabric_wakes,
 };
-use crate::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::egress::shard::EgressShardSnapshot;
+use crate::egress::shard::{EgressShardConfig, EgressShardGroupError};
 use crate::engine::MediaEngine;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,9 +75,9 @@ impl MediaEngine {
             .map_err(RtmpFabricEnsureError::TrustRoots)?;
             let group = spawn_rtmp_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
-                config.shard_config(),
+                EgressShardConfig::from_fabric(config),
                 config.tcp_poller_max_events,
-                config.work_budget(),
+                WorkBudgetConfig::from_fabric(config),
                 engine_config.rtmp_egress_chunk_size,
                 rtmps_client_config.clone(),
                 startup_source.clone(),
@@ -197,7 +198,7 @@ impl MediaEngine {
                     if matches!(reason, crate::egress::runtime::ResizeReason::Add)
                         && let Err(saturated) = runtime.admit_add(
                             crate::config::EgressShardProfile::OutputCount,
-                            config.egress_fabric.shard_config(),
+                            EgressShardConfig::from_fabric(&config.egress_fabric),
                             &spec.id,
                         )
                     {
@@ -273,8 +274,8 @@ impl MediaEngine {
         reason: crate::egress::runtime::ResizeReason,
     ) {
         let config = &engine_config.egress_fabric;
-        let shard_config = config.shard_config();
-        let budget = config.work_budget();
+        let shard_config = EgressShardConfig::from_fabric(config);
+        let budget = WorkBudgetConfig::from_fabric(config);
         let chunk_size = engine_config.rtmp_egress_chunk_size;
         let poller_max_events = config.tcp_poller_max_events;
         runtime.forecast_feed(&feed.publication_ring());

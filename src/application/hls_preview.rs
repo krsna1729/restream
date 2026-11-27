@@ -37,7 +37,7 @@ pub async fn ensure_hls_preview(
     engine: Arc<MediaEngine>,
     pipeline_id: &str,
 ) -> Result<Arc<Fmp4HlsStore>, HlsPreviewError> {
-    let source = restream_engine::engine_hls::preview_pipeline(pipeline_id).0;
+    let source = restream_engine::preview_ids::preview_pipeline(pipeline_id).0;
     let has_ingest = engine.ingests.active.read().await.contains_key(source);
 
     if has_ingest {
@@ -244,7 +244,7 @@ pub async fn input_audio_init_segment(
 }
 
 fn input_preview_resource_id(input_id: &str) -> String {
-    restream_engine::engine_hls::input_hls_preview_resource_id(input_id)
+    restream_engine::preview_ids::input_hls_preview_resource_id(input_id)
 }
 
 async fn preview_store(

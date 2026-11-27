@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::MediaEngine;
-use crate::engine_hls::HlsConsumers;
+use crate::engine_registries::HlsConsumers;
 use crate::pipe_metrics::PipeMetrics;
 use crate::test_support::{test_audio_packet, test_video_packet};
 use bytes::Bytes;

@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
 
+use crate::config::{DEFAULT_EGRESS_DRAIN_TIMEOUT, DEFAULT_EGRESS_LEAF_CAPACITY};
 use crate::egress::backend::{CloseReason, EngineProgress, ProtocolEngine, Readiness};
 use crate::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::egress::feed::EgressFeed;
@@ -25,7 +26,7 @@ use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
 use crate::egress::policy::{LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
-use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect, EgressShardConfig};
+use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::resolver::{ResolveError, Resolver};
 use restream_rtmp::parse_rtmp_url;
@@ -341,7 +342,7 @@ where
     service: crate::egress::metrics::ShardService,
     /// Bound on how long a leaf may stay in `draining_since` before it is
     /// force-closed regardless of remaining `pending_application_bytes`.
-    /// Defaults to `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
+    /// Defaults to `config::DEFAULT_EGRESS_DRAIN_TIMEOUT`; tests use
     /// `with_drain_timeout` for fast, deterministic timing.
     drain_timeout: Duration,
     /// Total `EngineProgress::FeedOverrun` resynchronizations observed across
@@ -383,13 +384,13 @@ where
             budget_config: budget,
             chunk_size,
             rtmps_client_config,
-            leaves: LeafArena::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
+            leaves: LeafArena::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             output_sockets: HashMap::new(),
-            ready: ReadyQueue::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
+            ready: ReadyQueue::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             visits_until_poll: 0,
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
-            queue_capacity: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            queue_capacity: DEFAULT_EGRESS_LEAF_CAPACITY,
             poll_buffer: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
             connecting: HashMap::new(),
@@ -397,7 +398,7 @@ where
             last_stall_sweep: None,
             sweep_service: Default::default(),
             service: Default::default(),
-            drain_timeout: crate::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+            drain_timeout: DEFAULT_EGRESS_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
             tx_units: 0,

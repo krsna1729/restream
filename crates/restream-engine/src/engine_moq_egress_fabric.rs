@@ -8,11 +8,12 @@ use crate::egress::journal::RingFeed;
 use crate::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome, PlacementPolicy,
 };
+use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
     SharedFabricRuntime, subscribe_fabric_wakes,
 };
-use crate::egress::shard::EgressShardGroupError;
+use crate::egress::shard::{EgressShardConfig, EgressShardGroupError};
 use crate::engine::MediaEngine;
 use crate::moq::egress::{MoqPublishStartup, SharedMoqStartupSource, moq_shard_backend};
 
@@ -65,8 +66,8 @@ impl MediaEngine {
             let startup_source = SharedMoqStartupSource::default();
             let group = spawn_moq_fabric_shard_group(
                 std::num::NonZeroU32::MIN,
-                config.shard_config(),
-                config.work_budget(),
+                EgressShardConfig::from_fabric(config),
+                WorkBudgetConfig::from_fabric(config),
                 startup_source.clone(),
                 |_| candidate_feed.clone_reader(),
             )
@@ -172,7 +173,7 @@ impl MediaEngine {
                     if matches!(reason, ResizeReason::Add)
                         && let Err(saturated) = runtime.admit_add(
                             crate::config::EgressShardProfile::OutputCount,
-                            config.egress_fabric.shard_config(),
+                            EgressShardConfig::from_fabric(&config.egress_fabric),
                             &spec.id,
                         )
                     {
@@ -236,8 +237,8 @@ impl MediaEngine {
         reason: ResizeReason,
     ) {
         let config = &engine_config.egress_fabric;
-        let shard_config = config.shard_config();
-        let budget = config.work_budget();
+        let shard_config = EgressShardConfig::from_fabric(config);
+        let budget = WorkBudgetConfig::from_fabric(config);
         runtime.forecast_feed(&feed.publication_ring());
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
