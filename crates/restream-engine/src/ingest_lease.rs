@@ -1,16 +1,16 @@
 //! Per-attempt ingest leases.
 //!
 //! Registering an input attempt
-//! ([`MediaEngine::try_register_pipeline_input_attempt`]) returns an
+//! (`MediaEngine::try_register_pipeline_input_attempt`) returns an
 //! [`IngestLease`], the only handle that ends the attempt. An orderly teardown
 //! calls [`IngestLease::finish`]. A lease dropped without it (a panic unwinding
 //! the task or entity state that held it, a cancelled task, an early return)
 //! cancels the attempt at once, which frees its input for the next publisher
-//! and stops its media, and queues it on the engine's release queue; the
-//! engine's release task records an abnormal end and unregisters it. No path
-//! can then leave a stream key locked as a duplicate publisher.
+//! and stops its media, and queues it on the ingest registry's release queue;
+//! the registry's release task records an abnormal end and unregisters it. No
+//! path can then leave a stream key locked as a duplicate publisher.
 //!
-//! The queue is engine-owned storage, not a channel a task owns: an attempt
+//! The queue is registry-owned storage, not a channel a task owns: an attempt
 //! stays queued until a release has ended it, so a release task cancelled with
 //! its runtime loses nothing, and the next task started (or the shutdown's
 //! final pass) ends the backlog first. The release task ends each attempt in
@@ -28,14 +28,7 @@
 
 use std::sync::{Arc, Weak};
 
-use crate::engine::MediaEngine;
-use crate::ingest_registry::{AbandonedAttempt, IngestRegistration, ReleaseQueue};
-
-/// The failure phase recorded for an attempt whose lease was dropped without
-/// [`IngestLease::finish`].
-pub const ABANDONED_PHASE: &str = "abandoned";
-const ABANDONED_REASON: &str =
-    "the input attempt ended without an orderly finish (its task panicked or was cancelled)";
+use crate::ingest_registry::{AbandonedAttempt, IngestRegistration, IngestRegistry, ReleaseQueue};
 
 /// How an attempt ends.
 pub enum IngestEnd<'a> {
@@ -57,7 +50,7 @@ pub enum IngestEnd<'a> {
 pub struct IngestLease {
     pipeline_id: String,
     registration: IngestRegistration,
-    engine: Weak<MediaEngine>,
+    ingests: Weak<IngestRegistry>,
     releases: Arc<ReleaseQueue>,
     /// `finish` recorded its outcome; a drop then only releases.
     recorded: bool,
@@ -66,16 +59,15 @@ pub struct IngestLease {
 
 impl IngestLease {
     pub(crate) fn new(
-        engine: &Arc<MediaEngine>,
-        releases: Arc<ReleaseQueue>,
+        ingests: &Arc<IngestRegistry>,
         pipeline_id: &str,
         registration: IngestRegistration,
     ) -> Self {
         Self {
             pipeline_id: pipeline_id.to_string(),
             registration,
-            engine: Arc::downgrade(engine),
-            releases,
+            ingests: Arc::downgrade(ingests),
+            releases: ingests.releases.clone(),
             recorded: false,
             finished: false,
         }
@@ -94,7 +86,7 @@ impl IngestLease {
     /// End the attempt in order: record `end` and unregister it, if it is
     /// still the input's current attempt.
     pub async fn finish(mut self, end: IngestEnd<'_>) {
-        let Some(engine) = self.engine.upgrade() else {
+        let Some(ingests) = self.ingests.upgrade() else {
             self.finished = true;
             return;
         };
@@ -104,7 +96,7 @@ impl IngestLease {
             had_error,
         } = end
         {
-            engine
+            ingests
                 .record_ingest_disconnect_if_current(
                     &self.pipeline_id,
                     &self.registration,
@@ -119,7 +111,7 @@ impl IngestLease {
         // skips the release (and a repeated, attempt-checked release is
         // harmless).
         self.recorded = true;
-        engine
+        ingests
             .unregister_ingest_if_current(&self.pipeline_id, &self.registration)
             .await;
         self.finished = true;
@@ -142,56 +134,6 @@ impl Drop for IngestLease {
             registration: self.registration.clone(),
             record: !self.recorded,
         });
-    }
-}
-
-/// Ends every queued attempt, oldest first. Each leaves the queue only once
-/// ended, so a pass cancelled midway leaves it for the next one, and two
-/// passes over one queue release every entry.
-pub(crate) async fn release_backlog(engine: &MediaEngine, queue: &ReleaseQueue) {
-    while let Some(attempt) = queue.front() {
-        release(engine, &attempt).await;
-        queue.complete(&attempt);
-    }
-}
-
-/// Record (unless `finish` already did) and unregister one attempt;
-/// attempt-checked, so repeating it is harmless.
-async fn release(engine: &MediaEngine, attempt: &AbandonedAttempt) {
-    if attempt.record {
-        engine
-            .record_ingest_disconnect_if_current(
-                &attempt.pipeline_id,
-                &attempt.registration,
-                Some(ABANDONED_PHASE),
-                Some(ABANDONED_REASON.to_string()),
-                true,
-            )
-            .await;
-    }
-    engine
-        .unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
-        .await;
-}
-
-/// The engine's release task: on each wake, hands every unclaimed queued
-/// attempt to a task of its own, until the engine is dropped.
-pub(crate) async fn drain_releases(engine: Weak<MediaEngine>, queue: Arc<ReleaseQueue>) {
-    loop {
-        let Some(strong) = engine.upgrade() else {
-            return;
-        };
-        for (attempt, claim) in queue.claim_unclaimed() {
-            let engine = strong.clone();
-            let queue = queue.clone();
-            tokio::spawn(async move {
-                release(&engine, &attempt).await;
-                queue.complete(&attempt);
-                drop(claim);
-            });
-        }
-        drop(strong);
-        queue.woken().await;
     }
 }
 

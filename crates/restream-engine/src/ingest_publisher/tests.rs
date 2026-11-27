@@ -8,6 +8,7 @@ mod rendition;
 use std::sync::Arc;
 
 use super::*;
+use crate::engine::MediaEngine;
 use restream_sync::RingBuffer;
 
 /// The publication harness file ingest uses: an engine, a registered input
@@ -27,7 +28,7 @@ pub(super) async fn harness(
         .await
         .expect("the ingest attempt registers");
     let target = PublishTarget::open(
-        engine.clone(),
+        engine.ingests.clone(),
         name.to_string(),
         lease.registration().clone(),
         ring.clone(),

@@ -8,6 +8,7 @@ use bytes::Bytes;
 
 use super::super::tests::harness;
 use super::super::*;
+use crate::engine::MediaEngine;
 use restream_core::PayloadFormat;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 

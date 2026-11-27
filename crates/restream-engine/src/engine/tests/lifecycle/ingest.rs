@@ -109,7 +109,7 @@ fn build_recent_ingest_outcome_resets_flap_streak_outside_window() {
         bytes_received: 2048,
     };
 
-    let next = MediaEngine::build_recent_ingest_outcome(
+    let next = IngestRegistry::build_recent_ingest_outcome(
         Some(&previous),
         "rtmp".to_string(),
         Some("disconnect"),

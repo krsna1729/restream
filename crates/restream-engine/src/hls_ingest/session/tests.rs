@@ -189,7 +189,7 @@ async fn each_publish_unit_converts_at_most_one_fmp4_step() {
     let ring = context.ring.clone();
     let shared_init = context.init.clone();
     let target = PublishTarget::open(
-        context.engine,
+        context.engine.ingests.clone(),
         context.pipeline_id,
         context.registration,
         context.ring,

@@ -9,11 +9,9 @@ use crate::engine_registries::{
     RuntimeInfra, StageRegistry, StreamQaRegistry,
 };
 use crate::ingest_registry::{
-    ActiveIngest, IngestRegistration, IngestRegistry, RecentIngestOutcome,
+    ActiveIngest, INGEST_FLAP_WINDOW_MS, IngestRegistration, IngestRegistry, RecentIngestOutcome,
 };
 use crate::snapshots::PublisherQuality;
-
-pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,8 +56,9 @@ impl MediaEngine {
     }
 
     pub fn new_with_config(config: Arc<crate::config::EngineConfig>) -> Self {
+        let runtime = RuntimeInfra::new(&config);
         Self {
-            ingests: Arc::new(IngestRegistry::new()),
+            ingests: Arc::new(IngestRegistry::new(runtime.event_log.clone())),
             egresses: EgressRegistry::new(),
             fabric: FabricRegistry::new(),
             recordings: RecordingRegistry::new(),
@@ -67,7 +66,7 @@ impl MediaEngine {
             hls: HlsRegistry::new(),
             file_ingests: FileIngestRegistry::new(),
             stages: StageRegistry::new(),
-            runtime: RuntimeInfra::new(&config),
+            runtime,
             config,
         }
     }
@@ -143,18 +142,14 @@ impl MediaEngine {
         registration: &IngestRegistration,
         f: impl FnOnce(&ActiveIngest) -> R,
     ) -> Option<R> {
-        self.current_ingest_session(registration)
-            .await
-            .map(|ingest| f(ingest.as_ref()))
+        self.ingests.with_ingest_session(registration, f).await
     }
 
     pub(super) async fn current_ingest_session(
         &self,
         registration: &IngestRegistration,
     ) -> Option<Arc<ActiveIngest>> {
-        let sessions = self.ingests.sessions.read().await;
-        let ingest = sessions.get(&registration.input_id)?;
-        (ingest.attempt_id == registration.attempt_id).then(|| ingest.clone())
+        self.ingests.current_ingest_session(registration).await
     }
 
     pub async fn is_ingest_session_selected(
@@ -163,11 +158,8 @@ impl MediaEngine {
         registration: &IngestRegistration,
     ) -> bool {
         self.ingests
-            .active
-            .read()
+            .is_ingest_session_selected(pipeline_id, registration)
             .await
-            .get(pipeline_id)
-            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id)
     }
 
     pub fn egress_protocol_from_url(url: &str) -> &'static str {
@@ -263,42 +255,6 @@ impl MediaEngine {
             return (0, false);
         }
         (recent.disconnect_count, recent.disconnect_count >= 2)
-    }
-
-    pub(super) fn build_recent_ingest_outcome(
-        previous: Option<&RecentIngestOutcome>,
-        protocol: String,
-        phase: Option<&str>,
-        reason: Option<String>,
-        had_error: bool,
-        remote_addr: Option<String>,
-        bytes_received: u64,
-    ) -> RecentIngestOutcome {
-        let disconnected_at_ms = Self::now_epoch_ms();
-        let (first_disconnect_at_ms, disconnect_count) = previous
-            .filter(|previous| {
-                disconnected_at_ms.saturating_sub(previous.disconnected_at_ms)
-                    <= INGEST_FLAP_WINDOW_MS
-            })
-            .map(|previous| {
-                (
-                    previous.first_disconnect_at_ms,
-                    previous.disconnect_count.saturating_add(1),
-                )
-            })
-            .unwrap_or((disconnected_at_ms, 1));
-
-        RecentIngestOutcome {
-            protocol,
-            disconnected_at_ms,
-            first_disconnect_at_ms,
-            disconnect_count,
-            reason,
-            failure_phase: phase.map(ToOwned::to_owned),
-            had_error,
-            remote_addr,
-            bytes_received,
-        }
     }
 }
 

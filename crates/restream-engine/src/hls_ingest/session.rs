@@ -160,7 +160,7 @@ pub(super) async fn run(
         session.seed_init(rendition, &applied.uri, applied.bytes.clone());
     }
     let end = match PublishTarget::open(
-        context.engine,
+        context.engine.ingests.clone(),
         context.pipeline_id,
         context.registration,
         context.ring,

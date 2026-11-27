@@ -60,7 +60,7 @@ async fn a_dispatch_dropped_before_its_owner_spawns_releases_the_attempt() {
     dispatching.abort();
     drop(held);
 
-    // The release runs on the engine's release task (a drop cannot await),
+    // The release runs on the ingest registry's release task (a drop cannot await),
     // so allow it to land before asserting.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while engine

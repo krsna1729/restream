@@ -4,6 +4,8 @@
 use std::time::Duration;
 
 use super::*;
+use crate::engine::MediaEngine;
+use crate::ingest_registry::ABANDONED_PHASE;
 
 const PIPELINE: &str = "pipe-lease";
 
@@ -160,6 +162,7 @@ async fn a_release_cancelled_at_a_lock_leaves_its_attempt_whole() {
         let registration = lease.registration().clone();
         async move {
             engine
+                .ingests
                 .unregister_ingest_if_current(PIPELINE, &registration)
                 .await
         }
@@ -195,11 +198,12 @@ async fn two_passes_over_one_queue_release_every_entry() {
     for taken in [pass_one, pass_two] {
         let taken = taken.expect("both passes see the first entry");
         engine
+            .ingests
             .unregister_ingest_if_current(PIPELINE, &taken.registration)
             .await;
         queue.complete(&taken);
     }
-    release_backlog(&engine, &queue).await;
+    engine.ingests.release_backlog(&queue).await;
 
     assert!(queue.front().is_none());
     assert!(!engine.input_has_session(PIPELINE, "first").await);
