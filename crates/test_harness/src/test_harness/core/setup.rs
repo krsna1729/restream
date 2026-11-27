@@ -175,6 +175,11 @@ pub(crate) fn env_secs(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Rounds to two decimals for report JSON.
+pub(crate) fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 pub(crate) fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()

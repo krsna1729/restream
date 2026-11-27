@@ -89,17 +89,6 @@ pub(super) struct ResourceAggregate {
     pub(super) srt_sink_drops: Option<crate::harness_srt_sink::SrtSinkDrops>,
 }
 
-/// Static labels and dimensions for one resource-sweep scenario.
-pub(super) struct ResourceScenarioMeta<'a> {
-    pub(super) scenario: &'a str,
-    pub(super) label: String,
-    pub(super) pipelines: usize,
-    pub(super) outputs: usize,
-    pub(super) ingest_types: String,
-    pub(super) egress_mix: String,
-    pub(super) transcode: &'a str,
-}
-
 /// Parsed `/proc/<pid>/smaps_rollup` memory counters used for attribution.
 struct ProcMemRollup {
     anonymous_kb: u64,
@@ -396,10 +385,6 @@ pub(super) fn summarize_resource_samples(
         stages_peak: samples.iter().map(|s| s.stages).max().unwrap_or(0),
         pipeline_count_peak: samples.iter().map(|s| s.pipeline_count).max().unwrap_or(0),
     }
-}
-
-pub(super) fn round2(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
 }
 
 /// CPU % of Restream (`ticks` since `prev_ticks`) and of the FFmpeg children

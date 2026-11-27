@@ -390,7 +390,7 @@ pub(super) fn spawn_msr_publisher(
 /// round-robin distribution `msr_output_url` publishes with. Shared by
 /// every place that needs to reach the same peer an output actually landed
 /// on: publish URL, read-back URL, and per-instance path-health grouping.
-/// SRT outputs then take the instance's sink ports in turn (`srt_peer_port`).
+/// SRT outputs then take the instance's sink ports in turn (`PeerPorts::srt_port`).
 pub(super) fn msr_peer_instance(ordinal: usize, peer_count: usize) -> usize {
     ordinal % peer_count.max(1)
 }

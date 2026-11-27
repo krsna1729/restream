@@ -803,10 +803,6 @@ pub(crate) async fn wait_for_preview_master(
     }
 }
 
-fn round2(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
-}
-
 /// A body snippet for progress lines and errors, bounded so a large body never
 /// floods the harness log.
 fn truncate_body(body: &str) -> String {

@@ -747,7 +747,3 @@ pub(crate) fn delivered_progress_ok(baseline: &Value, sink_summary: &Value) -> b
         && count(sink_summary, "mediaProgressMs") > count(baseline, "mediaProgressMs")
         && count(sink_summary, "audioCount") > count(baseline, "audioCount")
 }
-
-fn round2(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
-}

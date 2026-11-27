@@ -6,14 +6,13 @@ use std::path::{Path, PathBuf};
 use crate::core::PEER_PORT_STRIDE;
 use crate::harness_srt_sink::sink_slot;
 
-use super::{SweepConfig, SweepOutputKind};
+use super::SweepOutputKind;
 
 /// The peer instances' port bands: instance 0's MediaMTX ports, the instance
 /// count, and how many SRT ports each instance listens on. Instance `index`
 /// offsets every port by `index * PEER_PORT_STRIDE` (see that constant for the
 /// collision invariant), so instance 0 always matches the single-mediamtx
 /// ports and `peer_count == 1` is byte-identical to prior behavior.
-#[derive(Clone, Copy, Debug)]
 pub(super) struct PeerPorts {
     rtmp: u16,
     rtmps: u16,
@@ -132,7 +131,7 @@ impl PeerPorts {
     pub(super) fn output_url(
         &self,
         srt_host: Option<&str>,
-        config: SweepConfig,
+        multi_audio: bool,
         kind: SweepOutputKind,
         name: &str,
     ) -> (String, String) {
@@ -146,7 +145,7 @@ impl PeerPorts {
             ) => srt_url_on_host(&url, host),
             _ => url,
         };
-        (url, kind.encoding(config.multi_audio).to_string())
+        (url, kind.encoding(multi_audio).to_string())
     }
 }
 

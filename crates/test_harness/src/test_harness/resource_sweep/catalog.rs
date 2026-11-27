@@ -186,6 +186,17 @@ pub(super) fn live_output_names(
         .map(|(.., name)| name.as_str())
 }
 
+/// Static labels and dimensions for one resource-sweep scenario.
+pub(super) struct ResourceScenarioMeta<'a> {
+    pub(super) scenario: &'a str,
+    pub(super) label: String,
+    pub(super) pipelines: usize,
+    pub(super) outputs: usize,
+    pub(super) ingest_types: String,
+    pub(super) egress_mix: String,
+    pub(super) transcode: &'a str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

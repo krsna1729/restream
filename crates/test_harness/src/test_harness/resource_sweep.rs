@@ -16,7 +16,7 @@ use super::{
     default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
     file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
     harness_srt_ffmpeg_url, harness_srt_standard_publish_url, mediamtx_udp_read_buffer_line,
-    parse_srt_crypto_variants, pinned_mediamtx, plain_mediamtx_config, probe_dims_ramp,
+    parse_srt_crypto_variants, pinned_mediamtx, plain_mediamtx_config, probe_dims_ramp, round2,
     run_ffmpeg_filter_log, safe_artifact_stem, signal_report_json, spawn_mediamtx,
     spawn_publisher_with_selection, start_generalized_sink_server, start_output, stop_child,
     stop_generalized_sink_server, sweep_fixture, validate_signal_quality_with_tolerances,
@@ -83,9 +83,10 @@ mod packet_contract_verdict_tests;
 #[path = "resource_sweep/sweep_tests.rs"]
 #[cfg(test)]
 mod sweep_tests;
+use catalog::ResourceScenarioMeta;
 use measurement::{
-    ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
-    resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
+    ResourceAggregate, csv_escape, read_proc_stat_ticks, resource_aggregate_json,
+    sample_resource_window, write_resource_sweep_csv,
 };
 
 /// Live process stack shared by a resource-sweep sample.
@@ -110,7 +111,7 @@ struct ResourceSweepStack {
 
 /// In-process harness-native sink peers: one RTMP accept-and-discard
 /// listener per `PEER_COUNT` instance, plus one `HarnessSrtSinkPool` with one
-/// production SRT Owner thread per sink port (`srt_peer_ports`).
+/// production SRT Owner thread per sink port (`PeerPorts::srt_ports`).
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
@@ -321,7 +322,7 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 
 /// Starts the in-process harness-native sink peers: per instance an RTMP
 /// accept-and-discard listener, plus one SRT Owner thread per sink port
-/// (`srt_peer_ports`) -- no readiness polling needed, unlike spawning a
+/// (`PeerPorts::srt_ports`) -- no readiness polling needed, unlike spawning a
 /// separate process, since a synchronous bind either succeeds or fails
 /// immediately.
 /// `PEER_SKIP_START` is not honoured here: it exists for pre-started

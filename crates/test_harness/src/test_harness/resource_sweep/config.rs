@@ -8,7 +8,7 @@ use super::super::{
     HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, env_usize,
     harness_port_defaults, harness_srt_crypto_from_env,
 };
-use super::packet_contract_peers::PeerStateConfig;
+use super::SweepOutputKind;
 use super::peer_ports::PeerPorts;
 use crate::harness_srt_sink::configured_ports_per_peer;
 
@@ -78,6 +78,16 @@ impl ResourceSweepPeer {
     }
 }
 
+/// Where the remote sink peers publish their state.
+#[derive(Clone, Debug)]
+pub(super) struct PeerStateConfig {
+    pub(super) hosts: Vec<String>,
+    pub(super) port: u16,
+    /// How many of the rung's outputs each host is expected to receive, in
+    /// `hosts` order. Empty until the runner reports it.
+    pub(super) expected_outputs_per_host: Vec<usize>,
+}
+
 /// Environment and output paths for resource-sweep measurement runs.
 #[derive(Clone)]
 pub(super) struct ResourceSweepEnv {
@@ -103,7 +113,7 @@ pub(super) struct ResourceSweepEnv {
     /// instance its name hashes to (`peer_instance_for`); MSR assigns by
     /// ordinal (`msr_peer_instance`). `PEER_COUNT` (default 1) keeps every
     /// other resource-sweep scenario on a single instance. The bands are
-    /// validated when the env is built (`validate_peer_instance_ports`).
+    /// validated when the env is built (`PeerPorts::validate`).
     pub(super) peer_count: usize,
     /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
     /// instances above.
@@ -274,12 +284,12 @@ impl ResourceSweepEnv {
     /// [`PeerPorts::output_url`]).
     pub(super) fn output_url(
         &self,
-        config: super::SweepConfig,
-        kind: super::SweepOutputKind,
+        config: SweepConfig,
+        kind: SweepOutputKind,
         name: &str,
     ) -> (String, String) {
         self.peer_ports()
-            .output_url(self.srt_peer_host_for(name), config, kind, name)
+            .output_url(self.srt_peer_host_for(name), config.multi_audio, kind, name)
     }
 
     pub(super) fn scenario_enabled(&self, scenario: &str) -> bool {
