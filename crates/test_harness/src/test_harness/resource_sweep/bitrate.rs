@@ -1,4 +1,4 @@
-use super::measurement::{cpu_pcts, round2};
+use super::measurement::cpu_pcts;
 use super::*;
 
 fn parse_bitrate_specs(name: &str, default: &str) -> Result<Vec<BitrateSpec>, String> {

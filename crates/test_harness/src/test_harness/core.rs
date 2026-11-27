@@ -42,7 +42,7 @@ pub(crate) use profile::{
 pub(crate) use setup::{
     MEDIAMTX_CONFIG_ENV_NAMES, absolute_path, artifact_path, command_with_optional_cgroup,
     env_flag, env_secs, env_usize, finish_mode_report, maybe_global_process_cleanup,
-    maybe_prune_old_artifacts, mixed_command_artifact_path, remove_mediamtx_config_env,
+    maybe_prune_old_artifacts, mixed_command_artifact_path, remove_mediamtx_config_env, round2,
 };
 pub(crate) use srt_crypto::{
     HarnessSrtCrypto, append_srt_crypto, apply_harness_srt_listener_env, apply_srt_listener_env,

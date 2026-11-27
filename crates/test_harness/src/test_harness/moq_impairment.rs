@@ -285,7 +285,7 @@ impl Session {
     fn spawn_publisher(&mut self, url: &str) -> Result<(), String> {
         let child = spawn_logged_ffmpeg(
             &self.ffmpeg,
-            &crate::hls_push_duty::run::rtmp_publisher_args(&self.fixture, url),
+            &crate::media_probes::rtmp_publisher_args(&self.fixture, url),
             &self.work_dir.join("publisher.log"),
             "moq-impairment-publisher",
         )?;

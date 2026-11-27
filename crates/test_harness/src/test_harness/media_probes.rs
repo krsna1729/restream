@@ -67,6 +67,26 @@ pub(crate) fn checked_h264_fixture() -> Result<PathBuf, String> {
     restream_engine::test_fixtures::canonical_h264_ts_fixture()
 }
 
+/// The RTMP baseline publisher: real-time copy of the checked-in fixture.
+pub(crate) fn rtmp_publisher_args(fixture: &Path, url: &str) -> Vec<String> {
+    vec![
+        "-re".to_string(),
+        "-stream_loop".to_string(),
+        "-1".to_string(),
+        "-i".to_string(),
+        fixture.display().to_string(),
+        "-map".to_string(),
+        "0:v".to_string(),
+        "-map".to_string(),
+        "0:a:0".to_string(),
+        "-c".to_string(),
+        "copy".to_string(),
+        "-f".to_string(),
+        "flv".to_string(),
+        url.to_string(),
+    ]
+}
+
 pub(crate) fn spawn_publisher_with_selection(
     path: &Path,
     url: &str,

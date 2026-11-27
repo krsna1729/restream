@@ -1,5 +1,5 @@
 use super::super::*;
-use super::resilience::{
+use super::observe::{
     create_pipeline, delete_pipeline_v1, observe_final_output, wait_for_sink_video_above,
 };
 

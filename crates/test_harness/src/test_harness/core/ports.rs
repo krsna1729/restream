@@ -30,7 +30,7 @@ pub(crate) struct HarnessPortDefaults {
 /// Offset per peer instance, in ports.
 ///
 /// Instance `i` listens on `base + i * PEER_PORT_STRIDE` for each of
-/// `mtx_rtmp`/`mtx_rtmps`/`mtx_srt`/`mtx_api` (see `peer_instance_ports`), so
+/// `mtx_rtmp`/`mtx_rtmps`/`mtx_srt`/`mtx_api` (see `PeerPorts::instance`), so
 /// two TCP bases whose difference is a multiple of the stride below
 /// `PEER_PORT_STRIDE * peer_count` collide. The default layout is the case to
 /// clear: `mtx_rtmp` and `mtx_rtmps` are adjacent (1936/1937), and an offset of
@@ -91,7 +91,7 @@ pub(crate) fn harness_port_defaults() -> HarnessPortDefaults {
 /// the MTX bands must be reserved before any peer starts. A missing, zero or
 /// non-numeric value falls back to one instance, matching `ResourceSweepEnv`
 /// (`env_usize("PEER_COUNT", 1)`); a count too large for a port band is rejected
-/// by `validate_peer_instance_ports` when the env is built.
+/// by `PeerPorts::validate` when the env is built.
 fn peer_count_from_env() -> u16 {
     std::env::var("PEER_COUNT")
         .ok()

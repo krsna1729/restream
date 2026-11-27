@@ -6,13 +6,48 @@
 
 use serde_json::{Value, json};
 
-use super::measurement::round2;
-use super::packet_contract::MIN_RATED_WINDOW_SECS;
-use super::packet_contract_run::cpu_masks_disjoint;
 use super::packet_contract_verdict::sample_validity;
 use super::packet_contract_verdict::{
     EXPECTED_DATA_PPS_PER_OUTPUT, EXPECTED_PAYLOAD_BYTES_PER_OUTPUT_PER_SEC, WORKLOAD_TOLERANCE,
 };
+use crate::round2;
+
+/// Minimum rated counter window for a rung to count as baseline evidence.
+/// Configuration alone is not evidence: the window is measured from the prime
+/// to the last rated sample.
+pub(super) const MIN_RATED_WINDOW_SECS: f64 = 10.0;
+
+/// Parse a Linux CPU list (`0-2`, `0,2-3`) into the CPUs it names.
+pub(super) fn parse_cpu_mask(mask: &str) -> Option<Vec<u32>> {
+    let mut cpus = Vec::new();
+    for part in mask.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((start, end)) => {
+                let (start, end) = (
+                    start.trim().parse::<u32>().ok()?,
+                    end.trim().parse::<u32>().ok()?,
+                );
+                if end < start || end - start > 4096 {
+                    return None;
+                }
+                cpus.extend(start..=end);
+            }
+            None => cpus.push(part.parse::<u32>().ok()?),
+        }
+    }
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+/// Whether two CPU lists share no CPU. `None` when either mask is unparseable.
+pub(super) fn cpu_masks_disjoint(left: &str, right: &str) -> Option<bool> {
+    let left = parse_cpu_mask(left)?;
+    let right = parse_cpu_mask(right)?;
+    Some(left.iter().all(|cpu| !right.contains(cpu)))
+}
 
 /// Aggregate one rung's samples: mean/peak rates, peak gauges, cost proxies,
 /// the workload dimensions, and the worst validity verdict with the union of

@@ -366,7 +366,7 @@ async fn run_moxygen_egress(
         );
         children.push(spawn_logged_ffmpeg(
             environment.ffmpeg,
-            &crate::hls_push_duty::run::rtmp_publisher_args(environment.fixture, &publish_url),
+            &crate::media_probes::rtmp_publisher_args(environment.fixture, &publish_url),
             &environment.work_dir.join("publisher.log"),
             "moq-moxygen-publisher",
         )?);

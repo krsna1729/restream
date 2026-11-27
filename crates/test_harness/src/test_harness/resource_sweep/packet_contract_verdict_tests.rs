@@ -1,9 +1,11 @@
 //! Verdict and baseline-eligibility tests for the packet-rate contract.
 
+use super::config::PeerStateConfig;
 use super::packet_contract::*;
-use super::packet_contract_peers::{PeerReading, PeerState, PeerStateConfig};
-use super::packet_contract_run::{cpu_masks_disjoint, parse_cpu_mask};
-use super::packet_contract_summary::{baseline_eligibility, rung_summary};
+use super::packet_contract_peers::{PeerReading, PeerState};
+use super::packet_contract_summary::{
+    baseline_eligibility, cpu_masks_disjoint, parse_cpu_mask, rung_summary,
+};
 use super::packet_contract_tests::{
     SAMPLER_TEST_LOCK, clean_sample, sample_with, system_with_owners,
 };

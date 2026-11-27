@@ -55,9 +55,11 @@ the [assurance roadmap](assurance-roadmap.md).
   migrations/schema, `restream_sync` reader, xtask qualify/release,
   `restream_mcp` session, `application` service-error, SRT ingress-types,
   RTMP connection and client/session, and egress TLS/Compio TCP cycles.
-  Left: the 32-module engine cycle and six `test_harness` cycles (16, 8, 7,
-  3, 2 and 2 modules), which need their own design, not a mechanical import
-  shuffle.
+  The harness `hls_*_duty`, `fault_recovery`, `mixed_runner` and
+  `resource_sweep` cycles were broken by moving shared helpers into leaf
+  modules. Left: the
+  32-module engine cycle and the 16-module `test_harness` cycle, which need
+  their own design, not a mechanical import shuffle.
 - Design: the engine modules target this order, low to high: vocabulary and
   configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`);
   runtime storage (`engine_registries`, `stage_registry_access`,
@@ -79,13 +81,14 @@ the [assurance roadmap](assurance-roadmap.md).
   affected lifecycle/protocol tests pass; public API changes are documented.
 
 ### Q-124 [architecture] [opus] Untangle the engine composition root and triage the remaining deslop findings
-- Goal: reduce the remaining tangles, the `MediaEngine`/`StageRegistry`
-  tangle (35 things across 17 modules, reported at `hls/preview.rs`) and the
-  test-only `test_harness::resource_sweep` tangle (5 across 2), then decide
-  the remaining 18 `shallow-module` and 15 `wide-directory` findings by
-  ownership rather than file moves. The `hls_put_shard`, EgressTask/FabricRun
-  and SRT `tokio_ingress` tangles are gone: fabric runs hold the engine, and
-  SRT publisher tasks hold the engine instead of the server.
+- Goal: reduce the remaining tangle, the `MediaEngine`/`StageRegistry`
+  tangle (35 things across 17 modules, reported at `hls/preview.rs`), then
+  decide the remaining 18 `shallow-module` and 15 `wide-directory` findings by
+  ownership rather than file moves. The `test_harness::resource_sweep` tangle
+  is gone: a `PeerPorts` value owns the port-band arithmetic. The
+  `hls_put_shard`, EgressTask/FabricRun and SRT `tokio_ingress` tangles are
+  gone: fabric runs hold the engine, and SRT publisher tasks hold the engine
+  instead of the server.
 - Why open: the engine tangle is the union of subsystem back-references into
   `MediaEngine` (see Q-123's design); several shallow `lib.rs` modules may be
   deliberate public façades. No `long-file` finding exists, so file length

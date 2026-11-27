@@ -66,8 +66,8 @@ fn test_env() -> ResourceSweepEnv {
 fn peer_instance_ports_offset_from_instance_zero() {
     let env = test_env();
     // Instance 0 always matches the pre-existing single-mediamtx ports.
-    assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
-    assert_eq!(peer_instance_ports(&env, 3), (1948, 1949, 8903, 10009));
+    assert_eq!(env.peer_ports().instance(0), (1936, 1937, 8891, 9997));
+    assert_eq!(env.peer_ports().instance(3), (1948, 1949, 8903, 10009));
 }
 
 #[test]
@@ -77,15 +77,19 @@ fn peer_instance_ports_never_collide_across_instances() {
     // one-per-instance offset gives instance 1's RTMP port the value of
     // instance 0's RTMPS port and the second listener fails to bind. This is
     // the validator `ResourceSweepEnv` runs when it is built.
-    validate_peer_instance_ports(&env).expect("the default peer bands must not collide");
+    env.peer_ports()
+        .validate()
+        .expect("the default peer bands must not collide");
 }
 
 #[test]
 fn peer_instance_ports_reject_a_band_whose_difference_is_a_stride_multiple() {
     let mut env = test_env();
     env.mtx_rtmps = env.mtx_rtmp + PEER_PORT_STRIDE;
-    let error =
-        validate_peer_instance_ports(&env).expect_err("an overlapping band must be rejected");
+    let error = env
+        .peer_ports()
+        .validate()
+        .expect_err("an overlapping band must be rejected");
     assert!(error.contains("both use port"), "unexpected error: {error}");
 }
 
@@ -152,8 +156,7 @@ fn srt_outputs_spread_over_every_sink_owner_port() {
     let mut per_port = std::collections::BTreeMap::<u16, usize>::new();
     for index in 1..=100 {
         let name = format!("egress-growth-source-srt-srt-source-{index}");
-        let (url, _) =
-            resource_output_url(&env, sweep_configs()[0], SweepOutputKind::SrtSource, &name);
+        let (url, _) = env.output_url(sweep_configs()[0], SweepOutputKind::SrtSource, &name);
         let port = url
             .strip_prefix("srt://127.0.0.1:")
             .and_then(|rest| rest.split('?').next())

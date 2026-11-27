@@ -224,7 +224,7 @@ pub(super) async fn sample_with(
         0
     };
     for index in 0..mediamtx_instances {
-        let (_, _, _, api_port) = peer_instance_ports(env, index);
+        let (_, _, _, api_port) = env.peer_ports().instance(index);
         let body = client
             .get(format!("http://127.0.0.1:{api_port}/v3/paths/list"))
             .send()

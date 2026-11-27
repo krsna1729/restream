@@ -16,17 +16,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::measurement::round2;
-
-/// Where the remote sink peers publish their state.
-#[derive(Clone, Debug)]
-pub(super) struct PeerStateConfig {
-    pub(super) hosts: Vec<String>,
-    pub(super) port: u16,
-    /// How many of the rung's outputs each host is expected to receive, in
-    /// `hosts` order. Empty until the runner reports it.
-    pub(super) expected_outputs_per_host: Vec<usize>,
-}
+use super::config::PeerStateConfig;
+use crate::round2;
 
 /// One peer reading, parsed from the sink's `/state` endpoint. Counters are
 /// absolute so the measuring host can difference them per sample window.

@@ -29,13 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use super::measurement::round2;
 use super::*;
-
-/// Minimum rated counter window for a rung to count as baseline evidence.
-/// Configuration alone is not evidence: the window is measured from the prime
-/// to the last rated sample.
-pub(super) const MIN_RATED_WINDOW_SECS: f64 = 10.0;
+use crate::round2;
 
 /// `/metrics/system` `egressShards[].state` — the shard health enum, which is
 /// part of the current schema (`healthy`/`stalled`/`stopped`/`panicked`). It
@@ -299,7 +294,8 @@ struct PacketContractSampler {
     run: RunMetadata,
 }
 
-use super::packet_contract_peers::{PeerFold, PeerReading, PeerStateConfig, poll_peers};
+use super::config::PeerStateConfig;
+use super::packet_contract_peers::{PeerFold, PeerReading, poll_peers};
 pub(super) use super::packet_contract_run::RunMetadata;
 use super::packet_contract_verdict::sample_validity;
 

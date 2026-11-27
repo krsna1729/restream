@@ -239,7 +239,7 @@ fn output_and_read_urls_target_the_same_instance_the_output_publishes_to() {
 
     // ordinal 5 % 4 == instance 1: every MSR port derivation must come from the
     // peer-instance mapping (mtx_rtmp + PEER_PORT_STRIDE == 1940).
-    let (rtmp_port, _, srt_port, api_port) = peer_instance_ports(&env, 1);
+    let (rtmp_port, _, srt_port, api_port) = env.peer_ports().instance(1);
     assert_eq!(rtmp_port, 1940);
     assert_eq!(srt_port, 8895);
     assert_eq!(api_port, 10001);
