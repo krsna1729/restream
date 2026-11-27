@@ -215,7 +215,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
 
     cancel.cancel();
 
-    let snapshot = manager.snapshot(&stage_key).await;
+    let snapshot = engine.stage_runtime_snapshot(&stage_key).await;
     assert!(
         output_packets
             .iter()

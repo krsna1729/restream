@@ -27,7 +27,6 @@ use crate::stage_registry::{StageLease, StageRegistry, StageRuntime};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use restream_domain::domain::stage::{StageKey, StageKind};
-use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 
 /// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
@@ -48,10 +47,8 @@ pub struct StageRuntimeManager {
     ingests: Arc<IngestRegistry>,
     stages: Arc<StageRegistry>,
     events: Arc<EventLog>,
-    /// The engine-wide external FFmpeg slots, of which there are
-    /// `ffmpeg_permits_total`.
+    /// The engine-wide external FFmpeg slots.
     ffmpeg_permits: Arc<Semaphore>,
-    ffmpeg_permits_total: usize,
     transcoder_ring_capacity: usize,
 }
 
@@ -61,7 +58,6 @@ impl StageRuntimeManager {
         stages: Arc<StageRegistry>,
         events: Arc<EventLog>,
         ffmpeg_permits: Arc<Semaphore>,
-        ffmpeg_permits_total: usize,
         transcoder_ring_capacity: usize,
     ) -> Self {
         Self {
@@ -69,7 +65,6 @@ impl StageRuntimeManager {
             stages,
             events,
             ffmpeg_permits,
-            ffmpeg_permits_total,
             transcoder_ring_capacity,
         }
     }
@@ -360,13 +355,6 @@ impl StageRuntimeManager {
                 | StageBackendKind::Recording => {}
             }
         });
-    }
-
-    /// Return a runtime snapshot for a stage, if one is registered.
-    pub async fn snapshot(&self, key: &StageKey) -> Option<StageRuntimeSnapshot> {
-        self.stages
-            .stage_runtime_snapshot(key, &self.ffmpeg_permits, self.ffmpeg_permits_total)
-            .await
     }
 
     async fn initialize_stage_metadata(

@@ -36,7 +36,6 @@ impl MediaEngine {
             self.stages.clone(),
             self.runtime.event_log.clone(),
             self.runtime.external_ffmpeg_semaphore.clone(),
-            self.config.external_ffmpeg_permits,
             self.config.transcoder_ring_capacity,
         )
     }

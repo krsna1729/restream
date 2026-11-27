@@ -239,7 +239,10 @@ async fn snapshot_reflects_lifecycle_and_metrics() {
         backend: StageBackendKind::ExternalFfmpeg,
     });
 
-    let snap = manager.snapshot(&key).await.expect("snapshot exists");
+    let snap = engine
+        .stage_runtime_snapshot(&key)
+        .await
+        .expect("snapshot exists");
     assert_eq!(snap.key, key);
     assert_eq!(snap.bytes_in, 1024);
     assert_eq!(snap.bytes_out, 512);
