@@ -444,7 +444,7 @@ demuxes stdout (`TsDemuxer`) into the stage ring.
 
 Each consumer (egress, HLS preview, SRT player) holds a `StageLease` on every
 stage it reads. The last lease to drop stops the stage
-(`crates/restream-engine/src/stage_lease.rs`). Stage identity is owned by
+(`crates/restream-engine/src/stage_registry.rs`). Stage identity is owned by
 `crates/restream-domain/src/domain/stage.rs`; do not rebuild its keys in another layer.
 
 ## Lifecycle and recovery

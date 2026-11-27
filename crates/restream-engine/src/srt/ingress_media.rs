@@ -103,11 +103,14 @@ pub(crate) struct SrtReaderMedia {
     pub(super) packets: Vec<Arc<MediaPacket>>,
     pub(super) pending: VecDeque<Bytes>,
     /// The player's lease on the shared muxer; it stops when the last ends.
-    _muxer_lease: crate::stage_lease::StageLease,
+    _muxer_lease: crate::stage_registry::StageLease,
 }
 
 impl SrtReaderMedia {
-    pub(super) fn new(muxer: TsChunkReader, muxer_lease: crate::stage_lease::StageLease) -> Self {
+    pub(super) fn new(
+        muxer: TsChunkReader,
+        muxer_lease: crate::stage_registry::StageLease,
+    ) -> Self {
         Self {
             muxer,
             _muxer_lease: muxer_lease,

@@ -139,23 +139,23 @@ impl GraphRuntime {
             })
             .await;
         let mut stages: Vec<(StageKey, bool)> = engine
-            .stages
-            .runtimes
-            .read()
-            .await
-            .iter()
-            .filter(|(_, runtime)| runtime.ring.is_some())
-            .map(|(key, runtime)| (key.clone(), !runtime.cancel.is_cancelled()))
-            .collect();
+            .with_stage_runtimes(|runtimes| {
+                runtimes
+                    .iter()
+                    .filter(|(_, runtime)| runtime.ring.is_some())
+                    .map(|(key, runtime)| (key.clone(), !runtime.cancel.is_cancelled()))
+                    .collect()
+            })
+            .await;
         stages.sort_by_cached_key(|(key, _)| key.to_string());
         let ts_muxers = engine
-            .stages
-            .ts_muxers
-            .read()
-            .await
-            .iter()
-            .map(|(key, stage)| (key.clone(), !stage.muxer.cancel.is_cancelled()))
-            .collect();
+            .with_ts_muxer_stages(|ts_muxers| {
+                ts_muxers
+                    .iter()
+                    .map(|(key, stage)| (key.clone(), !stage.muxer.cancel.is_cancelled()))
+                    .collect()
+            })
+            .await;
         let recordings = engine.recording_activity().await;
         let mut hls = HashMap::new();
         for pipeline_id in pipeline_ids {

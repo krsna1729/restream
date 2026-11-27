@@ -31,6 +31,7 @@ pub async fn start_hls_fmp4_segmenter(
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
     let stage = hls_stage_key.to_string();
     let (lifecycle, metrics) = engine
+        .stages
         .get_or_create_non_ring_stage_runtime(
             hls_stage_key,
             crate::stage_lifecycle::StagePhase::Registered,
@@ -148,6 +149,7 @@ async fn run_hls_fmp4_segmenter(
     }
 
     engine
+        .stages
         .remove_stage_runtime_if_current(&hls_stage_key, &lifecycle)
         .await;
     engine

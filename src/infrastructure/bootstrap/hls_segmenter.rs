@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use restream_engine::engine::MediaEngine;
-use restream_engine::stage_lease::StageLease;
+use restream_engine::stage_registry::StageLease;
 
 /// Spawns the pipeline's one HLS segmenter on `ring`. The segmenter is
 /// shared by every HLS output of the pipeline and outlives the output that

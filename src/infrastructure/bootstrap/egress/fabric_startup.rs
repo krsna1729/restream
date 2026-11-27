@@ -6,7 +6,7 @@ use restream_domain::domain::output_spec::{OutputUrlScheme, RecirculationTarget}
 use restream_domain::models::Output;
 use restream_engine::egress::leaf::EgressProgressSink;
 use restream_engine::engine_registries::EgressRegistration;
-use restream_engine::stage_lease::StageLease;
+use restream_engine::stage_registry::StageLease;
 use tracing::warn;
 
 use super::EgressStarter;

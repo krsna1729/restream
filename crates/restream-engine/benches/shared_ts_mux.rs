@@ -7,7 +7,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream_core::MediaPacket;
 use restream_engine::engine::MediaEngine;
 use restream_engine::ingest_lease::IngestLease;
-use restream_engine::stage_lease::StageLease;
+use restream_engine::stage_registry::StageLease;
 use restream_engine::ts_chunk_ring::TsChunkReader;
 use restream_sync::RingBuffer;
 use std::sync::Arc;

@@ -6,8 +6,8 @@
 use super::telemetry_projection as api_view_models;
 use restream_domain::domain::stage::StageKey;
 use restream_engine::engine::MediaEngine;
-use restream_engine::engine_registries::StageRuntime;
 use restream_engine::stage_metrics::StageMetrics;
+use restream_engine::stage_registry::StageRuntime;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -30,23 +30,23 @@ impl StageMaps {
     async fn read(engine: &MediaEngine, pipeline_id: Option<&str>) -> Self {
         let wanted = |key: &StageKey| pipeline_id.is_none_or(|id| key.pipeline.as_str() == id);
         let runtimes = engine
-            .stages
-            .runtimes
-            .read()
-            .await
-            .iter()
-            .filter(|(key, _)| wanted(key))
-            .map(|(key, runtime)| (key.clone(), runtime.clone()))
-            .collect();
+            .with_stage_runtimes(|runtimes| {
+                runtimes
+                    .iter()
+                    .filter(|(key, _)| wanted(key))
+                    .map(|(key, runtime)| (key.clone(), runtime.clone()))
+                    .collect()
+            })
+            .await;
         let metrics = engine
-            .stages
-            .metrics
-            .read()
-            .await
-            .iter()
-            .filter(|(key, _)| wanted(key))
-            .map(|(key, metrics)| (key.clone(), metrics.clone()))
-            .collect();
+            .with_stage_metrics(|metrics| {
+                metrics
+                    .iter()
+                    .filter(|(key, _)| wanted(key))
+                    .map(|(key, metrics)| (key.clone(), metrics.clone()))
+                    .collect()
+            })
+            .await;
         Self { runtimes, metrics }
     }
 
@@ -161,19 +161,19 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         })
         .await;
     let ts_muxer_rings: Vec<serde_json::Value> = engine
-        .stages
-        .ts_muxers
-        .read()
-        .await
-        .iter()
-        .map(|(stage_key, stage)| {
-            api_view_models::ts_muxer_ring_telemetry_json(
-                stage_key,
-                &stage.muxer.ring,
-                !stage.muxer.cancel.is_cancelled(),
-            )
+        .with_ts_muxer_stages(|ts_muxers| {
+            ts_muxers
+                .iter()
+                .map(|(stage_key, stage)| {
+                    api_view_models::ts_muxer_ring_telemetry_json(
+                        stage_key,
+                        &stage.muxer.ring,
+                        !stage.muxer.cancel.is_cancelled(),
+                    )
+                })
+                .collect()
         })
-        .collect();
+        .await;
     let stages = StageMaps::read(engine, None).await;
     let stage_keys = stages.keys();
     let lifecycle_snapshots = lifecycle_snapshots(engine, &stage_keys).await;

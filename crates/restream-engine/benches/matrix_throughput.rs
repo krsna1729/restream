@@ -5,7 +5,7 @@ use restream_domain::domain::stage::StageKind;
 use restream_engine::codec::{audio_for_ts_into, video_for_ts_into};
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls::HlsSegmenterStart;
-use restream_engine::stage_lease::StageLease;
+use restream_engine::stage_registry::StageLease;
 use restream_mpegts::TsMuxer;
 use restream_sync::{DtsEnforcer, Reader, RingBuffer};
 use std::hint::black_box;

@@ -117,7 +117,7 @@ pub(super) struct EgressTask {
     /// Leases on the shared stages this output reads through: they stop
     /// when the last egress (or other consumer) using them ends. A pipeline
     /// HLS segmenter this output starts holds clones while it reads the ring.
-    pub(super) stages: Vec<restream_engine::stage_lease::StageLease>,
+    pub(super) stages: Vec<restream_engine::stage_registry::StageLease>,
     pub(super) tuning: RuntimeTuning,
     pub(super) correlation_id: String,
     pub(super) job: AttemptJob,
@@ -384,7 +384,7 @@ impl EgressTask {
     /// recording that as the attempt's error. Such a stage is never fed or
     /// reused again, so the attempt ends and its retry starts a new one.
     async fn own_stage_ended(&self) {
-        restream_engine::stage_lease::StageLease::any_ended(&self.stages).await;
+        restream_engine::stage_registry::StageLease::any_ended(&self.stages).await;
         self.engine
             .record_egress_error_if_current(
                 &self.output_id,

@@ -11,7 +11,7 @@ use restream_engine::egress::journal::{FeedEpoch, RingFeed, TsFeed};
 use restream_engine::egress::policy::LeafPolicy;
 use restream_engine::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use restream_engine::engine::MediaEngine;
-use restream_engine::stage_lease::StageLease;
+use restream_engine::stage_registry::StageLease;
 use restream_sync::RingBuffer;
 use std::sync::Arc;
 

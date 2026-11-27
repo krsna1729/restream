@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::engine::MediaEngine;
-use crate::stage_lease::StageLease;
+use crate::stage_registry::StageLease;
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
 

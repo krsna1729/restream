@@ -7,12 +7,13 @@ use std::time::Instant;
 
 use crate::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, RecordingRegistry,
-    RuntimeInfra, StageRegistry, StreamQaRegistry,
+    RuntimeInfra, StreamQaRegistry,
 };
 use crate::ingest_registry::{
     ActiveIngest, INGEST_FLAP_WINDOW_MS, IngestRegistration, IngestRegistry, RecentIngestOutcome,
 };
 use crate::snapshots::PublisherQuality;
+use crate::stage_registry::StageRegistry;
 use restream_sync::RingBuffer;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -41,7 +42,7 @@ pub struct MediaEngine {
     pub stream_qa: StreamQaRegistry,
     pub hls: HlsRegistry,
     pub file_ingests: FileIngestRegistry,
-    pub stages: StageRegistry,
+    pub stages: Arc<StageRegistry>,
     pub runtime: RuntimeInfra,
     pub config: Arc<crate::config::EngineConfig>,
 }
@@ -71,7 +72,7 @@ impl MediaEngine {
             stream_qa: StreamQaRegistry::default(),
             hls: HlsRegistry::new(),
             file_ingests: FileIngestRegistry::new(),
-            stages: StageRegistry::new(),
+            stages: Arc::new(StageRegistry::new()),
             runtime,
             config,
         }
