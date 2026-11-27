@@ -566,7 +566,7 @@ order, low to high:
 
 1. leaf contract: `egress::leaf`, `egress::visit`, feeds and wire helpers.
    These own cursors, progress, clocks and the end-of-visit report.
-2. protocol backends: `egress::backends::*` (MoQ in `egress::backends::moq`). A backend may
+2. protocol backends: `egress::backends::*`. A backend may
    use the leaf contract and its feed; it must not import `engine` or
    `engine_*`.
 3. shard runtime: `egress::shard`, `egress::manager`, `egress::runtime`.

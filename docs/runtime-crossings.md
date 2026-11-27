@@ -84,9 +84,11 @@ Tokio runtime with a fixed worker count (`crates/restream-engine/src/executor.rs
 ## MoQ crossings
 
 MoQ (moq-lite and IETF MOQT via `moq-net`, hang and MSF catalogs) runs over
-Compio QUIC (`crates/restream-engine/src/moq/`). Ingest and the local origin share the
-`moq-ingest` thread. Relay output (`moqt://`) runs on egress shards. No MoQ
-media runs on CONTROL.
+Compio QUIC: the leaf transport in `crates/restream-engine/src/moq_transport/`,
+ingest and the local origin in `crates/restream-engine/src/moq/`, and relay
+output in `crates/restream-engine/src/egress/backends/moq/`. Ingest and the
+local origin share the `moq-ingest` thread. Relay output (`moqt://`) runs on
+egress shards. No MoQ media runs on CONTROL.
 
 | # | Crossing | Mechanism | Rate | Bound | Verdict |
 |---|---|---|---|---|---|

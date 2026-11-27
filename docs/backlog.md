@@ -63,13 +63,14 @@ the [assurance roadmap](assurance-roadmap.md).
   `output_helpers`). Left: the 32-module engine cycle, which needs its own
   design, not a mechanical import shuffle.
 - Design: the engine modules target this order, low to high: vocabulary and
-  configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`);
-  runtime storage (`engine_registries`, `stage_registry_access`,
-  `ingest_lease`, `stage_lease`); media primitives (`stage_runtime`,
-  `audio_router`, `external_transcoder`, `ingest_publisher`, `hls`);
-  protocol paths (`rtmp`, `srt`, `moq`, `hls_ingest`, `hls_pull`);
-  `egress`; and finally the `engine`/`engine_*` composition modules and
-  snapshots. Lower modules must not import `engine` or `engine_*`. A
+  configuration (`config`, `codec`, `timing`, `executor`, `ffmpeg*`,
+  `preview_ids`, `moq_transport`); runtime state (`ingest_registry`,
+  `ingest_lease`, `stage_registry`); media workers (`stage_runtime`,
+  `audio_router`, `external_transcoder`, `ingest_publisher`, `stream_qa`,
+  `shared_ts_muxer`); `hls` primitives and `egress` (with its protocol
+  backends); `engine_registries`; the `engine`/`engine_*` composition modules
+  and snapshots; and finally the protocol servers (`rtmp`, `srt`, `moq`,
+  `hls_ingest`, `hls_pull`). Lower modules must not import `engine` or `engine_*`. A
   subsystem that needs engine state takes a scoped handle (event log, stage
   manager, egress context) instead of `Arc<MediaEngine>`. The reported
   32-module cycle is the union of those subsystem back-references, so it

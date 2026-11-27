@@ -31,9 +31,9 @@ use crate::egress::visit::{EngineVisit, EngineVisitResult};
 use super::leaf::{
     Activity, LeafLink, LinkPlan, MoqConnector, MoqEngine, QuicConnector, spawn_link,
 };
+use super::media::MediaConverter;
 use super::publish::{HangBroadcast, RingPublisher};
 use super::startup::SharedMoqStartupSource;
-use crate::egress::backends::moq::media::MediaConverter;
 use restream_moq::url::parse_moq_url;
 
 struct MoqFabricLeaf {
