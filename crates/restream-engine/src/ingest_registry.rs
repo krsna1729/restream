@@ -11,7 +11,7 @@
 //!
 //! The orders that span registries (a MoQ origin's per-pipeline attach lock
 //! before that pipeline's `selection`, egress unregistration's `try_read` of
-//! `active`, and file ingest's `sessions` -> `children` -> `active` ->
+//! `active`, and `ingests.sessions` -> file-ingest `children` -> `active` ->
 //! `positions`) are in the `engine_registries` module docs.
 //!
 //! `ingests.selection` is a [`KeyedLock`] keyed by pipeline id: it serializes
