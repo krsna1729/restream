@@ -211,7 +211,9 @@ impl IngestRegistry {
     /// Runs `f` on the pipeline's source ring with that pipeline's
     /// `selection` held, so what `f` reads of the ring and the selected
     /// ingest comes from one selected input. `None` when the pipeline has no
-    /// ring.
+    /// ring. `f` must not take this pipeline's `selection`, directly or
+    /// through an ingest operation (the lock is not reentrant), and must not
+    /// hold an ingest map across its awaits.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "this pipeline's `selection` keeps ring and track set from one selected input; under it each ingest map is taken one at a time (module docs)"

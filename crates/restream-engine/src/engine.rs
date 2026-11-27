@@ -162,7 +162,7 @@ impl MediaEngine {
 
     /// [`Self::with_source_rings`] without waiting: `None` while the ring map
     /// is being written.
-    pub fn try_with_source_rings<R>(
+    pub(crate) fn try_with_source_rings<R>(
         &self,
         f: impl FnOnce(&HashMap<String, Arc<RingBuffer>>) -> R,
     ) -> Option<R> {
@@ -180,8 +180,11 @@ impl MediaEngine {
     }
 
     /// Runs `f` on the pipeline's source ring with the pipeline's ingest
-    /// selection held (`IngestRegistry::with_selected_source_ring`).
-    pub async fn with_selected_source_ring<T>(
+    /// selection held (`IngestRegistry::with_selected_source_ring`). `f` must
+    /// not take this pipeline's `selection`, directly or through an ingest
+    /// operation (the lock is not reentrant), and must not hold an ingest map
+    /// across its awaits.
+    pub(crate) async fn with_selected_source_ring<T>(
         &self,
         pipeline_id: &str,
         f: impl AsyncFnOnce(Arc<RingBuffer>) -> T,

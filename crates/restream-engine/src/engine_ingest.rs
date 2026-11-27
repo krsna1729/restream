@@ -316,7 +316,7 @@ impl MediaEngine {
 
     /// The wanted `srt_call` inputs and their generation, when `seen` is out
     /// of date (`SrtCallInputs::snapshot_since`).
-    pub fn srt_calls_since(
+    pub(crate) fn srt_calls_since(
         &self,
         seen: u64,
     ) -> Option<(
