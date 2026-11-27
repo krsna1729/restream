@@ -7,7 +7,8 @@ use crate::snapshots::{
 };
 use restream_domain::domain::state::{EGRESS_PROGRESS_STALE_MS, EgressStatus};
 
-use super::engine::{ActiveEgress, MediaEngine};
+use super::engine::MediaEngine;
+use crate::engine_registries::ActiveEgress;
 use crate::preview_ids::hls_preview_registry_key;
 
 /// Locks without blocking, still recovering the guarded value from a

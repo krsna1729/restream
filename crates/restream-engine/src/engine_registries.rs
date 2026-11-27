@@ -1,5 +1,7 @@
 //! Registry structs for `MediaEngine` state ownership, grouping the
-//! synchronized maps and sets that back ingest, egress, HLS, and stage lifecycles.
+//! synchronized maps and sets that back egress, HLS, and stage lifecycles,
+//! and the egress records they store. Ingest state is in
+//! [`crate::ingest_registry`].
 //!
 //! Registry access rule: do not hold registry guards across awaits that acquire
 //! another registry. Snapshot paths should copy or render the fields they need
@@ -14,26 +16,16 @@
 //! writer. The few sections that must hold more than one guard take them in
 //! one order per registry, and never the reverse:
 //!
-//! - ingest: `selection` (one pipeline's) -> `cancel_tokens` -> `sessions` ->
-//!   `selected_inputs` -> `active` (`ingests.active` is read inside egress
-//!   unregistration with `try_read` only). A MoQ origin's per-pipeline
-//!   attach lock comes before that pipeline's `selection`;
+//! - ingest: in the [`crate::ingest_registry`] module docs. Across
+//!   registries: `ingests.active` is read inside egress unregistration with
+//!   `try_read` only, and a MoQ origin's per-pipeline attach lock comes
+//!   before that pipeline's `ingests.selection`;
 //! - egress: `retry` -> `cancel_tokens` -> `active` -> `recent` (a settled
 //!   outcome is written under the same `active` guard that removes its
 //!   attempt, so a late settlement cannot follow a replacement);
 //! - stage: `runtimes` -> `metrics` -> `lifecycles`;
 //! - file ingest: `ingests.sessions` -> `children` -> `active` -> `positions`
 //!   (any subsequence); `active` is never held while taking `children`.
-//!
-//! `ingests.selection` is a [`KeyedLock`] keyed by pipeline id: it serializes
-//! one pipeline's ingest lifecycle (registration replacement, selection,
-//! track replacement with ring adaptation, origin resolution, disconnect
-//! outcomes, release), so a holder stuck on one pipeline delays no other.
-//! No section holds two pipelines' selections. The engine-wide ingest maps
-//! under it are never held across a wait on media (a gate going idle), and
-//! the maps keyed by input id (`cancel_tokens`, `sessions`) are checked and
-//! changed under one write guard set, so two pipelines naming one input id
-//! cannot interleave a check and its change.
 //!
 //! Fabric protocol guards protect only map/refcount transactions and snapshots.
 //! Construction runs off-lock; publication rechecks the registry generation and
@@ -50,78 +42,120 @@
 //! `try_register_pipeline_input_attempt` (already under an `#[expect]`) and
 //! `ObjectBody`'s `segment.growing` claim lock in `hls_ingest.rs`.
 
-use arc_swap::ArcSwapOption;
-use restream_sync::keyed_lock::KeyedLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::egress::FeedId;
 use crate::egress::runtime::{FeedWakeSubscription, SharedFabricRuntime};
-use crate::engine::{
-    ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
-};
 use crate::events::EventLog;
 use crate::hls::HlsStore;
 use crate::hls_fmp4::Fmp4HlsStore;
 use crate::pipe_metrics::PipeMetrics;
-use crate::snapshots::{ListenerSocketStats, RtmpListenerStats};
+use crate::snapshots::{ListenerSocketStats, PublisherQuality, RtmpListenerStats};
 use crate::stage_lifecycle::StageLifecycle;
-use crate::stage_metrics::StageMetrics;
+use crate::stage_metrics::{StageMetrics, StageMetricsSnapshot};
 use crate::ts_chunk_ring::TsChunkRing;
 use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 use restream_sync::RingBuffer;
 
-pub struct IngestRegistry {
-    pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
-    pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
-    pub next_attempt_id: AtomicU64,
-    pub sessions: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
-    pub selected_inputs: TokioRwLock<HashMap<String, String>>,
-    pub timelines: TokioRwLock<HashMap<String, Arc<AtomicI64>>>,
-    pub preview_slots: TokioRwLock<HashMap<String, Arc<ArcSwapOption<RingBuffer>>>>,
-    /// One lock per pipeline id over that pipeline's ingest lifecycle
-    /// (module docs).
-    pub selection: KeyedLock,
-    pub preview_lock: TokioMutex<()>,
-    pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
-    pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
-    /// The `srt_call` inputs the SRT server dials.
-    pub srt_calls: restream_srt::calls::SrtCallInputs,
-    /// Dropped ingest leases' attempts awaiting release
-    /// ([`crate::ingest_lease`]), and the task releasing them.
-    pub(crate) releases: Arc<crate::ingest_lease::ReleaseQueue>,
-    pub(crate) release_drain: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+pub(crate) const EGRESS_FLAP_WINDOW_MS: u64 = 30_000;
+
+/// Where a fabric output runs: its feed and the shard index assigned to it.
+/// `(feed, shard)` names one shard heartbeat (feed ids carry a per-protocol
+/// prefix, so they are unique across fabric registries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FabricSlot {
+    pub feed: FeedId,
+    pub shard: u32,
 }
 
-impl Default for IngestRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct ActiveEgress {
+    pub attempt_id: u64,
+    pub output_id: String,
+    pub pipeline_id: String,
+    pub protocol: String,
+    pub target_url: String,
+    pub target_addr: Arc<std::sync::Mutex<Option<String>>>,
+    pub status: EgressStatus,
+    pub phase: Arc<std::sync::Mutex<EgressPhase>>,
+    pub started_at: String,
+    pub start_instant: Instant,
+    pub bytes_sent: Arc<AtomicU64>,
+    pub metrics: Arc<StageMetrics>,
+    pub last_progress_ms: Arc<AtomicU64>,
+    pub last_error: Arc<std::sync::Mutex<Option<String>>>,
+    pub last_error_ms: Arc<AtomicU64>,
+    pub failure_phase: Arc<std::sync::Mutex<Option<String>>>,
+    pub quality: Arc<std::sync::Mutex<PublisherQuality>>,
+    pub prev_bytes_sent: AtomicU64,
+    pub prev_sample_time: std::sync::Mutex<Instant>,
+    pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
+    pub terminal_stage_key: Option<StageKey>,
+    pub output_name: String,
+    pub encoding: String,
+    /// Whether this output is owned by the egress fabric's shard runtime
+    /// (RTMP, RTMPS, SRT, sink discard, and pipeline recirculation — every
+    /// network-egress output type). `false` for output types the fabric
+    /// does not cover (HLS PUT upload, recording), which have their own
+    /// task shape and no shard/leaf concept. Set once, right after
+    /// registration, from the same routing decision the bootstrap egress
+    /// reconciler already made — never inferred from `protocol`. `None`
+    /// for output types without a shard/leaf (the Reqwest HLS uploader,
+    /// recording).
+    pub fabric: Option<FabricSlot>,
+    pub resync_count: Arc<AtomicU64>,
+    /// Feed units the leaf's cursor is currently behind the feed head.
+    /// Fabric outputs only; stays 0 for non-fabric output types, which have
+    /// no shared feed cursor to report against.
+    pub feed_lag_units: Arc<AtomicU64>,
+    /// Reason for the leaf's current send-path health (`None` when
+    /// idle/healthy). Fabric outputs only.
+    pub backpressure_reason: Arc<std::sync::Mutex<Option<&'static str>>>,
 }
 
-impl IngestRegistry {
-    pub fn new() -> Self {
-        Self {
-            pipelines: TokioRwLock::new(HashMap::new()),
-            cancel_tokens: TokioRwLock::new(HashMap::new()),
-            next_attempt_id: AtomicU64::new(1),
-            sessions: TokioRwLock::new(HashMap::new()),
-            selected_inputs: TokioRwLock::new(HashMap::new()),
-            timelines: TokioRwLock::new(HashMap::new()),
-            preview_slots: TokioRwLock::new(HashMap::new()),
-            selection: KeyedLock::new(),
-            preview_lock: TokioMutex::new(()),
-            active: TokioRwLock::new(HashMap::new()),
-            recent: TokioRwLock::new(HashMap::new()),
-            srt_calls: Default::default(),
-            releases: Arc::default(),
-            release_drain: std::sync::Mutex::new(None),
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct RecentEgressOutcome {
+    pub output_id: String,
+    pub pipeline_id: String,
+    pub protocol: String,
+    pub target_url: String,
+    pub target_addr: Option<String>,
+    pub status: EgressRuntimeStatus,
+    pub raw_status: EgressStatus,
+    pub phase: EgressPhase,
+    pub started_at: String,
+    pub uptime_secs: f64,
+    pub bytes_sent: u64,
+    pub last_progress_ms: u64,
+    pub resync_count: u64,
+    pub feed_lag_units: u64,
+    pub backpressure_reason: Option<&'static str>,
+    pub last_error: Option<String>,
+    pub last_error_ms: u64,
+    pub failure_phase: Option<String>,
+    pub first_failure_at_ms: u64,
+    pub failure_count: u32,
+    pub quality: PublisherQuality,
+    pub metrics: StageMetricsSnapshot,
+    pub ended_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct EgressRetryState {
+    pub attempts: u32,
+    pub backoff_ms: u64,
+    pub next_retry_at_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct EgressRegistration {
+    pub cancel_token: CancellationToken,
+    pub attempt_id: u64,
 }
 
 pub struct EgressRegistry {

@@ -13,7 +13,8 @@ use restream_domain::models::Output;
 use restream_engine::egress::backends::moq::MoqPublishStartup;
 use restream_engine::egress::journal::RingFeed;
 use restream_engine::egress::{EgressCommand, FeedId, OutputSpec};
-use restream_engine::engine::{EgressRegistration, MediaEngine};
+use restream_engine::engine::MediaEngine;
+use restream_engine::engine_registries::EgressRegistration;
 use restream_health::diagnosis::CAPACITY_REFUSED_PHASE;
 
 use super::EgressTask;

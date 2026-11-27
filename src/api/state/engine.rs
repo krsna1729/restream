@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use restream_engine::engine::{ActiveIngest, MediaEngine};
+use restream_engine::engine::MediaEngine;
+use restream_engine::ingest_registry::ActiveIngest;
 
 use super::AppState;
 use crate::application::hls_preview::{self, HlsPreviewReadError};

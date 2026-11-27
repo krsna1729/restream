@@ -12,8 +12,9 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
 use crate::ingest_lease::{IngestEnd, IngestLease};
+use crate::ingest_registry::IngestRegistration;
 use restream_sync::RingBuffer;
 
 use crate::ingest_publisher::IngestTimestamps;

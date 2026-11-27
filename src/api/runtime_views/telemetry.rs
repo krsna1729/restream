@@ -305,7 +305,9 @@ pub(super) struct DeliveryInput {
     pub(super) rate: Option<(f64, f64)>,
 }
 
-pub(super) fn delivery_input(egress: &restream_engine::engine::ActiveEgress) -> DeliveryInput {
+pub(super) fn delivery_input(
+    egress: &restream_engine::engine_registries::ActiveEgress,
+) -> DeliveryInput {
     let quality = restream_sync::lock::lock(&egress.quality);
     DeliveryInput {
         feed: egress

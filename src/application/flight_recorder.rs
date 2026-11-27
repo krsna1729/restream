@@ -700,8 +700,8 @@ async fn egress_probes(engine: &MediaEngine) -> HashMap<String, EgressProbe> {
 /// Each AAC track's frame length: every track a multi-track source
 /// declared, else its one track.
 fn aac_frame_lengths(
-    ingest: &restream_engine::engine::ActiveIngest,
-    metadata: &restream_engine::engine::IngestMetadata,
+    ingest: &restream_engine::ingest_registry::ActiveIngest,
+    metadata: &restream_engine::ingest_registry::IngestMetadata,
 ) -> HashMap<u32, f64> {
     let tracks = restream_sync::lock::lock(&ingest.audio_tracks).clone();
     tracks
@@ -724,8 +724,8 @@ fn ingest_probe(
     engine: &MediaEngine,
     inspector: Option<&restream_engine::stream_inspector::StreamInspector>,
     pipeline_id: &str,
-    ingest: &restream_engine::engine::ActiveIngest,
-    metadata: &restream_engine::engine::IngestMetadata,
+    ingest: &restream_engine::ingest_registry::ActiveIngest,
+    metadata: &restream_engine::ingest_registry::IngestMetadata,
 ) -> IngestProbe {
     let quality = &metadata.quality;
     let receive_buffer = match (

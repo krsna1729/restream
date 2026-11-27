@@ -621,7 +621,7 @@ fn standby_publisher_promotes_with_headers_before_the_cached_gop() {
     let gate = Arc::new(InputPacketGate::standby());
     let ring = Arc::new(restream_sync::RingBuffer::new(64));
     let mut media = super::ingest_media::RtmpPublisherMedia {
-        registration: crate::engine::IngestRegistration {
+        registration: crate::ingest_registry::IngestRegistration {
             cancel_token: CancellationToken::new(),
             attempt_id: 1,
             input_id: "standby".to_string(),

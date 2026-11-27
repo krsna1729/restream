@@ -213,7 +213,7 @@ async fn egress_attribution_reflects_the_placed_shard_of_the_current_attempt() {
     let current = engine
         .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", None)
         .await;
-    let slot = |shard| restream_engine::engine::FabricSlot {
+    let slot = |shard| restream_engine::engine_registries::FabricSlot {
         feed: restream_engine::egress::command::FeedId::new("rtmp:pipe-1:source"),
         shard,
     };

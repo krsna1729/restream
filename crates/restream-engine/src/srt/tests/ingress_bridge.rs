@@ -271,7 +271,7 @@ fn test_publisher_media(
 ) {
     let bytes_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let media = Box::new(super::super::ingress_media::SrtPublisherMedia {
-        registration: crate::engine::IngestRegistration {
+        registration: crate::ingest_registry::IngestRegistration {
             cancel_token: tokio_util::sync::CancellationToken::new(),
             attempt_id: 1,
             input_id: "input".to_string(),

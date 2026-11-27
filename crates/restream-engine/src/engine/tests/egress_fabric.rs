@@ -555,7 +555,7 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     use crate::egress::backends::pipeline::PipelineTarget;
     use crate::egress::journal::RingFeed;
     use crate::egress::leaf::EgressProgressSink;
-    use crate::engine::IngestRegistration;
+    use crate::ingest_registry::IngestRegistration;
     use crate::input_gate::InputPacketGate;
     use restream_core::{MediaPacket, MediaType, PayloadFormat};
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -684,7 +684,7 @@ async fn a_pipeline_add_past_a_full_leaf_table_is_refused_and_releases_its_targe
     use crate::egress::command::ProtocolSpec;
     use crate::egress::journal::RingFeed;
     use crate::egress::sizing::Saturated;
-    use crate::engine::IngestRegistration;
+    use crate::ingest_registry::IngestRegistration;
     use crate::input_gate::InputPacketGate;
     use std::sync::atomic::AtomicI64;
     use tokio_util::sync::CancellationToken;

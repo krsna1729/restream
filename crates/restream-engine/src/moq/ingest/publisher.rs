@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::engine::{IngestRegistration, MediaEngine};
+use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::InputTimestampMapper;
 use crate::stage_metrics::StageMetrics;
 use restream_core::MediaPacket;
@@ -92,7 +93,7 @@ impl PublisherMedia {
     pub(crate) fn note_received(&self, bytes: usize) {
         let len = u64::try_from(bytes).unwrap_or(u64::MAX);
         let now_ms = MediaEngine::now_epoch_ms();
-        crate::engine::note_media_bytes(
+        crate::ingest_registry::note_media_bytes(
             &self.counters.bytes_received,
             &self.counters.first_media_ms,
             len,

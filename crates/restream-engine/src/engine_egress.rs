@@ -8,8 +8,9 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{
-    ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, RecentEgressOutcome,
+use crate::engine::MediaEngine;
+use crate::engine_registries::{
+    ActiveEgress, EgressRegistration, EgressRetryState, RecentEgressOutcome,
 };
 use crate::snapshots::PublisherQuality;
 use crate::stage_metrics::StageMetrics;
@@ -181,7 +182,7 @@ impl MediaEngine {
         &self,
         output_id: &str,
         registration: &EgressRegistration,
-        fabric: crate::engine::FabricSlot,
+        fabric: crate::engine_registries::FabricSlot,
     ) {
         let mut egresses = self.egresses.active.write().await;
         if let Some(egress) = egresses.get_mut(output_id)

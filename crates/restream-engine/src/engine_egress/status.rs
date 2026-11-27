@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use crate::engine::{ActiveEgress, EGRESS_FLAP_WINDOW_MS, MediaEngine, RecentEgressOutcome};
+use crate::engine::MediaEngine;
+use crate::engine_registries::{ActiveEgress, EGRESS_FLAP_WINDOW_MS, RecentEgressOutcome};
 use restream_domain::domain::state::{
     EGRESS_PROGRESS_STALE_MS, EgressPhase, EgressRuntimeStatus, EgressStatus,
 };

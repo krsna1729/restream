@@ -425,9 +425,9 @@ struct ProjectContext<'a> {
 
 fn project_output(
     output: &Output,
-    active: Option<&restream_engine::engine::ActiveEgress>,
+    active: Option<&restream_engine::engine_registries::ActiveEgress>,
     recent_evidence: Option<&FailureEvidence>,
-    retry: Option<&restream_engine::engine::EgressRetryState>,
+    retry: Option<&restream_engine::engine_registries::EgressRetryState>,
     has_ingest: bool,
     context: &ProjectContext<'_>,
 ) -> OutputState {
@@ -541,7 +541,7 @@ fn convergence_of(
 
 /// The active egress's last error, if any.
 fn active_failure_evidence(
-    egress: &restream_engine::engine::ActiveEgress,
+    egress: &restream_engine::engine_registries::ActiveEgress,
 ) -> Option<FailureEvidence> {
     restream_sync::lock::lock(&egress.last_error)
         .clone()
@@ -555,7 +555,7 @@ fn active_failure_evidence(
 /// The health of the shard a fabric output is placed on.
 fn shard_health(
     context: &ProjectContext<'_>,
-    slot: &restream_engine::engine::FabricSlot,
+    slot: &restream_engine::engine_registries::FabricSlot,
 ) -> ShardHealth {
     context
         .shards

@@ -12,7 +12,7 @@ use arc_swap::ArcSwapOption;
 use bytes::BytesMut;
 
 use super::*;
-use crate::engine::IngestRegistration;
+use crate::ingest_registry::IngestRegistration;
 use crate::input_gate::InputPacketGate;
 use crate::moq::ingest::publisher::{ProbeHoldLimits, PublisherCounters};
 use crate::stage_metrics::StageMetrics;

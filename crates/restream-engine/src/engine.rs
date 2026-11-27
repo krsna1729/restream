@@ -1,24 +1,19 @@
 //! Central media engine state and public runtime contracts.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use crate::engine_registries::{
-    EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
-    RecordingRegistry, RuntimeInfra, StageRegistry, StreamQaRegistry,
+    EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, RecordingRegistry,
+    RuntimeInfra, StageRegistry, StreamQaRegistry,
+};
+use crate::ingest_registry::{
+    ActiveIngest, IngestRegistration, IngestRegistry, RecentIngestOutcome,
 };
 use crate::snapshots::PublisherQuality;
-use crate::stage_metrics::StageMetrics;
-use crate::stage_metrics::StageMetricsSnapshot;
-use restream_core::metadata::{AudioMeta, VideoMeta};
-use restream_domain::domain::stage::StageKey;
-use restream_domain::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
-use restream_sync::RingBuffer;
 
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
-pub(crate) const EGRESS_FLAP_WINDOW_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,191 +21,6 @@ pub struct Publisher {
     pub protocol: String,
     pub remote_addr: Option<String>,
     pub quality: PublisherQuality,
-}
-
-#[derive(Clone, Default)]
-pub struct IngestMetadata {
-    pub remote_addr: Option<String>,
-    pub video: Option<VideoMeta>,
-    pub selected_video_track_index: Option<u32>,
-    pub video_track_count: usize,
-    pub audio: Option<AudioMeta>,
-    pub quality: PublisherQuality,
-    /// A container supplied a complete set, so missing tracks are absent,
-    /// not merely unknown (as with an unprobed recirculation input).
-    pub tracks_authoritative: bool,
-    /// What an RTMP encoder declared in `onMetaData`, latest first seen.
-    pub declared: Option<restream_core::metadata::DeclaredEncoder>,
-}
-
-pub struct ActiveIngest {
-    pub attempt_id: u64,
-    pub pipeline_id: String,
-    pub input_id: String,
-    pub stream_key: String,
-    pub gate: Arc<crate::input_gate::InputPacketGate>,
-    pub start_time: Instant,
-    pub protocol: String,
-    pub bytes_received: Arc<AtomicU64>,
-    /// Epoch-ms of the session's first media byte, 0 until one arrives.
-    /// The output start gate counts its probe grace from here, not from
-    /// registration: a probe may legitimately complete long after the source
-    /// starts sending (an SRT publisher reconnecting mid-GOP sends bytes at
-    /// once but completes its TS probe only on the next SPS).
-    pub first_media_ms: Arc<AtomicU64>,
-    pub metrics: Arc<StageMetrics>,
-    pub last_progress_ms: Arc<AtomicU64>,
-    pub metadata: std::sync::RwLock<IngestMetadata>,
-    pub audio_tracks: std::sync::Mutex<Arc<Vec<AudioMeta>>>,
-    pub keyframe_times: Arc<std::sync::Mutex<Vec<i64>>>,
-    /// Shared with the RTMP ingress owner, which updates and reads them
-    /// synchronously while running the publisher's media.
-    pub video_sequence_header: Arc<std::sync::Mutex<Option<bytes::Bytes>>>,
-    pub audio_sequence_header: Arc<std::sync::Mutex<Option<bytes::Bytes>>>,
-    pub prev_bytes_received: AtomicU64,
-    pub prev_sample_time: std::sync::Mutex<Instant>,
-    pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
-}
-
-impl ActiveIngest {
-    pub fn metadata(&self) -> IngestMetadata {
-        restream_sync::lock::read(&self.metadata).clone()
-    }
-}
-
-/// Count one media chunk's bytes and, on the session's first byte, the wall
-/// clock the output start gate counts its probe grace from.
-///
-/// Called on the media path (per 64 KiB chunk for HLS push and file ingest,
-/// per packet for RTMP and SRT). It reuses the bump that is already there
-/// and the clock read the caller already makes for `last_progress_ms` (pass
-/// that same `now_ms`): one comparison of the value `fetch_add` returns per
-/// call, and one `compare_exchange` in the whole session.
-pub(crate) fn note_media_bytes(
-    bytes_received: &AtomicU64,
-    first_media_ms: &AtomicU64,
-    bytes: u64,
-    now_ms: u64,
-) {
-    if bytes_received.fetch_add(bytes, Ordering::Relaxed) == 0 && bytes > 0 {
-        let _ = first_media_ms.compare_exchange(0, now_ms, Ordering::Relaxed, Ordering::Relaxed);
-    }
-}
-
-#[derive(Clone)]
-pub struct IngestRegistration {
-    pub cancel_token: CancellationToken,
-    pub attempt_id: u64,
-    pub input_id: String,
-    pub gate: Arc<crate::input_gate::InputPacketGate>,
-    pub last_forwarded_dts: Arc<AtomicI64>,
-    pub preview_ring: Arc<arc_swap::ArcSwapOption<RingBuffer>>,
-}
-
-/// Where a fabric output runs: its feed and the shard index assigned to it.
-/// `(feed, shard)` names one shard heartbeat (feed ids carry a per-protocol
-/// prefix, so they are unique across fabric registries).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FabricSlot {
-    pub feed: crate::egress::command::FeedId,
-    pub shard: u32,
-}
-
-pub struct ActiveEgress {
-    pub attempt_id: u64,
-    pub output_id: String,
-    pub pipeline_id: String,
-    pub protocol: String,
-    pub target_url: String,
-    pub target_addr: Arc<std::sync::Mutex<Option<String>>>,
-    pub status: EgressStatus,
-    pub phase: Arc<std::sync::Mutex<EgressPhase>>,
-    pub started_at: String,
-    pub start_instant: Instant,
-    pub bytes_sent: Arc<AtomicU64>,
-    pub metrics: Arc<StageMetrics>,
-    pub last_progress_ms: Arc<AtomicU64>,
-    pub last_error: Arc<std::sync::Mutex<Option<String>>>,
-    pub last_error_ms: Arc<AtomicU64>,
-    pub failure_phase: Arc<std::sync::Mutex<Option<String>>>,
-    pub quality: Arc<std::sync::Mutex<PublisherQuality>>,
-    pub prev_bytes_sent: AtomicU64,
-    pub prev_sample_time: std::sync::Mutex<Instant>,
-    pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
-    pub terminal_stage_key: Option<StageKey>,
-    pub output_name: String,
-    pub encoding: String,
-    /// Whether this output is owned by the egress fabric's shard runtime
-    /// (RTMP, RTMPS, SRT, sink discard, and pipeline recirculation — every
-    /// network-egress output type). `false` for output types the fabric
-    /// does not cover (HLS PUT upload, recording), which have their own
-    /// task shape and no shard/leaf concept. Set once, right after
-    /// registration, from the same routing decision the bootstrap egress
-    /// reconciler already made — never inferred from `protocol`. `None`
-    /// for output types without a shard/leaf (the Reqwest HLS uploader,
-    /// recording).
-    pub fabric: Option<FabricSlot>,
-    pub resync_count: Arc<AtomicU64>,
-    /// Feed units the leaf's cursor is currently behind the feed head.
-    /// Fabric outputs only; stays 0 for non-fabric output types, which have
-    /// no shared feed cursor to report against.
-    pub feed_lag_units: Arc<AtomicU64>,
-    /// Reason for the leaf's current send-path health (`None` when
-    /// idle/healthy). Fabric outputs only.
-    pub backpressure_reason: Arc<std::sync::Mutex<Option<&'static str>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RecentIngestOutcome {
-    pub protocol: String,
-    pub disconnected_at_ms: u64,
-    pub first_disconnect_at_ms: u64,
-    pub disconnect_count: u32,
-    pub reason: Option<String>,
-    pub failure_phase: Option<String>,
-    pub had_error: bool,
-    pub remote_addr: Option<String>,
-    pub bytes_received: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct RecentEgressOutcome {
-    pub output_id: String,
-    pub pipeline_id: String,
-    pub protocol: String,
-    pub target_url: String,
-    pub target_addr: Option<String>,
-    pub status: EgressRuntimeStatus,
-    pub raw_status: EgressStatus,
-    pub phase: EgressPhase,
-    pub started_at: String,
-    pub uptime_secs: f64,
-    pub bytes_sent: u64,
-    pub last_progress_ms: u64,
-    pub resync_count: u64,
-    pub feed_lag_units: u64,
-    pub backpressure_reason: Option<&'static str>,
-    pub last_error: Option<String>,
-    pub last_error_ms: u64,
-    pub failure_phase: Option<String>,
-    pub first_failure_at_ms: u64,
-    pub failure_count: u32,
-    pub quality: PublisherQuality,
-    pub metrics: StageMetricsSnapshot,
-    pub ended_at_ms: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct EgressRetryState {
-    pub attempts: u32,
-    pub backoff_ms: u64,
-    pub next_retry_at_ms: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct EgressRegistration {
-    pub cancel_token: CancellationToken,
-    pub attempt_id: u64,
 }
 
 /// RTMP ingress limits derived from the engine configuration.
@@ -224,7 +34,7 @@ pub struct RtmpIngressLimits {
 }
 
 pub struct MediaEngine {
-    pub ingests: IngestRegistry,
+    pub ingests: Arc<IngestRegistry>,
     pub egresses: EgressRegistry,
     pub fabric: FabricRegistry,
     pub recordings: RecordingRegistry,
@@ -249,7 +59,7 @@ impl MediaEngine {
 
     pub fn new_with_config(config: Arc<crate::config::EngineConfig>) -> Self {
         Self {
-            ingests: IngestRegistry::new(),
+            ingests: Arc::new(IngestRegistry::new()),
             egresses: EgressRegistry::new(),
             fabric: FabricRegistry::new(),
             recordings: RecordingRegistry::new(),
