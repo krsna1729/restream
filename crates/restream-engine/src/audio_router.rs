@@ -3,11 +3,25 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::events::EventLog;
+use crate::stage_lifecycle::{StageBackendKind, StageLifecycle, StageLifecycleGuard, StagePhase};
+use crate::stage_metrics::StageMetrics;
 use restream_core::metadata::AudioMeta;
 use restream_core::{MediaPacket, MediaType};
 use restream_domain::domain::audio_routing::AudioRouting;
 use restream_domain::domain::stage::StageKey;
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFollower};
+
+/// The stage an audio router runs as: its key, cancellation, lifecycle and
+/// metrics (the stage runtime's handle) and the event log its
+/// `StageStopped` goes to.
+pub struct AudioRouterStage {
+    pub key: StageKey,
+    pub cancel: CancellationToken,
+    pub lifecycle: Arc<StageLifecycle>,
+    pub metrics: Arc<StageMetrics>,
+    pub events: Arc<EventLog>,
+}
 
 /// Lightweight audio routing stage with no FFmpeg or MPEG-TS round-trip.
 ///
@@ -15,28 +29,22 @@ use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer, VideoConfigFol
 /// async loop. `Remap` and `Downmix` require DSP and run on the external FFmpeg
 /// backend.
 pub async fn start_audio_router(
-    pipeline_id: String,
+    stage: AudioRouterStage,
     routing: AudioRouting,
     input_buffer: Arc<RingBuffer>,
     output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::engine::MediaEngine>,
-    cancel: CancellationToken,
-    stage_key: StageKey,
 ) {
-    let stage_metrics = engine
-        .stages
-        .get_or_create_stage_metrics(stage_key.clone())
-        .await;
-    let lifecycle = engine
-        .stages
-        .get_or_create_stage_lifecycle(
-            stage_key.clone(),
-            crate::stage_lifecycle::StagePhase::Registered,
-        )
-        .await;
-    let _lifecycle_guard = crate::stage_lifecycle::StageLifecycleGuard::new(lifecycle.clone());
-    lifecycle.transition(crate::stage_lifecycle::StagePhase::BackendSpawned {
-        backend: crate::stage_lifecycle::StageBackendKind::AudioRouter,
+    let AudioRouterStage {
+        key: stage_key,
+        cancel,
+        lifecycle,
+        metrics: stage_metrics,
+        events,
+    } = stage;
+    let pipeline_id = stage_key.pipeline.to_string();
+    let _lifecycle_guard = StageLifecycleGuard::new(lifecycle.clone());
+    lifecycle.transition(StagePhase::BackendSpawned {
+        backend: StageBackendKind::AudioRouter,
         pid: None,
     });
 
@@ -122,13 +130,10 @@ pub async fn start_audio_router(
     // A cancelled entry is never reused; the consumers' lease drops remove
     // it, and only if no newer stage took its key.
     cancel.cancel();
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id,
-            encoding: stage_key.kind.to_string(),
-        });
+    events.emit(crate::events::EventKind::StageStopped {
+        pipeline_id,
+        encoding: stage_key.kind.to_string(),
+    });
 }
 
 /// Copy codec, parameter-set and track metadata from input to output before

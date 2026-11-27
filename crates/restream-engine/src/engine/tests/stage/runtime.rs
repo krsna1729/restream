@@ -200,6 +200,73 @@ async fn a_shared_muxer_lives_exactly_as_long_as_its_leases() {
     assert!(!third_ring.cancel.is_cancelled());
 }
 
+/// The engine starts the shared TS muxer with its ingests, and the muxer
+/// publishes TS on the media executor while the control thread is blocked.
+#[tokio::test(flavor = "current_thread")]
+async fn shared_muxer_packages_media_while_control_thread_is_blocked() {
+    let engine = Arc::new(MediaEngine::new());
+    let pipeline_id = "mux-control-isolation";
+    let (video, audio, packets) =
+        crate::test_fixtures::primary_av_packets_for_codec("h264").unwrap();
+    let _ingest = engine
+        .try_register_ingest(pipeline_id, "mux-isolation", "rtmp")
+        .await
+        .unwrap();
+    engine
+        .update_ingest_meta(pipeline_id, Some(video), audio.first().cloned(), None)
+        .await;
+    let source = Arc::new(RingBuffer::new(4096));
+    source.set_audio_tracks(audio);
+    source.push_batch(packets.iter().take(64).cloned());
+    let (ts_ring, muxer_lease) = engine
+        .get_or_create_ts_muxer_stage(pipeline_id, "source", source)
+        .await;
+    let mut reader =
+        crate::ts_chunk_ring::TsChunkReader::new("mux-isolation-result".into(), &ts_ring);
+    let cancel = CancellationToken::new();
+    let (done, observed) = std::sync::mpsc::channel();
+    let observer = crate::executor::spawn(cancel.clone(), async move {
+        let mut chunks = Vec::new();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            reader.wait_for_data_or_cancelled().await;
+            reader.pull_burst(&mut chunks, 4096).unwrap();
+            chunks
+        })
+        .await;
+        let _ = done.send(result);
+    })
+    .unwrap();
+    // No control-runtime polls are possible until the muxer has published TS.
+    let chunks = observed
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    drop(muxer_lease);
+    cancel.cancel();
+    observer.await.unwrap();
+    let mut demuxer = restream_mpegts::TsDemuxer::new();
+    let mut remuxed = Vec::new();
+    for chunk in chunks {
+        demuxer.feed(&chunk.payload);
+        demuxer.drain_into(&mut remuxed);
+    }
+    demuxer.flush();
+    demuxer.drain_into(&mut remuxed);
+    let first_video = remuxed
+        .iter()
+        .find(|p| p.media_type == MediaType::Video)
+        .unwrap();
+    let expected_video = packets
+        .iter()
+        .find(|p| p.media_type == MediaType::Video)
+        .unwrap();
+    assert_eq!(first_video.payload, expected_video.payload);
+    assert_eq!(
+        (first_video.pts, first_video.dts),
+        (expected_video.pts, expected_video.dts)
+    );
+}
+
 #[tokio::test]
 async fn a_released_lease_never_removes_a_newer_stage_under_its_key() {
     let engine = Arc::new(MediaEngine::new());

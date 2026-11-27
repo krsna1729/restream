@@ -3,11 +3,13 @@
 
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::MediaEngine;
+use crate::events::EventLog;
 use crate::stage_lifecycle::StageLifecycle;
 use crate::stage_metrics::StageMetrics;
+use crate::stage_registry::StageRegistry;
 use restream_domain::domain::stage::StageKey;
 
 /// Execution context passed to every FFmpeg stage.
@@ -18,7 +20,12 @@ pub struct StageRunContext {
     pub cancel: CancellationToken,
     pub lifecycle: Arc<StageLifecycle>,
     pub metrics: Arc<StageMetrics>,
-    pub engine: Arc<MediaEngine>,
+    /// Where the stage registers its pipe metrics.
+    pub stages: Arc<StageRegistry>,
+    /// The engine-wide external FFmpeg slots (`EngineConfig::external_ffmpeg_permits`).
+    pub ffmpeg_permits: Arc<Semaphore>,
+    /// The engine's event log, for `StageStopped`.
+    pub events: Arc<EventLog>,
 }
 
 /// Error type returned by FFmpeg stage execution.

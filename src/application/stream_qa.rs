@@ -23,14 +23,9 @@ pub async fn spawn_stream_qa(engine: Arc<MediaEngine>, pipeline_id: String) -> b
         return false;
     };
     tokio::spawn(async move {
-        restream_engine::stream_qa::runner::run(
-            engine.clone(),
-            pipeline_id.clone(),
-            ring,
-            findings.clone(),
-            cancel,
-        )
-        .await;
+        engine
+            .run_stream_qa(pipeline_id.clone(), ring, findings.clone(), cancel)
+            .await;
         engine.release_stream_qa(&pipeline_id, &findings);
     });
     true

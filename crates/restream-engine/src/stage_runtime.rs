@@ -193,7 +193,6 @@ impl StageRuntimeManager {
         {
             let pipeline_id = key.pipeline.to_string();
             let output_ring = handle.ring.clone();
-            let engine = self.engine.clone();
             let cancel = handle.cancel.clone();
             let routing = parse_audio_operation(audio_op);
             info!(
@@ -201,22 +200,26 @@ impl StageRuntimeManager {
                 stage = %key,
                 "spawning audio-router stage"
             );
+            let stage = crate::audio_router::AudioRouterStage {
+                key: key.clone(),
+                cancel: cancel.clone(),
+                lifecycle: handle.lifecycle.clone(),
+                metrics: handle.metrics.clone(),
+                events: self.engine.runtime.event_log.clone(),
+            };
             let _ = crate::executor::spawn_with_class(
                 crate::executor::MediaService {
                     class: crate::executor::MediaServiceClass::AudioRouter,
-                    pipeline_id: pipeline_id.clone(),
+                    pipeline_id,
                     stage: key.to_string(),
                 },
-                cancel.clone(),
+                cancel,
                 async move {
                     crate::audio_router::start_audio_router(
-                        pipeline_id,
+                        stage,
                         routing,
                         source_ring,
                         output_ring,
-                        engine,
-                        cancel,
-                        key,
                     )
                     .await;
                 },
@@ -226,6 +229,10 @@ impl StageRuntimeManager {
 
         let pipeline_id = key.pipeline.to_string();
         let output_ring = handle.ring.clone();
+        let ingests = self.engine.ingests.clone();
+        let stages = self.engine.stages.clone();
+        let ffmpeg_permits = self.engine.runtime.external_ffmpeg_semaphore.clone();
+        let events = self.engine.runtime.event_log.clone();
         let engine = self.engine.clone();
         let cancel = handle.cancel.clone();
         let lifecycle = handle.lifecycle.clone();
@@ -276,15 +283,15 @@ impl StageRuntimeManager {
                 return;
             };
 
-            // Fetch the video sequence header from the engine's ingest state.
+            // Fetch the video sequence header from the ingest state.
             // For RTMP/FLV sources this contains the AVCC SPS/PPS needed by
             // TsPacketFeeder; for TS/SRT sources it is typically None (the
             // feeder obtains raw annex-B parameter sets from the ring or
             // per-packet payload instead).
             let (video_seq_header, _) =
                 match crate::preview_ids::input_id_from_hls_preview_resource_id(&pipeline_id) {
-                    Some(input_id) => engine.ingests.get_input_sequence_headers(input_id).await,
-                    None => engine.ingests.get_sequence_headers(&pipeline_id).await,
+                    Some(input_id) => ingests.get_input_sequence_headers(input_id).await,
+                    None => ingests.get_sequence_headers(&pipeline_id).await,
                 };
 
             let input_pump = StageInputPump::new(
@@ -297,7 +304,7 @@ impl StageRuntimeManager {
                 metrics.clone(),
             )
             .with_video_sequence_header(video_seq_header)
-            .with_engine(engine.clone(), pipeline_id.clone())
+            .with_ingests(ingests, pipeline_id.clone())
             .with_lifecycle(lifecycle.clone());
 
             let stream_count = 1 + plan.input.audio_tracks.len();
@@ -311,7 +318,9 @@ impl StageRuntimeManager {
                 cancel: cancel.clone(),
                 lifecycle,
                 metrics,
-                engine: engine.clone(),
+                stages,
+                ffmpeg_permits,
+                events,
             };
 
             match backend {

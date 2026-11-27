@@ -70,7 +70,7 @@ impl MediaEngine {
     /// The shared TS muxer for `stage_key`, and the caller's lease on it: the
     /// muxer stops when its last lease drops.
     pub async fn get_or_create_ts_muxer_stage(
-        self: &Arc<Self>,
+        &self,
         pipeline_id: &str,
         stage_key: &str,
         source_ring: Arc<RingBuffer>,
@@ -78,11 +78,12 @@ impl MediaEngine {
         let key = format!("{}:{}", pipeline_id, stage_key);
         self.stages
             .get_or_create_ts_muxer(key, |cancel| {
-                crate::srt::start_shared_ts_muxer(
+                crate::shared_ts_muxer::start_shared_ts_muxer(
                     pipeline_id,
                     stage_key,
                     source_ring,
-                    self.clone(),
+                    self.ingests.clone(),
+                    self.config.ts_ring_capacity,
                     cancel,
                 )
             })

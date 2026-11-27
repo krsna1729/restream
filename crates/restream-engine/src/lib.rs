@@ -91,6 +91,7 @@ pub mod resolver;
 pub mod rtmp;
 pub mod secret_display;
 pub mod security;
+mod shared_ts_muxer;
 pub mod snapshots;
 pub mod srt;
 pub(crate) mod srt_stream_id;

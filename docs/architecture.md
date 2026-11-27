@@ -433,7 +433,7 @@ Stage kinds are `StageKind` values (`crates/restream-domain/src/domain/stage.rs`
 | `AudioRoute`, remap or downmix | FFmpeg child |
 | `HlsSegmenter`, `Hls` | MEDIA (`hls::segmenter` writes `HlsStore`; `hls::fmp4` writes `Fmp4HlsStore`) |
 | `Recording` | MEDIA mux, then a dedicated writer thread |
-| Shared TS mux (keyed per feed, not a `StageKind`) | MEDIA (`srt::shared_muxer`), writes `TsChunkRing` |
+| Shared TS mux (keyed per feed, not a `StageKind`) | MEDIA (`shared_ts_muxer`), writes `TsChunkRing` |
 
 HLS preview reads the source ring. For HEVC input it reads the shared
 HEVC-to-H.264 `CodecEdge` instead of starting its own transcoder.

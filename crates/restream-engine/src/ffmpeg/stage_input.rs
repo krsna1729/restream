@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::MediaEngine;
 use crate::feeder::{PacketFeedConfig, TsPacketFeeder};
+use crate::ingest_registry::IngestRegistry;
 use crate::stage_lifecycle::StageLifecycle;
 use crate::stage_metrics::StageMetrics;
 use restream_core::metadata::{AudioMeta, VideoMeta};
@@ -27,11 +27,11 @@ use restream_sync::{Reader, RingBuffer};
 /// Reconnect robustness:
 /// - Transient reconnect (same stream params): the pump blocks on
 ///   `wait_for_data` and naturally resumes when the ring refills.
-/// - Reconnect with new stream parameters: if an `engine` + `pipeline_id` are
-///   attached via [`with_engine`], the pump will re-fetch the video sequence
-///   header from the engine's ingest state on each new keyframe after the
-///   feeder's SPS/PPS cache is cleared, so new parameters are picked up
-///   without restarting the whole stage.
+/// - Reconnect with new stream parameters: if the ingest registry and a
+///   `pipeline_id` are attached via [`Self::with_ingests`], the pump will
+///   re-fetch the video sequence header from the ingest state on each new
+///   keyframe after the feeder's SPS/PPS cache is cleared, so new parameters
+///   are picked up without restarting the whole stage.
 pub struct StageInputPump {
     reader: Reader,
     feeder: TsPacketFeeder,
@@ -39,9 +39,9 @@ pub struct StageInputPump {
     include_audio: bool,
     lifecycle: Option<Arc<StageLifecycle>>,
     has_emitted_first_input: bool,
-    /// Optional engine + pipeline for dynamic sequence-header refresh on
-    /// publisher reconnect with new stream parameters.
-    engine_refresh: Option<(Arc<MediaEngine>, String)>,
+    /// Optional ingest registry + pipeline for dynamic sequence-header
+    /// refresh on publisher reconnect with new stream parameters.
+    ingest_refresh: Option<(Arc<IngestRegistry>, String)>,
 }
 
 impl StageInputPump {
@@ -69,7 +69,7 @@ impl StageInputPump {
             include_audio,
             lifecycle: None,
             has_emitted_first_input: false,
-            engine_refresh: None,
+            ingest_refresh: None,
         }
     }
 
@@ -91,11 +91,11 @@ impl StageInputPump {
         self
     }
 
-    /// Attach an engine + pipeline so that the pump can re-fetch the video
-    /// sequence header from the ingest state when the publisher reconnects
-    /// with new stream parameters (SPS/PPS change).
-    pub fn with_engine(mut self, engine: Arc<MediaEngine>, pipeline_id: String) -> Self {
-        self.engine_refresh = Some((engine, pipeline_id));
+    /// Attach the ingest registry + pipeline so that the pump can re-fetch
+    /// the video sequence header from the ingest state when the publisher
+    /// reconnects with new stream parameters (SPS/PPS change).
+    pub fn with_ingests(mut self, ingests: Arc<IngestRegistry>, pipeline_id: String) -> Self {
+        self.ingest_refresh = Some((ingests, pipeline_id));
         self
     }
 
@@ -139,11 +139,11 @@ impl StageInputPump {
             // from multiple sources in priority order:
             //   1. Ring buffer annex-B parameter sets (TS/SRT sources)
             //   2. Per-packet annex-B payload (raw TS frames)
-            //   3. Engine ingest video_sequence_header (RTMP/FLV sources)
+            //   3. Ingest video_sequence_header (RTMP/FLV sources)
             //
             // Source 3 also handles publisher reconnect with new stream
             // parameters: if the ring clears the parameter sets (or the
-            // feeder's cache becomes stale), we re-fetch from the engine.
+            // feeder's cache becomes stale), we re-fetch from the ingest.
             if pkt.media_type == MediaType::Video && self.feeder.needs_raw_video_parameter_sets() {
                 if let Some(parameter_sets) = self.reader.current_ring().video_parameter_sets() {
                     self.feeder
@@ -153,10 +153,10 @@ impl StageInputPump {
                 {
                     self.feeder
                         .set_raw_video_parameter_sets_if_empty(&parameter_sets);
-                } else if let Some((engine, pipeline_id)) = &self.engine_refresh {
-                    // Fallback: fetch AVCC sequence header from engine
-                    // ingest state (set by RTMP handler on connect/reconnect).
-                    if let Some(header) = engine.ingests.try_video_sequence_header(pipeline_id) {
+                } else if let Some((ingests, pipeline_id)) = &self.ingest_refresh {
+                    // Fallback: fetch AVCC sequence header from the ingest
+                    // state (set by RTMP handler on connect/reconnect).
+                    if let Some(header) = ingests.try_video_sequence_header(pipeline_id) {
                         self.feeder.set_video_sequence_header_from_avcc(&header);
                     }
                 }

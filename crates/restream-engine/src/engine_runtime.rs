@@ -10,6 +10,7 @@ use tracing::info;
 use crate::engine::MediaEngine;
 use crate::ingest_registry::IngestRegistration;
 use crate::snapshots::ListenerSocketStats;
+use restream_sync::RingBuffer;
 
 impl MediaEngine {
     pub fn listener_stats_handle(&self) -> Arc<ListenerSocketStats> {
@@ -309,6 +310,19 @@ impl MediaEngine {
         {
             entry.cancel.cancel();
         }
+    }
+
+    /// Runs a pipeline's stream checks until `cancel`, over this engine's
+    /// ingests (`stream_qa::runner::run`).
+    pub async fn run_stream_qa(
+        &self,
+        pipeline_id: String,
+        ring: Arc<RingBuffer>,
+        findings: Arc<std::sync::Mutex<crate::stream_qa::StreamQa>>,
+        cancel: CancellationToken,
+    ) {
+        crate::stream_qa::runner::run(self.ingests.clone(), pipeline_id, ring, findings, cancel)
+            .await;
     }
 
     /// Drops the entry a finished sampler left, unless a newer one replaced

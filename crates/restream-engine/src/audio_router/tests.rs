@@ -6,6 +6,18 @@ use restream_sync::Reader;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+/// The stage the runtime hands a router: a fresh lifecycle, metrics and
+/// event log.
+fn router_stage(key: StageKey, cancel: &CancellationToken) -> AudioRouterStage {
+    AudioRouterStage {
+        key,
+        cancel: cancel.clone(),
+        lifecycle: Arc::new(StageLifecycle::new(StagePhase::Registered)),
+        metrics: Arc::new(StageMetrics::new()),
+        events: Arc::new(EventLog::new()),
+    }
+}
+
 // --- apply_audio_routing tests ---
 
 #[test]
@@ -315,12 +327,10 @@ proptest! {
 
 #[tokio::test]
 async fn test_audio_router_reindexes_packets() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "pipe-id",
@@ -330,13 +340,10 @@ async fn test_audio_router_reindexes_packets() {
     // Start audio router
     let routing = AudioRouting::SelectTracks { tracks: vec![2] };
     let handle = tokio::spawn(start_audio_router(
-        "pipe-id".to_string(),
+        router_stage(stage_key, &cancel),
         routing,
         source_ring.clone(),
         out_ring.clone(),
-        engine,
-        cancel.clone(),
-        stage_key,
     ));
 
     // Push some source packets
@@ -380,26 +387,23 @@ async fn test_audio_router_reindexes_packets() {
 
 #[tokio::test]
 async fn audio_router_stage_is_not_blocking_after_output() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "audio-router-producing",
         StageKind::audio_route("atrack:0", StageKind::source()),
     );
 
+    let stage = router_stage(stage_key, &cancel);
+    let lifecycle = stage.lifecycle.clone();
     let handle = tokio::spawn(start_audio_router(
-        "audio-router-producing".to_string(),
+        stage,
         AudioRouting::SelectTracks { tracks: vec![0] },
         source_ring.clone(),
         out_ring.clone(),
-        engine.clone(),
-        cancel.clone(),
-        stage_key.clone(),
     ));
 
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -432,11 +436,9 @@ async fn audio_router_stage_is_not_blocking_after_output() {
     .await
     .expect("audio router should emit output");
 
-    assert!(
-        engine
-            .egress_blocked_by_stage_snapshot(&stage_key)
-            .await
-            .is_none(),
+    assert_eq!(
+        lifecycle.snapshot().phase,
+        StagePhase::Producing,
         "a stage that has emitted output must not surface as blockedBy"
     );
 
@@ -446,12 +448,10 @@ async fn audio_router_stage_is_not_blocking_after_output() {
 
 #[tokio::test]
 async fn audio_router_replays_prebuffered_upstream_stage() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "prebuffered-audio-route",
@@ -516,13 +516,10 @@ async fn audio_router_replays_prebuffered_upstream_stage() {
     source_ring.mark_end_of_stream();
 
     let handle = tokio::spawn(start_audio_router(
-        "prebuffered-audio-route".to_string(),
+        router_stage(stage_key, &cancel),
         AudioRouting::SelectTracks { tracks: vec![1] },
         source_ring,
         out_ring.clone(),
-        engine,
-        cancel,
-        stage_key,
     ));
     tokio::time::timeout(std::time::Duration::from_secs(2), handle)
         .await
@@ -553,12 +550,10 @@ async fn audio_router_replays_prebuffered_upstream_stage() {
 async fn audio_router_propagates_late_arriving_audio_tracks() {
     // Simulates SRT multi-audio: source ring has no audio_tracks when the
     // audio_router stage starts, then they arrive mid-stream.
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "late-tracks",
@@ -569,13 +564,10 @@ async fn audio_router_propagates_late_arriving_audio_tracks() {
     // NOTE: no set_audio_tracks() yet — simulates live SRT before probe
 
     let handle = tokio::spawn(start_audio_router(
-        "late-tracks".to_string(),
+        router_stage(stage_key, &cancel),
         AudioRouting::SelectTracks { tracks: vec![0, 1] },
         source_ring.clone(),
         out_ring.clone(),
-        engine,
-        cancel.clone(),
-        stage_key,
     ));
 
     // Output ring has no audio_tracks yet (source not probed)
@@ -705,12 +697,10 @@ async fn audio_tracks_ring_supports_reconnect_update() {
 
 #[tokio::test]
 async fn audio_router_preserves_upstream_video_parameter_sets() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "pipe-video-params",
@@ -724,13 +714,10 @@ async fn audio_router_preserves_upstream_video_parameter_sets() {
     ]);
 
     let handle = tokio::spawn(start_audio_router(
-        "pipe-video-params".to_string(),
+        router_stage(stage_key, &cancel),
         AudioRouting::SelectTracks { tracks: vec![0] },
         source_ring,
         out_ring.clone(),
-        engine,
-        cancel.clone(),
-        stage_key,
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -749,12 +736,10 @@ async fn audio_router_preserves_upstream_video_parameter_sets() {
 
 #[tokio::test]
 async fn audio_router_learns_video_parameter_sets_from_live_packets() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "pipe-video-params-live",
@@ -764,13 +749,10 @@ async fn audio_router_learns_video_parameter_sets_from_live_packets() {
     source_ring.set_codec_hint("h264");
 
     let handle = tokio::spawn(start_audio_router(
-        "pipe-video-params-live".to_string(),
+        router_stage(stage_key, &cancel),
         AudioRouting::SelectTracks { tracks: vec![0] },
         source_ring.clone(),
         out_ring.clone(),
-        engine,
-        cancel.clone(),
-        stage_key,
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -817,12 +799,10 @@ async fn audio_router_learns_video_parameter_sets_from_live_packets() {
 
 #[tokio::test]
 async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     let source_ring = Arc::new(RingBuffer::new(16));
     let out_ring = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(MediaEngine::new());
     let cancel = CancellationToken::new();
     let stage_key = StageKey::new(
         "pipe-video-params-cache",
@@ -832,13 +812,10 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
     source_ring.set_codec_hint("h264");
 
     let handle = tokio::spawn(start_audio_router(
-        "pipe-video-params-cache".to_string(),
+        router_stage(stage_key, &cancel),
         AudioRouting::SelectTracks { tracks: vec![0] },
         source_ring.clone(),
         out_ring.clone(),
-        engine,
-        cancel.clone(),
-        stage_key,
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -877,7 +854,6 @@ async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers
 /// it in the middle of one burst.
 #[tokio::test]
 async fn audio_router_copies_a_configuration_change_inside_one_burst() {
-    use crate::engine::MediaEngine;
     use restream_domain::domain::stage::{StageKey, StageKind};
 
     const SPS: &[u8] = &[0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80];
@@ -889,16 +865,16 @@ async fn audio_router_copies_a_configuration_change_inside_one_burst() {
     let out_ring = Arc::new(RingBuffer::new(16));
     let cancel = CancellationToken::new();
     let handle = tokio::spawn(start_audio_router(
-        "pipe-video-config-burst".to_string(),
+        router_stage(
+            StageKey::new(
+                "pipe-video-config-burst",
+                StageKind::audio_route("atrack:0", StageKind::source()),
+            ),
+            &cancel,
+        ),
         AudioRouting::SelectTracks { tracks: vec![0] },
         source_ring.clone(),
         out_ring.clone(),
-        Arc::new(MediaEngine::new()),
-        cancel.clone(),
-        StageKey::new(
-            "pipe-video-config-burst",
-            StageKind::audio_route("atrack:0", StageKind::source()),
-        ),
     ));
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
