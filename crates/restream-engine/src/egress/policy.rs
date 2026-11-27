@@ -346,4 +346,18 @@ mod tests {
             LeafStallClass::Idle
         );
     }
+
+    #[test]
+    fn work_budget_config_from_fabric_maps_each_field_with_its_unit() {
+        let fabric = crate::config::EgressFabricConfig {
+            visit_max_units: 11,
+            visit_max_bytes: 22,
+            visit_max_us: 33,
+            ..crate::config::EgressFabricConfig::default()
+        };
+        let budget = WorkBudgetConfig::from_fabric(&fabric);
+        assert_eq!(budget.max_units, 11);
+        assert_eq!(budget.max_bytes, 22);
+        assert_eq!(budget.window, Duration::from_micros(33));
+    }
 }
