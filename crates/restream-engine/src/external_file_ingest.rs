@@ -467,7 +467,10 @@ mod tests {
             crate::config::EngineConfig::default(),
         )));
         let ring_buffer = engine.get_or_create_pipeline(name).await;
-        let lease = engine
+        let crate::ingest_lease::RegisteredIngest {
+            lease,
+            registration,
+        } = engine
             .try_register_ingest(name, name, "file")
             .await
             .expect("register file ingest");
@@ -483,7 +486,7 @@ mod tests {
                 target_gop_seconds: 4,
             },
             ring_buffer,
-            registration: lease.registration().clone(),
+            registration,
         });
         (runtime, lease)
     }
@@ -741,11 +744,11 @@ mod tests {
         assert!(
             runtime
                 .engine
-                .with_ingest_session(replacement.registration(), |_| ())
+                .with_ingest_session(&replacement.registration, |_| ())
                 .await
                 .is_some()
         );
-        assert!(!replacement.registration().cancel_token.is_cancelled());
+        assert!(!replacement.registration.cancel_token.is_cancelled());
         runtime.engine.unregister_ingest(&runtime.pipeline_id).await;
         runtime
             .engine

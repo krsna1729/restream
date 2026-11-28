@@ -180,7 +180,7 @@ fn a_selection_switch_installs_the_new_inputs_tracks() {
         engine
             .update_ingest_session_meta(
                 "pipe-sel",
-                video_input.registration(),
+                &video_input.registration,
                 Some(VideoMeta {
                     codec: "h264".to_string(),
                     width: 640,

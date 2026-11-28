@@ -319,15 +319,20 @@ impl IngestRegistry {
         if attempt.record {
             self.record_ingest_disconnect_if_current(
                 &attempt.pipeline_id,
-                &attempt.registration,
+                &attempt.input_id,
+                attempt.attempt_id,
                 Some(ABANDONED_PHASE),
                 Some(ABANDONED_REASON.to_string()),
                 true,
             )
             .await;
         }
-        self.unregister_ingest_if_current(&attempt.pipeline_id, &attempt.registration)
-            .await;
+        self.unregister_ingest_if_current(
+            &attempt.pipeline_id,
+            &attempt.input_id,
+            attempt.attempt_id,
+        )
+        .await;
     }
 
     pub async fn record_ingest_disconnect(
@@ -367,22 +372,18 @@ impl IngestRegistry {
     pub(crate) async fn record_ingest_disconnect_if_current(
         &self,
         pipeline_id: &str,
-        registration: &IngestRegistration,
+        input_id: &str,
+        attempt_id: u64,
         phase: Option<&str>,
         reason: Option<String>,
         had_error: bool,
     ) -> bool {
         let _selection = self.selection.lock(pipeline_id).await;
-        let ingest = self
-            .sessions
-            .read()
-            .await
-            .get(&registration.input_id)
-            .cloned();
+        let ingest = self.sessions.read().await.get(input_id).cloned();
         let Some(ingest) = ingest else {
             return false;
         };
-        if ingest.pipeline_id != pipeline_id || ingest.attempt_id != registration.attempt_id {
+        if ingest.pipeline_id != pipeline_id || ingest.attempt_id != attempt_id {
             return false;
         }
 
@@ -391,7 +392,7 @@ impl IngestRegistry {
             .read()
             .await
             .get(pipeline_id)
-            .is_some_and(|active| active.attempt_id == registration.attempt_id);
+            .is_some_and(|active| active.attempt_id == attempt_id);
         if !is_selected {
             return true;
         }
@@ -429,25 +430,26 @@ impl IngestRegistry {
     pub(crate) async fn unregister_ingest_if_current(
         &self,
         pipeline_id: &str,
-        registration: &IngestRegistration,
+        input_id: &str,
+        attempt_id: u64,
     ) -> bool {
         let _selection = self.selection.lock(pipeline_id).await;
         let mut tokens = self.cancel_tokens.write().await;
         let mut sessions = self.sessions.write().await;
         let mut active = self.active.write().await;
-        let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
-            ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
+        let is_current = sessions.get(input_id).is_some_and(|ingest| {
+            ingest.pipeline_id == pipeline_id && ingest.attempt_id == attempt_id
         });
         if !is_current {
             return false;
         }
-        sessions.remove(&registration.input_id);
-        if let Some(token) = tokens.remove(&registration.input_id) {
+        sessions.remove(input_id);
+        if let Some(token) = tokens.remove(input_id) {
             token.cancel();
         }
         let is_selected = active
             .get(pipeline_id)
-            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
+            .is_some_and(|ingest| ingest.attempt_id == attempt_id);
         let removed_selected = is_selected.then(|| active.remove(pipeline_id)).flatten();
         drop((tokens, sessions, active));
         let protocol = removed_selected
@@ -637,7 +639,8 @@ pub struct RecentIngestOutcome {
 #[derive(Clone)]
 pub(crate) struct AbandonedAttempt {
     pub(crate) pipeline_id: String,
-    pub(crate) registration: IngestRegistration,
+    pub(crate) input_id: String,
+    pub(crate) attempt_id: u64,
     /// Whether to record the abandoned outcome: false once a cancelled
     /// `IngestLease::finish` already recorded its own.
     pub(crate) record: bool,
@@ -683,11 +686,11 @@ impl ReleaseQueue {
         let Pending { queue, claimed } = &mut *pending;
         queue
             .iter()
-            .filter(|attempt| claimed.insert(attempt.registration.attempt_id))
+            .filter(|attempt| claimed.insert(attempt.attempt_id))
             .map(|attempt| {
                 let claim = Claim {
                     queue: self.clone(),
-                    attempt_id: attempt.registration.attempt_id,
+                    attempt_id: attempt.attempt_id,
                 };
                 (attempt.clone(), claim)
             })
@@ -701,7 +704,7 @@ impl ReleaseQueue {
         if let Some(index) = pending
             .queue
             .iter()
-            .position(|queued| queued.registration.attempt_id == attempt.registration.attempt_id)
+            .position(|queued| queued.attempt_id == attempt.attempt_id)
         {
             pending.queue.remove(index);
         }

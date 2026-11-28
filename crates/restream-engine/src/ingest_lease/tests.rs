@@ -9,7 +9,7 @@ use crate::ingest_registry::ABANDONED_PHASE;
 
 const PIPELINE: &str = "pipe-lease";
 
-async fn register(engine: &Arc<MediaEngine>, input: &str) -> Option<IngestLease> {
+async fn register(engine: &Arc<MediaEngine>, input: &str) -> Option<RegisteredIngest> {
     engine
         .try_register_pipeline_input_attempt(PIPELINE, input, input, "srt", true)
         .await
@@ -122,7 +122,7 @@ async fn a_finish_cancelled_between_record_and_release_records_one_outcome() {
         .expect("the attempt registers");
     // Holding the token map parks the release at its first write lock.
     let tokens = engine.ingests.cancel_tokens.read().await;
-    let finish = tokio::spawn(lease.finish(IngestEnd::Disconnected {
+    let finish = tokio::spawn(lease.lease.finish(IngestEnd::Disconnected {
         phase: "disconnect",
         reason: "the publisher left".to_string(),
         had_error: false,
@@ -159,11 +159,12 @@ async fn a_release_cancelled_at_a_lock_leaves_its_attempt_whole() {
     let tokens = engine.ingests.cancel_tokens.read().await;
     let release = tokio::spawn({
         let engine = engine.clone();
-        let registration = lease.registration().clone();
+        let input_id = lease.registration.input_id.clone();
+        let attempt_id = lease.registration.attempt_id;
         async move {
             engine
                 .ingests
-                .unregister_ingest_if_current(PIPELINE, &registration)
+                .unregister_ingest_if_current(PIPELINE, &input_id, attempt_id)
                 .await
         }
     });
@@ -172,7 +173,7 @@ async fn a_release_cancelled_at_a_lock_leaves_its_attempt_whole() {
     let _ = release.await;
     drop(tokens);
 
-    lease.finish(IngestEnd::Released).await;
+    lease.lease.finish(IngestEnd::Released).await;
     assert!(
         register(&engine, "input").await.is_some(),
         "a cancelled release left the input refused as a duplicate"
@@ -190,7 +191,8 @@ async fn two_passes_over_one_queue_release_every_entry() {
     for lease in [&first, &second] {
         queue.push(AbandonedAttempt {
             pipeline_id: PIPELINE.to_string(),
-            registration: lease.registration().clone(),
+            input_id: lease.registration.input_id.clone(),
+            attempt_id: lease.registration.attempt_id,
             record: false,
         });
     }
@@ -199,7 +201,7 @@ async fn two_passes_over_one_queue_release_every_entry() {
         let taken = taken.expect("both passes see the first entry");
         engine
             .ingests
-            .unregister_ingest_if_current(PIPELINE, &taken.registration)
+            .unregister_ingest_if_current(PIPELINE, &taken.input_id, taken.attempt_id)
             .await;
         queue.complete(&taken);
     }
@@ -236,6 +238,7 @@ async fn a_stale_lease_never_releases_a_newer_attempt_on_its_input() {
         .await
         .expect("the next replacement registers");
     current
+        .lease
         .finish(IngestEnd::Disconnected {
             phase: "disconnect",
             reason: "the old owner finished late".to_string(),
@@ -245,8 +248,8 @@ async fn a_stale_lease_never_releases_a_newer_attempt_on_its_input() {
     assert_current(&engine, &newest).await;
 }
 
-async fn assert_current(engine: &Arc<MediaEngine>, lease: &IngestLease) {
-    let registration = lease.registration();
+async fn assert_current(engine: &Arc<MediaEngine>, lease: &RegisteredIngest) {
+    let registration = &lease.registration;
     assert!(
         engine
             .with_ingest_session(registration, |_| ())
@@ -307,5 +310,5 @@ async fn a_stuck_selection_does_not_delay_another_pipelines_abandoned_release() 
     })
     .await
     .expect("A is released once its selection frees");
-    republished.finish(IngestEnd::Released).await;
+    republished.lease.finish(IngestEnd::Released).await;
 }

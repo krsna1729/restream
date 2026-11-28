@@ -46,7 +46,7 @@ async fn stuck_registration(
     gate: &InputPacketGate,
     pipeline_id: &'static str,
     input_id: &'static str,
-) -> tokio::task::JoinHandle<Option<crate::ingest_lease::IngestLease>> {
+) -> tokio::task::JoinHandle<Option<crate::ingest_lease::RegisteredIngest>> {
     let engine = server.engine.clone();
     engine
         .ingests
@@ -69,8 +69,8 @@ async fn stuck_registration(
     stuck
 }
 
-async fn finish(lease: crate::ingest_lease::IngestLease) {
-    lease.finish(IngestEnd::Released).await;
+async fn finish(lease: crate::ingest_lease::RegisteredIngest) {
+    lease.lease.finish(IngestEnd::Released).await;
 }
 
 /// Pipeline A's selection is held by a stuck registration; an SRT

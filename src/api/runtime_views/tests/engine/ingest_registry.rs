@@ -18,6 +18,7 @@ async fn stale_ingest_disconnect_cannot_poison_replacement_attempt() {
         .expect("replacement ingest should register");
 
     first
+        .lease
         .finish(IngestEnd::Disconnected {
             phase: "receive",
             reason: "stale disconnect".to_string(),
@@ -31,6 +32,7 @@ async fn stale_ingest_disconnect_cannot_poison_replacement_attempt() {
     );
 
     replacement
+        .lease
         .finish(IngestEnd::Disconnected {
             phase: "disconnect",
             reason: "replacement disconnect".to_string(),

@@ -276,13 +276,13 @@ async fn a_deleted_pipeline_loses_its_runtime_and_other_pipelines_keep_theirs() 
     );
     converge_topology(&db(&pool), &engine, &outputs(&pool).await).await;
 
-    assert!(gone_ingest.registration().cancel_token.is_cancelled());
+    assert!(gone_ingest.registration.cancel_token.is_cancelled());
     assert!(egress.is_cancelled(), "the output row cascaded away");
     assert!(
         engine.recent_egress_outcome("out-gone").await.is_none(),
         "a deleted pipeline must not leave settled output records behind"
     );
-    assert!(!kept_ingest.registration().cancel_token.is_cancelled());
+    assert!(!kept_ingest.registration.cancel_token.is_cancelled());
     assert_eq!(
         engine.runtime_pipeline_ids().await,
         HashSet::from(["pipe-kept".to_string()])
@@ -336,7 +336,7 @@ async fn a_persisted_promotion_switches_the_forwarded_input_on_request() {
         Some("input-backup")
     );
     assert!(
-        !primary.registration().cancel_token.is_cancelled(),
+        !primary.registration.cancel_token.is_cancelled(),
         "demoted, not dropped"
     );
 }
@@ -359,7 +359,7 @@ async fn a_pass_never_demotes_a_stream_key_session_without_a_request() {
     converge_topology(&db(&pool), &engine, &[]).await;
 
     assert_eq!(forwarded_input(&engine, "pipe").as_deref(), Some("key-p"));
-    assert!(!file_ingest.registration().cancel_token.is_cancelled());
+    assert!(!file_ingest.registration.cancel_token.is_cancelled());
 }
 
 #[test]

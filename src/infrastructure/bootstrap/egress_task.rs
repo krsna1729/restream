@@ -653,7 +653,10 @@ impl EgressTask {
         // before `Add`, and cannot happen on a shard thread (see
         // `PipelineTargetSource`'s doc comment). Dropped with this task, the
         // lease releases the claimed target input.
-        let Some(input_lease) = self
+        let Some(restream_engine::ingest_lease::RegisteredIngest {
+            lease: input_lease,
+            registration: input_registration,
+        }) = self
             .engine
             .try_register_pipeline_input_attempt(
                 &fabric.target_pipeline_id,
@@ -703,7 +706,7 @@ impl EgressTask {
                 fabric.spec.id.clone(),
                 restream_engine::egress::backends::pipeline::PipelineTarget {
                     target_ring,
-                    input_registration: input_lease.registration().clone(),
+                    input_registration,
                 },
             )
             .await;

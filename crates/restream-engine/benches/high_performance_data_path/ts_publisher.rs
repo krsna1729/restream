@@ -30,12 +30,12 @@ fn bench_ts_publisher(c: &mut Criterion) {
         let target = PublishTarget::open(
             engine.ingests.clone(),
             "bench".to_string(),
-            lease.registration().clone(),
+            lease.registration,
             ring,
         )
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-        (target, lease)
+        (target, lease.lease)
     });
 
     let mut group = c.benchmark_group("data_path/ts_publisher");

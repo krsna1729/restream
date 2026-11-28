@@ -7,7 +7,7 @@ async fn unregister_ingest_cancels_token() {
         .try_register_ingest("p1", "key", "rtmp")
         .await
         .unwrap();
-    let token = &lease.registration().cancel_token;
+    let token = &lease.registration.cancel_token;
     assert!(!token.is_cancelled());
 
     engine.unregister_ingest("p1").await;

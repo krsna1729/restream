@@ -72,7 +72,7 @@ struct ControlSession {
     engine: Arc<MediaEngine>,
     /// The publisher's lease: dropped with this task, it releases the input
     /// attempt even when the task unwinds or is cancelled.
-    active_ingest: Option<IngestLease>,
+    active_ingest: Option<RegisteredIngest>,
     playback: Option<Playback>,
     /// A command that arrived while a play burst waited for media.
     deferred_command: Option<RtmpControlCommand>,
@@ -133,7 +133,7 @@ impl ControlSession {
             RtmpControlCommand::EncoderDeclared(declared) => {
                 if let Some(active) = self.active_ingest.as_ref() {
                     self.engine
-                        .update_ingest_session_declared(active.registration(), declared)
+                        .update_ingest_session_declared(&active.registration, declared)
                         .await;
                 }
             }
@@ -165,7 +165,7 @@ impl ControlSession {
                 if let Some(active) = self.active_ingest.as_ref() {
                     tokio::select! {
                         _ = self.shutdown.cancelled() => return Step::Stop,
-                        _ = self.engine.update_ingest_session_quality(active.registration(), *quality) => {}
+                        _ = self.engine.update_ingest_session_quality(&active.registration, *quality) => {}
                     }
                 }
             }
@@ -269,8 +269,9 @@ impl ControlSession {
             };
             (phase.to_string(), reason.to_string(), false)
         });
-        info!(pipeline = %active.pipeline_id(), "[rtmp] Publisher disconnected");
+        info!(pipeline = %active.lease.pipeline_id(), "[rtmp] Publisher disconnected");
         active
+            .lease
             .finish(IngestEnd::Disconnected {
                 phase: &phase,
                 reason,
@@ -296,7 +297,7 @@ async fn authorize_publish(
     engine: &Arc<MediaEngine>,
     shutdown: &CancellationToken,
     context: PublishContext<'_>,
-    active_ingest: &mut Option<IngestLease>,
+    active_ingest: &mut Option<RegisteredIngest>,
 ) -> PublishAuthorization {
     let registered = async {
         let pipeline =
@@ -367,7 +368,7 @@ async fn register_publisher(
     shutdown: &CancellationToken,
     context: &PublishContext<'_>,
     pipeline: &AuthenticatedPipeline,
-) -> Result<(IngestLease, Box<RtmpPublisherMedia>), PublishAuthorization> {
+) -> Result<(RegisteredIngest, Box<RtmpPublisherMedia>), PublishAuthorization> {
     let lease = tokio::select! {
         biased;
         lease = engine.try_register_pipeline_input_attempt(
@@ -388,13 +389,13 @@ async fn register_publisher(
         return Err(PublishAuthorization::Cancelled);
     }
     let media = tokio::select! {
-        media = publisher_media(engine, &lease, &pipeline.id) => media?,
+        media = publisher_media(engine, &lease.registration, &pipeline.id) => media?,
         _ = shutdown.cancelled() => return Err(PublishAuthorization::Cancelled),
     };
     tokio::select! {
         _ = engine.update_ingest_session_meta(
             &pipeline.id,
-            lease.registration(),
+            &lease.registration,
             None,
             None,
             Some(context.client_addr.to_string()),
@@ -409,12 +410,12 @@ async fn register_publisher(
 /// publisher's media state.
 async fn publisher_media(
     engine: &MediaEngine,
-    lease: &IngestLease,
+    registration: &crate::ingest_registry::IngestRegistration,
     pipeline_id: &str,
 ) -> Result<Box<RtmpPublisherMedia>, PublishAuthorization> {
     let ring = engine.get_or_create_pipeline(pipeline_id).await;
     let ingest = engine
-        .with_ingest_session(lease.registration(), |ingest| {
+        .with_ingest_session(registration, |ingest| {
             (
                 ingest.bytes_received.clone(),
                 ingest.first_media_ms.clone(),
@@ -443,7 +444,7 @@ async fn publisher_media(
         });
     };
     Ok(Box::new(RtmpPublisherMedia {
-        registration: lease.registration().clone(),
+        registration: registration.clone(),
         ring,
         bytes_received,
         first_media_ms,

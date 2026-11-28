@@ -231,7 +231,7 @@ async fn re_register_ingest_after_unregister() {
         .await
         .unwrap();
     engine.unregister_ingest("p1").await;
-    assert!(t1.registration().cancel_token.is_cancelled());
+    assert!(t1.registration.cancel_token.is_cancelled());
 
     let snap = test_health_snapshot(&engine, &pipelines, &HashMap::new()).await;
     assert_eq!(snap["pipelines"]["p1"]["input"]["status"], "off");

@@ -78,7 +78,7 @@ impl PeerWork {
     ) -> Publisher {
         let (jobs_tx, jobs) = unbounded_channel();
         let ingest = session.ingest.clone();
-        let cancel = session.lease.registration().cancel_token.clone();
+        let cancel = session.registration.cancel_token.clone();
         self.tasks.spawn(run(
             engine.clone(),
             logical_peer,

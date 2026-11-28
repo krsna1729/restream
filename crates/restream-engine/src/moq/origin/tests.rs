@@ -622,7 +622,7 @@ async fn register_live_ingest(
     engine
         .update_ingest_session_meta(
             pipeline_id,
-            lease.registration(),
+            &lease.registration,
             video_meta,
             audio_meta,
             None,
@@ -632,13 +632,13 @@ async fn register_live_ingest(
         engine
             .update_ingest_session_audio_tracks(
                 pipeline_id,
-                lease.registration(),
+                &lease.registration,
                 vec![test_audio_meta()],
             )
             .await;
     }
     engine.select_pipeline_input(pipeline_id, stream_key).await;
-    lease
+    lease.lease
 }
 
 /// A viewer on the current generation, with its session kept alive by the

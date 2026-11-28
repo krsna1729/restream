@@ -702,7 +702,7 @@ async fn changing_an_inputs_source_kind_ends_the_session_the_old_kind_held() {
         .try_register_pipeline_input_attempt(&pipeline_id, &input_id, &stream_key, "rtmp", true)
         .await
         .expect("a keyed input accepts a push");
-    let pusher = lease.registration().cancel_token.clone();
+    let pusher = lease.registration.cancel_token.clone();
     assert!(engine.input_has_session(&pipeline_id, &input_id).await);
 
     // A patch that changes neither the kind nor the enablement leaves the
