@@ -195,12 +195,12 @@ impl MediaEngine {
 
     /// The selected active ingest for a pipeline.
     pub async fn active_ingest(&self, pipeline_id: &str) -> Option<Arc<ActiveIngest>> {
-        self.ingests.active.read().await.get(pipeline_id).cloned()
+        self.ingests.active_ingest(pipeline_id).await
     }
 
     /// The live session registered for one input.
     pub async fn ingest_session(&self, input_id: &str) -> Option<Arc<ActiveIngest>> {
-        self.ingests.sessions.read().await.get(input_id).cloned()
+        self.ingests.ingest_session(input_id).await
     }
 
     pub async fn with_ingest_session<R>(
@@ -304,13 +304,9 @@ impl MediaEngine {
     }
 
     pub async fn has_recent_ingest_disconnect(&self, pipeline_id: &str, grace_ms: u64) -> bool {
-        if grace_ms == 0 {
-            return false;
-        }
-        let recent = self.ingests.recent.read().await;
-        recent.get(pipeline_id).is_some_and(|outcome| {
-            Self::now_epoch_ms().saturating_sub(outcome.disconnected_at_ms) < grace_ms
-        })
+        self.ingests
+            .has_recent_ingest_disconnect(pipeline_id, grace_ms)
+            .await
     }
 
     pub fn recent_ingest_flap_state(recent: Option<&RecentIngestOutcome>) -> (u32, bool) {

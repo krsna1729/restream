@@ -1,9 +1,8 @@
 //! Ingest state owned by `MediaEngine`: pipeline rings, input sessions and
 //! their selection, the records stored in them, and the queue of dropped
-//! ingest leases' attempts awaiting release; the queries over that state,
-//! and the operations that end an attempt (its disconnect outcome, its
-//! unregistration, the release task). Metadata, track and sequence-header
-//! operations are in `metadata`, ring creation and resizing in `rings`.
+//! ingest leases' attempts awaiting release. Session transactions are in
+//! `lifecycle`, metadata, track and sequence-header operations are in
+//! `metadata`, and ring creation and resizing are in `rings`.
 //!
 //! The registry access rules in the `engine_registries` module docs apply.
 //! The few sections that must hold more than one ingest guard take them in
@@ -44,6 +43,7 @@ use crate::input_gate::InputPacketGate;
 use crate::snapshots::PublisherQuality;
 use crate::stage_metrics::StageMetrics;
 
+mod lifecycle;
 mod metadata;
 mod rings;
 
@@ -67,18 +67,18 @@ const ABANDONED_REASON: &str =
 
 pub struct IngestRegistry {
     pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
-    pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
-    pub next_attempt_id: AtomicU64,
+    pub(crate) cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
+    pub(crate) next_attempt_id: AtomicU64,
     pub sessions: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
-    pub selected_inputs: TokioRwLock<HashMap<String, String>>,
-    pub timelines: TokioRwLock<HashMap<String, Arc<AtomicI64>>>,
-    pub preview_slots: TokioRwLock<HashMap<String, Arc<ArcSwapOption<RingBuffer>>>>,
+    pub(crate) selected_inputs: TokioRwLock<HashMap<String, String>>,
+    pub(crate) timelines: TokioRwLock<HashMap<String, Arc<AtomicI64>>>,
+    preview_slots: TokioRwLock<HashMap<String, Arc<ArcSwapOption<RingBuffer>>>>,
     /// One lock per pipeline id over that pipeline's ingest lifecycle
     /// (module docs).
-    pub selection: KeyedLock,
+    pub(crate) selection: KeyedLock,
     pub preview_lock: TokioMutex<()>,
     pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
-    pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
+    pub(crate) recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
     /// The `srt_call` inputs the SRT server dials.
     pub srt_calls: restream_srt::calls::SrtCallInputs,
     /// Dropped ingest leases' attempts awaiting release (`ingest_lease`),
@@ -135,6 +135,41 @@ impl IngestRegistry {
         let sessions = self.sessions.read().await;
         let ingest = sessions.get(&registration.input_id)?;
         (ingest.attempt_id == registration.attempt_id).then(|| ingest.clone())
+    }
+
+    /// Inspect the session and update file-ingest state without letting
+    /// registration replace the attempt between the check and the update.
+    /// The operation may take file-ingest guards, but must not await ingest.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "lock order `ingests.sessions` -> file-ingest children, active, positions (engine_registries module docs); the session is pinned through the update"
+    )]
+    pub(crate) async fn with_input_session_locked<R>(
+        &self,
+        input_id: &str,
+        update_file_ingest: impl AsyncFnOnce(Option<&ActiveIngest>) -> R,
+    ) -> R {
+        let sessions = self.sessions.read().await;
+        let result = update_file_ingest(sessions.get(input_id).map(Arc::as_ref)).await;
+        drop(sessions);
+        result
+    }
+
+    /// The live session registered for one input.
+    pub(crate) async fn ingest_session(&self, input_id: &str) -> Option<Arc<ActiveIngest>> {
+        self.sessions.read().await.get(input_id).cloned()
+    }
+
+    /// The selected active ingest for a pipeline.
+    pub(crate) async fn active_ingest(&self, pipeline_id: &str) -> Option<Arc<ActiveIngest>> {
+        self.active.read().await.get(pipeline_id).cloned()
+    }
+
+    /// Best-effort presence check for callers that hold an egress guard.
+    pub(crate) fn try_has_active_ingest(&self, pipeline_id: &str) -> bool {
+        self.active
+            .try_read()
+            .is_ok_and(|active| active.contains_key(pipeline_id))
     }
 
     pub async fn is_ingest_session_selected(

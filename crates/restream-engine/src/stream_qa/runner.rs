@@ -324,16 +324,15 @@ async fn run_child(
     findings: &Findings,
     cancel: &CancellationToken,
 ) -> Result<(), String> {
-    let (video, audio) = {
-        let active = ingests.active.read().await;
-        let Some(ingest) = active.get(pipeline_id) else {
-            return Err("no live source".to_string());
-        };
-        (
-            ingest.metadata().video.clone(),
-            restream_sync::lock::lock(&ingest.audio_tracks).to_vec(),
-        )
-    };
+    let (video, audio) = ingests
+        .with_active_ingest(pipeline_id, |ingest| {
+            (
+                ingest.metadata().video,
+                restream_sync::lock::lock(&ingest.audio_tracks).to_vec(),
+            )
+        })
+        .await
+        .ok_or_else(|| "no live source".to_string())?;
     let has_video = video.is_some();
     let has_audio = !audio.is_empty();
     let groups = sound_groups(audio.len());

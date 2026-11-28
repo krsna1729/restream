@@ -242,7 +242,9 @@ impl MediaEngine {
     ) -> bool {
         let has_ingest = if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
         {
-            self.ingests.sessions.read().await.contains_key(input_id)
+            self.ingests
+                .with_ingest_sessions(|sessions| sessions.contains_key(input_id))
+                .await
         } else {
             // A passthrough preview id names its pipeline with a suffix.
             self.ingests

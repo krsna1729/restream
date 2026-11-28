@@ -204,11 +204,12 @@ impl MediaEngine {
         let source_video = loop {
             let video = self
                 .ingests
-                .sessions
-                .read()
-                .await
-                .get(input_id)
-                .and_then(|ingest| ingest.metadata().video);
+                .with_ingest_sessions(|sessions| {
+                    sessions
+                        .get(input_id)
+                        .and_then(|ingest| ingest.metadata().video)
+                })
+                .await;
             if video.is_some() || cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
                 break video;
             }
@@ -260,10 +261,10 @@ impl MediaEngine {
     }
 
     async fn ingest_video_meta(&self, pipeline_id: &str) -> Option<VideoMeta> {
-        let ingests = self.ingests.active.read().await;
-        ingests
-            .get(pipeline_id)
-            .and_then(|ingest| ingest.metadata().video)
+        self.ingests
+            .with_active_ingest(pipeline_id, |ingest| ingest.metadata().video)
+            .await
+            .flatten()
     }
 }
 

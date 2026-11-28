@@ -312,10 +312,8 @@ impl StageRuntimeManager {
         let input_tracks = if let Some(tracks) = source_ring.audio_tracks() {
             std::sync::Arc::new(tracks.to_vec())
         } else {
-            let ingests = self.ingests.active.read().await;
-            ingests
-                .get(key.pipeline.as_str())
-                .map(|i| {
+            self.ingests
+                .with_active_ingest(key.pipeline.as_str(), |i| {
                     let metadata = i.metadata();
                     let lock = restream_sync::lock::lock(&i.audio_tracks);
                     if lock.is_empty()
@@ -326,6 +324,7 @@ impl StageRuntimeManager {
                         std::sync::Arc::clone(&lock)
                     }
                 })
+                .await
                 .unwrap_or_default()
         };
 

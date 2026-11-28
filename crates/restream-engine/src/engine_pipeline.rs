@@ -92,12 +92,8 @@ impl MediaEngine {
     pub async fn runtime_pipeline_ids(&self) -> HashSet<String> {
         let mut ids = self
             .ingests
-            .pipelines
-            .read()
-            .await
-            .keys()
-            .cloned()
-            .collect::<HashSet<_>>();
+            .with_source_rings(|rings| rings.keys().cloned().collect())
+            .await;
         self.stages.extend_runtime_pipeline_ids(&mut ids).await;
         ids.into_iter()
             .filter(|id| crate::preview_ids::input_id_from_hls_preview_resource_id(id).is_none())

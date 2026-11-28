@@ -243,12 +243,7 @@ impl MediaEngine {
                 .map(|e| e.pipeline_id.clone())
                 .unwrap_or_default();
             if let Some(egress) = egresses.get(output_id) {
-                let has_ingest = self
-                    .ingests
-                    .active
-                    .try_read()
-                    .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
-                    .unwrap_or(false);
+                let has_ingest = self.ingests.try_has_active_ingest(&egress.pipeline_id);
                 let mut recent = self.egresses.recent.write().await;
                 let previous_recent = recent.get(output_id).cloned();
                 let outcome = Self::build_recent_egress_outcome(
@@ -309,12 +304,7 @@ impl MediaEngine {
                 )
             });
             let pipeline_id = active.pipeline_id.clone();
-            let has_ingest = self
-                .ingests
-                .active
-                .try_read()
-                .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
-                .unwrap_or(false);
+            let has_ingest = self.ingests.try_has_active_ingest(&active.pipeline_id);
             let mut recent = self.egresses.recent.write().await;
             let previous_recent = recent.get(output_id).cloned();
             let outcome = Self::build_recent_egress_outcome(

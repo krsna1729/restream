@@ -309,18 +309,17 @@ async fn resolve_hls_preview_metadata(
             let video = if let Some(video) = preview_video_meta.clone() {
                 Some(video)
             } else {
-                let ingests = ingests.active.read().await;
                 ingests
-                    .get(pipeline_id)
-                    .and_then(|ingest| ingest.metadata().video)
+                    .with_active_ingest(pipeline_id, |ingest| ingest.metadata().video)
+                    .await
+                    .flatten()
             };
             if let Some(video) = video {
                 return Some((video, tracks.to_vec()));
             }
         }
-        let result = {
-            let ingests = ingests.active.read().await;
-            ingests.get(pipeline_id).and_then(|ingest| {
+        let result = ingests
+            .with_active_ingest(pipeline_id, |ingest| {
                 let metadata = ingest.metadata();
                 let video = preview_video_meta.clone().or(metadata.video)?;
                 let lock = restream_sync::lock::lock(&ingest.audio_tracks);
@@ -335,7 +334,8 @@ async fn resolve_hls_preview_metadata(
                 };
                 Some((video, tracks))
             })
-        };
+            .await
+            .flatten();
         if let Some(result) = result {
             return Some(result);
         }
