@@ -72,26 +72,17 @@ impl OwnerLoop {
         if !self.media.has_readers() {
             return;
         }
-        // Readers are listener peers: a caller session only publishes to us.
-        let peers: Vec<LogicalPeerId> = self
-            .media
-            .readers
-            .keys()
-            .filter_map(|session| match session {
-                SessionId::Peer(peer) => Some(*peer),
-                SessionId::Caller(_) => None,
-            })
-            .collect();
-        for peer in peers {
+        for session in self.media.reader_sessions() {
+            // Readers are listener peers: a caller session only publishes to us.
+            let SessionId::Peer(peer) = session else {
+                continue;
+            };
             if self.deferred.len_for(&peer) > 0 {
                 continue;
             }
             let mut fragments = std::mem::take(&mut self.reader_scratch);
-            if let Some(reader) = self.media.readers.get_mut(&SessionId::Peer(peer)) {
-                reader.refill();
-                let count = reader.pending.len().min(READER_SENDS_PER_VISIT);
-                fragments.extend(reader.pending.drain(..count));
-            }
+            self.media
+                .take_reader_fragments(session, &mut fragments, READER_SENDS_PER_VISIT);
             for payload in fragments.drain(..) {
                 self.send(peer, payload, now);
             }

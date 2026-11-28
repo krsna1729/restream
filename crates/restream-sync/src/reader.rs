@@ -2,10 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
-use crate::lock::lock;
 use crate::reader_info::{ReaderInfo, burst_bucket};
-use crate::ring_buffer::RingBuffer;
-use restream_core::MediaPacket;
+use crate::ring_buffer::{ReaderWait, RingBuffer, VideoConfigFollower};
+use restream_core::{AudioMeta, MediaPacket};
 
 const OVERFLOW: &str = "Overflow: reader lagged and was fast-forwarded";
 
@@ -22,11 +21,7 @@ pub struct Reader {
 
 impl Drop for Reader {
     fn drop(&mut self) {
-        let mut readers = lock(&self.buffer.readers);
-        readers.retain(|weak| match weak.upgrade() {
-            Some(info) => !Arc::ptr_eq(&info, &self.info),
-            None => false,
-        });
+        self.buffer.deregister_reader(&self.info);
         info!(
             target: "restream_engine::ring_buffer::reader",
             reader = %self.info.name,
@@ -44,11 +39,7 @@ impl Reader {
         migration_preroll_packets: usize,
     ) -> Self {
         let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
-
-        {
-            let mut readers = lock(&buffer.readers);
-            readers.push(Arc::downgrade(&info));
-        }
+        buffer.register_reader(&info);
 
         Self {
             buffer,
@@ -59,8 +50,38 @@ impl Reader {
         }
     }
 
-    pub fn current_ring(&self) -> &Arc<RingBuffer> {
-        &self.buffer
+    /// The codec hint of the ring this reader reads now (it follows the
+    /// reader across a resize).
+    pub fn codec_hint_str(&self) -> &str {
+        self.buffer.codec_hint_str()
+    }
+
+    /// The raw video parameter sets of the ring this reader reads now.
+    pub fn video_parameter_sets(&self) -> Option<Vec<u8>> {
+        self.buffer.video_parameter_sets()
+    }
+
+    /// The audio tracks of the ring this reader reads now.
+    pub fn audio_tracks(&self) -> Option<Vec<AudioMeta>> {
+        self.buffer.audio_tracks()
+    }
+
+    /// [`VideoConfigFollower::follow`] for the packet this reader pulled at
+    /// `sequence`, from the ring it pulled it from.
+    pub fn follow_video_config(
+        &self,
+        follower: &mut VideoConfigFollower,
+        sequence: usize,
+        target: &RingBuffer,
+        pending: &mut Vec<MediaPacket>,
+    ) {
+        follower.follow(&self.buffer, sequence, target, pending);
+    }
+
+    /// Whether this reader reads `ring` now (it moves to a successor once it
+    /// drains a sealed ring).
+    pub fn is_reading(&self, ring: &RingBuffer) -> bool {
+        std::ptr::eq(Arc::as_ptr(&self.buffer), ring)
     }
 
     /// Ring sequence of the next packet this reader pulls; a successful
@@ -288,28 +309,26 @@ impl Reader {
             if self.buffer.get_write_idx() > self.read_idx {
                 return;
             }
-            if let Some(next) = self.buffer.next.load_full() {
-                self.migrate_to(next);
+            if let Some(old_ring) = RingBuffer::follow_successor(&mut self.buffer) {
+                self.migrated_from(&old_ring);
                 continue;
             }
             let notified = notify.notified();
-            if self.buffer.get_write_idx() > self.read_idx {
-                return;
+            match self.buffer.reader_wait(self.read_idx) {
+                ReaderWait::Ready => return,
+                ReaderWait::Superseded => continue,
+                ReaderWait::Park => notified.await,
             }
-            if self.buffer.next.load().is_some() {
-                continue;
-            }
-            if self.buffer.is_end_of_stream() {
-                return;
-            }
-            notified.await;
         }
     }
 
-    fn migrate_to(&mut self, new_ring: Arc<RingBuffer>) {
+    /// The reader has just followed `old_ring`'s successor: join the new
+    /// ring and, for a stage input caught up at the handoff, start it at the
+    /// new ring's keyframe preroll.
+    fn migrated_from(&mut self, old_ring: &RingBuffer) {
         let old_read_idx = self.read_idx;
-        let old_ring = std::mem::replace(&mut self.buffer, new_ring.clone());
-        lock(&new_ring.readers).push(Arc::downgrade(&self.info));
+        let new_ring = &self.buffer;
+        new_ring.register_reader(&self.info);
         let new_write_idx = new_ring.get_write_idx();
         if self.migration_preroll_packets > 0 && old_read_idx == new_write_idx {
             let keyframe_start = new_ring.fast_forward(new_write_idx);
@@ -322,7 +341,7 @@ impl Reader {
                 self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
             }
         }
-        lock(&old_ring.readers).retain(|weak| weak.upgrade().is_some());
+        old_ring.prune_readers();
         debug!(
             target: "restream_engine::ring_buffer::reader",
             read_idx = self.read_idx,

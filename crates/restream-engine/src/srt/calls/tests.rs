@@ -25,16 +25,14 @@ fn wanted_since(
 }
 
 /// One call taken through resolution to the Owner command.
-async fn dialed(calls: &mut Calls, now: Instant) -> CallToken {
-    let resolved = calls.resolved.recv().await.expect("a resolution");
-    let token = resolved.0;
-    match calls.resolved(resolved, now) {
-        Some(IngressCommand::Call { remote, .. }) => {
+async fn dialed(calls: &mut Calls) -> CallToken {
+    match calls.next_resolved().await {
+        Some(IngressCommand::Call { remote, token, .. }) => {
             assert_eq!(remote, "127.0.0.1:9000".parse().unwrap());
+            token
         }
         _ => panic!("a resolved call is dialled"),
     }
-    token
 }
 
 #[test]
@@ -86,7 +84,7 @@ async fn a_failed_call_redials_after_its_backoff_and_a_connected_one_publishes()
     let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let first = dialed(&mut calls, t0).await;
+    let first = dialed(&mut calls).await;
 
     calls.failed(first, "refused", t0);
     calls.tick(
@@ -99,7 +97,7 @@ async fn a_failed_call_redials_after_its_backoff_and_a_connected_one_publishes()
         "no redial inside the backoff"
     );
     calls.tick(wanted_since(&inputs), t0 + Duration::from_secs(1), |_| true);
-    let second = dialed(&mut calls, t0).await;
+    let second = dialed(&mut calls).await;
     assert_ne!(first, second, "each attempt has its own token");
     calls.failed(first, "late verdict for the old attempt", t0);
 
@@ -119,7 +117,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let token = dialed(&mut calls, t0).await;
+    let token = dialed(&mut calls).await;
     let peer = caller_peer(1);
     calls.started(token, peer);
     calls.connected(peer).expect("publishing");
@@ -128,7 +126,7 @@ async fn an_ended_call_redials_promptly_and_an_unwanted_one_is_hung_up() {
     calls.disconnected(peer, "listener closed", t0);
     assert!(!calls.owns(&peer));
     calls.tick(wanted_since(&inputs), t0 + Duration::from_secs(1), |_| true);
-    let token = dialed(&mut calls, t0).await;
+    let token = dialed(&mut calls).await;
     let peer = caller_peer(2);
     calls.started(token, peer);
 
@@ -151,7 +149,7 @@ async fn a_call_admitted_after_its_row_left_is_refused() {
     let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let token = dialed(&mut calls, t0).await;
+    let token = dialed(&mut calls).await;
     inputs.converge(Vec::new());
     calls.tick(wanted_since(&inputs), t0, |_| true);
     assert!(
@@ -167,7 +165,7 @@ async fn a_busy_command_slot_defers_the_hang_up_to_the_next_tick() {
     let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let token = dialed(&mut calls, t0).await;
+    let token = dialed(&mut calls).await;
     let peer = caller_peer(4);
     calls.started(token, peer);
     inputs.converge(Vec::new());
@@ -188,17 +186,35 @@ async fn a_replaced_calls_late_admission_is_refused_while_its_successor_dials() 
     let mut calls = Calls::new();
     let t0 = Instant::now();
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let old = dialed(&mut calls, t0).await;
+    let old = dialed(&mut calls).await;
     // The row changes while the first dial is still in the pool's queue.
     inputs.converge(vec![spec("a", "srt://127.0.0.1:9000?streamid=new")]);
     calls.tick(wanted_since(&inputs), t0, |_| true);
-    let new = dialed(&mut calls, t0).await;
+    let new = dialed(&mut calls).await;
     assert!(
         !calls.started(old, caller_peer(5)),
         "the old attempt is hung up"
     );
     assert!(!calls.owns(&caller_peer(5)));
     assert!(calls.started(new, caller_peer(6)));
+}
+
+#[tokio::test]
+async fn a_dropped_wait_for_a_resolution_loses_nothing() {
+    let inputs = SrtCallInputs::default();
+    inputs.converge(vec![spec("a", "srt://127.0.0.1:9000")]);
+    let mut calls = Calls::new();
+    calls.tick(wanted_since(&inputs), Instant::now(), |_| true);
+    // The current-thread runtime has not run the resolver yet: the wait is
+    // pending when the ready arm wins and drops it, as a losing select arm
+    // in the server loop would be.
+    tokio::select! {
+        biased;
+        _ = calls.next_resolved() => panic!("the resolver has not run yet"),
+        () = std::future::ready(()) => {}
+    }
+    let token = dialed(&mut calls).await;
+    assert!(calls.started(token, caller_peer(8)));
 }
 
 fn addr(text: &str) -> SocketAddr {

@@ -107,7 +107,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
         "source ring should cache raw parameter sets for the marker fixture"
     );
     assert!(
-        reader.current_ring().video_parameter_sets().is_some(),
+        reader.video_parameter_sets().is_some(),
         "external H.264 marker stage output ring should cache raw parameter sets"
     );
 }
@@ -223,7 +223,7 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
         "external H.264 marker stage should emit live video packets without requiring EOS; \
          source_write_idx={} output_write_idx={} output_packets={} stage_snapshot={snapshot:?}",
         source_ring.get_write_idx(),
-        reader.current_ring().get_write_idx(),
+        reader.next_sequence() + reader.lag(),
         output_packets.len()
     );
 }

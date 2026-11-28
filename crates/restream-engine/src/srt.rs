@@ -1,5 +1,7 @@
 //! SRT API surface backed by the external `srt-rs` protocol implementation.
 
+#[doc(hidden)]
+pub mod bench_entry;
 mod calls;
 #[path = "srt/ingress_admission.rs"]
 mod ingress_admission;

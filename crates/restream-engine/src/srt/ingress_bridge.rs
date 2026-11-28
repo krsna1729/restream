@@ -35,11 +35,16 @@ struct OwnerLink {
     thread: Option<std::thread::JoinHandle<IngressExit>>,
 }
 
+/// Tokio's ends of the Owners' bridges out: lifecycle events, and lossy,
+/// stamped receive-quality samples. [`SrtIngressHandle::start`] hands them
+/// to the loop that receives them.
+pub(crate) type IngressReceivers = (
+    mpsc::Receiver<SrtIngressEvent>,
+    mpsc::Receiver<QualitySample>,
+);
+
 /// Tokio's handle to the owner threads.
 pub(crate) struct SrtIngressHandle {
-    pub(crate) events: mpsc::Receiver<SrtIngressEvent>,
-    /// Lossy, stamped receive-quality samples from the Owners.
-    pub(crate) telemetry: mpsc::Receiver<QualitySample>,
     owners: Vec<OwnerLink>,
     local_addr: SocketAddr,
 }
@@ -49,7 +54,9 @@ impl SrtIngressHandle {
     /// for every verdict. A runtime or listener that cannot be built is a
     /// typed error (the started Owners are stopped); there is no fallback
     /// transport.
-    pub(crate) async fn start(config: IngressConfig) -> Result<Self, IngressStartError> {
+    pub(crate) async fn start(
+        config: IngressConfig,
+    ) -> Result<(Self, IngressReceivers), IngressStartError> {
         let plans = listener_plans(&config).map_err(IngressStartError)?;
         let (events_tx, events_rx) = mpsc::channel(config.event_capacity.max(1));
         let (telemetry_tx, telemetry_rx) = mpsc::channel(config.telemetry_capacity.max(1));
@@ -111,12 +118,7 @@ impl SrtIngressHandle {
         }
         let local_addr = local_addr
             .ok_or_else(|| IngressStartError("SRT ingress started no Owner".to_string()))?;
-        Ok(Self {
-            events: events_rx,
-            telemetry: telemetry_rx,
-            owners,
-            local_addr,
-        })
+        Ok((Self { owners, local_addr }, (events_rx, telemetry_rx)))
     }
 
     /// The address every Owner's listener socket is bound to.
@@ -168,6 +170,7 @@ impl SrtIngressHandle {
         Self,
         Vec<flume::Receiver<IngressCommand>>,
         mpsc::Sender<SrtIngressEvent>,
+        mpsc::Receiver<SrtIngressEvent>,
     ) {
         let mut owners = Vec::new();
         let mut receivers = Vec::new();
@@ -180,16 +183,14 @@ impl SrtIngressHandle {
             receivers.push(receiver);
         }
         let (events_tx, events) = mpsc::channel(1);
-        let (_telemetry_tx, telemetry) = mpsc::channel(1);
         (
             Self {
-                events,
-                telemetry,
                 owners,
                 local_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             },
             receivers,
             events_tx,
+            events,
         )
     }
 }

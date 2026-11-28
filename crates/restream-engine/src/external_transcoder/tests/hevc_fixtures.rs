@@ -87,7 +87,7 @@ async fn external_720p_stage_emits_live_packets_for_single_audio_hevc_fixture() 
         "external 720p single-audio HEVC stage should emit live video packets"
     );
     assert!(
-        reader.current_ring().video_parameter_sets().is_some(),
+        reader.video_parameter_sets().is_some(),
         "external 720p HEVC stage output ring should cache raw parameter sets for chained stages"
     );
 }

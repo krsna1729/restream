@@ -69,7 +69,7 @@ pub(crate) fn start_shared_ts_muxer(
                     _ = reader.wait_for_data() => {
                         pull_packets.clear();
                         if let Ok(1..) = reader.pull_burst(&mut pull_packets, MEDIA_PULL_BURST_PACKETS) {
-                            mux.mux_burst(&pull_packets, reader.current_ring(), &ts_ring_clone);
+                            mux.mux_burst(&pull_packets, &reader, &ts_ring_clone);
                         }
                     }
                 }
@@ -200,13 +200,13 @@ impl TsPayloadConverter {
     fn convert<'a>(
         &'a mut self,
         pkt: &'a MediaPacket,
-        current_ring: &RingBuffer,
+        source: &Reader,
         audio_tracks: &[AudioMeta],
     ) -> Option<&'a [u8]> {
         match pkt.media_type {
             MediaType::Video => {
                 if self.sps_pps_cache.is_empty()
-                    && let Some(parameter_sets) = current_ring.video_parameter_sets()
+                    && let Some(parameter_sets) = source.video_parameter_sets()
                 {
                     self.sps_pps_cache.extend_from_slice(&parameter_sets);
                 }
@@ -277,22 +277,14 @@ impl BurstMux {
         }
     }
 
-    fn mux_burst(
-        &mut self,
-        packets: &[Arc<MediaPacket>],
-        current_ring: &RingBuffer,
-        ts_ring: &TsChunkRing,
-    ) {
+    fn mux_burst(&mut self, packets: &[Arc<MediaPacket>], source: &Reader, ts_ring: &TsChunkRing) {
         self.chunk_ends.clear();
         // One allocation for the burst's TS output, sized to the actual
         // media payloads. A fixed 64 KiB floor pins excessive memory in the
         // retained TS ring when the muxer wakes for one small packet.
         let mut ts_accum = Vec::<u8>::with_capacity(estimate_ts_accum_capacity(packets));
         for pkt in packets {
-            let Some(payload) = self
-                .converter
-                .convert(pkt, current_ring, &self.audio_tracks)
-            else {
+            let Some(payload) = self.converter.convert(pkt, source, &self.audio_tracks) else {
                 continue;
             };
             let stream_idx = match pkt.media_type {

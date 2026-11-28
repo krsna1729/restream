@@ -51,9 +51,7 @@ pub(crate) fn forward_ingest_packets(
         // Another selected producer may have resized the shared ring while
         // this source was standby. Resolve handoffs only on promotion, not
         // on the ordinary active publication path.
-        while let Some(next) = ring.next.load_full() {
-            *ring = next;
-        }
+        RingBuffer::follow_to_current(ring);
         *packets = standby_gop.take_replay();
         lease
     };
