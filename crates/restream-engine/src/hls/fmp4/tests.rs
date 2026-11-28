@@ -40,7 +40,7 @@ async fn input_preview_resolves_late_join_sequence_headers_from_input_session() 
     let expected = Bytes::from(high_profile_sequence_header());
     engine
         .ingests
-        .cache_ingest_session_sequence_header(lease.registration(), true, expected.clone())
+        .cache_ingest_session_sequence_header(&lease.registration, true, expected.clone())
         .await;
     let resource_id = crate::preview_ids::input_hls_preview_resource_id("standby-input");
 

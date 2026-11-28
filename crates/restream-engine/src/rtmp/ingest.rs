@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 use crate::engine::MediaEngine;
 use crate::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode};
-use crate::ingest_lease::{IngestEnd, IngestLease};
+use crate::ingest_lease::{IngestEnd, RegisteredIngest};
 use crate::input_gate::InputTimestampMapper;
 use crate::secret_display::redact_secret;
 use crate::security::IngestSecurityService;
@@ -60,7 +60,11 @@ async fn send_control_command(
 
 /// Record a publisher's one-time stream probe as ingest metadata; the audio
 /// tracks land before the metadata that opens an output's start gate.
-async fn record_media_probe(engine: &MediaEngine, active: &IngestLease, event: RtmpMediaEvent) {
+async fn record_media_probe(
+    engine: &MediaEngine,
+    active: &RegisteredIngest,
+    event: RtmpMediaEvent,
+) {
     match event {
         RtmpMediaEvent::Video(meta) => {
             info!(
@@ -69,8 +73,8 @@ async fn record_media_probe(engine: &MediaEngine, active: &IngestLease, event: R
             );
             engine
                 .update_ingest_session_meta(
-                    active.pipeline_id(),
-                    active.registration(),
+                    active.lease.pipeline_id(),
+                    &active.registration,
                     Some(meta),
                     None,
                     None,
@@ -84,15 +88,15 @@ async fn record_media_probe(engine: &MediaEngine, active: &IngestLease, event: R
             );
             engine
                 .update_ingest_session_audio_tracks(
-                    active.pipeline_id(),
-                    active.registration(),
+                    active.lease.pipeline_id(),
+                    &active.registration,
                     vec![meta.clone()],
                 )
                 .await;
             engine
                 .update_ingest_session_meta(
-                    active.pipeline_id(),
-                    active.registration(),
+                    active.lease.pipeline_id(),
+                    &active.registration,
                     None,
                     Some(meta),
                     None,
@@ -101,7 +105,7 @@ async fn record_media_probe(engine: &MediaEngine, active: &IngestLease, event: R
         }
     }
     engine
-        .note_ingest_session_probed(active.registration())
+        .note_ingest_session_probed(&active.registration)
         .await;
 }
 

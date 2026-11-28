@@ -23,11 +23,17 @@ async fn a_panic_in_one_session_ends_only_that_session_and_releases_its_input() 
     let before = crate::panic_boundary::contained_panics();
     ingest
         .clone()
-        .supervise_session(panicking, async {
-            crate::test_support::with_expected_panic_suppressed(|| {
-                panic!("a session bug");
-            })
-        })
+        .supervise_session(
+            panicking.lease,
+            panicking.registration.input_id,
+            panicking.registration.attempt_id,
+            panicking.registration.cancel_token,
+            async {
+                crate::test_support::with_expected_panic_suppressed(|| {
+                    panic!("a session bug");
+                })
+            },
+        )
         .await;
 
     assert!(
@@ -60,11 +66,13 @@ async fn a_cancelled_supervisor_releases_its_input() {
         .try_register_pipeline_input_attempt("pipe-a", "input-a", "key-a", "hls", true)
         .await
         .expect("the first attempt registers");
-    let supervisor = tokio::spawn(
-        ingest
-            .clone()
-            .supervise_session(attempt, std::future::pending::<(SessionEnd, Counters)>()),
-    );
+    let supervisor = tokio::spawn(ingest.clone().supervise_session(
+        attempt.lease,
+        attempt.registration.input_id,
+        attempt.registration.attempt_id,
+        attempt.registration.cancel_token,
+        std::future::pending::<(SessionEnd, Counters)>(),
+    ));
     tokio::task::yield_now().await;
     supervisor.abort();
     assert!(supervisor.await.unwrap_err().is_cancelled());

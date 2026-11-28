@@ -115,6 +115,7 @@ pub(super) struct PublisherSession {
     /// Dropped with the session (a panicking task, a listener torn down), it
     /// releases the input attempt.
     lease: IngestLease,
+    registration: crate::ingest_registry::IngestRegistration,
     /// The attempt's own ingest state: written without a registry lookup.
     ingest: Arc<ActiveIngest>,
 }
@@ -131,7 +132,7 @@ impl PublisherSession {
         identity: super::ingress_media::ProbeIdentity,
         probe: DemuxProbe,
     ) -> Option<Arc<RingBuffer>> {
-        let registration = self.lease.registration();
+        let registration = &self.registration;
         if registration.attempt_id != identity.attempt_id {
             return None;
         }
@@ -525,7 +526,10 @@ impl SrtServer {
         let ring_buffer = self.engine.get_or_create_pipeline(&pipeline.id).await;
         // Every early return and unwind below drops the lease, which
         // releases the attempt.
-        let lease = self
+        let crate::ingest_lease::RegisteredIngest {
+            lease,
+            registration,
+        } = self
             .engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
@@ -541,21 +545,17 @@ impl SrtServer {
         self.engine
             .update_ingest_session_meta(
                 &pipeline.id,
-                lease.registration(),
+                &registration,
                 None,
                 None,
                 Some(peer.to_string()),
             )
             .await;
-        let Some(ingest) = self
-            .engine
-            .current_ingest_session(lease.registration())
-            .await
-        else {
+        let Some(ingest) = self.engine.current_ingest_session(&registration).await else {
             return Err("SRT ingest session disappeared during registration".to_string());
         };
         let media = Box::new(SrtPublisherMedia {
-            registration: lease.registration().clone(),
+            registration: registration.clone(),
             ring_buffer,
             demuxer: restream_mpegts::TsDemuxer::new(),
             timestamp_mapper: InputTimestampMapper::default(),
@@ -567,7 +567,14 @@ impl SrtServer {
             ingest_metrics: ingest.metrics.clone(),
             last_progress_ms: ingest.last_progress_ms.clone(),
         });
-        Ok((PublisherSession { lease, ingest }, media))
+        Ok((
+            PublisherSession {
+                lease,
+                registration,
+                ingest,
+            },
+            media,
+        ))
     }
 
     async fn start_reader(&self, pipeline_id: &str) -> Result<SrtReaderMedia, String> {

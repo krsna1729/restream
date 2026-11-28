@@ -208,7 +208,7 @@ async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
         .unwrap();
     let ingest = session.ingest.clone();
     let identity = ProbeIdentity {
-        attempt_id: session.lease.registration().attempt_id,
+        attempt_id: session.registration.attempt_id,
         revision: 1,
     };
     let (handle, receivers, _events, events) = SrtIngressHandle::test_channels(1);

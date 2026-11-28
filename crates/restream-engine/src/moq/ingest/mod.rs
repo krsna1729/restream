@@ -176,7 +176,10 @@ impl MoqIngestServer {
         let ring = self.engine.get_or_create_pipeline(&pipeline.id).await;
         // Every early return below drops the lease, which releases the
         // attempt.
-        let lease = self
+        let crate::ingest_lease::RegisteredIngest {
+            lease,
+            registration,
+        } = self
             .engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
@@ -190,7 +193,7 @@ impl MoqIngestServer {
         self.engine
             .update_ingest_session_meta(
                 &pipeline.id,
-                lease.registration(),
+                &registration,
                 None,
                 None,
                 Some(peer.to_string()),
@@ -198,7 +201,7 @@ impl MoqIngestServer {
             .await;
         let Some(counters) = self
             .engine
-            .with_ingest_session(lease.registration(), |ingest| PublisherCounters {
+            .with_ingest_session(&registration, |ingest| PublisherCounters {
                 bytes_received: ingest.bytes_received.clone(),
                 first_media_ms: ingest.first_media_ms.clone(),
                 ingest_metrics: ingest.metrics.clone(),
@@ -213,7 +216,7 @@ impl MoqIngestServer {
         };
         let session = PublisherSession {
             pipeline_id: pipeline.id,
-            registration: lease.registration().clone(),
+            registration,
         };
         let media = PublisherMedia::new(
             session.registration.clone(),

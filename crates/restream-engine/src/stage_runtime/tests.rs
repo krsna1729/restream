@@ -640,7 +640,7 @@ async fn wait_for_stage_metadata_reads_an_input_preview_stage_from_its_input_ses
     engine
         .update_ingest_session_meta(
             "pipe-standby",
-            lease.registration(),
+            &lease.registration,
             Some(ready_video_meta("hevc")),
             None,
             None,

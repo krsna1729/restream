@@ -1,7 +1,7 @@
 //! Engine entry points for ingest sessions and publish targets.
 
 use crate::engine::MediaEngine;
-use crate::ingest_lease::IngestLease;
+use crate::ingest_lease::{IngestLease, RegisteredIngest};
 use crate::ingest_publisher::PublishTarget;
 use crate::ingest_registry::{IngestRegistration, RecentIngestOutcome};
 use restream_sync::RingBuffer;
@@ -14,14 +14,14 @@ impl MediaEngine {
         pipeline_id: &str,
         stream_key: &str,
         protocol: &str,
-    ) -> Option<IngestLease> {
+    ) -> Option<RegisteredIngest> {
         self.ingests
             .try_register_ingest(pipeline_id, stream_key, protocol)
             .await
-            .map(|registration| IngestLease::new(&self.ingests, pipeline_id, registration))
+            .map(|registration| self.admitted_ingest(pipeline_id, registration))
     }
 
-    /// Register an input attempt and return the lease that owns its release.
+    /// Register an input attempt and hand off its release owner and media state.
     pub async fn try_register_pipeline_input_attempt(
         &self,
         pipeline_id: &str,
@@ -29,7 +29,7 @@ impl MediaEngine {
         stream_key: &str,
         protocol: &str,
         selected: bool,
-    ) -> Option<IngestLease> {
+    ) -> Option<RegisteredIngest> {
         self.ingests
             .try_register_pipeline_input_attempt(
                 pipeline_id,
@@ -39,7 +39,19 @@ impl MediaEngine {
                 selected,
             )
             .await
-            .map(|registration| IngestLease::new(&self.ingests, pipeline_id, registration))
+            .map(|registration| self.admitted_ingest(pipeline_id, registration))
+    }
+
+    fn admitted_ingest(
+        &self,
+        pipeline_id: &str,
+        registration: IngestRegistration,
+    ) -> RegisteredIngest {
+        let lease = IngestLease::new(&self.ingests, pipeline_id, &registration);
+        RegisteredIngest {
+            lease,
+            registration,
+        }
     }
 
     pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
@@ -134,7 +146,8 @@ impl MediaEngine {
         self.ingests
             .record_ingest_disconnect_if_current(
                 pipeline_id,
-                registration,
+                &registration.input_id,
+                registration.attempt_id,
                 phase,
                 reason,
                 had_error,

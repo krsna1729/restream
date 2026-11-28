@@ -30,12 +30,12 @@ pub(super) async fn harness(
     let target = PublishTarget::open(
         engine.ingests.clone(),
         name.to_string(),
-        lease.registration().clone(),
+        lease.registration,
         ring.clone(),
     )
     .await
     .expect("the publish target opens");
-    (engine, target, ring, lease)
+    (engine, target, ring, lease.lease)
 }
 
 /// Deterministic bytes, so a failure is replayable.

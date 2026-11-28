@@ -36,7 +36,7 @@ async fn context() -> (SessionContext, IngestLease) {
     let context = SessionContext {
         engine,
         pipeline_id: "pipe".to_string(),
-        registration: lease.registration().clone(),
+        registration: lease.registration,
         ring,
         lead_ms: Arc::new(AtomicU64::new(0)),
         limits: SessionLimits {
@@ -47,7 +47,7 @@ async fn context() -> (SessionContext, IngestLease) {
         max_init_bytes: 1 << 20,
         init: Arc::new(Mutex::new(Default::default())),
     };
-    (context, lease)
+    (context, lease.lease)
 }
 
 /// The replies the session has answered, in total: a oneshot receiver yields

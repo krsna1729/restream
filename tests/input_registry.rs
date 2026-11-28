@@ -12,13 +12,13 @@ async fn pipeline_accepts_selected_and_standby_input_sessions() {
         .try_register_pipeline_input_attempt("pipeline", "primary", "primary-key", "rtmp", true)
         .await
         .expect("primary registration");
-    let primary = primary_lease.registration();
+    let primary = &primary_lease.registration;
 
     let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "backup-key", "srt", false)
         .await
         .expect("backup registration");
-    let backup = backup_lease.registration();
+    let backup = &backup_lease.registration;
 
     assert_eq!(primary.gate.state(), InputForwardState::Active);
     assert_eq!(backup.gate.state(), InputForwardState::Standby);
@@ -34,12 +34,12 @@ async fn promotion_hands_writer_lease_to_backup_at_keyframe() {
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("primary registration");
-    let primary = primary_lease.registration();
+    let primary = &primary_lease.registration;
     let backup_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "rtmp", false)
         .await
         .expect("backup registration");
-    let backup = backup_lease.registration();
+    let backup = &backup_lease.registration;
 
     let connected = engine.select_pipeline_input("pipeline", "backup").await;
 
@@ -69,7 +69,7 @@ async fn stale_disconnect_cannot_unregister_promoted_replacement() {
         .expect("backup registration");
     assert!(engine.select_pipeline_input("pipeline", "backup").await);
 
-    primary.finish(IngestEnd::Released).await;
+    primary.lease.finish(IngestEnd::Released).await;
 
     assert_eq!(engine.connected_input_count("pipeline").await, 1);
     let selected = engine
@@ -77,7 +77,7 @@ async fn stale_disconnect_cannot_unregister_promoted_replacement() {
         .await;
     assert_eq!(selected.as_deref(), Some("backup"));
     assert_eq!(
-        backup_lease.registration().gate.state(),
+        backup_lease.registration.gate.state(),
         InputForwardState::AwaitingKeyframe
     );
 }
@@ -90,16 +90,16 @@ async fn selected_reconnect_waits_for_keyframe_when_pipeline_timeline_exists() {
         .await
         .expect("first registration");
     first
-        .registration()
+        .registration
         .last_forwarded_dts
         .store(4_000, std::sync::atomic::Ordering::Release);
-    first.finish(IngestEnd::Released).await;
+    first.lease.finish(IngestEnd::Released).await;
 
     let second_lease = engine
         .try_register_pipeline_input_attempt("pipeline", "primary", "key-a", "rtmp", true)
         .await
         .expect("second registration");
-    let second = second_lease.registration();
+    let second = &second_lease.registration;
 
     assert_eq!(second.gate.state(), InputForwardState::AwaitingKeyframe);
     assert!(second.gate.try_enter(InputPacketBoundary::Other).is_none());
@@ -112,7 +112,7 @@ async fn input_preview_ring_exists_only_while_preview_is_requested() {
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "srt", false)
         .await
         .expect("backup registration");
-    let registration = lease.registration();
+    let registration = &lease.registration;
     assert!(registration.preview_ring.load_full().is_none());
 
     let ring = engine
@@ -139,7 +139,7 @@ async fn standby_metadata_does_not_replace_selected_input_metadata() {
         .try_register_pipeline_input_attempt("pipeline", "backup", "key-b", "file", false)
         .await
         .expect("backup registration");
-    let (primary, backup) = (primary_lease.registration(), backup_lease.registration());
+    let (primary, backup) = (&primary_lease.registration, &backup_lease.registration);
     let primary_video = VideoMeta {
         codec: "h264".to_string(),
         width: 1920,

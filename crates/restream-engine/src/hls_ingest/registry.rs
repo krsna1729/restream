@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::ordering::{Counters, SessionLimits};
@@ -635,7 +636,10 @@ impl HlsIngest {
             }
         }
         let engine = &self.engine;
-        let lease = engine
+        let crate::ingest_lease::RegisteredIngest {
+            lease,
+            registration,
+        } = engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
                 &pipeline.input_id,
@@ -645,7 +649,6 @@ impl HlsIngest {
             )
             .await
             .ok_or(DispatchError::PublisherActive)?;
-        let registration = lease.registration().clone();
         // Until the owner is spawned below, this future holds the lease: a
         // caller that drops it in that window (a pull's cancel lands in it)
         // drops the lease, which releases the attempt, so no attempt is left
@@ -750,8 +753,17 @@ impl HlsIngest {
         objects: mpsc::Receiver<HlsObject>,
         lease: IngestLease,
     ) {
-        self.supervise_session(lease, session::run(context, objects))
-            .await;
+        let input_id = context.registration.input_id.clone();
+        let attempt_id = context.registration.attempt_id;
+        let cancel = context.registration.cancel_token.clone();
+        self.supervise_session(
+            lease,
+            input_id,
+            attempt_id,
+            cancel,
+            session::run(context, objects),
+        )
+        .await;
     }
 
     /// The supervision half of `supervise`, for any session future: run it as
@@ -759,22 +771,18 @@ impl HlsIngest {
     async fn supervise_session(
         self: Arc<Self>,
         lease: IngestLease,
+        input_id: String,
+        attempt_id: u64,
+        cancel: CancellationToken,
         session: impl Future<Output = (SessionEnd, Counters)> + Send + 'static,
     ) {
         let pipeline_id = lease.pipeline_id().to_string();
-        let input_id = lease.registration().input_id.clone();
-        let attempt_id = lease.registration().attempt_id;
         let service = MediaService {
             class: MediaServiceClass::HlsIngest,
             pipeline_id: pipeline_id.clone(),
             stage: format!("hls-ingest:{input_id}"),
         };
-        let result = crate::executor::run_with_class(
-            service,
-            lease.registration().cancel_token.clone(),
-            session,
-        )
-        .await;
+        let result = crate::executor::run_with_class(service, cancel, session).await;
         let (phase, reason, had_error) = match &result {
             Ok((SessionEnd::Ended, _)) => ("eof", "HLS playlist ended".to_string(), false),
             Ok((SessionEnd::Idle, _)) => ("idle", "HLS publisher went idle".to_string(), false),

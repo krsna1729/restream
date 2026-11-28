@@ -238,7 +238,10 @@ impl FileIngestService {
             .ok_or(FileIngestStartError::MissingPipelineForStreamKey)?;
 
         let ring_buffer = engine.get_or_create_pipeline(&pipeline.id).await;
-        let Some(lease) = engine
+        let Some(restream_engine::ingest_lease::RegisteredIngest {
+            lease,
+            registration,
+        }) = engine
             .try_register_pipeline_input_attempt(
                 &pipeline.id,
                 &input.id,
@@ -265,7 +268,7 @@ impl FileIngestService {
                 target_gop_seconds: ingest.target_gop_seconds,
             },
             ring_buffer,
-            registration: lease.registration().clone(),
+            registration,
         };
         // A failed spawn has released this attempt only, never another
         // input's publisher on the pipeline.

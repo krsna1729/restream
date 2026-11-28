@@ -65,12 +65,12 @@ async fn stale_ingest_unregister_cannot_clobber_replacement_attempt() {
         .await
         .expect("replacement ingest should register");
 
-    first.finish(IngestEnd::Released).await;
+    first.lease.finish(IngestEnd::Released).await;
     assert!(
         engine
             .with_active_ingest("pipeline-race", |ingest| ingest.attempt_id)
             .await
-            .is_some_and(|attempt_id| attempt_id == replacement.registration().attempt_id),
+            .is_some_and(|attempt_id| attempt_id == replacement.registration.attempt_id),
         "replacement ingest must remain active after stale unregister"
     );
 }

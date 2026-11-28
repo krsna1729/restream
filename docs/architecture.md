@@ -451,6 +451,9 @@ stage it reads. The last lease to drop stops the stage
 transactions. File-ingest updates check the attempt and keep the session
 guard until the update finishes, so a replacement cannot be cleared by
 an older attempt.
+An accepted registration returns publication data and an `IngestLease`
+separately. The lease owns cancellation and release of that attempt; it
+does not carry the packet publication state.
 
 `StageRegistry` owns ring-stage admission and cleanup. It checks for reuse
 and publishes a replacement under one runtime write guard.

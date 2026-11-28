@@ -30,6 +30,14 @@ use std::sync::{Arc, Weak};
 
 use crate::ingest_registry::{AbandonedAttempt, IngestRegistration, IngestRegistry, ReleaseQueue};
 
+/// Admission hands off the release owner and the media registration separately.
+/// Holding this value keeps the attempt alive through its lease.
+#[must_use = "dropping the admission ends the input attempt"]
+pub struct RegisteredIngest {
+    pub lease: IngestLease,
+    pub registration: IngestRegistration,
+}
+
 /// How an attempt ends.
 pub enum IngestEnd<'a> {
     /// Record why it ended as the pipeline's recent ingest outcome (when it
@@ -49,7 +57,9 @@ pub enum IngestEnd<'a> {
 #[must_use = "dropping the lease ends the input attempt"]
 pub struct IngestLease {
     pipeline_id: String,
-    registration: IngestRegistration,
+    input_id: String,
+    attempt_id: u64,
+    cancel: tokio_util::sync::CancellationToken,
     ingests: Weak<IngestRegistry>,
     releases: Arc<ReleaseQueue>,
     /// `finish` recorded its outcome; a drop then only releases.
@@ -61,22 +71,18 @@ impl IngestLease {
     pub(crate) fn new(
         ingests: &Arc<IngestRegistry>,
         pipeline_id: &str,
-        registration: IngestRegistration,
+        registration: &IngestRegistration,
     ) -> Self {
         Self {
             pipeline_id: pipeline_id.to_string(),
-            registration,
+            input_id: registration.input_id.clone(),
+            attempt_id: registration.attempt_id,
+            cancel: registration.cancel_token.clone(),
             ingests: Arc::downgrade(ingests),
             releases: ingests.releases.clone(),
             recorded: false,
             finished: false,
         }
-    }
-
-    /// The attempt's identity, for metadata, probe and selection calls and
-    /// for the media state that runs it.
-    pub fn registration(&self) -> &IngestRegistration {
-        &self.registration
     }
 
     pub fn pipeline_id(&self) -> &str {
@@ -99,7 +105,8 @@ impl IngestLease {
             ingests
                 .record_ingest_disconnect_if_current(
                     &self.pipeline_id,
-                    &self.registration,
+                    &self.input_id,
+                    self.attempt_id,
                     Some(phase),
                     Some(reason),
                     had_error,
@@ -112,7 +119,7 @@ impl IngestLease {
         // harmless).
         self.recorded = true;
         ingests
-            .unregister_ingest_if_current(&self.pipeline_id, &self.registration)
+            .unregister_ingest_if_current(&self.pipeline_id, &self.input_id, self.attempt_id)
             .await;
         self.finished = true;
     }
@@ -128,10 +135,11 @@ impl Drop for IngestLease {
         // At once, before the release task runs: the duplicate check admits
         // the next publisher on this input, and the attempt's media stops.
         // The token is this attempt's own; a newer attempt has its own.
-        self.registration.cancel_token.cancel();
+        self.cancel.cancel();
         self.releases.push(AbandonedAttempt {
             pipeline_id: std::mem::take(&mut self.pipeline_id),
-            registration: self.registration.clone(),
+            input_id: std::mem::take(&mut self.input_id),
+            attempt_id: self.attempt_id,
             record: !self.recorded,
         });
     }

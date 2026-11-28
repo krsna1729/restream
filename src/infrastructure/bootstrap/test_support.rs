@@ -106,7 +106,7 @@ pub(super) async fn live_output(
             None,
         )
         .await;
-    lease
+    lease.lease
 }
 
 /// The output rows, as a pass reads them.

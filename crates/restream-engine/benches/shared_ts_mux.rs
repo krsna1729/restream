@@ -71,7 +71,7 @@ impl MuxStage {
         let reader = TsChunkReader::new("bench_shared_ts_mux".to_string(), &ts_ring);
         let mut stage = Self {
             _engine: engine,
-            _ingest: ingest,
+            _ingest: ingest.lease,
             _lease: lease,
             source,
             reader,

@@ -108,11 +108,11 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
         .await
         .unwrap();
     let first_ingest = engine
-        .current_ingest_session(first.registration())
+        .current_ingest_session(&first.registration)
         .await
         .unwrap();
     let backup_ingest = engine
-        .current_ingest_session(backup.registration())
+        .current_ingest_session(&backup.registration)
         .await
         .unwrap();
     let video = VideoMeta {
@@ -128,7 +128,7 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     engine
         .replace_ingest_session_tracks(
             &first_ingest,
-            first.registration(),
+            &first.registration,
             Some(video),
             vec![audio.clone()],
             1,
@@ -139,7 +139,7 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     engine
         .replace_ingest_session_tracks(
             &backup_ingest,
-            backup.registration(),
+            &backup.registration,
             None,
             vec![audio],
             0,
@@ -160,19 +160,19 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     );
     assert!(ring.video_config().is_none());
     assert!(ring.audio_tracks().is_some());
-    backup.registration().cancel_token.cancel();
+    backup.registration.cancel_token.cancel();
     let replacement = engine
         .try_register_pipeline_input_attempt("pipe", "backup", "key3", "srt", true)
         .await
         .unwrap();
     let replacement_ingest = engine
-        .current_ingest_session(replacement.registration())
+        .current_ingest_session(&replacement.registration)
         .await
         .unwrap();
     engine
         .replace_ingest_session_tracks(
             &replacement_ingest,
-            replacement.registration(),
+            &replacement.registration,
             Some(VideoMeta {
                 codec: "h264".to_string(),
                 ..VideoMeta::default()
@@ -186,7 +186,7 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
     engine
         .replace_ingest_session_tracks(
             &backup_ingest,
-            backup.registration(),
+            &backup.registration,
             None,
             Vec::new(),
             0,
@@ -195,7 +195,7 @@ async fn authoritative_tracks_follow_selection_and_reject_replaced_attempts() {
         .await;
     assert_eq!(ring.codec_hint_str(), "h264");
     let metadata = engine
-        .with_ingest_session(replacement.registration(), |ingest| ingest.metadata())
+        .with_ingest_session(&replacement.registration, |ingest| ingest.metadata())
         .await
         .unwrap();
     assert!(metadata.video.is_some());
@@ -211,7 +211,7 @@ async fn authoritative_snapshot_clears_an_obsolete_sequence_header() {
         .try_register_pipeline_input_attempt("pipe", "input", "key", "srt", true)
         .await
         .unwrap();
-    let registration = lease.registration();
+    let registration = &lease.registration;
     let ingest = engine.current_ingest_session(registration).await.unwrap();
     let video = |codec: &str| restream_core::metadata::VideoMeta {
         codec: codec.to_string(),

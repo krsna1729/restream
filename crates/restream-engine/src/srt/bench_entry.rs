@@ -73,7 +73,7 @@ impl ReaderDrive {
             scratch: Vec::with_capacity(READER_SENDS_PER_VISIT),
             readers,
             _engine: engine,
-            _ingest: ingest,
+            _ingest: ingest.lease,
         }
     }
 
