@@ -11,7 +11,7 @@
 //! ```text
 //! Ingest (RTMP/SRT demuxer)
 //!   → push(MediaPacket)
-//!     → RingSlot::replace() on slot[write_idx % capacity]
+//!     → RingSlot::publish() on slot[write_idx % capacity]
 //!     → AtomicUsize::store(write_idx + 1, Release)
 //!     → Notify::notify_waiters()
 //!
