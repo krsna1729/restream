@@ -6,7 +6,7 @@ use crate::egress::backends::sink_shard::SinkShardBackend;
 use crate::egress::command::{EgressCommand, FeedId};
 use crate::egress::journal::{FeedEpoch, RingFeed};
 use crate::egress::manager::{EgressManagerConfig, PlacementPolicy};
-use crate::egress::runtime::{FeedWakeSubscription, ResizeReason, subscribe_fabric_wakes};
+use crate::egress::runtime::ResizeReason;
 use crate::egress::shard::EgressShardHealth;
 use crate::test_support::{output_spec, shard_config, test_video_packet};
 use restream_sync::RingBuffer;
@@ -46,11 +46,10 @@ impl Fixture {
         })
         .await
         .unwrap();
-        let wakes = subscribe_fabric_wakes(
+        let wakes = runtime.subscribe_feed_wakes(
             "owned-test",
             id.clone(),
             feed.publication_ring().publication_subscribers(),
-            runtime.feed_wake_handles(),
         );
         Self {
             runtime,
@@ -216,10 +215,14 @@ fn held_growth_keeps_media_health_and_other_feeds_live_after_caller_cancel() {
 
 #[tokio::test]
 async fn dropping_unpublished_runtime_stops_shards_despite_retained_wake_handles() {
-    let fixture = Fixture::new("unpublished").await;
-    let observer = fixture.runtime.observer.clone();
-    let retained_wakes = fixture.runtime.feed_wake_handles();
-    drop(fixture);
+    let Fixture {
+        runtime,
+        feed,
+        _wakes: retained_wakes,
+        ..
+    } = Fixture::new("unpublished").await;
+    let observer = runtime.observer.clone();
+    drop((runtime, feed));
     tokio::time::timeout(Duration::from_secs(2), async {
         while !observer.snapshots()[0].stopped {
             tokio::time::sleep(Duration::from_millis(2)).await;

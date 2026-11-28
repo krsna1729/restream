@@ -7,10 +7,12 @@ use arc_swap::ArcSwap;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
-use super::EgressFabricRuntime;
+use super::{EgressFabricRuntime, FeedWakeSubscription, subscribe_fabric_wakes};
+use crate::egress::command::FeedId;
 use crate::egress::shard::{
     EgressShardGroup, EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle, ShardSnapshotWatch,
 };
+use restream_sync::PublishSubscribers;
 
 #[derive(Clone, Debug)]
 pub(super) struct FabricObserver {
@@ -89,7 +91,7 @@ pub struct SharedFabricRuntime {
 impl SharedFabricRuntime {
     pub fn new(runtime: EgressFabricRuntime) -> Self {
         let observer = runtime.observer.clone();
-        let wakes = runtime.feed_wake_handles();
+        let wakes = runtime.wake_handles.clone();
         Self {
             owner: Arc::new(Mutex::new(RuntimeOwner {
                 runtime: Some(runtime),
@@ -142,8 +144,14 @@ impl SharedFabricRuntime {
         true
     }
 
-    pub(crate) fn feed_wake_handles(&self) -> Arc<ArcSwap<Vec<FeedWakeHandle>>> {
-        Arc::clone(&self.wakes)
+    /// Subscribe this fabric to producer wakes without exposing the shard list.
+    pub(crate) fn subscribe_feed_wakes(
+        &self,
+        kind: &'static str,
+        feed_id: FeedId,
+        subscribers: Arc<PublishSubscribers>,
+    ) -> FeedWakeSubscription {
+        subscribe_fabric_wakes(kind, feed_id, subscribers, self.wakes.clone())
     }
 
     #[cfg(any(test, feature = "test-support"))]
