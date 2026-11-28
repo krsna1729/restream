@@ -281,8 +281,7 @@ async fn health_and_graph_expose_reader_lag_overflow_and_packet_age() {
 async fn health_snapshot_exposes_bonding_and_member_telemetry() {
     let engine = Arc::new(MediaEngine::new());
     engine
-        .runtime
-        .listener_stats
+        .listener_stats_handle()
         .bonding_available
         .store(true, Ordering::Relaxed);
     let _ingest = engine
@@ -318,16 +317,9 @@ async fn health_snapshot_exposes_bonding_and_member_telemetry() {
 #[tokio::test]
 async fn health_snapshot_exposes_runtime_limit_and_rtmp_listener_errors() {
     let engine = MediaEngine::new();
-    engine
-        .runtime
-        .rtmp_listener_stats
-        .rtmp_accept_errors
-        .store(7, Ordering::Relaxed);
-    engine
-        .runtime
-        .rtmp_listener_stats
-        .rtmp_fd_exhaustion_errors
-        .store(3, Ordering::Relaxed);
+    for i in 0..7 {
+        engine.record_rtmp_listener_error(true, i < 3);
+    }
 
     let snapshot = test_health_snapshot(&engine, &[], &HashMap::new()).await;
 

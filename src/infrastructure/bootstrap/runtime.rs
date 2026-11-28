@@ -12,7 +12,7 @@ use tracing::{error, info};
 
 use crate::api::AppState;
 use crate::config::AppConfig;
-use restream_engine::engine::MediaEngine;
+use restream_engine::engine::{IngestListener, MediaEngine};
 use restream_engine::ingest_auth::PipelineAccessAuthenticator;
 use restream_engine::security::IngestSecurityService;
 use restream_engine::srt::SrtIngestPolicyStore;
@@ -121,7 +121,6 @@ impl RuntimeTasks {
         ));
 
         let rtmp_port = config.ports.rtmp;
-        let rtmp_restarts = Arc::clone(&engine.runtime.rtmp_listener_stats.restarts);
         let spawn_rtmp = {
             let engine = engine.clone();
             let security = security.clone();
@@ -150,7 +149,7 @@ impl RuntimeTasks {
             "rtmp",
             rtmp_task,
             Box::new(move || spawn_rtmp(None)),
-            rtmp_restarts,
+            (engine.clone(), IngestListener::Rtmp),
         );
 
         let moq = match restream_engine::moq::ingest::listener::MoqListener::new(
@@ -160,7 +159,6 @@ impl RuntimeTasks {
             security.clone(),
         ) {
             Some(moq) => {
-                let moq_restarts = Arc::clone(&engine.runtime.moq_listener_restarts);
                 let spawn_moq = move |started| tokio::spawn(Arc::clone(&moq).run(started));
                 let (moq_started_tx, moq_started_rx) = tokio::sync::oneshot::channel();
                 let moq_task = spawn_moq(Some(moq_started_tx));
@@ -169,22 +167,26 @@ impl RuntimeTasks {
                     "moq",
                     moq_task,
                     Box::new(move || spawn_moq(None)),
-                    moq_restarts,
+                    (engine.clone(), IngestListener::Moq),
                 ))
             }
             None => None,
         };
 
-        let srt_restarts = Arc::clone(&engine.runtime.listener_stats.restarts);
         let srt_server = Arc::new(restream_engine::srt::SrtServer::new(
             pipeline_access,
-            engine,
+            engine.clone(),
             security,
             srt_ingest_policy_store,
         ));
         let srt_port = config.ports.srt;
         let spawn_srt = move || tokio::spawn(Arc::clone(&srt_server).run(srt_port));
-        let srt = SupervisedListener::new("srt", spawn_srt(), Box::new(spawn_srt), srt_restarts);
+        let srt = SupervisedListener::new(
+            "srt",
+            spawn_srt(),
+            Box::new(spawn_srt),
+            (engine, IngestListener::Srt),
+        );
 
         Ok(Self {
             http_stop,

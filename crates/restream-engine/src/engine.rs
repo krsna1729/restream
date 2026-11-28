@@ -9,6 +9,7 @@ use crate::engine_registries::{
     EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, RecordingRegistry,
     RuntimeInfra, StreamQaRegistry,
 };
+pub use crate::engine_runtime::IngestListener;
 use crate::ingest_registry::{
     ActiveIngest, INGEST_FLAP_WINDOW_MS, IngestRegistration, IngestRegistry, RecentIngestOutcome,
 };
@@ -43,7 +44,7 @@ pub struct MediaEngine {
     pub hls: HlsRegistry,
     pub file_ingests: FileIngestRegistry,
     pub stages: Arc<StageRegistry>,
-    pub runtime: RuntimeInfra,
+    pub(crate) runtime: RuntimeInfra,
     pub config: Arc<crate::config::EngineConfig>,
 }
 

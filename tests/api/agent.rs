@@ -176,14 +176,11 @@ async fn agent_context_returns_redacted_state_bundle() {
     .await
     .unwrap();
 
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::IngestConnected {
-            pipeline_id: pid.clone(),
-            protocol: "rtmp".to_string(),
-            stream_key: raw_stream_key.to_string(),
-        });
+    engine.emit_event(restream_engine::events::EventKind::IngestConnected {
+        pipeline_id: pid.clone(),
+        protocol: "rtmp".to_string(),
+        stream_key: raw_stream_key.to_string(),
+    });
 
     let resp = app
         .oneshot(auth_req("GET", "/api/v1/agent/context", &cookie, None))
@@ -282,14 +279,11 @@ async fn agent_investigation_returns_evidence_envelope() {
     let pipe = body_json(create).await;
     let pid = pipe["pipeline"]["id"].as_str().unwrap().to_string();
 
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::IngestConnected {
-            pipeline_id: pid.clone(),
-            protocol: "rtmp".to_string(),
-            stream_key: raw_stream_key.to_string(),
-        });
+    engine.emit_event(restream_engine::events::EventKind::IngestConnected {
+        pipeline_id: pid.clone(),
+        protocol: "rtmp".to_string(),
+        stream_key: raw_stream_key.to_string(),
+    });
 
     let resp = app
         .oneshot(auth_req(

@@ -212,31 +212,6 @@ fn host_settings_json(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RtmpListenerHealthJson {
-    accept_errors: u64,
-    fd_exhaustion_errors: u64,
-    restarts: u64,
-    /// Ingress owners accepting now (0 while the listener is stopped).
-    ingress_owners: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SrtListenerHealthJson {
-    bonding_available: bool,
-    restarts: u64,
-    ingress_owner: restream_engine::snapshots::SrtIngressOwnerSnapshot,
-}
-
-/// The MoQ ingest listener (0 restarts while MoQ ingest is off).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MoqListenerHealthJson {
-    restarts: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TuningHealthJson {
     output_max_retries: u32,
 }
@@ -290,9 +265,9 @@ pub(crate) struct EngineHealthView {
     stages: serde_json::Map<String, serde_json::Value>,
     runtime_limits: RuntimeLimitsHealthJson,
     host_settings: Vec<HostSettingRow>,
-    rtmp_listener: RtmpListenerHealthJson,
-    srt_listener: SrtListenerHealthJson,
-    moq_listener: MoqListenerHealthJson,
+    rtmp_listener: restream_engine::snapshots::RtmpListenerSnapshot,
+    srt_listener: restream_engine::snapshots::SrtListenerSnapshot,
+    moq_listener: restream_engine::snapshots::MoqListenerSnapshot,
     egress_fabric_shards:
         Vec<restream_engine::engine_egress_fabric_diagnostics::EgressFabricShardStatus>,
     /// Panics contained at a per-entity boundary since start
@@ -532,11 +507,9 @@ pub(crate) async fn health_snapshot_view(
         stages: stages_json,
         runtime_limits: RuntimeLimitsHealthJson { nofile },
         host_settings: host_settings_rows,
-        rtmp_listener: rtmp_listener_health(engine),
-        srt_listener: srt_listener_health(engine),
-        moq_listener: MoqListenerHealthJson {
-            restarts: engine.runtime.moq_listener_restarts.load(Ordering::Relaxed),
-        },
+        rtmp_listener: engine.rtmp_listener_health(),
+        srt_listener: engine.srt_listener_health(),
+        moq_listener: engine.moq_listener_health(),
         egress_fabric_shards,
         contained_panics: restream_engine::panic_boundary::contained_panics(),
         name_resolver: name_resolver_health(),
@@ -684,25 +657,6 @@ async fn stage_snapshots_json(
         }
     }
     stages_json
-}
-
-fn rtmp_listener_health(engine: &MediaEngine) -> RtmpListenerHealthJson {
-    let stats = &engine.runtime.rtmp_listener_stats;
-    RtmpListenerHealthJson {
-        accept_errors: stats.rtmp_accept_errors.load(Ordering::Relaxed),
-        fd_exhaustion_errors: stats.rtmp_fd_exhaustion_errors.load(Ordering::Relaxed),
-        restarts: stats.restarts.load(Ordering::Relaxed),
-        ingress_owners: stats.owners.load(Ordering::Relaxed),
-    }
-}
-
-fn srt_listener_health(engine: &MediaEngine) -> SrtListenerHealthJson {
-    let stats = &engine.runtime.listener_stats;
-    SrtListenerHealthJson {
-        bonding_available: stats.bonding_available.load(Ordering::Relaxed),
-        restarts: stats.restarts.load(Ordering::Relaxed),
-        ingress_owner: stats.ingress_owner.snapshot(),
-    }
 }
 
 fn name_resolver_health() -> NameResolverHealthJson {

@@ -12,6 +12,22 @@ use crate::ingest_registry::IngestRegistration;
 use crate::snapshots::ListenerSocketStats;
 use restream_sync::RingBuffer;
 
+/// Listener supervised by the application runtime.
+#[derive(Clone, Copy)]
+pub enum IngestListener {
+    Rtmp,
+    Srt,
+    Moq,
+}
+
+struct RunningRtmpOwners<'a>(&'a std::sync::atomic::AtomicU64);
+
+impl Drop for RunningRtmpOwners<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, Ordering::Relaxed);
+    }
+}
+
 impl MediaEngine {
     pub fn listener_stats_handle(&self) -> Arc<ListenerSocketStats> {
         self.runtime.listener_stats.clone()
@@ -38,6 +54,74 @@ impl MediaEngine {
             .owners
             .load(Ordering::Relaxed) as usize;
         (rtmp, srt)
+    }
+
+    pub fn record_listener_restart(&self, listener: IngestListener) {
+        let counter = match listener {
+            IngestListener::Rtmp => &self.runtime.rtmp_listener_stats.restarts,
+            IngestListener::Srt => &self.runtime.listener_stats.restarts,
+            IngestListener::Moq => &self.runtime.moq_listener_restarts,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn rtmp_listener_health(&self) -> crate::snapshots::RtmpListenerSnapshot {
+        let stats = &self.runtime.rtmp_listener_stats;
+        crate::snapshots::RtmpListenerSnapshot {
+            accept_errors: stats.rtmp_accept_errors.load(Ordering::Relaxed),
+            fd_exhaustion_errors: stats.rtmp_fd_exhaustion_errors.load(Ordering::Relaxed),
+            restarts: stats.restarts.load(Ordering::Relaxed),
+            ingress_owners: stats.owners.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn srt_listener_health(&self) -> crate::snapshots::SrtListenerSnapshot {
+        let stats = &self.runtime.listener_stats;
+        crate::snapshots::SrtListenerSnapshot {
+            bonding_available: stats.bonding_available.load(Ordering::Relaxed),
+            restarts: stats.restarts.load(Ordering::Relaxed),
+            ingress_owner: stats.ingress_owner.snapshot(),
+        }
+    }
+
+    pub fn moq_listener_health(&self) -> crate::snapshots::MoqListenerSnapshot {
+        crate::snapshots::MoqListenerSnapshot {
+            restarts: self.runtime.moq_listener_restarts.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Report running owners until the listener stops accepting.
+    pub(crate) fn publish_rtmp_owners(&self, owners: usize) -> impl Drop + '_ {
+        let gauge = &self.runtime.rtmp_listener_stats.owners;
+        gauge.store(u64::try_from(owners).unwrap_or(u64::MAX), Ordering::Relaxed);
+        RunningRtmpOwners(gauge)
+    }
+
+    pub fn record_rtmp_listener_error(&self, accept_failed: bool, fd_exhaustion: bool) {
+        let stats = &self.runtime.rtmp_listener_stats;
+        if accept_failed {
+            stats.rtmp_accept_errors.fetch_add(1, Ordering::Relaxed);
+        }
+        if fd_exhaustion {
+            stats
+                .rtmp_fd_exhaustion_errors
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn srt_sender_threads(&self, limit: u64) -> u64 {
+        limit.saturating_sub(self.runtime.sender_semaphore.available_permits() as u64)
+    }
+
+    pub fn running_os_thread_count(&self) -> u64 {
+        restream_sync::lock::lock(&self.runtime.os_threads)
+            .iter()
+            .filter(|thread| !thread.is_finished())
+            .count() as u64
+    }
+
+    pub fn emit_event(&self, event: crate::events::EventKind) {
+        self.runtime.event_log.emit(event);
     }
 
     /// Register an OS thread JoinHandle so it can be joined at shutdown.

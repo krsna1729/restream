@@ -606,12 +606,8 @@ pub(crate) async fn resource_map(
     );
 
     let srt_sender_limit = 512u64;
-    let srt_sender_threads =
-        srt_sender_limit.saturating_sub(engine.runtime.sender_semaphore.available_permits() as u64);
-    let registered_os_threads = restream_sync::lock::lock(&engine.runtime.os_threads)
-        .iter()
-        .filter(|thread| !thread.is_finished())
-        .count() as u64;
+    let srt_sender_threads = engine.srt_sender_threads(srt_sender_limit);
+    let registered_os_threads = engine.running_os_thread_count();
     let retained_payload_bytes = number_field(&memory_accounting, "retainedPayloadBytes");
 
     let total_node_count = nodes.len();

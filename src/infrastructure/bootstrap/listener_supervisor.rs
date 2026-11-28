@@ -8,8 +8,8 @@
 //! fault, a MoQ listener thread that panicked or whose start failed) so they
 //! are reported and recovered, not escalated.
 
+use restream_engine::engine::{IngestListener, MediaEngine};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -24,7 +24,7 @@ pub(super) struct SupervisedListener {
     started_at: Instant,
     restart_at: Option<Instant>,
     backoff: RestartBackoff,
-    restarts: Arc<AtomicU64>,
+    restart_counter: (Arc<MediaEngine>, IngestListener),
 }
 
 impl SupervisedListener {
@@ -33,7 +33,7 @@ impl SupervisedListener {
         name: &'static str,
         task: JoinHandle<()>,
         spawn: Box<dyn Fn() -> JoinHandle<()> + Send>,
-        restarts: Arc<AtomicU64>,
+        restart_counter: (Arc<MediaEngine>, IngestListener),
     ) -> Self {
         Self {
             name,
@@ -42,7 +42,7 @@ impl SupervisedListener {
             started_at: Instant::now(),
             restart_at: None,
             backoff: RestartBackoff::new(),
-            restarts,
+            restart_counter,
         }
     }
 
@@ -76,7 +76,8 @@ impl SupervisedListener {
             self.task = Some((self.spawn)());
             self.started_at = now;
             self.restart_at = None;
-            self.restarts.fetch_add(1, Ordering::Relaxed);
+            let (engine, listener) = &self.restart_counter;
+            engine.record_listener_restart(*listener);
             info!(listener = self.name, "ingest listener restarted");
         }
     }
@@ -91,6 +92,7 @@ impl SupervisedListener {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     /// A listener task that ends is respawned after its delay, counted, and
@@ -98,14 +100,18 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_exited_listener_is_respawned_after_its_delay() {
         let spawned = Arc::new(AtomicU64::new(0));
-        let restarts = Arc::new(AtomicU64::new(0));
+        let engine = Arc::new(MediaEngine::new());
         let counter = spawned.clone();
         let spawn: Box<dyn Fn() -> JoinHandle<()> + Send> = Box::new(move || {
             counter.fetch_add(1, Ordering::Relaxed);
             tokio::spawn(std::future::pending())
         });
-        let mut listener =
-            SupervisedListener::new("test", tokio::spawn(async {}), spawn, restarts.clone());
+        let mut listener = SupervisedListener::new(
+            "test",
+            tokio::spawn(async {}),
+            spawn,
+            (engine.clone(), IngestListener::Rtmp),
+        );
 
         listener.exited().await;
         let due = listener.restart_due().expect("restart scheduled");
@@ -116,7 +122,7 @@ mod tests {
 
         listener.restart_if_due(due);
         assert_eq!(spawned.load(Ordering::Relaxed), 1);
-        assert_eq!(restarts.load(Ordering::Relaxed), 1);
+        assert_eq!(engine.rtmp_listener_health().restarts, 1);
         assert!(listener.restart_due().is_none());
     }
 }

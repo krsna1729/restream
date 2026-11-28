@@ -526,6 +526,8 @@ One slow dependency stalls only the entity that needs it:
   a stalled SQLite grows no queue and a writer panic loses no update.
 - RTMP/SRT/MoQ listener restarts and the dashboard listener's exit are handled
   by a supervision task of their own, never between passes.
+  The supervisor reports each restart to `MediaEngine`; health reads
+  listener snapshots without reaching into runtime counters.
 
 Housekeeping that reads no outputs runs every interval in its own supervised
 task: sessions, log retention (in batches of at most 1000 rows per write),
