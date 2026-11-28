@@ -3,7 +3,6 @@
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::thread;
 
 use compio::driver::{DriverType, ProactorBuilder};
@@ -125,7 +124,7 @@ pub async fn start_rtmp_server_on_with_shutdown(
     // No owner accepts until every runtime/socket has initialized.
     accepting.cancel();
     log_listener_started(owners, &addr);
-    let _running = RunningOwners::publish(&engine.runtime.rtmp_listener_stats.owners, owners);
+    let _running = engine.publish_rtmp_owners(owners);
     if let Some(started) = started {
         let _ = started.send(Ok(bound_addr));
     }
@@ -265,26 +264,6 @@ async fn await_owner_readiness(
         return Err("RTMP ingress cancelled before startup readiness".to_string());
     }
     Ok(())
-}
-
-/// The running-owner gauge while the listener accepts; dropping it (the
-/// listener returning, or its task aborted) reports 0.
-struct RunningOwners<'a>(&'a std::sync::atomic::AtomicU64);
-
-impl<'a> RunningOwners<'a> {
-    fn publish(gauge: &'a std::sync::atomic::AtomicU64, owners: usize) -> Self {
-        gauge.store(
-            u64::try_from(owners).unwrap_or(u64::MAX),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        Self(gauge)
-    }
-}
-
-impl Drop for RunningOwners<'_> {
-    fn drop(&mut self) {
-        self.0.store(0, std::sync::atomic::Ordering::Relaxed);
-    }
 }
 
 /// What one ingress owner may admit: its share of the connection cap and the
@@ -584,20 +563,7 @@ fn report_listener_error(
     message: &'static str,
 ) {
     let fd_exhaustion = is_fd_exhaustion_error(error);
-    if kind == "accept_failed" {
-        engine
-            .runtime
-            .rtmp_listener_stats
-            .rtmp_accept_errors
-            .fetch_add(1, Ordering::Relaxed);
-    }
-    if fd_exhaustion {
-        engine
-            .runtime
-            .rtmp_listener_stats
-            .rtmp_fd_exhaustion_errors
-            .fetch_add(1, Ordering::Relaxed);
-    }
+    engine.record_rtmp_listener_error(kind == "accept_failed", fd_exhaustion);
     let event_type = if fd_exhaustion {
         "rtmp.listener.fd_exhausted"
     } else if kind == "bind_failed" {
@@ -794,13 +760,7 @@ mod tests {
             }
         };
 
-        let running = || {
-            engine
-                .runtime
-                .rtmp_listener_stats
-                .owners
-                .load(std::sync::atomic::Ordering::Relaxed)
-        };
+        let running = || engine.rtmp_listener_health().ingress_owners;
         assert_eq!(running(), owners as u64, "every bound owner is reported");
         let mut clients = Vec::new();
         for _ in 0..16 {

@@ -732,14 +732,11 @@ async fn v1_events_returns_envelope_and_events_array() {
     let cookie = login(&app).await;
 
     // Emit a synthetic event directly on the engine's event log
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::IngestConnected {
-            pipeline_id: "test-pipeline".to_string(),
-            protocol: "rtmp".to_string(),
-            stream_key: "key01".to_string(),
-        });
+    engine.emit_event(restream_engine::events::EventKind::IngestConnected {
+        pipeline_id: "test-pipeline".to_string(),
+        protocol: "rtmp".to_string(),
+        stream_key: "key01".to_string(),
+    });
 
     let resp = app
         .clone()
@@ -764,22 +761,16 @@ async fn v1_events_filters_by_pipeline_id() {
     let (app, _pool, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
 
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::IngestConnected {
-            pipeline_id: "pipe-a".to_string(),
-            protocol: "rtmp".to_string(),
-            stream_key: "key01".to_string(),
-        });
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::IngestConnected {
-            pipeline_id: "pipe-b".to_string(),
-            protocol: "srt".to_string(),
-            stream_key: "key02".to_string(),
-        });
+    engine.emit_event(restream_engine::events::EventKind::IngestConnected {
+        pipeline_id: "pipe-a".to_string(),
+        protocol: "rtmp".to_string(),
+        stream_key: "key01".to_string(),
+    });
+    engine.emit_event(restream_engine::events::EventKind::IngestConnected {
+        pipeline_id: "pipe-b".to_string(),
+        protocol: "srt".to_string(),
+        stream_key: "key02".to_string(),
+    });
 
     let resp = app
         .clone()

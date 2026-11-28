@@ -521,7 +521,7 @@ pub struct RuntimeInfra {
     pub rtmp_listener_stats: Arc<RtmpListenerStats>,
     /// Restarts of the MoQ ingest listener after it ended without a
     /// shutdown request.
-    pub moq_listener_restarts: Arc<std::sync::atomic::AtomicU64>,
+    pub moq_listener_restarts: std::sync::atomic::AtomicU64,
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub listener_shutdowns: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
@@ -542,7 +542,7 @@ impl RuntimeInfra {
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),
             rtmp_listener_stats: Arc::new(RtmpListenerStats::default()),
-            moq_listener_restarts: Arc::default(),
+            moq_listener_restarts: std::sync::atomic::AtomicU64::new(0),
             os_threads: std::sync::Mutex::new(Vec::new()),
             listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),

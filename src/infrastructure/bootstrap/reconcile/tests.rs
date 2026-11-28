@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use restream_engine::engine::IngestListener;
 
 use super::super::test_support::{
     file_pools, hold_every_connection, hold_write_lock, live_output, memory_pool,
@@ -44,28 +44,28 @@ fn reconciler(engine: Arc<MediaEngine>, db: DeadlineDb, pool: &sqlx::SqlitePool)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is_stalled() {
     let (api, lifecycle, dir) = file_pools("listener").await;
+    let engine = Arc::new(MediaEngine::new());
     let reconciler = Arc::new(reconciler(
-        Arc::new(MediaEngine::new()),
+        engine.clone(),
         DeadlineDb::new(lifecycle.clone(), SHARED_LOOP_DEADLINE),
         &api,
     ));
     let held = hold_every_connection(&lifecycle).await;
-    let listener = |restarts: Arc<AtomicU64>| {
+    let listener = |kind| {
         super::super::listener_supervisor::SupervisedListener::new(
             "test",
             // Faulted: the listener task has already ended.
             tokio::spawn(async {}),
             Box::new(|| tokio::spawn(std::future::pending())),
-            restarts,
+            (engine.clone(), kind),
         )
     };
     // RTMP, SRT and MoQ, each faulted.
-    let restarts: [Arc<AtomicU64>; 3] = Default::default();
     let listeners = super::super::runtime::Listeners::new(
         tokio::spawn(std::future::pending()),
-        listener(restarts[0].clone()),
-        listener(restarts[1].clone()),
-        Some(listener(restarts[2].clone())),
+        listener(IngestListener::Rtmp),
+        listener(IngestListener::Srt),
+        Some(listener(IngestListener::Moq)),
     );
     let shutdown = CancellationToken::new();
     let control = tokio::spawn({
@@ -73,12 +73,16 @@ async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is
         async move { super::super::run_control_loops(&reconciler, listeners, &shutdown).await }
     });
 
+    let restarts = || {
+        [
+            engine.rtmp_listener_health().restarts,
+            engine.srt_listener_health().restarts,
+            engine.moq_listener_health().restarts,
+        ]
+    };
     let started = Instant::now();
     let restarted = tokio::time::timeout(Duration::from_secs(3), async {
-        while restarts
-            .iter()
-            .any(|restarts| restarts.load(Ordering::Relaxed) == 0)
-        {
+        while restarts().contains(&0) {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -89,8 +93,9 @@ async fn a_faulted_listener_restarts_within_its_backoff_while_the_output_pass_is
     let _ = std::fs::remove_dir_all(dir);
     assert!(
         restarted.is_ok(),
-        "a faulted listener did not restart within its 1 s backoff (+2 s) while the pass was stalled; waited {:?}, restarts {restarts:?}",
-        started.elapsed()
+        "a faulted listener did not restart within its 1 s backoff (+2 s) while the pass was stalled; waited {:?}, restarts {:?}",
+        started.elapsed(),
+        restarts(),
     );
 }
 

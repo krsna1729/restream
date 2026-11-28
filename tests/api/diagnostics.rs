@@ -174,13 +174,10 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
     )
     .await
     .unwrap();
-    engine
-        .runtime
-        .event_log
-        .emit(restream_engine::events::EventKind::StageRegistered {
-            pipeline_id: "pipe-diagctx".to_string(),
-            encoding: "video:720p".to_string(),
-        });
+    engine.emit_event(restream_engine::events::EventKind::StageRegistered {
+        pipeline_id: "pipe-diagctx".to_string(),
+        encoding: "video:720p".to_string(),
+    });
 
     let resp = app
         .clone()

@@ -179,6 +179,29 @@ pub struct FileIngestDependencySnapshot {
     pub child_registered: bool,
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RtmpListenerSnapshot {
+    pub accept_errors: u64,
+    pub fd_exhaustion_errors: u64,
+    pub restarts: u64,
+    pub ingress_owners: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SrtListenerSnapshot {
+    pub bonding_available: bool,
+    pub restarts: u64,
+    pub ingress_owner: SrtIngressOwnerSnapshot,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoqListenerSnapshot {
+    pub restarts: u64,
+}
+
 /// Shared SRT listener state, published by the SRT ingress Owner thread.
 #[derive(Debug, Default)]
 pub struct ListenerSocketStats {
@@ -186,7 +209,7 @@ pub struct ListenerSocketStats {
     /// Counters published by the SRT ingress Owner thread.
     pub ingress_owner: SrtIngressOwnerStats,
     /// Restarts after the listener ended without a shutdown request.
-    pub restarts: std::sync::Arc<AtomicU64>,
+    pub restarts: AtomicU64,
 }
 
 macro_rules! ingress_owner_stats {
@@ -278,7 +301,7 @@ pub struct RtmpListenerStats {
     pub rtmp_accept_errors: AtomicU64,
     pub rtmp_fd_exhaustion_errors: AtomicU64,
     /// Restarts after the listener ended without a shutdown request.
-    pub restarts: std::sync::Arc<AtomicU64>,
+    pub restarts: AtomicU64,
     /// Ingress owners accepting now: the configured count after the
     /// connection-limit and parser-budget clamps, or 0 while stopped.
     pub owners: AtomicU64,

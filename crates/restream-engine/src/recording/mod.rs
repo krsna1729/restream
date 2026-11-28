@@ -593,13 +593,10 @@ pub async fn start_recording(
         backend: crate::stage_lifecycle::StageBackendKind::Recording,
         pid: None,
     });
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageRegistered {
-            pipeline_id: pipeline_id.clone(),
-            encoding: "recording".to_string(),
-        });
+    engine.emit_event(crate::events::EventKind::StageRegistered {
+        pipeline_id: pipeline_id.clone(),
+        encoding: "recording".to_string(),
+    });
 
     let queue = Arc::new(restream_sync::byte_queue::MemoryQueue::new_with_capacity(
         engine.config.recording_queue_capacity,
@@ -689,13 +686,10 @@ pub async fn start_recording(
     }
 
     engine.remove_stage_runtime(&rec_stage_key).await;
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id: pipeline_id.clone(),
-            encoding: "recording".to_string(),
-        });
+    engine.emit_event(crate::events::EventKind::StageStopped {
+        pipeline_id: pipeline_id.clone(),
+        encoding: "recording".to_string(),
+    });
 }
 
 fn report_recording_failure(
