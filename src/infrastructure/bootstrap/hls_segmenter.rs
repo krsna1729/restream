@@ -21,12 +21,11 @@ pub(super) fn spawn_pipeline_hls_segmenter(
     stages: Vec<StageLease>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let segmenter = restream_engine::hls::start_hls_segmenter(
+        let segmenter = engine.start_hls_segmenter(
             pipeline_id.clone(),
             store,
             ring,
             None,
-            engine.clone(),
             cancel.clone(),
             restream_engine::hls::HlsSegmenterStart {
                 video_meta_override: None,

@@ -114,8 +114,8 @@ pub fn plan_hls_output_graph(
 /// Plan the HLS preview graph for a pipeline.
 ///
 /// This is a pure planning function — it does not create ring buffers or
-/// spawn stages. The runtime resolver in `media::hls::preview_graph` uses
-/// this plan to drive runtime execution.
+/// spawn stages. The runtime resolver in `restream_engine`'s
+/// `engine_hls_preview` uses this plan to drive runtime execution.
 pub fn plan_hls_preview_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,

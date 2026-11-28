@@ -45,7 +45,7 @@ path by URL scheme. Each fabric output becomes an `OutputSpec` with one
 HLS PUT has one exception. It uses the fabric only when
 `RESTREAM_HLS_PUT_FABRIC` is on (default) and, for HTTPS, when kernel TLS is
 available. Otherwise the output uses the Tokio Reqwest uploader
-(`crates/restream-engine/src/hls/upload.rs`).
+(`crates/restream-engine/src/hls_upload.rs`).
 
 ## Ownership
 

@@ -48,45 +48,6 @@ fn planned_hls_key(pipeline_id: &str) -> StageKey {
     StageKey::new(pipeline_id, StageKind::hls_segmenter(StageKind::source()))
 }
 
-#[test]
-fn derives_segment_url_from_file_query() {
-    let playlist =
-        Url::parse("https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=out.m3u8")
-            .unwrap();
-    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
-    assert_eq!(
-        segment.as_str(),
-        "https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=seg42.ts"
-    );
-}
-
-#[test]
-fn derives_segment_url_from_playlist_path() {
-    let playlist = Url::parse("https://example.com/live/out.m3u8").unwrap();
-    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
-    assert_eq!(segment.as_str(), "https://example.com/live/seg42.ts");
-}
-
-#[test]
-fn derives_segment_url_from_directory_path() {
-    let playlist = Url::parse("https://example.com/live/channel/").unwrap();
-    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
-    assert_eq!(
-        segment.as_str(),
-        "https://example.com/live/channel/seg42.ts"
-    );
-}
-
-#[test]
-fn preserves_signed_query_for_path_style_uploads() {
-    let playlist = Url::parse("https://example.com/live/out.m3u8?hdnea=token&policy=abc").unwrap();
-    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
-    assert_eq!(
-        segment.as_str(),
-        "https://example.com/live/seg42.ts?hdnea=token&policy=abc"
-    );
-}
-
 #[tokio::test]
 async fn uploads_segments_and_playlist_to_put_sink() {
     let seen = Arc::new(Mutex::new(Vec::<(String, String, Vec<u8>)>::new()));
@@ -168,7 +129,7 @@ async fn uploads_segments_and_playlist_to_put_sink() {
     assert!(
         seen.iter().any(|(uri, content_type, body)| {
             uri == "/upload?cid=abc&file=S-0.ts"
-                && content_type == super::super::upload_policy::HLS_SEGMENT_CONTENT_TYPE
+                && content_type == crate::hls::upload_policy::HLS_SEGMENT_CONTENT_TYPE
                 && body == b"segment-0"
         }),
         "segment PUT not observed: {seen:?}"
@@ -176,7 +137,7 @@ async fn uploads_segments_and_playlist_to_put_sink() {
     assert!(
         seen.iter().any(|(uri, content_type, body)| {
             uri == "/upload?cid=abc&file=out.m3u8"
-                && content_type == super::super::upload_policy::HLS_PLAYLIST_CONTENT_TYPE
+                && content_type == crate::hls::upload_policy::HLS_PLAYLIST_CONTENT_TYPE
                 && body.starts_with(b"#EXTM3U")
         }),
         "playlist PUT not observed: {seen:?}"
@@ -286,7 +247,7 @@ async fn put_bytes_times_out_against_hung_sink() {
             end: false,
         },
         file_name: String::new(),
-        content_type: super::super::upload_policy::HLS_PLAYLIST_CONTENT_TYPE,
+        content_type: crate::hls::upload_policy::HLS_PLAYLIST_CONTENT_TYPE,
         body: Bytes::from_static(b"#EXTM3U"),
         fresh_connection: false,
     };
@@ -690,11 +651,4 @@ async fn a_retry_uses_a_new_connection() {
 
     registration.cancel_token.cancel();
     let _ = uploader.await;
-}
-
-/// Session tokens are unique even when many outputs start at once.
-#[test]
-fn session_tokens_do_not_repeat_within_a_burst() {
-    let tokens: HashSet<String> = (0..10_000).map(|_| upload_session_token()).collect();
-    assert_eq!(tokens.len(), 10_000);
 }

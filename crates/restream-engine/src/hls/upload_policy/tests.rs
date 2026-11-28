@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -437,4 +437,50 @@ fn the_delivery_totals_count_a_segment_on_time_only_when_acknowledged_before_it_
     // The destination answers afterwards: still missed, counted once.
     ok(&mut policy, due + second);
     assert_eq!(policy.delivery_totals(due + second), (7, 14), "late");
+}
+
+#[test]
+fn derives_segment_url_from_file_query() {
+    let playlist =
+        Url::parse("https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=out.m3u8")
+            .unwrap();
+    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
+    assert_eq!(
+        segment.as_str(),
+        "https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=seg42.ts"
+    );
+}
+
+#[test]
+fn derives_segment_url_from_playlist_path() {
+    let playlist = Url::parse("https://example.com/live/out.m3u8").unwrap();
+    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
+    assert_eq!(segment.as_str(), "https://example.com/live/seg42.ts");
+}
+
+#[test]
+fn derives_segment_url_from_directory_path() {
+    let playlist = Url::parse("https://example.com/live/channel/").unwrap();
+    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
+    assert_eq!(
+        segment.as_str(),
+        "https://example.com/live/channel/seg42.ts"
+    );
+}
+
+#[test]
+fn preserves_signed_query_for_path_style_uploads() {
+    let playlist = Url::parse("https://example.com/live/out.m3u8?hdnea=token&policy=abc").unwrap();
+    let segment = derive_hls_upload_url(&playlist, "seg42.ts");
+    assert_eq!(
+        segment.as_str(),
+        "https://example.com/live/seg42.ts?hdnea=token&policy=abc"
+    );
+}
+
+/// Session tokens are unique even when many outputs start at once.
+#[test]
+fn session_tokens_do_not_repeat_within_a_burst() {
+    let tokens: HashSet<String> = (0..10_000).map(|_| upload_session_token()).collect();
+    assert_eq!(tokens.len(), 10_000);
 }

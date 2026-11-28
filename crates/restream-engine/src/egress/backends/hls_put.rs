@@ -15,7 +15,7 @@ use reqwest::Url;
 use super::compio_tcp::TlsTcpConnection;
 use super::compio_tcp::TxPart;
 use crate::egress::http1::{HttpError, RequestHead, Response, ResponseReader, write_request_head};
-use crate::hls::upload_policy::{UploadRequest, UploadTarget};
+use crate::hls::upload_policy::{UploadRequest, UploadTarget, derive_hls_upload_url};
 
 /// `<manufacturer> / <model> / <version>`, as YouTube asks and Akamai
 /// requires.
@@ -62,7 +62,7 @@ impl HlsPutTarget {
         let url = match request.target {
             UploadTarget::Playlist { .. } => self.playlist_url.clone(),
             UploadTarget::Segment { .. } => {
-                crate::hls::upload::derive_hls_upload_url(&self.playlist_url, &request.file_name)
+                derive_hls_upload_url(&self.playlist_url, &request.file_name)
             }
         };
         let mut target = url.path().to_string();

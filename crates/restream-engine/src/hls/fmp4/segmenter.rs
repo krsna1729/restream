@@ -6,10 +6,10 @@ use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::super::HlsSegmenterStart;
+use super::super::{HlsSegmenterContext, HlsSegmenterStart};
 use super::rendition::{AudioRenditionState, VideoRenditionState};
 use super::store::Fmp4HlsStore;
-use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistry;
 use crate::stage_lifecycle::StageLifecycle;
 use crate::stage_metrics::StageMetrics;
 use restream_core::metadata::{AudioMeta, VideoMeta};
@@ -17,11 +17,11 @@ use restream_core::{MediaPacket, MediaType};
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
-pub async fn start_hls_fmp4_segmenter(
+pub(crate) async fn start_hls_fmp4_segmenter(
     pipeline_id: String,
     store: Arc<Fmp4HlsStore>,
     ring_buffer: Arc<RingBuffer>,
-    engine: Arc<MediaEngine>,
+    context: HlsSegmenterContext,
     cancel_token: CancellationToken,
     start: HlsSegmenterStart,
 ) {
@@ -30,7 +30,7 @@ pub async fn start_hls_fmp4_segmenter(
         .clone()
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
     let stage = hls_stage_key.to_string();
-    let (lifecycle, metrics) = engine
+    let (lifecycle, metrics) = context
         .stages
         .get_or_create_non_ring_stage_runtime(
             hls_stage_key,
@@ -50,7 +50,7 @@ pub async fn start_hls_fmp4_segmenter(
             pipeline_id,
             store,
             ring_buffer,
-            engine.clone(),
+            context,
             cancel_token.clone(),
             start,
             (lifecycle.clone(), metrics),
@@ -67,11 +67,16 @@ async fn run_hls_fmp4_segmenter(
     pipeline_id: String,
     store: Arc<Fmp4HlsStore>,
     ring_buffer: Arc<RingBuffer>,
-    engine: Arc<MediaEngine>,
+    context: HlsSegmenterContext,
     cancel_token: CancellationToken,
     start: HlsSegmenterStart,
     stage: (Arc<StageLifecycle>, Arc<StageMetrics>),
 ) {
+    let HlsSegmenterContext {
+        ingests,
+        stages,
+        events,
+    } = context;
     let hls_stage_key = start
         .planned_stage_key
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
@@ -81,18 +86,15 @@ async fn run_hls_fmp4_segmenter(
         backend: crate::stage_lifecycle::StageBackendKind::HlsSegmenter,
         pid: None,
     });
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageRegistered {
-            pipeline_id: pipeline_id.clone(),
-            encoding: "hls".to_string(),
-        });
+    events.emit(crate::events::EventKind::StageRegistered {
+        pipeline_id: pipeline_id.clone(),
+        encoding: "hls".to_string(),
+    });
 
     let mut reader = Reader::new(format!("hls-fmp4:{pipeline_id}"), ring_buffer.clone());
     let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     let (video_sequence_header, audio_sequence_header) =
-        resolve_hls_sequence_headers(&engine, &pipeline_id).await;
+        resolve_hls_sequence_headers(&ingests, &pipeline_id).await;
     let min_segment_ms = (store.config().min_segment_secs * 1000.0).round() as i64;
     let mut renditions = None;
 
@@ -112,7 +114,7 @@ async fn run_hls_fmp4_segmenter(
                         metrics.record_in(packet.payload.len() as u64);
                         if renditions.is_none() {
                             let Some((video, audio)) = resolve_hls_preview_metadata(
-                                &engine,
+                                &ingests,
                                 &ring_buffer,
                                 &cancel_token,
                                 &pipeline_id,
@@ -148,17 +150,13 @@ async fn run_hls_fmp4_segmenter(
         state.flush_final(&store, &pipeline_id);
     }
 
-    engine
-        .stages
+    stages
         .remove_stage_runtime_if_current(&hls_stage_key, &lifecycle)
         .await;
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id,
-            encoding: "hls".to_string(),
-        });
+    events.emit(crate::events::EventKind::StageStopped {
+        pipeline_id,
+        encoding: "hls".to_string(),
+    });
 }
 
 struct SegmentClock {
@@ -293,7 +291,7 @@ fn bind_preview_audio_tracks(
 }
 
 async fn resolve_hls_preview_metadata(
-    engine: &MediaEngine,
+    ingests: &IngestRegistry,
     ring_buffer: &Arc<RingBuffer>,
     cancel_token: &CancellationToken,
     pipeline_id: &str,
@@ -311,7 +309,7 @@ async fn resolve_hls_preview_metadata(
             let video = if let Some(video) = preview_video_meta.clone() {
                 Some(video)
             } else {
-                let ingests = engine.ingests.active.read().await;
+                let ingests = ingests.active.read().await;
                 ingests
                     .get(pipeline_id)
                     .and_then(|ingest| ingest.metadata().video)
@@ -321,7 +319,7 @@ async fn resolve_hls_preview_metadata(
             }
         }
         let result = {
-            let ingests = engine.ingests.active.read().await;
+            let ingests = ingests.active.read().await;
             ingests.get(pipeline_id).and_then(|ingest| {
                 let metadata = ingest.metadata();
                 let video = preview_video_meta.clone().or(metadata.video)?;
@@ -350,14 +348,13 @@ pub(super) const fn relative_to_hls_zero_ms(timestamp_ms: i64, zero_ms: i64) -> 
 }
 
 pub(super) async fn resolve_hls_sequence_headers(
-    engine: &MediaEngine,
+    ingests: &IngestRegistry,
     pipeline_id: &str,
 ) -> (Option<Bytes>, Option<Bytes>) {
     if let Some(input_id) = crate::preview_ids::input_id_from_hls_preview_resource_id(pipeline_id) {
-        engine.ingests.get_input_sequence_headers(input_id).await
+        ingests.get_input_sequence_headers(input_id).await
     } else {
-        engine
-            .ingests
+        ingests
             .get_sequence_headers(crate::preview_ids::preview_pipeline(pipeline_id).0)
             .await
     }

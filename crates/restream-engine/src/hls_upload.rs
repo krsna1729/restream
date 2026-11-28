@@ -1,11 +1,8 @@
 //! HTTP PUT uploader for remote HLS ingest targets, on Tokio with Reqwest.
 //!
-//! What to send and how to react is [`super::upload_policy`]; this module is
-//! the transport and the status reporting.
-//!
-//! YouTube-style endpoints pass the target object name as a `file=` query
-//! parameter. Other HLS PUT origins commonly use a playlist path and expect
-//! segments beside it. This module supports both shapes.
+//! What to send, where (both the `file=` query and the playlist-path URL
+//! shapes) and how to react is [`crate::hls::upload_policy`]; this module is
+//! the transport and the egress status reporting.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -13,14 +10,14 @@ use tracing::warn;
 
 use reqwest::{Client, Url};
 
-use super::HlsStore;
-use super::upload_policy::{
-    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest, UploadTarget,
-    backlog_dropped_message, backoff, dropped_message, phase, rejected_message,
-    status_failure_message,
-};
 use crate::engine::MediaEngine;
 use crate::engine_registries::EgressRegistration;
+use crate::hls::HlsStore;
+use crate::hls::upload_policy::{
+    Next, ResultEffect, Stopped, UploadOutcome, UploadPolicy, UploadRequest, UploadTarget,
+    backlog_dropped_message, backoff, derive_hls_upload_url, dropped_message, phase,
+    rejected_message, status_failure_message, upload_session_token,
+};
 use restream_domain::domain::stage::StageKey;
 use restream_domain::domain::state::EgressPhase;
 
@@ -84,15 +81,6 @@ pub struct HlsUploadStart {
     pub pipeline_id: String,
     pub target_url: String,
     pub terminal_stage_key: StageKey,
-}
-
-/// A segment-name prefix unique to this output attempt, also across process
-/// restarts (YouTube and Akamai require segment names never to repeat).
-pub(crate) fn upload_session_token() -> String {
-    // 64 random bits: outputs started together (or after a clock rollback)
-    // must not share names, or two playlists in one origin directory would
-    // overwrite each other's segments.
-    format!("r{:016x}", rand::random::<u64>())
 }
 
 pub async fn start_hls_put_upload(
@@ -432,52 +420,6 @@ async fn send_upload(
                 err.to_string()
             }
         })
-}
-
-pub(crate) fn derive_hls_upload_url(playlist_url: &Url, file_name: &str) -> Url {
-    let mut url = playlist_url.clone();
-    let original_pairs: Vec<(String, String)> = url
-        .query_pairs()
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-
-    if original_pairs.iter().any(|(key, _)| key == "file") {
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.clear();
-            for (key, value) in original_pairs {
-                if key == "file" {
-                    pairs.append_pair(&key, file_name);
-                } else {
-                    pairs.append_pair(&key, &value);
-                }
-            }
-        }
-        return url;
-    }
-
-    let path = url.path();
-    let new_path = if path.ends_with('/') {
-        format!("{path}{file_name}")
-    } else if path
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.contains('.'))
-    {
-        let prefix = path
-            .rsplit_once('/')
-            .map(|(prefix, _)| prefix)
-            .unwrap_or("");
-        if prefix.is_empty() {
-            format!("/{file_name}")
-        } else {
-            format!("{prefix}/{file_name}")
-        }
-    } else {
-        format!("{}/{}", path.trim_end_matches('/'), file_name)
-    };
-    url.set_path(&new_path);
-    url
 }
 
 #[cfg(test)]

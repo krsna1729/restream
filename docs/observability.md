@@ -252,7 +252,7 @@ Sender quality:
 These are sender-side signals. They do not prove a platform accepted or played
 the stream.
 
-HLS PUT failure handling (`crates/restream-engine/src/hls/upload.rs`, `upload_policy.rs`):
+HLS PUT failure handling (`crates/restream-engine/src/hls_upload.rs`, `hls/upload_policy.rs`):
 
 - Each request has a 5 s timeout.
 - 5xx, 408, 425, 429, timeouts and connection failures raise
