@@ -84,10 +84,7 @@ fn p1_p2_reader_caught_up_at_seal_time() {
         r.wait_for_data().await;
         let got2 = drain(&mut r);
         assert_eq!(got2, (10..15).collect::<Vec<_>>(), "P1: next 5 delivered");
-        assert!(
-            Arc::ptr_eq(r.current_ring(), &new),
-            "P3: reader on new ring"
-        );
+        assert!(r.is_reading(&new), "P3: reader on new ring");
     });
 }
 
@@ -137,10 +134,7 @@ fn p1_p2_reader_has_lag_at_seal_time() {
         sorted.dedup();
         assert_eq!(sorted.len(), all.len(), "P2: no duplicates");
 
-        assert!(
-            Arc::ptr_eq(r.current_ring(), &new),
-            "P3: reader on new ring"
-        );
+        assert!(r.is_reading(&new), "P3: reader on new ring");
     });
 }
 
@@ -185,10 +179,7 @@ fn p3_write_index_continuity_zero_lag() {
     // Now migrate and verify: read_idx == 50, write_idx == 51, lag == 1.
     let rt = Runtime::new().unwrap();
     rt.block_on(async { r.wait_for_data().await }); // migrates; sees write_idx 51 > 50
-    assert!(
-        Arc::ptr_eq(r.current_ring(), &new),
-        "P3: reader migrated to new ring"
-    );
+    assert!(r.is_reading(&new), "P3: reader migrated to new ring");
     assert_eq!(
         r.lag(),
         1,
@@ -228,7 +219,7 @@ fn p5_chain_migration_two_hops() {
             .collect();
 
         assert_eq!(all, (0..15).collect::<Vec<_>>(), "P5: all 15 across chain");
-        assert!(Arc::ptr_eq(r.current_ring(), &ring2), "P5: reader on ring2");
+        assert!(r.is_reading(&ring2), "P5: reader on ring2");
     });
 }
 
@@ -252,10 +243,7 @@ fn p6_isolation_between_pipelines() {
         // Reader on B should deliver packets 100..110 unaffected.
         let got = drain(&mut r_b);
         assert_eq!(got, (100..110).collect::<Vec<_>>(), "P6: ring B unaffected");
-        assert!(
-            Arc::ptr_eq(r_b.current_ring(), &ring_b),
-            "P6: reader stays on ring B"
-        );
+        assert!(r_b.is_reading(&ring_b), "P6: reader stays on ring B");
     });
 }
 

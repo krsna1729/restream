@@ -310,9 +310,7 @@ impl RingFeed {
 
     pub(crate) fn current_ring(&self) -> Arc<RingBuffer> {
         let mut ring = Arc::clone(&self.ring);
-        while let Some(next) = ring.next.load_full() {
-            ring = next;
-        }
+        RingBuffer::follow_to_current(&mut ring);
         ring
     }
 

@@ -10,7 +10,7 @@ use srt_transport::compio::Owner;
 use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 
 use super::super::ingress_admission::{AdmissionGuard, ReceiverGroupId};
-use super::super::ingress_bridge::SrtIngressHandle;
+use super::super::ingress_bridge::{IngressReceivers, SrtIngressHandle};
 use super::super::ingress_types::{IngressCommand, IngressConfig, SrtIngressEvent};
 use super::super::tokio_ingress::SrtIngestPolicyStore;
 
@@ -32,7 +32,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
         &entries,
     ));
     let stats = Arc::new(crate::snapshots::ListenerSocketStats::default());
-    let mut handle = SrtIngressHandle::start(IngressConfig {
+    let (handle, (mut events, _telemetry)) = SrtIngressHandle::start(IngressConfig {
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
@@ -67,7 +67,7 @@ async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
     while Instant::now() < deadline
         && bytes_received.load(std::sync::atomic::Ordering::Relaxed) < sent_bytes
     {
-        match tokio::time::timeout(Duration::from_millis(100), handle.events.recv()).await {
+        match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
             Ok(Some(SrtIngressEvent::Connected { logical_peer, .. })) => {
                 let command = IngressCommand::AttachPublisher {
                     logical_peer,
@@ -133,7 +133,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     // autobind, so it never joins another process's group itself. A bind that
     // still collides (a wildcard socket on `P`) fails, and the test retries.
     let mut attempts = 0;
-    let (foreign, mut handle) = loop {
+    let (foreign, handle, mut events, _telemetry) = loop {
         attempts += 1;
         let foreign = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("foreign bind");
         foreign.set_nonblocking(true).expect("foreign non-blocking");
@@ -154,7 +154,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
         })
         .await;
         match started {
-            Ok(handle) => break (foreign, handle),
+            Ok((handle, (events, telemetry))) => break (foreign, handle, events, telemetry),
             Err(error) if attempts < 5 => eprintln!("ingress start retried: {error:?}"),
             Err(error) => panic!("two ingress Owners start: {error:?}"),
         }
@@ -186,7 +186,7 @@ async fn two_owners_share_the_port_and_each_session_command_reaches_its_owner() 
     };
     let deadline = Instant::now() + Duration::from_secs(25);
     while Instant::now() < deadline && !done(&received) {
-        match tokio::time::timeout(Duration::from_millis(100), handle.events.recv()).await {
+        match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
             Ok(Some(SrtIngressEvent::Connected { logical_peer, .. })) => {
                 owners.insert(logical_peer.owner);
                 let ring = Arc::new(restream_sync::RingBuffer::new(1024));
@@ -296,14 +296,18 @@ fn test_publisher_media(
 async fn start_quality_owner(
     key: &str,
     telemetry_capacity: usize,
-) -> (SrtIngressHandle, Arc<crate::snapshots::ListenerSocketStats>) {
+) -> (
+    SrtIngressHandle,
+    IngressReceivers,
+    Arc<crate::snapshots::ListenerSocketStats>,
+) {
     let entries = vec![plain(key)];
     let store = Arc::new(SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
         &entries,
     ));
     let stats = Arc::new(crate::snapshots::ListenerSocketStats::default());
-    let handle = SrtIngressHandle::start(IngressConfig {
+    let (handle, receivers) = SrtIngressHandle::start(IngressConfig {
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: store,
         receiver_group: ReceiverGroupId::generate(),
@@ -318,7 +322,7 @@ async fn start_quality_owner(
     })
     .await
     .expect("ingress owner starts");
-    (handle, stats)
+    (handle, receivers, stats)
 }
 
 /// Spawn a publisher that stays connected for `stay`, then leaves.
@@ -346,7 +350,7 @@ fn stay_connected_publisher(
 /// again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
-    let (mut handle, _stats) = start_quality_owner("q-key", 64).await;
+    let (handle, (mut events, mut telemetry), _stats) = start_quality_owner("q-key", 64).await;
     let caller = stay_connected_publisher(
         handle.local_addr(),
         "#!::r=q-key,m=publish",
@@ -359,13 +363,13 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline && !disconnected {
         tokio::select! {
-            event = handle.events.recv() => match event {
+            event = events.recv() => match event {
                 Some(SrtIngressEvent::Connected { logical_peer, .. }) => peer = Some(logical_peer),
                 Some(SrtIngressEvent::Disconnected { .. }) => disconnected = true,
                 Some(_) => {}
                 None => break,
             },
-            Some(sample) = handle.telemetry.recv() => samples.push(sample),
+            Some(sample) = telemetry.recv() => samples.push(sample),
         }
     }
     // Events and telemetry travel on separate bridges, so a sample the Owner
@@ -373,7 +377,7 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
     // event. Collect those for a grace far shorter than the sampling interval;
     // anything observed later is a sample of a retired peer.
     let grace_end = tokio::time::Instant::now() + Duration::from_millis(200);
-    while let Ok(Some(sample)) = tokio::time::timeout_at(grace_end, handle.telemetry.recv()).await {
+    while let Ok(Some(sample)) = tokio::time::timeout_at(grace_end, telemetry.recv()).await {
         samples.push(sample);
     }
     let _ = caller.await;
@@ -400,7 +404,7 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
     // A retired peer is never sampled again.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     let mut after = 0;
-    while let Ok(sample) = handle.telemetry.try_recv() {
+    while let Ok(sample) = telemetry.try_recv() {
         if sample.observation.observed_at > samples.last().expect("sampled").observation.observed_at
         {
             after += 1;
@@ -416,7 +420,7 @@ async fn owner_stamps_receive_quality_and_stops_sampling_retired_peers() {
 /// (media delivery) is unaffected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_full_telemetry_bridge_drops_samples_and_never_delays_the_protocol() {
-    let (mut handle, stats) = start_quality_owner("t-key", 1).await;
+    let (handle, (mut events, _telemetry), stats) = start_quality_owner("t-key", 1).await;
     let caller = stay_connected_publisher(
         handle.local_addr(),
         "#!::r=t-key,m=publish",
@@ -424,7 +428,7 @@ async fn a_full_telemetry_bridge_drops_samples_and_never_delays_the_protocol() {
     );
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        match tokio::time::timeout(Duration::from_millis(200), handle.events.recv()).await {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
             Ok(Some(SrtIngressEvent::Disconnected { .. })) => break,
             Ok(Some(_)) | Err(_) => {}
             Ok(None) => break,

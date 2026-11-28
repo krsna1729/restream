@@ -101,7 +101,7 @@ impl StageInputPump {
 
     /// Return the current input codec hint without exposing the source ring.
     pub fn codec_hint(&self) -> String {
-        self.reader.current_ring().codec_hint_str().to_string()
+        self.reader.codec_hint_str().to_string()
     }
 
     /// Turn this pump into a pull-based refill: the consumer pulls the ring
@@ -145,7 +145,7 @@ impl StageInputPump {
             // parameters: if the ring clears the parameter sets (or the
             // feeder's cache becomes stale), we re-fetch from the ingest.
             if pkt.media_type == MediaType::Video && self.feeder.needs_raw_video_parameter_sets() {
-                if let Some(parameter_sets) = self.reader.current_ring().video_parameter_sets() {
+                if let Some(parameter_sets) = self.reader.video_parameter_sets() {
                     self.feeder
                         .set_raw_video_parameter_sets_if_empty(&parameter_sets);
                 } else if let Some(parameter_sets) =

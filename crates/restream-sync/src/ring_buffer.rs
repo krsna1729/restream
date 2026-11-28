@@ -121,7 +121,7 @@ pub struct RingBuffer {
     pub(crate) capacity: usize,
     created_at: Instant,
     notify: Arc<tokio::sync::Notify>,
-    pub readers: std::sync::Mutex<Vec<std::sync::Weak<ReaderInfo>>>,
+    readers: std::sync::Mutex<Vec<std::sync::Weak<ReaderInfo>>>,
     /// Current hint: 0 unknown/absent, 1 initial hint, 2 H.264, 3 HEVC.
     /// The immutable initial string preserves arbitrary producer codec names
     /// and the borrowed getter; later supported PMT changes use static names.
@@ -146,7 +146,7 @@ pub struct RingBuffer {
     /// on the old ring wake up, drain any remaining unread slots, then follow
     /// `next` to the new ring. External egress connections never disconnect —
     /// they just see a sub-millisecond hiccup as readers move to the new ring.
-    pub next: ArcSwapOption<RingBuffer>,
+    next: ArcSwapOption<RingBuffer>,
     /// Woken by the producer after each publication (see
     /// [`crate::subscribers::PublishWake`]). Created on first subscription, so
     /// a ring nobody subscribes to pays one atomic load per publication.
@@ -155,6 +155,16 @@ pub struct RingBuffer {
     /// configuration, audio tracks) changes. Created on first subscription,
     /// so a ring nobody watches pays no wake work for metadata changes.
     metadata_subscribers: std::sync::OnceLock<Arc<PublishSubscribers>>,
+}
+
+/// [`RingBuffer::reader_wait`]'s answer to a reader with nothing to read.
+pub(crate) enum ReaderWait {
+    /// Data arrived, or the stream ended: return to the caller.
+    Ready,
+    /// The ring was sealed: look again, then follow its successor.
+    Superseded,
+    /// Sleep until the armed wakeup fires.
+    Park,
 }
 
 impl RingBuffer {
@@ -277,11 +287,7 @@ impl RingBuffer {
             let unit = old_ring.slots[idx % old_ring.capacity]
                 .unit
                 .load(Ordering::Acquire);
-            self.slots[slot_idx]
-                .published_at_us
-                .store(self.elapsed_us().max(1), Ordering::Release);
-            self.slots[slot_idx].replace(packet.clone());
-            self.slots[slot_idx].unit.store(unit, Ordering::Release);
+            self.slots[slot_idx].publish(packet.clone(), self.elapsed_us().max(1), unit);
             if packet.media_type == MediaType::Video && packet.is_keyframe {
                 last_keyframe_idx = idx;
             }
@@ -319,6 +325,53 @@ impl RingBuffer {
         self.notify.notify_waiters();
         self.wake_publication_subscribers();
         self.wake_metadata_subscribers();
+    }
+
+    /// Move `ring` one step along its successor chain, to the ring that
+    /// superseded it ([`Self::seal_and_forward`]); the ring it leaves, or
+    /// `None` when `ring` is not superseded.
+    pub(crate) fn follow_successor(ring: &mut Arc<Self>) -> Option<Arc<Self>> {
+        let next = ring.next.load_full()?;
+        Some(std::mem::replace(ring, next))
+    }
+
+    /// Move `ring` to the end of its successor chain: the ring its producer
+    /// publishes into now.
+    pub fn follow_to_current(ring: &mut Arc<Self>) {
+        while Self::follow_successor(ring).is_some() {}
+    }
+
+    /// What a reader at `read_idx` that found nothing to read and then
+    /// armed its wakeup does next: re-checked after arming, so a
+    /// publication, seal or end of stream in between is not missed.
+    pub(crate) fn reader_wait(&self, read_idx: usize) -> ReaderWait {
+        if self.get_write_idx() > read_idx {
+            ReaderWait::Ready
+        } else if self.next.load().is_some() {
+            ReaderWait::Superseded
+        } else if self.is_end_of_stream() {
+            ReaderWait::Ready
+        } else {
+            ReaderWait::Park
+        }
+    }
+
+    /// Count `info`'s reader in this ring's fill and reader snapshots.
+    pub(crate) fn register_reader(&self, info: &Arc<ReaderInfo>) {
+        lock(&self.readers).push(Arc::downgrade(info));
+    }
+
+    /// Stop counting `info`'s reader, forgetting readers already dropped.
+    pub(crate) fn deregister_reader(&self, info: &Arc<ReaderInfo>) {
+        lock(&self.readers).retain(|weak| match weak.upgrade() {
+            Some(other) => !Arc::ptr_eq(&other, info),
+            None => false,
+        });
+    }
+
+    /// Forget readers already dropped.
+    pub(crate) fn prune_readers(&self) {
+        lock(&self.readers).retain(|weak| weak.upgrade().is_some());
     }
 
     pub fn mark_end_of_stream(&self) {
@@ -550,11 +603,7 @@ impl RingBuffer {
         let payload_bytes = packet.payload.len() as u64;
         let unit = self.next_frame_unit(&packet, idx);
         self.begin_write(idx + 1);
-        self.slots[slot_idx]
-            .published_at_us
-            .store(self.elapsed_us().max(1), Ordering::Release);
-        self.slots[slot_idx].unit.store(unit, Ordering::Release);
-        self.slots[slot_idx].replace(Arc::new(packet));
+        self.slots[slot_idx].publish(Arc::new(packet), self.elapsed_us().max(1), unit);
 
         if is_keyframe {
             self.last_keyframe_idx.val.store(idx, Ordering::Release);
@@ -592,11 +641,7 @@ impl RingBuffer {
             if published_at_us == 0 {
                 published_at_us = self.elapsed_us().max(1);
             }
-            self.slots[slot_idx]
-                .published_at_us
-                .store(published_at_us, Ordering::Release);
-            self.slots[slot_idx].unit.store(unit, Ordering::Release);
-            self.slots[slot_idx].replace(Arc::new(packet));
+            self.slots[slot_idx].publish(Arc::new(packet), published_at_us, unit);
             if is_keyframe {
                 self.last_keyframe_idx.val.store(idx, Ordering::Release);
             }

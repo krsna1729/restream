@@ -11,7 +11,7 @@ use restream_domain::domain::srt_ingest::SrtGlobalIngestConfig;
 // LogicalPeerId is deliberately opaque. Mint one through a real native
 // handshake rather than forging an ID or exposing protocol internals.
 async fn native_peer() -> IngressPeer {
-    let mut handle = SrtIngressHandle::start(IngressConfig {
+    let (handle, (mut events, _telemetry)) = SrtIngressHandle::start(IngressConfig {
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         policy_store: Arc::new(SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
@@ -37,7 +37,7 @@ async fn native_peer() -> IngressPeer {
             |ctx| ctx.connected(),
         )
     });
-    let event = tokio::time::timeout(Duration::from_secs(5), handle.events.recv())
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
         .unwrap();
     let Some(SrtIngressEvent::Connected { logical_peer, .. }) = event else {
@@ -52,10 +52,11 @@ async fn native_peer() -> IngressPeer {
 async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
     let peer = native_peer().await;
     let other = IngressPeer { owner: 1, ..peer };
-    let (handle, mut receivers, events) = SrtIngressHandle::test_channels(2);
+    let (handle, mut receivers, events, event_rx) = SrtIngressHandle::test_channels(2);
     let owner_a = receivers.remove(0);
     let mut ingress = Ingress {
         handle,
+        events: event_rx,
         pending_command: None,
     };
     let ring = Arc::new(RingBuffer::new(16));
@@ -90,7 +91,7 @@ async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
     );
     for _ in 0..1024 {
         let mut next = Box::pin(Ingress::next_event(
-            &mut ingress.handle.events,
+            &mut ingress.events,
             &ingress.pending_command,
         ));
         assert!(
@@ -128,7 +129,7 @@ async fn control_backpressure_bounds_replies_and_preserves_handoff_order() {
     assert_eq!(applied, identity);
     assert!(Arc::ptr_eq(&applied_ring, &ring));
     assert!(
-        matches!(Ingress::next_event(&mut ingress.handle.events, &ingress.pending_command).await,
+        matches!(Ingress::next_event(&mut ingress.events, &ingress.pending_command).await,
         Some(SrtIngressEvent::Probe { logical_peer, .. }) if logical_peer == other)
     );
 
@@ -210,9 +211,10 @@ async fn a_probe_then_a_disconnect_answer_then_finish_in_order() {
         attempt_id: session.lease.registration().attempt_id,
         revision: 1,
     };
-    let (handle, receivers, _events) = SrtIngressHandle::test_channels(1);
+    let (handle, receivers, _events, events) = SrtIngressHandle::test_channels(1);
     let mut ingress = Ingress {
         handle,
+        events,
         pending_command: None,
     };
     let mut sessions = HashMap::new();

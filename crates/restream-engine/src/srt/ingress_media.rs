@@ -99,9 +99,9 @@ impl SrtPublisherMedia {
 
 /// One direct SRT read/play session (debug path), owned by the Owner thread.
 pub(crate) struct SrtReaderMedia {
-    pub(super) muxer: TsChunkReader,
-    pub(super) packets: Vec<Arc<MediaPacket>>,
-    pub(super) pending: VecDeque<Bytes>,
+    muxer: TsChunkReader,
+    packets: Vec<Arc<MediaPacket>>,
+    pending: VecDeque<Bytes>,
     /// The player's lease on the shared muxer; it stops when the last ends.
     _muxer_lease: crate::stage_registry::StageLease,
 }
@@ -119,8 +119,16 @@ impl SrtReaderMedia {
         }
     }
 
+    /// Append up to `max` of the next SRT-sized fragments to `out`, in
+    /// order, refilled from the next burst when none are waiting.
+    fn take_fragments(&mut self, out: &mut Vec<Bytes>, max: usize) {
+        self.refill();
+        let count = self.pending.len().min(max);
+        out.extend(self.pending.drain(..count));
+    }
+
     /// Fill `pending` with the next burst's SRT-sized fragments when empty.
-    pub(super) fn refill(&mut self) {
+    fn refill(&mut self) {
         if !self.pending.is_empty() {
             return;
         }
@@ -182,7 +190,7 @@ pub(crate) struct IngressMedia<K = LogicalPeerId> {
     unattached: HashMap<K, Unattached>,
     unattached_bytes: usize,
     held_bytes: usize,
-    pub(super) readers: HashMap<K, SrtReaderMedia>,
+    readers: HashMap<K, SrtReaderMedia>,
 }
 
 impl<K> Default for IngressMedia<K> {
@@ -348,9 +356,7 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
     fn release_held(slot: &mut PublisherSlot, held_total: &mut usize) {
         // A superseded revision may already have sealed the source ring.
         // Overflow and detach must also flush into its current successor.
-        while let Some(next) = slot.media.ring_buffer.next.load_full() {
-            slot.media.ring_buffer = next;
-        }
+        RingBuffer::follow_to_current(&mut slot.media.ring_buffer);
         slot.probe_pending = false;
         while let Some(mut group) = slot.held.pop_front() {
             slot.media.forward(&mut group, true);
@@ -445,6 +451,19 @@ impl<K: std::hash::Hash + Eq + Copy> IngressMedia<K> {
     pub(crate) fn attach_reader(&mut self, peer: K, reader: SrtReaderMedia) {
         self.forget_unattached(peer);
         self.readers.insert(peer, reader);
+    }
+
+    /// Every session with an attached reader, for one drive pass.
+    pub(super) fn reader_sessions(&self) -> Vec<K> {
+        self.readers.keys().copied().collect()
+    }
+
+    /// Append up to `max` of `session`'s next read/play fragments to `out`
+    /// ([`SrtReaderMedia::take_fragments`]); nothing when it has no reader.
+    pub(super) fn take_reader_fragments(&mut self, session: K, out: &mut Vec<Bytes>, max: usize) {
+        if let Some(reader) = self.readers.get_mut(&session) {
+            reader.take_fragments(out, max);
+        }
     }
 
     /// The identity of the probe last returned for `peer`: the one in

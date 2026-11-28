@@ -291,11 +291,7 @@ impl HlsSegmenter {
             audio_tracks,
             PacketFeedConfig {
                 video_sequence_header: self.video_sequence_header.as_ref().map(|v| v.to_vec()),
-                raw_video_parameter_sets: self
-                    .reader
-                    .current_ring()
-                    .video_parameter_sets()
-                    .map(|v| v.to_vec()),
+                raw_video_parameter_sets: self.reader.video_parameter_sets().map(|v| v.to_vec()),
                 ..PacketFeedConfig::default()
             },
         ));

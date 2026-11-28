@@ -96,7 +96,7 @@ const READER_POLL: Duration = Duration::from_millis(5);
 
 /// Fragments one reader may send per visit, so one busy reader cannot
 /// monopolize the Owner.
-const READER_SENDS_PER_VISIT: usize = 32;
+pub(super) const READER_SENDS_PER_VISIT: usize = 32;
 
 /// Lifecycle events waiting for Tokio. Media no longer waits on this bridge;
 /// only past this many undelivered lifecycle events does the Owner stop

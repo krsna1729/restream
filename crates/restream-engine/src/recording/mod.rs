@@ -461,10 +461,7 @@ async fn drain_ready_bursts(
                     tracks,
                     PacketFeedConfig {
                         video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-                        raw_video_parameter_sets: reader
-                            .current_ring()
-                            .video_parameter_sets()
-                            .map(|v| v.to_vec()),
+                        raw_video_parameter_sets: reader.video_parameter_sets().map(|v| v.to_vec()),
                         service_metadata: Some(service_metadata.clone()),
                     },
                 ));

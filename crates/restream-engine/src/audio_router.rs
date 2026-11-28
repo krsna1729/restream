@@ -90,15 +90,15 @@ pub(crate) async fn start_audio_router(
                 for (index, packet) in packets.drain(..).enumerate() {
                     stage_metrics.record_in(packet.payload.len() as u64);
                     if packet.media_type == MediaType::Video {
-                        video_config.follow(
-                            reader.current_ring(),
+                        reader.follow_video_config(
+                            &mut video_config,
                             first_sequence + index,
                             &output_buffer,
                             &mut out_batch,
                         );
                     }
                     if output_buffer.audio_tracks().is_none()
-                        && let Some(input_tracks) = reader.current_ring().audio_tracks()
+                        && let Some(input_tracks) = reader.audio_tracks()
                     {
                         output_buffer
                             .set_audio_tracks(apply_audio_routing(&routing, &input_tracks));

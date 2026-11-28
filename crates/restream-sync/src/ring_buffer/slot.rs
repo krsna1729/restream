@@ -12,7 +12,7 @@
 //! The producer overwrites the oldest slot, so it meets a reader on a slot
 //! only when that reader is nearly a full lap behind.
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use restream_core::MediaPacket;
@@ -36,10 +36,16 @@ impl RingSlot {
         }
     }
 
-    /// Store `packet`. The lock covers only the pointer swap: the packet it
-    /// replaces drops after the lock is released.
+    /// Publish `packet` in this slot: its publication time and its packed
+    /// frame unit (Release), then the packet, so a reader that gets the
+    /// packet also sees the unit word tagging its sequence
+    /// (`sequence_reads`). The lock covers only the pointer swap: the packet
+    /// it replaces drops after the lock is released.
     #[inline]
-    pub(super) fn replace(&self, packet: Arc<MediaPacket>) {
+    pub(super) fn publish(&self, packet: Arc<MediaPacket>, published_at_us: u64, unit: u64) {
+        self.published_at_us
+            .store(published_at_us, Ordering::Release);
+        self.unit.store(unit, Ordering::Release);
         let replaced = lock(&self.data).replace(packet);
         drop(replaced);
     }

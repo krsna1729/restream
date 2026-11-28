@@ -59,6 +59,8 @@ const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(100);
 /// Housekeeping/telemetry remain responsive on the existing listener select.
 struct Ingress {
     handle: SrtIngressHandle,
+    /// The Owners' lifecycle events, received only while no command waits.
+    events: tokio::sync::mpsc::Receiver<SrtIngressEvent>,
     pending_command: Option<IngressCommand>,
 }
 
@@ -180,6 +182,8 @@ struct SrtLoop {
     admissions: Admissions,
     peers: PeerWork,
     answers: tokio::sync::mpsc::UnboundedReceiver<ProbeAnswer>,
+    /// The Owners' lossy receive-quality samples.
+    telemetry: tokio::sync::mpsc::Receiver<QualitySample>,
 }
 
 /// How one listener turn ended.
@@ -221,7 +225,7 @@ impl SrtServer {
             failures: auth_failures,
             stats: self.engine.listener_stats_handle(),
         };
-        let handle = match SrtIngressHandle::start(IngressConfig {
+        let (handle, (events, telemetry)) = match SrtIngressHandle::start(IngressConfig {
             bind,
             policy_store: self.ingest_policy_store.clone(),
             receiver_group: ReceiverGroupId::generate(),
@@ -236,7 +240,7 @@ impl SrtServer {
         })
         .await
         {
-            Ok(handle) => handle,
+            Ok(started) => started,
             Err(error) => {
                 log_start_error(port, error);
                 return;
@@ -246,6 +250,7 @@ impl SrtServer {
         let mut state = SrtLoop {
             ingress: Ingress {
                 handle,
+                events,
                 pending_command: None,
             },
             sessions: HashMap::new(),
@@ -253,6 +258,7 @@ impl SrtServer {
             admissions: Admissions::new(self.engine.config.srt_max_peers_per_ip),
             peers,
             answers,
+            telemetry,
         };
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -311,10 +317,10 @@ impl SrtServer {
         housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let turn = tokio::select! {
-                event = Ingress::next_event(&mut state.ingress.handle.events, &state.ingress.pending_command) =>
+                event = Ingress::next_event(&mut state.ingress.events, &state.ingress.pending_command) =>
                     self.on_loop_event(state, event),
-                Some(resolved) = state.calls.resolved.recv(), if state.ingress.pending_command.is_none() => {
-                    if let Some(command) = state.calls.resolved(resolved, std::time::Instant::now()) {
+                command = state.calls.next_resolved(), if state.ingress.pending_command.is_none() => {
+                    if let Some(command) = command {
                         // The slot is free (the guard above), so this is accepted.
                         let _ = state.ingress.command(command);
                     }
@@ -335,7 +341,7 @@ impl SrtServer {
                     self.on_auth_failure(failure);
                     SrtTurn::Continue
                 }
-                sample = state.ingress.handle.telemetry.recv() => {
+                sample = state.telemetry.recv() => {
                     if let Some(sample) = sample {
                         fold_telemetry(&mut state.sessions, sample);
                     }

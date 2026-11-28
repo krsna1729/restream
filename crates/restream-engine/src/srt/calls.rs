@@ -74,7 +74,7 @@ pub(super) struct CallSupervisor<P = IngressPeer> {
     by_token: HashMap<CallToken, String>,
     by_peer: HashMap<P, String>,
     resolved_tx: tokio::sync::mpsc::UnboundedSender<Resolved>,
-    pub(super) resolved: tokio::sync::mpsc::UnboundedReceiver<Resolved>,
+    resolved: tokio::sync::mpsc::UnboundedReceiver<Resolved>,
 }
 
 impl<P: Copy + Eq + Hash> CallSupervisor<P> {
@@ -155,6 +155,15 @@ impl<P: Copy + Eq + Hash> CallSupervisor<P> {
                 let _ = tx.send((token, resolve(hosts).await));
             });
         }
+    }
+
+    /// Wait for the next finished resolution and apply it
+    /// ([`Self::resolved`]): the Owner command to dial, if any. Cancel-safe:
+    /// the receive is its only await. The supervisor holds a sender, so the
+    /// channel never closes.
+    pub(super) async fn next_resolved(&mut self) -> Option<IngressCommand> {
+        let resolved = self.resolved.recv().await?;
+        self.resolved(resolved, Instant::now())
     }
 
     /// A resolution finished: the Owner command to dial, or `None` after
