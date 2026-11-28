@@ -296,11 +296,13 @@ where
         key: LeafKey,
         common: &LeafCommon,
     ) -> Result<RtmpFabricEngine, ()> {
-        match RtmpFabricEngine::new_client(parts, self.chunk_size, publish_startup) {
-            Ok(mut engine) => {
-                engine.share_payload_cache(self.payload_cache.clone());
-                Ok(engine)
-            }
+        match RtmpFabricEngine::new_client(
+            parts,
+            self.chunk_size,
+            publish_startup,
+            self.payload_cache.clone(),
+        ) {
+            Ok(engine) => Ok(engine),
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
                 self.abandon_connect(fd, key, common)

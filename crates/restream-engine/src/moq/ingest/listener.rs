@@ -83,6 +83,7 @@ impl Drop for CapSlot {
 /// failed start.
 pub struct MoqListener {
     config: MoqIngestConfig,
+    engine: Arc<MediaEngine>,
     server: Arc<MoqIngestServer>,
     shutdown: CancellationToken,
 }
@@ -110,20 +111,29 @@ impl MoqListener {
             }
             MoqIngestSetting::On(config) => config.clone(),
         };
-        Some(Self::configured(
-            config,
-            Arc::new(MoqIngestServer::new(pipeline_access, engine, security)),
-        ))
+        let server = Arc::new(MoqIngestServer::new(
+            pipeline_access,
+            engine.clone(),
+            security,
+        ));
+        Some(Self::configured(config, engine, server))
     }
 
-    fn configured(config: MoqIngestConfig, server: Arc<MoqIngestServer>) -> Arc<Self> {
+    /// `server` serves sessions for `engine`, which also stops and joins
+    /// the listener thread with its other listeners.
+    fn configured(
+        config: MoqIngestConfig,
+        engine: Arc<MediaEngine>,
+        server: Arc<MoqIngestServer>,
+    ) -> Arc<Self> {
         let shutdown = CancellationToken::new();
-        server.engine().register_listener_shutdown({
+        engine.register_listener_shutdown({
             let shutdown = shutdown.clone();
             move || shutdown.cancel()
         });
         Arc::new(Self {
             config,
+            engine,
             server,
             shutdown,
         })
@@ -168,7 +178,6 @@ impl MoqListener {
     async fn start(&self) -> Result<(SocketAddr, tokio::sync::oneshot::Receiver<()>), String> {
         let config = &self.config;
         let server = self.server.clone();
-        let engine = server.engine().clone();
         let tokio = tokio::runtime::Handle::current();
         let shutdown = self.shutdown.clone();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -177,22 +186,24 @@ impl MoqListener {
             .name("moq-ingest".to_string())
             .spawn({
                 let config = config.clone();
+                let engine = self.engine.clone();
                 move || {
                     let _ended = ended_tx;
-                    run_thread(&config, server, tokio, shutdown, ready_tx);
+                    run_thread(&config, engine, server, tokio, shutdown, ready_tx);
                 }
             })
             .map_err(|error| format!("spawn the MoQ listener thread: {error}"))?;
         let local = ready_rx
             .await
             .unwrap_or_else(|_| Err("the MoQ listener thread exited before binding".to_string()))?;
-        engine.register_os_thread(thread);
+        self.engine.register_os_thread(thread);
         Ok((local, ended_rx))
     }
 }
 
 fn run_thread(
     config: &MoqIngestConfig,
+    engine: Arc<MediaEngine>,
     server: Arc<MoqIngestServer>,
     tokio: tokio::runtime::Handle,
     shutdown: CancellationToken,
@@ -211,7 +222,7 @@ fn run_thread(
     // listener. compio's `block_on` clears its executor before re-raising,
     // so no task is polled during this unwind.
     let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        serve(config, server, tokio, shutdown, ready, runtime);
+        serve(config, engine, server, tokio, shutdown, ready, runtime);
     }));
     if let Err(payload) = served {
         let panic = crate::panic_boundary::record_contained(payload.as_ref());
@@ -226,6 +237,7 @@ fn run_thread(
 
 fn serve(
     config: &MoqIngestConfig,
+    engine: Arc<MediaEngine>,
     server: Arc<MoqIngestServer>,
     tokio: tokio::runtime::Handle,
     shutdown: CancellationToken,
@@ -247,7 +259,6 @@ fn serve(
                 return;
             }
         };
-        let engine = server.engine().clone();
         let listener = Rc::new(Listener {
             lifecycle: TokioLifecycle::new(tokio.clone(), server),
             origin: Origin::new(engine, config.origin_max_viewers),

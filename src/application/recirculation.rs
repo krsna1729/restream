@@ -232,8 +232,9 @@ mod tests {
             .unwrap();
         }
         let db = DeadlineDb::api(pool);
-        let pipelines = PipelineService::new(db.clone(), CatalogAuth::new(db.clone()));
-        let pipeline_inputs = PipelineInputService::new(db.clone(), pipelines);
+        let catalog_auth = CatalogAuth::new(db.clone());
+        let pipelines = PipelineService::new(db.clone(), catalog_auth.clone());
+        let pipeline_inputs = PipelineInputService::new(db.clone(), pipelines, catalog_auth);
         RecirculationService::with_services(db, pipeline_inputs)
     }
 

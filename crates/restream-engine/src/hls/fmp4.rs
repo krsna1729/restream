@@ -179,8 +179,12 @@ mod tests {
     #[test]
     fn primary_playlist_points_at_fmp4_segments() {
         let store = test_store();
-        store.put_video_init_segment(Bytes::from_static(b"init"));
-        store.push_video_segment(0, 2.25, Bytes::from_static(b"segment-zero"));
+        store.publish_video_segment(
+            0,
+            2.25,
+            Bytes::from_static(b"init"),
+            Bytes::from_static(b"segment-zero"),
+        );
         store.push_video_segment(1, 3.5, Bytes::from_static(b"segment-one"));
 
         let playlist = store.get_primary_playlist().expect("playlist");
@@ -196,8 +200,12 @@ mod tests {
             max_segments: 1,
             ..HlsConfig::default()
         });
-        store.put_video_init_segment(Bytes::from_static(b"init"));
-        store.push_video_segment(0, 3.5, Bytes::from_static(b"long"));
+        store.publish_video_segment(
+            0,
+            3.5,
+            Bytes::from_static(b"init"),
+            Bytes::from_static(b"long"),
+        );
         store.push_video_segment(1, 1.0, Bytes::from_static(b"short"));
 
         let playlist = store.get_primary_playlist().expect("playlist");
@@ -223,8 +231,13 @@ mod tests {
                 profile: None,
             }],
         );
-        store.put_audio_init_segment(15, Bytes::from_static(b"init-audio"));
-        store.push_audio_segment(15, 7, 2.0, Bytes::from_static(b"audio-segment"));
+        store.publish_audio_segment(
+            15,
+            7,
+            2.0,
+            Bytes::from_static(b"init-audio"),
+            Bytes::from_static(b"audio-segment"),
+        );
 
         let playlist = store.get_audio_playlist(15).expect("audio playlist");
         assert!(playlist.contains("#EXT-X-MAP:URI=\"init.mp4\""));
@@ -275,8 +288,6 @@ mod tests {
             max_segments: 3,
             ..HlsConfig::default()
         });
-        store.put_video_init_segment(Bytes::from_static(b"init"));
-
         for index in 0..9u64 {
             store.push_video_segment(index, 1.0, Bytes::from(index.to_string()));
         }
@@ -645,8 +656,6 @@ mod tests {
                 max_segments,
                 ..HlsConfig::default()
             });
-            store.put_video_init_segment(Bytes::from_static(b"init"));
-
             for (index, duration) in durations.iter().copied().enumerate() {
                 store.push_video_segment(index as u64, duration as f64, Bytes::from(index.to_string()));
             }

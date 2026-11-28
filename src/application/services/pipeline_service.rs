@@ -25,11 +25,6 @@ impl PipelineService {
         Self { db, catalog_auth }
     }
 
-    /// The admission index every catalog write commits through.
-    pub(crate) fn catalog_auth(&self) -> &Arc<CatalogAuth> {
-        &self.catalog_auth
-    }
-
     /// Builds the shared not-found error shape used when callers reference a
     /// pipeline ID that no longer exists in the catalog.
     fn pipeline_not_found(id: &str) -> ServiceError {

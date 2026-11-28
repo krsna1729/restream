@@ -218,7 +218,7 @@ struct Outbox {
 
 impl Outbox {
     fn push(&mut self, release: Release) {
-        self.bytes += release.payload.bytes.len();
+        self.bytes += release.payload.len();
         self.media = self.media.saturating_add(release.media());
         self.releases.push_back(release);
     }
@@ -227,7 +227,7 @@ impl Outbox {
     fn pop_front(&mut self) {
         self.offset = 0;
         if let Some(release) = self.releases.pop_front() {
-            self.bytes -= release.payload.bytes.len();
+            self.bytes -= release.payload.len();
             self.media = self.media.saturating_sub(release.media());
         }
     }
