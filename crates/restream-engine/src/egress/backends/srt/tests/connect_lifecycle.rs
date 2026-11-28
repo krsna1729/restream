@@ -391,7 +391,7 @@ fn connecting_leaf_holds_no_feed_data_and_is_not_backpressured() {
     assert!(
         harness.feed_until(&unit, Duration::from_secs(5), |backend| backend
             .blocked
-            .contains(&key)),
+            .contains(key)),
         "a connecting caller parks"
     );
     for _ in 0..8 {

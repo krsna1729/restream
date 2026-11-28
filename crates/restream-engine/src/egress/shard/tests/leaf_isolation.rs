@@ -43,7 +43,7 @@ fn blocked_leaf_does_not_starve_ready_leaf_on_same_shard_thread() {
 
 /// A panic in one output's engine fails that output only: the shard thread
 /// keeps running and the other output on it keeps being served. Before the
-/// containment in `visit_leaf`, the panic unwound the shard thread, which
+/// containment in `LeafCommon::advance`, the panic unwound the shard thread, which
 /// stopped every output on it (`snapshot.panicked`).
 #[test]
 fn panicking_leaf_fails_alone_and_its_shard_keeps_serving_the_others() {

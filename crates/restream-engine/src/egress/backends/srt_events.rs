@@ -87,7 +87,7 @@ impl SrtShardBackend {
                 if let Some(key) = self.callers.get(&SrtCaller { family, id }).copied()
                     && let Some(leaf) = self.leaves.get_mut(key)
                 {
-                    leaf.tx_failures = leaf.tx_failures.saturating_add(1);
+                    leaf.record_tx_failure();
                 }
             }
             SrtOwnerEvent::OutputFailure {
@@ -155,7 +155,7 @@ impl SrtShardBackend {
         let Some(leaf) = self.leaves.get(key) else {
             return;
         };
-        leaf.common.progress_sink.mark_terminated_unexpectedly();
+        leaf.mark_terminated_unexpectedly();
         let output_id = leaf.common.output_id.clone();
         tracing::warn!(
             output_id = %output_id,
@@ -185,7 +185,7 @@ impl SrtShardBackend {
             .collect();
         for key in doomed {
             if let Some(leaf) = self.leaves.get(key) {
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
+                leaf.mark_terminated_unexpectedly();
                 let output_id = leaf.common.output_id.clone();
                 self.output_sockets.remove(&output_id);
             }

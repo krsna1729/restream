@@ -283,7 +283,7 @@ impl TlsTcpConnection {
         counters.record(TlsEvent::Connection);
         counters.record(TlsEvent::KtlsRequested);
         let stream: CompioTcpStream = stream.into();
-        stream.set_ancillary_mode();
+        stream.start_ancillary_receive();
         Ok(Self {
             state: ConnectionState::Tls(Some(Box::new(StreamOwned::new(connection, stream)))),
             tls_version_recorded: false,
@@ -474,7 +474,7 @@ impl TlsTcpConnection {
             counters.record(TlsEvent::KtlsError);
             return Err(error);
         }
-        socket.set_ktls_mode();
+        socket.enter_ktls();
         self.state = ConnectionState::Ktls(KtlsConnection {
             stream: socket,
             version,

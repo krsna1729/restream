@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use super::backend::EngineProgress;
 use super::leaf_arena::LeafKey;
 
 // ---------------------------------------------------------------------------
@@ -24,16 +25,12 @@ pub struct ScheduleState {
     /// `true` iff the most recent `EngineProgress`'s `WaitCondition` was
     /// `Feed` or `FeedOrIo` — i.e. a feed wake should directly re-enqueue
     /// this leaf. Set unconditionally from every visit outcome in
-    /// `apply_progress_to_common` (`visit.rs`); `false` for outcomes that
+    /// [`record_visit`](Self::record_visit); `false` for outcomes that
     /// don't carry a wait condition at all (`HandshakeComplete`,
     /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`). Advisory: a stale
-    /// value can never double-queue a leaf, because the ready queue
-    /// refuses a key it holds.
+    /// value can never double-queue a leaf, because the shard's queues
+    /// refuse a key they hold.
     pub wants_feed_wake: bool,
-    /// Whether this leaf currently has one entry in the shard's feed-waiting
-    /// queue; it prevents repeated readiness visits from growing the parked
-    /// queue without bound before the next feed wake.
-    pub feed_wake_queued: bool,
 }
 
 impl ScheduleState {
@@ -42,13 +39,32 @@ impl ScheduleState {
             deficit_bytes: 0,
             last_service_at: None,
             wants_feed_wake: false,
-            feed_wake_queued: false,
         }
     }
 
     pub fn mark_serviced(&mut self) {
         self.last_service_at = Some(Instant::now());
         self.deficit_bytes = 0;
+    }
+
+    /// Fold one visit outcome in: whether a feed wake should re-enqueue the
+    /// leaf, and, for an outcome that serviced it (progress, a wait, or a
+    /// finished handshake), the service stamp.
+    pub fn record_visit(&mut self, progress: &EngineProgress) {
+        let (wants_feed, serviced) = match progress {
+            EngineProgress::Progress { wait, .. } | EngineProgress::Needs(wait) => {
+                (wait.wants_feed(), true)
+            }
+            EngineProgress::HandshakeComplete => (false, true),
+            EngineProgress::FeedOverrun
+            | EngineProgress::PeerClosed
+            | EngineProgress::Failed(_)
+            | EngineProgress::Yield => (false, false),
+        };
+        self.wants_feed_wake = wants_feed;
+        if serviced {
+            self.mark_serviced();
+        }
     }
 }
 

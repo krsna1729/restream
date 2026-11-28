@@ -26,17 +26,13 @@ impl SrtShardBackend {
         let Some(leaf) = self.leaves.get_mut(key) else {
             return;
         };
-        let backlog = self
-            .owners
-            .stats(&leaf.caller)
-            .and_then(|stats| send_backlog(&stats));
+        let backlog = leaf.send_backlog(&self.owners);
         if !leaf.pressure(backlog).is_backpressured() {
             self.output_sockets.remove(output_id);
             self.remove_leaf(key, reason);
             return;
         }
-        leaf.draining_since = Some(Instant::now());
-        leaf.draining_reason = Some(reason);
+        leaf.begin_drain(reason);
         // A draining leaf must be visited to flush.
         if !self.ready.contains(key) {
             self.enqueue_ready_candidate(key);
@@ -75,12 +71,8 @@ impl SrtShardBackend {
             let owners = &self.owners;
             let Some((output_id, close, pressured, delivery)) =
                 self.leaves.get_mut(key).map(|leaf| {
-                    let lag_units = if leaf.common().cursor_primed && leaf.connected {
-                        head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
-                    } else {
-                        0
-                    };
-                    let stats = owners.stats(&leaf.caller);
+                    let lag_units = leaf.feed_lag(head_sequence);
+                    let stats = leaf.stats(owners);
                     let backlog = stats.as_ref().and_then(send_backlog);
                     let quality = stats
                         .as_ref()
@@ -99,16 +91,8 @@ impl SrtShardBackend {
                         LeafStallClass::Stalled if shard_saturated => Some("shard_saturated"),
                         LeafStallClass::Stalled => Some("stalled"),
                     };
-                    leaf.common()
-                        .progress_sink
-                        .record_backpressure_state(lag_units, reason);
-                    if let Some(quality) = quality {
-                        leaf.common().progress_sink.record_quality(quality);
-                    }
-                    let draining = leaf.draining_since.is_some_and(|since| {
-                        !leaf.pressure(backlog).is_backpressured()
-                            || now.saturating_duration_since(since) >= drain_timeout
-                    });
+                    leaf.publish_health(lag_units, reason, quality);
+                    let draining = leaf.drain_finished(backlog, now, drain_timeout).is_some();
                     (
                         leaf.common().output_id.clone(),
                         draining || matches!(reason, Some("stalled")),
@@ -128,20 +112,8 @@ impl SrtShardBackend {
             let Some(key) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
-            // A leaf already draining for a requested close (Remove, drain,
-            // shutdown) is expiring its drain window, not failing: only an
-            // undrained leaf that stalled is an unexpected termination.
-            if let Some(leaf) = self.leaves.get(key)
-                && leaf.draining_since.is_none()
-            {
-                tracing::warn!(
-                    output_id = %output_id,
-                    tx_failures = leaf.tx_failures,
-                    blocked = leaf.blocked_queued,
-                    lag = head_sequence.saturating_sub(leaf.common().cursor.next_sequence),
-                    "srt egress leaf closed unexpectedly: no progress (stalled)"
-                );
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
+            if let Some(leaf) = self.leaves.get(key) {
+                leaf.report_stall_close(&output_id, head_sequence, self.blocked.contains(key));
             }
             self.remove_leaf(key, crate::egress::backend::CloseReason::NoProgress);
         }
@@ -154,12 +126,12 @@ impl SrtShardBackend {
     /// publishes more media. The queue is populated at visit time, so a feed
     /// wake does not scan every output on the shard.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
-        while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                continue;
-            };
-            leaf.common.schedule.feed_wake_queued = false;
-            if !leaf.common.schedule.wants_feed_wake || self.ready.contains(key) {
+        while let Some(key) = self.feed_waiting.pop() {
+            let wants_feed = self
+                .leaves
+                .get(key)
+                .is_some_and(|leaf| leaf.common.schedule.wants_feed_wake);
+            if !wants_feed || self.ready.contains(key) {
                 continue;
             }
             self.enqueue_ready_candidate(key);

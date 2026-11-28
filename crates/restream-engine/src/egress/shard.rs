@@ -847,15 +847,14 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         });
         self.backend.observe_metrics(&mut self.metrics);
         let collected_at = Instant::now();
-        self.metrics.collected_at = Some(collected_at);
-        if self
+        let sample_cpu = self
             .last_cpu_sample
-            .is_none_or(|at| collected_at.saturating_duration_since(at) >= Duration::from_secs(1))
-        {
-            self.metrics.thread_cpu_ns = thread_cpu_ns();
-            self.metrics.thread_cpu_at = (self.metrics.thread_cpu_ns > 0).then_some(collected_at);
+            .is_none_or(|at| collected_at.saturating_duration_since(at) >= Duration::from_secs(1));
+        if sample_cpu {
             self.last_cpu_sample = Some(collected_at);
         }
+        self.metrics
+            .mark_collected(collected_at, sample_cpu.then(thread_cpu_ns));
 
         let mut snapshot = restream_sync::lock::lock(&self.snapshot);
         snapshot.loop_iterations = self.metrics.loop_iterations;
@@ -863,7 +862,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         snapshot.timers_processed = self.metrics.timers_processed;
         snapshot.pending_timers = self.timers.len();
         snapshot.media_ticks = self.metrics.media_ticks;
-        snapshot.last_progress_at = self.metrics.collected_at;
+        snapshot.last_progress_at = Some(collected_at);
         snapshot.metrics = self.metrics.clone();
     }
 }

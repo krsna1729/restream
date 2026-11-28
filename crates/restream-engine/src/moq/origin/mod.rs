@@ -54,7 +54,7 @@ use super::egress::publish_startup;
 use crate::egress::backends::moq::MoqPublishStartup;
 use crate::egress::backends::moq::media::MediaConverter;
 use crate::egress::backends::moq::publish::{HangBroadcast, Pump, RingPublisher};
-use crate::egress::visit::live_start_cursor;
+use crate::egress::feed::live_start_cursor;
 use crate::moq_transport::{self as transport, Accepted};
 use restream_moq::media::VideoCodec;
 

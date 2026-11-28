@@ -686,7 +686,7 @@ fn a_resync_without_a_retained_keyframe_suppresses_interframes() {
     for tag in 0..10 {
         ring.push(tagged(MediaType::Video, tag, tag == 0));
     }
-    let cursor = crate::egress::visit::live_start_cursor(&ring_feed);
+    let cursor = crate::egress::feed::live_start_cursor(&ring_feed);
     assert_eq!(cursor.next_sequence, 10, "no keyframe retained: live edge");
     for (media_type, tag, is_keyframe) in after_gap {
         ring.push(tagged(media_type, tag, is_keyframe));
@@ -699,7 +699,7 @@ fn a_resync_without_a_retained_keyframe_suppresses_interframes() {
     let ts_ring = TsChunkRing::new(4, CancellationToken::new());
     let ts_feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
     ts_ring.push_batch((0..10).map(|tag| (Bytes::from(vec![tag]), MediaType::Video, tag == 0)));
-    let cursor = crate::egress::visit::live_start_cursor(&ts_feed);
+    let cursor = crate::egress::feed::live_start_cursor(&ts_feed);
     assert_eq!(cursor.next_sequence, 10, "no keyframe retained: live edge");
     ts_ring.push_batch(
         after_gap.into_iter().map(|(media_type, tag, is_keyframe)| {

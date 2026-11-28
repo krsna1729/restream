@@ -3,7 +3,7 @@
 //!
 //! A panic while handling one entity must end only that entity: the thread
 //! that serves many of them keeps running. Each boundary sits at the single
-//! seam where the entity's bytes enter (`egress::visit::visit_leaf`, the RTMP
+//! seam where the entity's bytes enter (`egress::leaf::LeafCommon::advance`, the RTMP
 //! connection future, the SRT ingress per-peer media step, the MoQ connection
 //! task and its publisher's catalog read, the HLS push playlist parse, and
 //! every MEDIA service awaited through `executor::run_with_class`, such as

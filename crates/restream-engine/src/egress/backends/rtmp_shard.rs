@@ -24,7 +24,7 @@ use crate::egress::journal::RingFeed;
 use crate::egress::leaf::LeafCommon;
 use crate::egress::leaf_arena::{LeafArena, LeafKey};
 use crate::egress::metrics::ShardMetrics;
-use crate::egress::policy::{LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall};
+use crate::egress::policy::{LeafStallClass, WorkBudget, WorkBudgetConfig};
 use crate::egress::scheduler::{ReadyQueue, VisitDecision};
 use crate::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::egress::visit::{EngineVisit, EngineVisitResult};
@@ -132,6 +132,10 @@ struct RtmpFabricLeaf {
     engine: RtmpFabricEngine,
     transport: TlsTcpConnection,
     pending_readiness: Readiness,
+    /// Application bytes pending on this leaf: engine-queued wire bytes,
+    /// the rustls estimate and transport-staged bytes, refreshed after every
+    /// visit. The stall sweep and graceful close read it.
+    pending_application_bytes: usize,
     /// Last-progress fallback while a leaf has made no byte or protocol
     /// progress yet, such as during connect or handshake.
     observed_since: Instant,
@@ -181,26 +185,33 @@ impl RtmpFabricLeaf {
         result
     }
 
+    /// Refresh `pending_application_bytes` after a visit: queued engine
+    /// bytes, plus what rustls and the transport still hold.
+    fn refresh_pending_application_bytes(&mut self) {
+        self.pending_application_bytes = self
+            .engine
+            .pending_application_bytes()
+            .saturating_add(self.transport.rustls_pending_bytes_estimate())
+            .saturating_add(self.transport.pending_transport_write_bytes());
+    }
+
+    /// Nothing is pending: a draining leaf may close.
+    fn is_flushed(&self) -> bool {
+        self.pending_application_bytes == 0
+    }
+
     /// Classify send-path health from pending application bytes and time
     /// since the last byte or protocol progress. The shared stall classifier
     /// consumes the progress state updated by `EngineVisit::run`.
-    fn observe_stall(&self, now: Instant) -> LeafStallClass {
-        let last_progress = self
-            .common
-            .progress
-            .last_byte_progress
-            .into_iter()
-            .chain(self.common.progress.last_protocol_progress)
-            .max()
-            .unwrap_or(self.observed_since);
-        let age = now.saturating_duration_since(last_progress);
-        classify_stall(
-            self.common.pending_application_bytes as u64,
-            age,
+    fn observe_stall(&mut self, now: Instant) -> LeafStallClass {
+        self.common.stall_class(
+            now,
+            false,
+            self.observed_since,
+            self.pending_application_bytes as u64,
             // Lossless-TCP catch-up: a lagging RTMP leaf recovers by
             // reading flat-out, so the lag ceiling is SRT-only.
             0,
-            &self.common.policy,
         )
     }
 
@@ -328,7 +339,8 @@ where
     /// without I/O, so polling only on an empty queue could starve the very
     /// completion a requeued leaf is waiting for.
     visits_until_poll: usize,
-    feed_waiting: VecDeque<LeafKey>,
+    /// Leaves parked until the next feed publication, each at most once.
+    feed_waiting: ReadyQueue,
     stall_candidates: VecDeque<LeafKey>,
     queue_capacity: usize,
     poll_buffer: Vec<TcpReadyLeaf>,
@@ -388,7 +400,7 @@ where
             output_sockets: HashMap::new(),
             ready: ReadyQueue::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             visits_until_poll: 0,
-            feed_waiting: VecDeque::with_capacity(ready_capacity),
+            feed_waiting: ReadyQueue::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
             queue_capacity: DEFAULT_EGRESS_LEAF_CAPACITY,
             poll_buffer: Vec::with_capacity(ready_capacity),
@@ -412,7 +424,7 @@ where
         self.leaves = LeafArena::with_capacity(capacity);
         self.queue_capacity = capacity;
         self.ready = ReadyQueue::with_capacity(capacity);
-        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.feed_waiting = ReadyQueue::with_capacity(capacity);
         self.stall_candidates = VecDeque::with_capacity(capacity);
         self
     }
@@ -453,7 +465,7 @@ where
 
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
-        self.feed_waiting.retain(|key| *key != socket_ref.key);
+        self.feed_waiting.remove(socket_ref.key);
         self.stall_candidates.retain(|key| *key != socket_ref.key);
         self.sweep_service.invalidate();
         self.service = Default::default();
@@ -491,12 +503,12 @@ where
     /// never touches them — they remain discoverable only via real
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
-        while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                continue;
-            };
-            leaf.common.schedule.feed_wake_queued = false;
-            if leaf.common.schedule.wants_feed_wake {
+        while let Some(key) = self.feed_waiting.pop() {
+            let wants_feed = self
+                .leaves
+                .get(key)
+                .is_some_and(|leaf| leaf.common.schedule.wants_feed_wake);
+            if wants_feed {
                 self.push_ready(key);
             }
         }
@@ -558,21 +570,11 @@ where
         ) {
             self.resync_count = self.resync_count.saturating_add(1);
         }
-        leaf.common.pending_application_bytes = leaf
-            .engine
-            .pending_application_bytes()
-            .saturating_add(leaf.transport.rustls_pending_bytes_estimate())
-            .saturating_add(leaf.transport.pending_transport_write_bytes());
+        leaf.refresh_pending_application_bytes();
         // Progress can still end on an empty feed. Keep that leaf parked for
         // the next publication even though this visit returns `Continue`.
-        let feed_waiting =
-            leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued;
-        if feed_waiting {
-            let admitted = push_bounded(&mut self.feed_waiting, key, self.queue_capacity);
-            if !admitted {
-                self.queue_overflows = self.queue_overflows.saturating_add(1);
-            }
-            leaf.common.schedule.feed_wake_queued = admitted;
+        if leaf.common.schedule.wants_feed_wake && !self.feed_waiting.push(key).is_queued() {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
         }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
@@ -581,7 +583,7 @@ where
         // deadline force-closes the same way, so a peer that stops reading
         // mid-drain can't hang this leaf open forever.
         if let Some(draining_since) = leaf.draining_since {
-            let flushed = leaf.common.pending_application_bytes == 0;
+            let flushed = leaf.is_flushed();
             let expired = draining_since.elapsed() >= self.drain_timeout;
             if flushed || expired {
                 let reason = leaf.draining_reason.unwrap_or(CloseReason::Removed);
@@ -695,7 +697,7 @@ where
             if let Some(socket_ref) = self.output_sockets.get(output_id)
                 && let Some(leaf) = self.leaves.get(socket_ref.key)
             {
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
+                leaf.common.mark_terminated_unexpectedly();
             }
             self.remove_leaf_by_output(output_id);
         }

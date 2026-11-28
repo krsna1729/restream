@@ -248,7 +248,7 @@ impl MediaPublisher {
     /// Application bytes queued for send but not yet accepted by the
     /// transport: the remainder of any in-flight `pending_write` plus every
     /// still-queued `current_batch` packet. Used to keep
-    /// `LeafCommon::pending_application_bytes` (`crates/restream-engine/src/egress/leaf.rs`)
+    /// `RtmpFabricLeaf::pending_application_bytes` (`egress/backends/rtmp_shard.rs`)
     /// accurate for this leaf, which the stall sweep reads. This covers
     /// queued wire bytes; rustls-internal buffering for RTMPS is not counted.
     /// Encoding waits until this reaches zero, so it never exceeds one feed

@@ -303,6 +303,17 @@ impl ShardMetrics {
         self.budget_exhaustions = iteration.budget_exhaustions;
     }
 
+    /// Stamp the snapshot as collected at `collected_at`, with the shard
+    /// thread's CPU time when it was sampled this time (`thread_cpu_at`
+    /// stays unset while the clock reads zero).
+    pub(crate) fn mark_collected(&mut self, collected_at: Instant, thread_cpu_ns: Option<u64>) {
+        self.collected_at = Some(collected_at);
+        if let Some(cpu_ns) = thread_cpu_ns {
+            self.thread_cpu_ns = cpu_ns;
+            self.thread_cpu_at = (cpu_ns > 0).then_some(collected_at);
+        }
+    }
+
     /// Count one ready batch's backend visits.
     pub(crate) fn record_ready_visits(&mut self, visits: usize) {
         self.ready_visits = self.ready_visits.saturating_add(visits as u64);

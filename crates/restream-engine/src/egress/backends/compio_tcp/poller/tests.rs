@@ -44,7 +44,7 @@ fn exercise_bounded_receive(ancillary_mode: bool) {
     let generation = 51;
     let buffers = stream.io_buffers().unwrap();
     if ancillary_mode {
-        stream.set_ancillary_mode();
+        stream.start_ancillary_receive();
     }
     poller
         .register_connection(fd, key, generation, &stream)
@@ -566,7 +566,7 @@ fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
 
     let mut poller = CompioTcpPoller::new(4).unwrap();
     let stream = poller.adopt(client).unwrap();
-    stream.set_ancillary_mode();
+    stream.start_ancillary_receive();
     let fd = stream.raw_fd();
     poller
         .register_connection(fd, LeafKey::for_test(32, 0), 9, &stream)
@@ -581,7 +581,7 @@ fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
     // Syscalls on this thread run any io_uring task work that would complete
     // an in-flight receive, as they would in the owner before a handoff.
     thread::sleep(Duration::from_millis(50));
-    stream.set_ktls_mode();
+    stream.enter_ktls();
 
     let mut peek = [0u8; 16];
     // SAFETY: `peek` is a live buffer of the length passed; `fd` stays open for the call.
