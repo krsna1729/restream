@@ -97,11 +97,10 @@ async fn a_retried_output_delivers_again_after_its_shard_panics() {
         u32::MAX,
     )
     .unwrap();
-    let wakes = crate::egress::runtime::subscribe_fabric_wakes(
+    let wakes = runtime.subscribe_feed_wakes(
         "rtmp",
         crate::egress::command::FeedId::new("feed"),
         feed.publication_ring().publication_subscribers(),
-        runtime.feed_wake_handles(),
     );
 
     let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));

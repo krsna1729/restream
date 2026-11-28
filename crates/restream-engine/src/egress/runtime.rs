@@ -244,10 +244,14 @@ impl EgressFabricRuntime {
         !self.group.panicked_shards().is_empty()
     }
 
-    /// Shared handle list for feed publication subscriptions (see the field
-    /// doc on `wake_handles`); `rescale` keeps it current.
-    pub(crate) fn feed_wake_handles(&self) -> Arc<ArcSwap<Vec<FeedWakeHandle>>> {
-        Arc::clone(&self.wake_handles)
+    #[cfg(test)]
+    pub(crate) fn subscribe_feed_wakes(
+        &self,
+        kind: &'static str,
+        feed_id: FeedId,
+        subscribers: Arc<PublishSubscribers>,
+    ) -> FeedWakeSubscription {
+        subscribe_fabric_wakes(kind, feed_id, subscribers, self.wake_handles.clone())
     }
 
     /// Plan the shard count before an Add, or from the reconciler's periodic
@@ -509,7 +513,7 @@ impl Drop for FeedWakeSubscription {
 /// that grow later are woken too. One wake is delivered on subscribe, so a
 /// publication that landed before registration is not left waiting for the
 /// shards' idle poll.
-pub(crate) fn subscribe_fabric_wakes(
+fn subscribe_fabric_wakes(
     kind: &'static str,
     feed_id: FeedId,
     subscribers: Arc<restream_sync::PublishSubscribers>,

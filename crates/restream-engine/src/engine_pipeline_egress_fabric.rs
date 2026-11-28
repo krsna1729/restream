@@ -9,7 +9,7 @@ use crate::egress::manager::{
 use crate::egress::policy::WorkBudgetConfig;
 use crate::egress::runtime::{
     EgressFabricRuntime, EgressFabricRuntimeError, FabricWorkerError, ResizeReason,
-    SharedFabricRuntime, subscribe_fabric_wakes,
+    SharedFabricRuntime,
 };
 #[cfg(test)]
 use crate::egress::shard::EgressShardSnapshot;
@@ -90,11 +90,10 @@ impl MediaEngine {
         }
         let created = !registry.runtimes.contains_key(&feed_id);
         if created {
-            let wakes = subscribe_fabric_wakes(
+            let wakes = runtime.subscribe_feed_wakes(
                 "pipeline",
                 feed_id.clone(),
                 feed.publication_ring().publication_subscribers(),
-                runtime.feed_wake_handles(),
             );
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_wakes.insert(feed_id.clone(), wakes);

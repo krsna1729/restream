@@ -239,6 +239,10 @@ sequenceDiagram
 - A draining shard refuses new specs with `ShardDraining`.
 - `Shutdown` is sent to every shard only if every channel has room.
 
+`SharedFabricRuntime` creates the feed subscription, which the engine
+retains. The runtime updates the shared wake list when shards change,
+without exposing the list to the engine.
+
 Feed wakes skip the manager. The sequence shows one publication.
 
 ```mermaid
