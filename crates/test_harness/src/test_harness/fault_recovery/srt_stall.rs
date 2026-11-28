@@ -773,14 +773,13 @@ async fn watch_srt_rs_receiver(
     }
     let watch_elapsed = watch_started.elapsed();
     let loadavg_after = loadavg();
-    let contention_burners = contention.handles.len();
     drop(contention);
     Ok(SrtRsReceiverWatch {
         observation,
         loadavg_before,
         loadavg_during,
         loadavg_after,
-        contention_burners,
+        contention_burners: contention_threads,
         elapsed: watch_elapsed,
     })
 }

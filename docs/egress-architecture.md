@@ -566,9 +566,7 @@ Startup logs `srt egress shard runtime ready` per shard and
 
 ### Backend module layers
 
-`deslop-please` reports one tangle across the fabric backends, the
-`MediaEngine` composition modules and the stage/audio runtime. The intended
-order, low to high:
+Dependencies point from higher to lower layers:
 
 1. leaf contract: `egress::leaf`, `egress::visit`, feeds and wire helpers.
    These own cursors, progress, clocks and the end-of-visit report.
@@ -580,10 +578,9 @@ order, low to high:
 4. composition: `engine_*_egress_fabric` and the factory build a backend
    with the context it needs.
 
-The first slice moved the leaf clock to `timing` so the HLS report and
-`visit_leaf` no longer import `MediaEngine`. The remaining back-references
-(the progress sink, upload reporting and audio routing) move to a context
-passed at construction; the backend must not reach back into the engine.
+Composition passes the progress sink, upload reporting and audio-routing
+context to the backends at construction. A backend does not look up those
+dependencies through `MediaEngine`.
 
 ## Configuration
 
