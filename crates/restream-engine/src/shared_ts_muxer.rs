@@ -76,7 +76,7 @@ pub(crate) fn start_shared_ts_muxer(
                 // One bounded pull burst per media turn; an always-ready source
                 // must not monopolize this worker or starve cancellation.
                 tokio::task::yield_now().await;
-                if !ingests.active.read().await.contains_key(&pipeline_id_str) {
+                if !ingests.has_active_ingest(&pipeline_id_str).await {
                     break;
                 }
             }

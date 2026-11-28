@@ -447,6 +447,11 @@ stage it reads. The last lease to drop stops the stage
 (`crates/restream-engine/src/stage_registry.rs`). Stage identity is owned by
 `crates/restream-domain/src/domain/stage.rs`; do not rebuild its keys in another layer.
 
+`IngestRegistry` owns the input admission, selection, and release
+transactions. File-ingest updates check the attempt and keep the session
+guard until the update finishes, so a replacement cannot be cleared by
+an older attempt.
+
 `StageRegistry` owns ring-stage admission and cleanup. It checks for reuse
 and publishes a replacement under one runtime write guard.
 `StageRuntimeManager` prepares the newly admitted output ring and starts

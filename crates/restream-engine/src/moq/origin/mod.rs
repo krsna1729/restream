@@ -662,7 +662,7 @@ async fn total_media_loss(engine: &MediaEngine, pipeline_id: &str) -> bool {
                 .any(|ingest| ingest.pipeline_id == pipeline_id)
         })
         .await;
-    let has_recent = engine.recent_ingest_outcome(pipeline_id).await.is_some();
+    let has_recent = engine.has_ingest_outcome(pipeline_id).await;
     has_session || has_recent
 }
 

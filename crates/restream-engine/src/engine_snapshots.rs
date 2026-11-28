@@ -127,46 +127,46 @@ impl MediaEngine {
     }
 
     pub async fn active_ingest_count(&self) -> usize {
-        self.ingests.active.read().await.len()
+        self.ingests
+            .with_active_ingests(|ingests| ingests.len())
+            .await
     }
 
     pub async fn active_ingest_protocol_for_probe(&self, pipeline_id: &str) -> Option<String> {
         self.ingests
-            .active
-            .read()
+            .with_active_ingest(pipeline_id, |ingest| ingest.protocol.clone())
             .await
-            .get(pipeline_id)
-            .map(|ingest| ingest.protocol.clone())
     }
 
     pub async fn ingest_video_codec(&self, pipeline_id: &str) -> Option<String> {
         self.ingests
-            .active
-            .read()
+            .with_active_ingest(pipeline_id, |ingest| {
+                ingest.metadata().video.map(|video| video.codec)
+            })
             .await
-            .get(pipeline_id)
-            .and_then(|ingest| ingest.metadata().video)
-            .map(|video| video.codec)
+            .flatten()
     }
 
     pub async fn active_ingest_diag_snapshot(
         &self,
         pipeline_id: &str,
     ) -> Option<IngestDiagSnapshot> {
-        let ingests = self.ingests.active.read().await;
-        let ingest = ingests.get(pipeline_id)?;
-        let keyframe_times = restream_sync::lock::lock(&ingest.keyframe_times).clone();
-        let metadata = ingest.metadata();
-        Some(IngestDiagSnapshot {
-            protocol: ingest.protocol.clone(),
-            uptime_secs: ingest.start_time.elapsed().as_secs_f64(),
-            bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
-            remote_addr: metadata.remote_addr,
-            video: metadata.video,
-            audio: metadata.audio,
-            quality: metadata.quality,
-            keyframe_times,
-        })
+        self.ingests
+            .with_active_ingest(pipeline_id, |ingest| {
+                let keyframe_times = restream_sync::lock::lock(&ingest.keyframe_times).clone();
+                let metadata = ingest.metadata();
+                IngestDiagSnapshot {
+                    protocol: ingest.protocol.clone(),
+                    uptime_secs: ingest.start_time.elapsed().as_secs_f64(),
+                    bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
+                    remote_addr: metadata.remote_addr,
+                    video: metadata.video,
+                    audio: metadata.audio,
+                    quality: metadata.quality,
+                    keyframe_times,
+                }
+            })
+            .await
     }
 
     pub async fn active_egress_count(&self) -> usize {
@@ -214,14 +214,17 @@ impl MediaEngine {
         &self,
         pipeline_id: &str,
     ) -> Option<RingBufferDiagSnapshot> {
-        let pipelines = self.ingests.pipelines.read().await;
-        let ring = pipelines.get(pipeline_id)?;
-        let (fill_slots, capacity_slots) = ring.fill_and_capacity();
-        Some(RingBufferDiagSnapshot {
-            fill_slots,
-            capacity_slots,
-            readers: ring.reader_snapshots(),
-        })
+        self.ingests
+            .with_source_rings(|rings| {
+                let ring = rings.get(pipeline_id)?;
+                let (fill_slots, capacity_slots) = ring.fill_and_capacity();
+                Some(RingBufferDiagSnapshot {
+                    fill_slots,
+                    capacity_slots,
+                    readers: ring.reader_snapshots(),
+                })
+            })
+            .await
     }
 
     pub async fn srt_listener_diag_snapshot(&self) -> SrtListenerDiagSnapshot {
@@ -232,12 +235,13 @@ impl MediaEngine {
             // would let a concurrent RTMP ingest inflate the SRT number.
             active_ingest_count: self
                 .ingests
-                .active
-                .read()
-                .await
-                .values()
-                .filter(|ingest| ingest.protocol == "srt")
-                .count(),
+                .with_active_ingests(|ingests| {
+                    ingests
+                        .values()
+                        .filter(|ingest| ingest.protocol == "srt")
+                        .count()
+                })
+                .await,
         }
     }
 }

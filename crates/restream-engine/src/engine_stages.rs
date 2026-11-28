@@ -236,30 +236,32 @@ impl MediaEngine {
         };
         let active_codecs = self
             .ingests
-            .active
-            .read()
-            .await
-            .iter()
-            .filter_map(|(pipeline_id, ingest)| {
-                ingest
-                    .metadata()
-                    .video
-                    .map(|video| (pipeline_id.clone(), video.codec))
+            .with_active_ingests(|ingests| {
+                ingests
+                    .iter()
+                    .filter_map(|(pipeline_id, ingest)| {
+                        ingest
+                            .metadata()
+                            .video
+                            .map(|video| (pipeline_id.clone(), video.codec))
+                    })
+                    .collect::<std::collections::HashMap<_, _>>()
             })
-            .collect::<std::collections::HashMap<_, _>>();
+            .await;
         let input_codecs = self
             .ingests
-            .sessions
-            .read()
-            .await
-            .iter()
-            .filter_map(|(input_id, ingest)| {
-                ingest
-                    .metadata()
-                    .video
-                    .map(|video| (input_id.clone(), video.codec))
+            .with_ingest_sessions(|sessions| {
+                sessions
+                    .iter()
+                    .filter_map(|(input_id, ingest)| {
+                        ingest
+                            .metadata()
+                            .video
+                            .map(|video| (input_id.clone(), video.codec))
+                    })
+                    .collect::<std::collections::HashMap<_, _>>()
             })
-            .collect::<std::collections::HashMap<_, _>>();
+            .await;
         let mut needed = HashSet::new();
 
         for pipeline_id in active_preview_ids {

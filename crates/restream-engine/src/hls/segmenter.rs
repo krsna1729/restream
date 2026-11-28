@@ -322,29 +322,32 @@ impl HlsSegmenter {
         if let Some(video) = self.preview_video_meta.clone() {
             return Some(video);
         }
-        let ingests = self.ingests.active.read().await;
-        ingests
-            .get(&self.pipeline_id)
-            .and_then(|ingest| ingest.metadata().video)
+        self.ingests
+            .with_active_ingest(&self.pipeline_id, |ingest| ingest.metadata().video)
+            .await
+            .flatten()
     }
 
     /// Video metadata and audio tracks from the live ingest, falling back to
     /// its single probed audio track.
     async fn ingest_stream_metadata(&self) -> Option<(Option<VideoMeta>, Arc<Vec<AudioMeta>>)> {
-        let ingests = self.ingests.active.read().await;
-        let ingest = ingests.get(&self.pipeline_id)?;
-        let metadata = ingest.metadata();
-        let video = self.preview_video_meta.clone().or(metadata.video);
-        video.as_ref()?;
-        let lock = restream_sync::lock::lock(&ingest.audio_tracks);
-        let tracks = if lock.is_empty()
-            && let Some(audio) = metadata.audio
-        {
-            Arc::new(vec![audio])
-        } else {
-            Arc::clone(&lock)
-        };
-        Some((video, tracks))
+        self.ingests
+            .with_active_ingest(&self.pipeline_id, |ingest| {
+                let metadata = ingest.metadata();
+                let video = self.preview_video_meta.clone().or(metadata.video);
+                video.as_ref()?;
+                let lock = restream_sync::lock::lock(&ingest.audio_tracks);
+                let tracks = if lock.is_empty()
+                    && let Some(audio) = metadata.audio
+                {
+                    Arc::new(vec![audio])
+                } else {
+                    Arc::clone(&lock)
+                };
+                Some((video, tracks))
+            })
+            .await
+            .flatten()
     }
 
     /// Publishes the remaining data as the final segment.
