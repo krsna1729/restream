@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use super::backend::EngineProgress;
 use super::leaf_arena::LeafKey;
 
 // ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ pub struct ScheduleState {
     /// `true` iff the most recent `EngineProgress`'s `WaitCondition` was
     /// `Feed` or `FeedOrIo` — i.e. a feed wake should directly re-enqueue
     /// this leaf. Set unconditionally from every visit outcome in
-    /// `apply_progress_to_common` (`visit.rs`); `false` for outcomes that
+    /// [`record_visit`](Self::record_visit); `false` for outcomes that
     /// don't carry a wait condition at all (`HandshakeComplete`,
     /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`). Advisory: a stale
     /// value can never double-queue a leaf, because the ready queue
@@ -49,6 +50,44 @@ impl ScheduleState {
     pub fn mark_serviced(&mut self) {
         self.last_service_at = Some(Instant::now());
         self.deficit_bytes = 0;
+    }
+
+    /// Fold one visit outcome in: whether a feed wake should re-enqueue the
+    /// leaf, and, for an outcome that serviced it (progress, a wait, or a
+    /// finished handshake), the service stamp.
+    pub fn record_visit(&mut self, progress: &EngineProgress) {
+        let (wants_feed, serviced) = match progress {
+            EngineProgress::Progress { wait, .. } | EngineProgress::Needs(wait) => {
+                (wait.wants_feed(), true)
+            }
+            EngineProgress::HandshakeComplete => (false, true),
+            EngineProgress::FeedOverrun
+            | EngineProgress::PeerClosed
+            | EngineProgress::Failed(_)
+            | EngineProgress::Yield => (false, false),
+        };
+        self.wants_feed_wake = wants_feed;
+        if serviced {
+            self.mark_serviced();
+        }
+    }
+
+    /// Claim the leaf's one entry in the shard's feed-waiting queue: `true`
+    /// (the caller must push it) when its last visit waits on the feed and
+    /// it is not queued yet.
+    pub fn join_feed_queue(&mut self) -> bool {
+        let join = self.wants_feed_wake && !self.feed_wake_queued;
+        if join {
+            self.feed_wake_queued = true;
+        }
+        join
+    }
+
+    /// Give up the feed-waiting entry (the feed woke the leaf, or the queue
+    /// refused it); `true` when a feed wake should visit the leaf.
+    pub fn leave_feed_queue(&mut self) -> bool {
+        self.feed_wake_queued = false;
+        self.wants_feed_wake
     }
 }
 

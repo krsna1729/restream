@@ -6,10 +6,11 @@
 
 use std::time::Instant;
 
-use crate::egress::feed::FeedCursor;
+use crate::egress::backend::{EngineProgress, ProtocolFailure, Readiness};
+use crate::egress::feed::{EgressFeed, FeedCursor, live_start_cursor};
 use crate::egress::ids::{FeedId, OutputId};
-use crate::egress::policy::LeafPolicy;
-use crate::egress::scheduler::ScheduleState;
+use crate::egress::policy::{LeafPolicy, LeafStallClass, WorkBudget, classify_stall};
+use crate::egress::scheduler::{ScheduleState, VisitDecision};
 
 // ---------------------------------------------------------------------------
 // ProgressState
@@ -76,6 +77,19 @@ impl ProgressState {
     pub fn record_overrun(&mut self) {
         self.overrun_count = self.overrun_count.saturating_add(1);
     }
+
+    /// The latest byte or protocol progress. `acknowledged`: the peer
+    /// acknowledged data since the last check, first recorded as protocol
+    /// progress at `now`.
+    fn latest_progress(&mut self, now: Instant, acknowledged: bool) -> Option<Instant> {
+        if acknowledged {
+            self.last_protocol_progress = Some(now);
+        }
+        self.last_byte_progress
+            .into_iter()
+            .chain(self.last_protocol_progress)
+            .max()
+    }
 }
 
 impl Default for ProgressState {
@@ -105,12 +119,12 @@ pub struct LeafCommon {
     /// Whether [`cursor`](Self::cursor) has been anchored to a real feed
     /// position yet. A freshly constructed leaf has no feed handle (the feed
     /// is owned by the shard and only borrowed per visit), so its cursor
-    /// starts at the placeholder `(0, 0)`; `EngineVisit::run` primes it to a
-    /// live start point on the first visit and sets this flag. Without the
-    /// flag the leaf would begin reading at sequence 0 — on any established
-    /// pipeline that is hundreds of units behind the feed head, so the first
-    /// read overruns and the leaf resynchronizes from a stale position it
-    /// should never have been at.
+    /// starts at the placeholder `(0, 0)`; [`advance`](Self::advance) primes
+    /// it to a live start point on the first visit and sets this flag.
+    /// Without the flag the leaf would begin reading at sequence 0 — on any
+    /// established pipeline that is hundreds of units behind the feed head,
+    /// so the first read overruns and the leaf resynchronizes from a stale
+    /// position it should never have been at.
     pub cursor_primed: bool,
     /// Scheduler visibility and deficit accounting.
     pub schedule: ScheduleState,
@@ -337,6 +351,181 @@ impl LeafCommon {
     /// generation. Stale events (lower generation) are silently ignored.
     pub fn is_current_generation(&self, generation_val: u64) -> bool {
         generation_val == self.generation
+    }
+
+    /// Run one engine `advance` against this leaf's cursor.
+    ///
+    /// The first visit anchors the placeholder `(0, 0)` cursor to a real feed
+    /// position before the engine ever reads. [`new`](Self::new) cannot do
+    /// this — the feed is owned by the shard and only borrowed per visit —
+    /// and priming here rather than at construction also means the anchor is
+    /// taken at the moment the leaf can actually send, not when it was queued
+    /// for connect.
+    ///
+    /// Fault domain: a panic in one output's engine fails that output (and
+    /// its retry policy takes over), not the shard thread and every other
+    /// output on it. The engine and transport are per-leaf state, dropped
+    /// with the leaf when it closes.
+    pub(crate) fn advance<F: EgressFeed>(
+        &mut self,
+        feed: &F,
+        readiness: Readiness,
+        budget: WorkBudget,
+        advance: impl FnOnce(&mut FeedCursor, Readiness, WorkBudget) -> EngineProgress,
+    ) -> EngineProgress {
+        if !self.cursor_primed {
+            self.cursor = live_start_cursor(feed);
+            self.cursor_primed = true;
+            tracing::debug!(
+                output_id = %self.output_id,
+                start_epoch = self.cursor.epoch,
+                start_sequence = self.cursor.next_sequence,
+                head_sequence = feed.head_sequence(),
+                "egress leaf cursor primed to feed live start"
+            );
+        }
+        let cursor = &mut self.cursor;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            advance(cursor, readiness, budget)
+        }))
+        .unwrap_or_else(|payload| {
+            let detail = crate::panic_boundary::record_contained(payload.as_ref()).to_string();
+            tracing::error!(
+                output_id = %self.output_id,
+                %detail,
+                "egress engine panicked; the output is closed and retried"
+            );
+            EngineProgress::Failed(ProtocolFailure {
+                reason: "engine_panic",
+                detail,
+                retryable: true,
+            })
+        })
+    }
+
+    /// Fold one visit outcome into the leaf's scheduling, progress and
+    /// cursor state, and map it to the scheduler's decision.
+    pub(crate) fn apply_progress<F: EgressFeed>(
+        &mut self,
+        progress: &EngineProgress,
+        feed: &F,
+    ) -> VisitDecision {
+        self.schedule.record_visit(progress);
+        match progress {
+            EngineProgress::Progress { bytes, units, .. } => {
+                self.progress.record_send(*bytes, *units);
+                if *bytes > 0 || *units > 0 {
+                    let now_ms = crate::timing::epoch_ms();
+                    self.progress_sink
+                        .record_sent(*bytes as u64, *units as u64, now_ms);
+                }
+                VisitDecision::Continue
+            }
+            EngineProgress::Needs(_) => VisitDecision::Suspend,
+            EngineProgress::HandshakeComplete => {
+                // Handshake/negotiation states never read the feed, so the
+                // anchor taken on the first visit has been aging for the whole
+                // connect + handshake round trip. Re-anchor at the transition
+                // into a state that can send media, so a slow handshake does
+                // not hand the publisher a cursor that is already seconds
+                // behind live.
+                self.cursor = live_start_cursor(feed);
+                VisitDecision::Continue
+            }
+            EngineProgress::FeedOverrun => {
+                self.progress.record_overrun();
+                self.progress_sink.record_overrun();
+                // Resynchronize in place rather than closing: the leaf keeps
+                // its connection and retry budget, and resumes from a valid
+                // point instead of cycling through reconnect for a transient
+                // overrun.
+                self.cursor = live_start_cursor(feed);
+                tracing::warn!(
+                    output_id = %self.output_id,
+                    resync_epoch = self.cursor.epoch,
+                    resync_sequence = self.cursor.next_sequence,
+                    "egress feed overrun: leaf resynchronized to latest sync point"
+                );
+                VisitDecision::Continue
+            }
+            EngineProgress::Failed(failure) => {
+                tracing::warn!(
+                    output_id = %self.output_id,
+                    reason = failure.reason,
+                    detail = %failure.detail,
+                    retryable = failure.retryable,
+                    "egress leaf failed"
+                );
+                VisitDecision::Close
+            }
+            EngineProgress::PeerClosed => VisitDecision::Close,
+            EngineProgress::Yield => VisitDecision::Continue,
+        }
+    }
+
+    /// Feed units this leaf's cursor is behind `head_sequence`; zero until
+    /// the first visit anchors the cursor.
+    pub(crate) fn feed_lag(&self, head_sequence: u64) -> u64 {
+        if self.cursor_primed {
+            head_sequence.saturating_sub(self.cursor.next_sequence)
+        } else {
+            0
+        }
+    }
+
+    /// Classify send-path health from `pending_bytes`, the feed lag and the
+    /// time since the leaf's last byte or protocol progress
+    /// (`observed_since` before any). `acknowledged`: the peer acknowledged
+    /// data since the last check, which counts as protocol progress at `now`.
+    pub(crate) fn stall_class(
+        &mut self,
+        now: Instant,
+        acknowledged: bool,
+        observed_since: Instant,
+        pending_bytes: u64,
+        lag_units: u64,
+    ) -> LeafStallClass {
+        let last_progress = self
+            .progress
+            .latest_progress(now, acknowledged)
+            .unwrap_or(observed_since);
+        classify_stall(
+            pending_bytes,
+            now.saturating_duration_since(last_progress),
+            lag_units,
+            &self.policy,
+        )
+    }
+
+    /// Publish one stall-sweep sample: the feed lag and send-path health
+    /// always; protocol quality only when the transport sampled one (`None`
+    /// leaves the previous value in place).
+    pub(crate) fn publish_health(
+        &self,
+        lag_units: u64,
+        reason: Option<&'static str>,
+        quality: Option<crate::snapshots::PublisherQuality>,
+    ) {
+        self.progress_sink
+            .record_backpressure_state(lag_units, reason);
+        if let Some(quality) = quality {
+            self.progress_sink.record_quality(quality);
+        }
+    }
+
+    /// See [`EgressProgressSink::mark_terminated_unexpectedly`].
+    pub(crate) fn mark_terminated_unexpectedly(&self) {
+        self.progress_sink.mark_terminated_unexpectedly();
+    }
+
+    /// See [`ScheduleState::join_feed_queue`].
+    pub(crate) fn join_feed_queue(&mut self) -> bool {
+        self.schedule.join_feed_queue()
+    }
+
+    /// See [`ScheduleState::leave_feed_queue`].
+    pub(crate) fn leave_feed_queue(&mut self) -> bool {
+        self.schedule.leave_feed_queue()
     }
 }
 

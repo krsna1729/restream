@@ -524,7 +524,7 @@ fn only_an_enhanced_outputs_connect_advertises_fourcc_list() {
 
 #[test]
 fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
-    // `LeafCommon::pending_application_bytes` (wired up in
+    // `RtmpFabricLeaf::pending_application_bytes` (wired up in
     // `visit_one_ready_leaf`) is enforced by `sweep_stalled_leaves`
     // (mirroring `SrtShardBackend`'s identical mechanism): a leaf with
     // pending bytes and no byte/protocol progress within
@@ -598,7 +598,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     {
         let socket_ref = *backend.output_sockets.get(&stuck_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 4096;
+        leaf.pending_application_bytes = 4096;
         leaf.common.progress.last_byte_progress = None;
         leaf.common.progress.last_protocol_progress = None;
         leaf.observed_since = long_ago;
@@ -606,7 +606,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     {
         let socket_ref = *backend.output_sockets.get(&healthy_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 4096;
+        leaf.pending_application_bytes = 4096;
         leaf.common.progress.last_byte_progress = Some(now);
         leaf.common.progress.last_protocol_progress = None;
         leaf.observed_since = long_ago;

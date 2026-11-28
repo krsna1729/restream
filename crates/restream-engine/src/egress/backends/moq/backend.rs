@@ -259,7 +259,7 @@ impl<C: MoqConnector> MoqShardBackend<C> {
             VisitDecision::Close => {
                 // Only a session or broadcast that ended by itself closes
                 // here; an explicit Remove never visits again.
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
+                leaf.common.mark_terminated_unexpectedly();
                 let output_id = leaf.common.output_id.clone();
                 self.output_leaves.remove(&output_id);
                 self.ready.remove(key);

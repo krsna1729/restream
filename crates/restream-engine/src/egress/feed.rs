@@ -198,6 +198,43 @@ pub trait EgressFeed {
     }
 }
 
+/// The position a leaf should read from when it has no valid position of its
+/// own: either starting fresh, or recovering from an overrun.
+///
+/// This is the feed's latest retained keyframe/sync point, falling back to the
+/// live edge (`head_sequence`) when no sync point is retained — for example an
+/// audio-only feed, or a video feed whose GOP is longer than the retention
+/// window. It deliberately mirrors `RingBuffer::fast_forward`, the positioning
+/// every ring `Reader` uses (`Reader::new` on attach and the overflow recovery
+/// inside `Reader::pull*`), so fabric leaves and ring readers start and
+/// resynchronize at the same place.
+///
+/// The live-edge fallback cursor awaits a keyframe: the video interframes
+/// after it reference frames the leaf never read, so the feed skips them up
+/// to the next keyframe (audio passes), as a `Reader` does after an
+/// overflow.
+///
+/// The fallback must not be `oldest_sequence`: that is the maximum possible
+/// backward rewind, landing mid-GOP one slot away from being overwritten, so
+/// the leaf immediately runs a full retention window behind live. On a live
+/// transport with a latency window far smaller than its send buffer (SRT with
+/// `TLPKTDROP`), that backlog is silently dropped downstream rather than
+/// delivered, and nothing pulls the leaf forward again.
+///
+/// The epoch is re-read from the feed so a concurrent epoch bump is picked up
+/// in the same step.
+///
+/// The live edge is read *before* the sync point. The producer publishes
+/// concurrently, and reading it after a `None` sync point could land past a
+/// keyframe published between the two reads, skipping it (the leaf then
+/// waits a whole GOP). Read first, the fallback edge is at or before any
+/// keyframe the sync-point query did not see.
+pub(crate) fn live_start_cursor<F: EgressFeed>(feed: &F) -> FeedCursor {
+    let edge = feed.head_sequence();
+    feed.latest_sync_point()
+        .unwrap_or_else(|| FeedCursor::awaiting_keyframe_at(feed.epoch(), edge))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

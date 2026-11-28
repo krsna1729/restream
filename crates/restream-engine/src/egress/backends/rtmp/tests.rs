@@ -704,7 +704,7 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 
 #[test]
 fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
-    // `LeafCommon::pending_application_bytes` must report the
+    // `RtmpFabricLeaf::pending_application_bytes` must report the
     // encoded-but-unsent data queued for an RTMP leaf
     // (`RtmpFabricEngine::pending_application_bytes`), and drain to zero.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

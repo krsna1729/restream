@@ -60,7 +60,7 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 4096;
+        leaf.pending_application_bytes = 4096;
     }
 
     backend.on_command(EgressCommand::Remove(output_id.clone()));
@@ -83,7 +83,7 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 0;
+        leaf.pending_application_bytes = 0;
     }
     backend.sweep_draining_leaves(std::time::Instant::now());
 
@@ -102,7 +102,7 @@ fn remove_closes_immediately_when_nothing_is_queued() {
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 0;
+        leaf.pending_application_bytes = 0;
     }
 
     backend.on_command(EgressCommand::Remove(output_id.clone()));
@@ -126,7 +126,7 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 4096;
+        leaf.pending_application_bytes = 4096;
     }
     backend.on_command(EgressCommand::Remove(output_id.clone()));
     assert!(backend.output_sockets.contains_key(&output_id));
@@ -141,7 +141,7 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
         leaf.draining_since = Some(long_ago);
         // Still nonzero — proves the close is deadline-driven, not
         // flush-driven.
-        assert_ne!(leaf.common.pending_application_bytes, 0);
+        assert_ne!(leaf.pending_application_bytes, 0);
     }
 
     backend.sweep_draining_leaves(std::time::Instant::now());
@@ -161,7 +161,7 @@ fn shutdown_marks_every_connected_leaf_draining() {
     {
         let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
         let leaf = backend.leaves.get_mut(socket_ref.key).unwrap();
-        leaf.common.pending_application_bytes = 4096;
+        leaf.pending_application_bytes = 4096;
     }
 
     backend.on_command(EgressCommand::Shutdown);

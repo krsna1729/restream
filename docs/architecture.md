@@ -545,7 +545,7 @@ many entities, so each entity has a panic boundary where its bytes enter:
 
 | Entity | Boundary | On panic |
 |---|---|---|
-| Egress output | `egress::visit::visit_leaf` | That output fails (`engine_panic`, retryable). The shard keeps serving the rest |
+| Egress output | `egress::leaf::LeafCommon::advance` | That output fails (`engine_panic`, retryable). The shard keeps serving the rest |
 | RTMP ingest connection | Connection future in `rtmp::listener::run_compio_owner` | That connection closes. Its parser charge and gate lease drop with it |
 | SRT ingest peer | `srt::ingress_owner::OwnerLoop::contain_peer_media` | That peer's media state is discarded without flush and the peer is disconnected. Its Owner byte budget share returns |
 | MoQ connection (handshake, publisher or origin viewer) | Connection task in `moq::ingest::listener::accept_loop` | That connection closes (`restream.moq.ingest.connection_panicked`). Its connection and per-client slots, its viewer slot and generation attachment drop with it; an admitted publisher's attempt ends as `abandoned`. The listener thread keeps serving the rest |

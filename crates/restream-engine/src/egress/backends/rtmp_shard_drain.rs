@@ -27,7 +27,7 @@ where
         let Some(leaf) = self.leaves.get_mut(socket_ref.key) else {
             return;
         };
-        if leaf.common.pending_application_bytes == 0 {
+        if leaf.is_flushed() {
             self.output_sockets.remove(output_id);
             self.remove_leaf_socket(socket_ref, reason);
             return;
@@ -49,10 +49,7 @@ where
             self.connecting_by_output
                 .remove(&connecting.common.output_id);
             let _ = self.poller.remove(connecting.stream.as_raw_fd());
-            connecting
-                .common
-                .progress_sink
-                .mark_terminated_unexpectedly();
+            connecting.common.mark_terminated_unexpectedly();
         }
     }
 
@@ -72,7 +69,7 @@ where
             .filter_map(|(output_id, socket_ref)| {
                 let leaf = self.leaves.get(socket_ref.key)?;
                 let draining_since = leaf.draining_since?;
-                let flushed = leaf.common.pending_application_bytes == 0;
+                let flushed = leaf.is_flushed();
                 let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
                 (flushed || expired).then(|| output_id.clone())
             })
@@ -117,11 +114,7 @@ where
                 self.leaves
                     .get_mut(key)
                     .map(|leaf| {
-                        let lag_units = if leaf.common.cursor_primed {
-                            head_sequence.saturating_sub(leaf.common.cursor.next_sequence)
-                        } else {
-                            0
-                        };
+                        let lag_units = leaf.common.feed_lag(head_sequence);
                         let quality = leaf.sample_quality(now, feed_published_bytes);
                         let delivery = quality
                             .as_ref()
@@ -131,14 +124,9 @@ where
                             LeafStallClass::Backpressured => Some("backpressured"),
                             LeafStallClass::Stalled => Some("stalled"),
                         };
-                        leaf.common
-                            .progress_sink
-                            .record_backpressure_state(lag_units, reason);
-                        if let Some(quality) = quality {
-                            leaf.common.progress_sink.record_quality(quality);
-                        }
+                        leaf.common.publish_health(lag_units, reason, quality);
                         let draining = leaf.draining_since.is_some_and(|since| {
-                            leaf.common.pending_application_bytes == 0
+                            leaf.is_flushed()
                                 || now.saturating_duration_since(since) >= drain_timeout
                         });
                         let startup_expired =
@@ -170,7 +158,7 @@ where
                 continue;
             };
             if let Some(leaf) = self.leaves.get(socket_ref.key) {
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
+                leaf.common.mark_terminated_unexpectedly();
             }
             // The shared removal path returns the key to `free_leaf_keys` and
             // purges it from every queue; closing in place leaked the slot.

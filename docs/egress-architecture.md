@@ -137,8 +137,9 @@ first video keyframe ends the wait. Audio and codec configuration pass: an
 FLV sequence header is not flagged a keyframe, but references nothing
 (`MediaPacket::is_video_interframe`).
 
-A leaf starts with a placeholder cursor. On its first visit, `visit_leaf`
-(`visit.rs`) primes it with `live_start_cursor`: the latest retained sync
+A leaf starts with a placeholder cursor. On its first visit,
+`LeafCommon::advance` (`leaf.rs`) primes it with `live_start_cursor`
+(`feed.rs`): the latest retained sync
 point, or the head when none is retained, awaiting a keyframe there.
 `HandshakeComplete` re-anchors the
 cursor the same way, because handshake states never read the feed. The
@@ -324,7 +325,7 @@ when the transport would block and keep any partial wire state it needs to
 resume. `WorkBudget` (`policy.rs`) ends a visit when units, bytes or the time
 deadline run out; a visit always gets at least one unit.
 
-`visit_leaf` maps the result to a scheduler decision:
+`LeafCommon::apply_progress` (`leaf.rs`) maps the result to a scheduler decision:
 
 | `EngineProgress` | Effect on the leaf | `VisitDecision` |
 |---|---|---|
@@ -340,8 +341,9 @@ deadline run out; a visit always gets at least one unit.
 `FeedWake`. `RecoveryCapability` lets an engine advertise
 `InPlaceResync`; the default is `ReconnectOnly`.
 
-`visit_leaf` also rejects a stale generation (`StaleGeneration`) and catches a
-panic inside `advance`. A panic becomes `Failed` with reason `engine_panic`,
+`visit_leaf` also rejects a stale generation (`StaleGeneration`), and
+`LeafCommon::advance` catches a panic inside the engine's `advance`. A panic
+becomes `Failed` with reason `engine_panic`,
 so only that output fails.
 
 ## Backpressure, stalls and retries
@@ -426,7 +428,7 @@ test (see [SRT shard capacity](runtime-crossings.md#srt-shard-capacity)).
 
 | Failure | Blast radius | Mechanism |
 |---|---|---|
-| Engine panic | One output | `catch_unwind` in `visit_leaf`; output closes and retries |
+| Engine panic | One output | `catch_unwind` in `LeafCommon::advance`; output closes and retries |
 | Slow or dead destination | One output | Budgets, parking, `LeafPolicy` stall ceilings, stall sweep |
 | Stale event after removal | None | `LeafKey` epoch; generation check in `visit_leaf` |
 | Shard panic outside a visit | Outputs on that shard | `EgressShardSnapshot::panicked`; health `Panicked`; critical alert |

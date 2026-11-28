@@ -127,7 +127,7 @@ where
             return;
         }
         tracing::warn!(output_id = %output_id, %error, "rtmp fabric leaf rejected: peer resolution failed");
-        pending.common.progress_sink.mark_terminated_unexpectedly();
+        pending.common.mark_terminated_unexpectedly();
     }
 
     pub(super) fn complete_pending_connect(
@@ -145,7 +145,7 @@ where
         }
 
         let Some(key) = self.leaves.reserve() else {
-            pending.common.progress_sink.mark_terminated_unexpectedly();
+            pending.common.mark_terminated_unexpectedly();
             tracing::warn!(
                 output_id = %output_id,
                 "rtmp fabric leaf rejected: shard leaf capacity exhausted"
@@ -189,7 +189,7 @@ where
                     error = %error.message,
                     "rtmp fabric leaf connect failed"
                 );
-                pending.common.progress_sink.mark_terminated_unexpectedly();
+                pending.common.mark_terminated_unexpectedly();
                 self.leaves.release_reserved(key);
                 false
             }
@@ -211,7 +211,6 @@ where
         connecting: ConnectingRtmpConnect,
         key: LeafKey,
     ) -> Result<(), ()> {
-        let progress_sink = connecting.common.progress_sink.clone();
         let startup_timeout = connecting.startup_timeout;
         let generation = connecting.common.generation;
         let fd = connecting.stream.as_raw_fd();
@@ -221,22 +220,23 @@ where
             &connecting.parts,
             fd,
             key,
-            &progress_sink,
+            &connecting.common,
         )?;
-        let publish_startup = self.take_startup(output_id, fd, key, &progress_sink)?;
+        let publish_startup = self.take_startup(output_id, fd, key, &connecting.common)?;
         let engine = self.build_engine(
             connecting.parts,
             publish_startup,
             output_id,
             fd,
             key,
-            &progress_sink,
+            &connecting.common,
         )?;
         let leaf = RtmpFabricLeaf {
             common: connecting.common,
             engine,
             transport: stream,
             pending_readiness: super::Readiness::default(),
+            pending_application_bytes: 0,
             observed_since: Instant::now(),
             startup_deadline: Instant::now() + startup_timeout,
             draining_since: None,
@@ -244,7 +244,7 @@ where
             previous_tcp_bytes: None,
             delivery: Default::default(),
         };
-        self.install_leaf(output_id, key, fd, generation, leaf, &progress_sink)
+        self.install_leaf(output_id, key, fd, generation, leaf)
     }
 
     fn secure_stream(
@@ -254,7 +254,7 @@ where
         parts: &restream_rtmp::RtmpUrlParts,
         fd: std::os::fd::RawFd,
         key: LeafKey,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
+        common: &LeafCommon,
     ) -> Result<TlsTcpConnection, ()> {
         if !parts.tls {
             return Ok(TlsTcpConnection::plain(stream));
@@ -268,7 +268,7 @@ where
             Ok(stream) => Ok(stream),
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
-                self.abandon_connect(fd, key, progress_sink)
+                self.abandon_connect(fd, key, common)
             }
         }
     }
@@ -278,11 +278,11 @@ where
         output_id: &OutputId,
         fd: std::os::fd::RawFd,
         key: LeafKey,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
+        common: &LeafCommon,
     ) -> Result<RtmpPublishStartup, ()> {
         let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");
-            return self.abandon_connect(fd, key, progress_sink);
+            return self.abandon_connect(fd, key, common);
         };
         Ok(publish_startup)
     }
@@ -294,7 +294,7 @@ where
         output_id: &OutputId,
         fd: std::os::fd::RawFd,
         key: LeafKey,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
+        common: &LeafCommon,
     ) -> Result<RtmpFabricEngine, ()> {
         match RtmpFabricEngine::new_client(parts, self.chunk_size, publish_startup) {
             Ok(mut engine) => {
@@ -303,7 +303,7 @@ where
             }
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
-                self.abandon_connect(fd, key, progress_sink)
+                self.abandon_connect(fd, key, common)
             }
         }
     }
@@ -315,12 +315,11 @@ where
         fd: std::os::fd::RawFd,
         generation: u64,
         leaf: RtmpFabricLeaf,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
     ) -> Result<(), ()> {
-        self.register_leaf_connection(output_id, key, fd, generation, &leaf, progress_sink)?;
-        self.fill_leaf(key, leaf, output_id, fd, progress_sink)?;
+        self.register_leaf_connection(output_id, key, fd, generation, &leaf)?;
+        self.fill_leaf(key, leaf, output_id, fd)?;
         self.record_leaf_socket(output_id, key, fd);
-        self.enqueue_first_write(output_id, key, fd, generation, progress_sink)?;
+        self.enqueue_first_write(output_id, key, fd, generation)?;
         tracing::info!(output_id = %output_id, leaf_key = ?key, "rtmp fabric leaf connected");
         Ok(())
     }
@@ -332,7 +331,6 @@ where
         fd: std::os::fd::RawFd,
         generation: u64,
         leaf: &RtmpFabricLeaf,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
     ) -> Result<(), ()> {
         if self
             .poller
@@ -340,7 +338,7 @@ where
             .is_err()
         {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
-            return self.abandon_connect(fd, key, progress_sink);
+            return self.abandon_connect(fd, key, &leaf.common);
         }
         Ok(())
     }
@@ -351,7 +349,6 @@ where
         leaf: RtmpFabricLeaf,
         output_id: &OutputId,
         fd: std::os::fd::RawFd,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
     ) -> Result<(), ()> {
         if let Err(mut leaf) = self.leaves.fill(key, leaf) {
             // Unreachable while `key` is this connect's reservation; never
@@ -359,7 +356,7 @@ where
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf slot was not reserved");
             let _ = self.poller.remove(fd);
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
-            progress_sink.mark_terminated_unexpectedly();
+            leaf.common.mark_terminated_unexpectedly();
             return Err(());
         }
         Ok(())
@@ -383,7 +380,6 @@ where
         key: LeafKey,
         fd: std::os::fd::RawFd,
         generation: u64,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
     ) -> Result<(), ()> {
         // An established TCP socket is writable, but the TX worker only emits
         // completions after a write. Queue that first write opportunity here.
@@ -395,7 +391,9 @@ where
             writable: true,
         }) {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf could not enter the ready queue");
-            progress_sink.mark_terminated_unexpectedly();
+            if let Some(leaf) = self.leaves.get(key) {
+                leaf.common.mark_terminated_unexpectedly();
+            }
             self.remove_leaf_by_output(output_id);
             return Err(());
         }
@@ -406,10 +404,10 @@ where
         &mut self,
         fd: std::os::fd::RawFd,
         key: LeafKey,
-        progress_sink: &crate::egress::leaf::EgressProgressSink,
+        common: &LeafCommon,
     ) -> Result<T, ()> {
         let _ = self.poller.remove(fd);
-        progress_sink.mark_terminated_unexpectedly();
+        common.mark_terminated_unexpectedly();
         self.leaves.release_reserved(key);
         Err(())
     }
@@ -445,10 +443,7 @@ where
         self.connecting_by_output.remove(&output_id);
         if let Err(error) = connect_error(connecting.stream.as_raw_fd()) {
             tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf connect failed");
-            connecting
-                .common
-                .progress_sink
-                .mark_terminated_unexpectedly();
+            connecting.common.mark_terminated_unexpectedly();
             let _ = self.poller.remove(connecting.stream.as_raw_fd());
             self.leaves.release_reserved(event.key);
             return false;

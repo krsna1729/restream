@@ -1,11 +1,12 @@
 use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness, WaitCondition};
 use super::command::{FeedId, OutputId};
+use super::feed::live_start_cursor;
 use super::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use super::leaf::LeafCommon;
 use super::policy::{LeafPolicy, WorkBudget};
 use super::scheduler::VisitDecision;
 use super::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
-use super::visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult, live_start_cursor};
+use super::visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult};
 use bytes::Bytes;
 use proptest::prelude::*;
 use std::time::Duration;
@@ -92,7 +93,7 @@ fn suspends_when_engine_needs_readiness() {
     assert!(common.schedule.last_service_at.is_some());
 }
 
-/// Exhaustive proof of `apply_progress_to_common`'s `wants_feed_wake`
+/// Exhaustive proof of `ScheduleState::record_visit`'s `wants_feed_wake`
 /// mapping: `Feed`/`FeedOrIo` (from either `Needs` or `Progress`) set it
 /// `true`; `Io` and every non-wait-carrying `EngineProgress` variant set
 /// it `false`. This is the flag `RtmpShardBackend`/`SrtShardBackend`'s

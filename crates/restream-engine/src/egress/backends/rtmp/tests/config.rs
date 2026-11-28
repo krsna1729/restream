@@ -338,7 +338,7 @@ fn leaf_sends_no_interframe_after_a_resync_without_a_retained_keyframe() {
             _ => thread::sleep(Duration::from_millis(1)),
         }
     }
-    cursor = crate::egress::visit::live_start_cursor(&feed);
+    cursor = crate::egress::feed::live_start_cursor(&feed);
 
     ring.push_drained_batch_recording_config(&mut vec![
         raw_video(&[P_SLICE], false, 14 * 40),

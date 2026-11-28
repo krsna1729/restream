@@ -110,9 +110,7 @@ impl IoBuffers {
     /// limit; `WouldBlock` when nothing fits. `message`: the parts are the
     /// rest of one message, so a prefix leaves it open (`message_open`).
     fn stage_parts(&mut self, parts: &[TxPart<'_>], message: bool) -> io::Result<usize> {
-        if let Some((kind, error)) = &self.error {
-            return Err(io::Error::new(*kind, error.clone()));
-        }
+        self.check_transmit()?;
         let mut available = self
             .transmit_capacity
             .saturating_sub(self.pending_write_bytes);
@@ -146,8 +144,283 @@ impl IoBuffers {
         Ok(count)
     }
 
+    /// Stage a prefix of `buf` as copied bytes within the TX bound;
+    /// `WouldBlock` when nothing fits.
+    fn write_copied(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.check_transmit()?;
+        let available = self
+            .transmit_capacity
+            .saturating_sub(self.pending_write_bytes);
+        let count = buf.len().min(available);
+        if count == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.stage_copy(&buf[..count]);
+        self.pending_write_bytes += count;
+        wake(&mut self.tx_waker);
+        Ok(count)
+    }
+
+    /// Copies only (the copied run adds no segment), so it needs no
+    /// `MAX_BATCH_SEGMENTS` guard; a zero-copy variant must use `stage_parts`.
+    fn write_copied_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.check_transmit()?;
+        let mut available = self
+            .transmit_capacity
+            .saturating_sub(self.pending_write_bytes);
+        let mut count = 0;
+        for buf in bufs.iter().filter(|buf| !buf.is_empty()) {
+            let take = available.min(buf.len());
+            if take == 0 {
+                break;
+            }
+            self.stage_copy(&buf[..take]);
+            self.pending_write_bytes += take;
+            available -= take;
+            count += take;
+        }
+        if count == 0 && bufs.iter().any(|buf| !buf.is_empty()) {
+            Err(io::ErrorKind::WouldBlock.into())
+        } else {
+            wake(&mut self.tx_waker);
+            Ok(count)
+        }
+    }
+
+    /// A failed connection refuses further writes with its stored error.
+    fn check_transmit(&self) -> io::Result<()> {
+        match &self.error {
+            Some((kind, error)) => Err(io::Error::new(*kind, error.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Raise (or lower) the TX staging bound; at least one byte, so a
+    /// write can always make progress.
+    fn limit_transmit(&mut self, bytes: usize) {
+        self.transmit_capacity = bytes.max(1);
+    }
+
     fn has_outgoing(&self) -> bool {
         !self.outgoing.is_empty() || !self.copied.is_empty()
+    }
+
+    /// Swap the staged segments into `output`; `Ready(true)` when they stop
+    /// inside an open message (see `message_open`). Pending, with the waker
+    /// kept, until something is staged.
+    fn poll_take_transmit(&mut self, cx: &mut Context<'_>, output: &mut Vec<Bytes>) -> Poll<bool> {
+        if !self.has_outgoing() {
+            self.tx_waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+        // Hand the staged segments to the writer by swapping lists; both keep
+        // their capacity, so payload is never copied and the list is not
+        // reallocated. (Sealed copied runs and Compio's iovec array are small
+        // per-flush allocations.)
+        self.seal_copied();
+        std::mem::swap(output, &mut self.outgoing);
+        Poll::Ready(self.message_open)
+    }
+
+    /// The transmit worker sent `count` staged bytes: their room in the TX
+    /// bound frees up.
+    fn complete_transmit(&mut self, count: usize) {
+        self.pending_write_bytes = self.pending_write_bytes.saturating_sub(count);
+    }
+
+    /// Keep a socket error for the protocol's next read or write.
+    fn fail(&mut self, error: &io::Error) {
+        self.error = Some((error.kind(), error.to_string()));
+    }
+
+    fn pending_receive_bytes(&self) -> usize {
+        self.received.len()
+    }
+
+    /// See `CompioTcpStream::complete_tls_records_len`.
+    fn complete_tls_records_len(&self) -> usize {
+        let received = &self.received;
+        whole_tls_records_len(received.len(), |at| received.get(at).copied())
+    }
+
+    /// See `CompioTcpStream::receive_closed`.
+    fn receive_closed(&self) -> bool {
+        self.eof || self.error.is_some()
+    }
+
+    /// See `CompioTcpStream::has_buffered_receive`.
+    fn has_buffered_receive(&self) -> bool {
+        !self.received.is_empty() || self.receive_closed()
+    }
+
+    /// Let the receive worker post its next receive.
+    fn resume_receive(&mut self) {
+        self.receive_armed = true;
+        wake(&mut self.rx_resume_waker);
+    }
+
+    /// TLS before kTLS: receives go through the ancillary worker, which
+    /// reads synchronously until the hand-off and then with `recvmsg`.
+    fn start_ancillary_receive(&mut self) {
+        debug_assert!(!self.ktls_active, "ancillary receive starts before kTLS");
+        self.ancillary_mode = true;
+    }
+
+    /// The kernel took over TLS. Only the ancillary worker reads record
+    /// types, and every staged byte went to rustls first, so no record is
+    /// split between rustls and kernel TLS.
+    fn enter_ktls(&mut self) {
+        debug_assert!(
+            self.ancillary_mode,
+            "kTLS receive needs the ancillary worker"
+        );
+        debug_assert!(
+            self.received.is_empty(),
+            "staged receive bytes at the kTLS hand-off"
+        );
+        self.ktls_active = true;
+    }
+
+    /// Move the front of the receive buffer into `buf` and wake a receive
+    /// waiting for room. Nothing buffered: the stored error (once), EOF as
+    /// `Ok(0)`, else `WouldBlock`.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let count = buf.len().min(self.received.len());
+        self.drain_received(&mut buf[..count])
+    }
+
+    /// One read with its TLS record type: 23 (application data) before
+    /// kTLS; after it, at most the rest of the current kTLS record.
+    fn read_record(&mut self, buf: &mut [u8]) -> io::Result<(usize, u8)> {
+        if !self.ktls_active {
+            return self.read(buf).map(|count| (count, 23));
+        }
+        let received_len = self.received.len();
+        let Some((remaining, record_type)) = self.record_type.as_mut() else {
+            if received_len == 0 {
+                return self.closed_read().map(|()| (0, 23));
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "kTLS receive data missing its record type",
+            ));
+        };
+        let count = buf.len().min(received_len).min(*remaining);
+        *remaining -= count;
+        let record_type = *record_type;
+        if *remaining == 0 {
+            self.record_type = None;
+        }
+        self.drain_received(&mut buf[..count]).map(|count| {
+            if count > 0 {
+                (count, record_type)
+            } else {
+                (0, 23)
+            }
+        })
+    }
+
+    fn drain_received(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        take_front(&mut self.received, dst);
+        if dst.is_empty() {
+            return self.closed_read().map(|()| 0);
+        }
+        wake(&mut self.rx_space_waker);
+        Ok(dst.len())
+    }
+
+    /// A read found nothing buffered: the stored error (reported once),
+    /// `Ok` at EOF, else `WouldBlock`.
+    fn closed_read(&mut self) -> io::Result<()> {
+        if let Some((kind, message)) = self.error.take() {
+            Err(io::Error::new(kind, message))
+        } else if self.eof {
+            Ok(())
+        } else {
+            Err(io::ErrorKind::WouldBlock.into())
+        }
+    }
+
+    /// Room for the next receive, at most `IO_CHUNK`; Pending, with the
+    /// waker kept, while the buffer is full or a kTLS record is still
+    /// being read.
+    fn poll_receive_room(&mut self, cx: &mut Context<'_>) -> Poll<usize> {
+        let room = TRANSPORT_BUFFER_CAPACITY.saturating_sub(self.received.len());
+        let waiting_for_ktls_record = self.ktls_active && self.record_type.is_some();
+        if room > 0 && !waiting_for_ktls_record {
+            Poll::Ready(room.min(IO_CHUNK))
+        } else {
+            self.rx_space_waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+
+    /// Consume the arm a protocol visit gave (`resume_receive`); Pending,
+    /// with the waker kept, until there is one.
+    fn poll_receive_arm(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.receive_armed {
+            self.receive_armed = false;
+            Poll::Ready(())
+        } else {
+            self.rx_resume_waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+
+    /// The record type of a `recvmsg` completion: from its control data
+    /// once kTLS is active; before that, control data is an error.
+    fn ktls_record_type(&self, control: &[u8], truncated: bool) -> io::Result<Option<u8>> {
+        if self.ktls_active {
+            crate::egress::tls::ktls::record_type_from_control(control, truncated).map(Some)
+        } else if !control.is_empty() || truncated {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected RTMPS ancillary control data",
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Stage one receive attempt for the next protocol visit. `None`: the
+    /// pre-kTLS readiness poll read nothing (or kTLS was installed
+    /// meanwhile), so the receive re-arms itself and retries without
+    /// waiting for a visit. Bytes extend the buffer, tagged with their kTLS
+    /// record type when given; zero bytes are EOF; an error is kept for the
+    /// protocol's next read.
+    fn stage_receive(
+        &mut self,
+        attempt: Option<io::Result<&[u8]>>,
+        record_type: Option<u8>,
+    ) -> ReceiveStep {
+        match attempt {
+            None => {
+                self.receive_armed = true;
+                ReceiveStep::Retry
+            }
+            Some(Ok([])) => {
+                self.eof = true;
+                ReceiveStep::Stop
+            }
+            Some(Ok(bytes)) => {
+                self.received.extend(bytes);
+                debug_assert!(self.received.len() <= TRANSPORT_BUFFER_CAPACITY);
+                if let Some(record_type) = record_type {
+                    self.record_type = Some((bytes.len(), record_type));
+                }
+                ReceiveStep::Continue
+            }
+            Some(Err(error)) => {
+                self.fail(&error);
+                ReceiveStep::Stop
+            }
+        }
+    }
+
+    /// Test transport: see `CompioTcpStream::push_received_for_test`.
+    #[cfg(test)]
+    fn push_received_for_test(&mut self, bytes: &[u8]) {
+        self.received.extend(bytes);
     }
 
     pub(super) fn new() -> SharedIoBuffers {
@@ -209,7 +482,7 @@ impl CompioTcpStream {
     }
     pub(crate) fn pending_receive_bytes(&self) -> usize {
         self.io_buffers()
-            .map_or(0, |buffers| buffers.borrow().received.len())
+            .map_or(0, |buffers| buffers.borrow().pending_receive_bytes())
     }
 
     /// Length of the run of whole TLS records (5-byte header, then the
@@ -218,11 +491,7 @@ impl CompioTcpStream {
     /// split between rustls and kernel TLS.
     pub(crate) fn complete_tls_records_len(&self) -> usize {
         match self {
-            Self::Compio { buffers, .. } => {
-                let buffers = buffers.borrow();
-                let received = &buffers.received;
-                whole_tls_records_len(received.len(), |at| received.get(at).copied())
-            }
+            Self::Compio { buffers, .. } => buffers.borrow().complete_tls_records_len(),
             #[cfg(test)]
             Self::Std(stream) => {
                 let mut peeked = vec![0_u8; 64 * 1024];
@@ -236,10 +505,7 @@ impl CompioTcpStream {
     /// before it may still be buffered.
     pub(crate) fn receive_closed(&self) -> bool {
         match self {
-            Self::Compio { buffers, .. } => {
-                let buffers = buffers.borrow();
-                buffers.eof || buffers.error.is_some()
-            }
+            Self::Compio { buffers, .. } => buffers.borrow().receive_closed(),
             // Test-only: detects a clean EOF with nothing pending; data
             // before a FIN reads as "not closed".
             #[cfg(test)]
@@ -255,9 +521,12 @@ impl CompioTcpStream {
     #[cfg(test)]
     pub(crate) fn take_staged_for_test(&self) -> Vec<u8> {
         let buffers = self.io_buffers().expect("a Compio stream");
-        let mut buffers = buffers.borrow_mut();
-        buffers.seal_copied();
-        std::mem::take(&mut buffers.outgoing)
+        let mut segments = Vec::new();
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let _ = buffers
+            .borrow_mut()
+            .poll_take_transmit(&mut cx, &mut segments);
+        segments
             .iter()
             .flat_map(|segment| segment.iter().copied())
             .collect()
@@ -267,38 +536,35 @@ impl CompioTcpStream {
     #[cfg(test)]
     pub(crate) fn drain_for_test(&self) {
         let buffers = self.io_buffers().expect("a Compio stream");
-        buffers.borrow_mut().pending_write_bytes = 0;
+        buffers.borrow_mut().complete_transmit(usize::MAX);
     }
 
     /// Test transport: the receive worker saw EOF.
     #[cfg(test)]
     pub(crate) fn end_receive_for_test(&self) {
         let buffers = self.io_buffers().expect("a Compio stream");
-        buffers.borrow_mut().eof = true;
+        buffers.borrow_mut().stage_receive(Some(Ok(&[])), None);
     }
 
-    /// Test transport: bytes the receive worker read from the socket.
+    /// Test transport: bytes the receive worker read from the socket
+    /// (unbounded, unlike the worker's reads).
     #[cfg(test)]
     pub(crate) fn push_received_for_test(&self, bytes: &[u8]) {
         let buffers = self.io_buffers().expect("a Compio stream");
-        buffers.borrow_mut().received.extend(bytes);
+        buffers.borrow_mut().push_received_for_test(bytes);
     }
 
     /// Whether the adapter holds receive state the protocol has not consumed
     /// yet (bytes, EOF, or an error). A receive completion is an edge event,
     /// so the scheduler must revisit a read-waiting leaf in this state itself.
     pub(crate) fn has_buffered_receive(&self) -> bool {
-        self.io_buffers().is_some_and(|buffers| {
-            let buffers = buffers.borrow();
-            !buffers.received.is_empty() || buffers.eof || buffers.error.is_some()
-        })
+        self.io_buffers()
+            .is_some_and(|buffers| buffers.borrow().has_buffered_receive())
     }
 
     pub(crate) fn resume_receive(&self) {
         if let Some(buffers) = self.io_buffers() {
-            let mut buffers = buffers.borrow_mut();
-            buffers.receive_armed = true;
-            wake(&mut buffers.rx_resume_waker);
+            buffers.borrow_mut().resume_receive();
         }
     }
     pub(crate) fn raw_fd(&self) -> RawFd {
@@ -311,62 +577,22 @@ impl CompioTcpStream {
             Self::Std(stream) => stream.as_fd(),
         }
     }
-    pub(crate) fn set_ancillary_mode(&self) {
+    /// TLS before kTLS: see `IoBuffers::start_ancillary_receive`.
+    pub(crate) fn start_ancillary_receive(&self) {
         if let Some(buffers) = self.io_buffers() {
-            buffers.borrow_mut().ancillary_mode = true;
+            buffers.borrow_mut().start_ancillary_receive();
         }
     }
-    pub(crate) fn set_ktls_mode(&self) {
+    /// The kernel took over TLS: see `IoBuffers::enter_ktls`.
+    pub(crate) fn enter_ktls(&self) {
         if let Some(buffers) = self.io_buffers() {
-            buffers.borrow_mut().ktls_active = true;
+            buffers.borrow_mut().enter_ktls();
         }
     }
 
     pub(crate) fn read_record(&mut self, buf: &mut [u8]) -> io::Result<(usize, u8)> {
         match self {
-            Self::Compio { buffers, .. } => {
-                let mut buffers = buffers.borrow_mut();
-                let active = buffers.ktls_active;
-                let received_len = buffers.received.len();
-                let (record_type, count) = if active {
-                    let Some((remaining, record_type)) = buffers.record_type.as_mut() else {
-                        if received_len == 0 {
-                            return if let Some((kind, message)) = buffers.error.take() {
-                                Err(io::Error::new(kind, message))
-                            } else if buffers.eof {
-                                Ok((0, 23))
-                            } else {
-                                Err(io::ErrorKind::WouldBlock.into())
-                            };
-                        }
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "kTLS receive data missing its record type",
-                        ));
-                    };
-                    let count = buf.len().min(received_len).min(*remaining);
-                    *remaining -= count;
-                    let record_type = *record_type;
-                    let exhausted = *remaining == 0;
-                    if exhausted {
-                        buffers.record_type = None;
-                    }
-                    (record_type, count)
-                } else {
-                    (23, buf.len().min(buffers.received.len()))
-                };
-                take_front(&mut buffers.received, &mut buf[..count]);
-                if count > 0 {
-                    wake(&mut buffers.rx_space_waker);
-                    Ok((count, record_type))
-                } else if let Some((kind, message)) = buffers.error.take() {
-                    Err(io::Error::new(kind, message))
-                } else if buffers.eof {
-                    Ok((0, 23))
-                } else {
-                    Err(io::ErrorKind::WouldBlock.into())
-                }
-            }
+            Self::Compio { buffers, .. } => buffers.borrow_mut().read_record(buf),
             #[cfg(test)]
             Self::Std(stream) => crate::egress::tls::ktls::recv_record(stream.as_raw_fd(), buf),
         }
@@ -406,21 +632,7 @@ impl Read for CompioTcpStream {
             return Ok(0);
         }
         match self {
-            Self::Compio { buffers, .. } => {
-                let mut buffers = buffers.borrow_mut();
-                let count = buf.len().min(buffers.received.len());
-                take_front(&mut buffers.received, &mut buf[..count]);
-                if count > 0 {
-                    wake(&mut buffers.rx_space_waker);
-                    Ok(count)
-                } else if let Some((kind, message)) = buffers.error.take() {
-                    Err(io::Error::new(kind, message))
-                } else if buffers.eof {
-                    Ok(0)
-                } else {
-                    Err(io::ErrorKind::WouldBlock.into())
-                }
-            }
+            Self::Compio { buffers, .. } => buffers.borrow_mut().read(buf),
             #[cfg(test)]
             Self::Std(stream) => stream.read(buf),
         }
@@ -448,7 +660,7 @@ impl CompioTcpStream {
     /// costs no copy; it only lets more of a payload be queued at once.
     pub(crate) fn set_transmit_capacity(&mut self, bytes: usize) {
         match self {
-            Self::Compio { buffers, .. } => buffers.borrow_mut().transmit_capacity = bytes.max(1),
+            Self::Compio { buffers, .. } => buffers.borrow_mut().limit_transmit(bytes),
             #[cfg(test)]
             Self::Std(_) => {}
         }
@@ -475,58 +687,15 @@ impl Write for CompioTcpStream {
             return Ok(0);
         }
         match self {
-            Self::Compio { buffers, .. } => {
-                let mut buffers = buffers.borrow_mut();
-                if let Some((kind, message)) = &buffers.error {
-                    return Err(io::Error::new(*kind, message.clone()));
-                }
-                let available = buffers
-                    .transmit_capacity
-                    .saturating_sub(buffers.pending_write_bytes);
-                let count = buf.len().min(available);
-                if count == 0 {
-                    return Err(io::ErrorKind::WouldBlock.into());
-                }
-                buffers.stage_copy(&buf[..count]);
-                buffers.pending_write_bytes += count;
-                wake(&mut buffers.tx_waker);
-                Ok(count)
-            }
+            Self::Compio { buffers, .. } => buffers.borrow_mut().write_copied(buf),
             #[cfg(test)]
             Self::Std(stream) => stream.write(buf),
         }
     }
 
-    /// Copies only (the copied run adds no segment), so it needs no
-    /// `MAX_BATCH_SEGMENTS` guard; a zero-copy variant must use `stage_parts`.
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         match self {
-            Self::Compio { buffers, .. } => {
-                let mut buffers = buffers.borrow_mut();
-                if let Some((kind, message)) = &buffers.error {
-                    return Err(io::Error::new(*kind, message.clone()));
-                }
-                let mut available = buffers
-                    .transmit_capacity
-                    .saturating_sub(buffers.pending_write_bytes);
-                let mut count = 0;
-                for buf in bufs.iter().filter(|buf| !buf.is_empty()) {
-                    let take = available.min(buf.len());
-                    if take == 0 {
-                        break;
-                    }
-                    buffers.stage_copy(&buf[..take]);
-                    buffers.pending_write_bytes += take;
-                    available -= take;
-                    count += take;
-                }
-                if count == 0 && bufs.iter().any(|buf| !buf.is_empty()) {
-                    Err(io::ErrorKind::WouldBlock.into())
-                } else {
-                    wake(&mut buffers.tx_waker);
-                    Ok(count)
-                }
-            }
+            Self::Compio { buffers, .. } => buffers.borrow_mut().write_copied_vectored(bufs),
             #[cfg(test)]
             Self::Std(stream) => stream.write_vectored(bufs),
         }
@@ -580,15 +749,7 @@ impl Future for ReceiveRoom {
     type Output = usize;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut buffers = self.0.borrow_mut();
-        let room = TRANSPORT_BUFFER_CAPACITY.saturating_sub(buffers.received.len());
-        let waiting_for_ktls_record = buffers.ktls_active && buffers.record_type.is_some();
-        if room > 0 && !waiting_for_ktls_record {
-            Poll::Ready(room.min(IO_CHUNK))
-        } else {
-            buffers.rx_space_waker = Some(cx.waker().clone());
-            Poll::Pending
-        }
+        self.0.borrow_mut().poll_receive_room(cx)
     }
 }
 
@@ -598,14 +759,7 @@ impl Future for ReceiveArm {
     type Output = ();
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut buffers = self.0.borrow_mut();
-        if buffers.receive_armed {
-            buffers.receive_armed = false;
-            Poll::Ready(())
-        } else {
-            buffers.rx_resume_waker = Some(cx.waker().clone());
-            Poll::Pending
-        }
+        self.0.borrow_mut().poll_receive_arm(cx)
     }
 }
 
@@ -613,21 +767,7 @@ impl Future for ReceiveArm {
 /// open message (see `IoBuffers::message_open`).
 async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) -> bool {
     output.clear();
-    std::future::poll_fn(|cx| {
-        let mut buffers = buffers.borrow_mut();
-        if !buffers.has_outgoing() {
-            buffers.tx_waker = Some(cx.waker().clone());
-            return Poll::Pending;
-        }
-        // Hand the staged segments to the writer by swapping lists; both keep
-        // their capacity, so payload is never copied and the list is not
-        // reallocated. (Sealed copied runs and Compio's iovec array are small
-        // per-flush allocations.)
-        buffers.seal_copied();
-        std::mem::swap(output, &mut buffers.outgoing);
-        Poll::Ready(buffers.message_open)
-    })
-    .await
+    std::future::poll_fn(|cx| buffers.borrow_mut().poll_take_transmit(cx, output)).await
 }
 
 async fn notify_readable(events: &flume::Sender<TcpReadyLeaf>, event: TcpReadyLeaf) -> bool {
@@ -644,8 +784,21 @@ async fn notify_readable(events: &flume::Sender<TcpReadyLeaf>, event: TcpReadyLe
         .is_ok()
 }
 
-fn store_receive_error(buffers: &SharedIoBuffers, error: io::Error) {
-    buffers.borrow_mut().error = Some((error.kind(), error.to_string()));
+/// Wake the protocol for a staged receive; a closed event channel stops the
+/// worker.
+async fn notify_staged(
+    events: &flume::Sender<TcpReadyLeaf>,
+    event: TcpReadyLeaf,
+    step: ReceiveStep,
+) -> ReceiveStep {
+    if step == ReceiveStep::Retry {
+        return step;
+    }
+    if notify_readable(events, event).await {
+        step
+    } else {
+        ReceiveStep::Stop
+    }
 }
 
 pub(super) async fn receive_worker(
@@ -671,29 +824,15 @@ pub(super) async fn receive_worker(
         }
         let compio::BufResult(result, returned) = (&mut stream).read(buffer).await;
         buffer = returned;
-        match result {
-            Ok(0) => {
-                buffers.borrow_mut().eof = true;
-                let _ = notify_readable(&events, event).await;
-                return;
-            }
-            Ok(count) => {
-                {
-                    let mut state = buffers.borrow_mut();
-                    debug_assert!(count <= room);
-                    state.received.extend(&buffer[..count]);
-                    debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
-                }
-                buffer.clear();
-                if !notify_readable(&events, event).await {
-                    return;
-                }
-            }
-            Err(error) => {
-                store_receive_error(&buffers, error);
-                let _ = notify_readable(&events, event).await;
-                return;
-            }
+        if let Ok(count) = result {
+            debug_assert!(count <= room);
+        }
+        let step = buffers
+            .borrow_mut()
+            .stage_receive(Some(result.map(|count| &buffer[..count])), None);
+        buffer.clear();
+        if notify_staged(&events, event, step).await == ReceiveStep::Stop {
+            return;
         }
     }
 }
@@ -784,9 +923,11 @@ async fn receive_ancillary_worker(
     }
 }
 
-/// Whether the receive loop continues after one staged read.
+/// What the receive loop does after one receive attempt.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReceiveStep {
+    /// Nothing was staged; receive again without a protocol visit.
+    Retry,
     Continue,
     Stop,
 }
@@ -801,38 +942,16 @@ async fn receive_before_ktls_step(
     room: usize,
     data: &mut Vec<u8>,
 ) -> ReceiveStep {
-    match receive_before_ktls(owned_stream, buffers, room, data).await {
-        None => {
-            // Not readable after all, or handed off meanwhile: retry without
-            // waiting for another protocol visit.
-            buffers.borrow_mut().receive_armed = true;
-            ReceiveStep::Continue
-        }
-        Some(Ok(0)) => {
-            buffers.borrow_mut().eof = true;
-            let _ = notify_readable(events, event).await;
-            ReceiveStep::Stop
-        }
-        Some(Ok(count)) => {
-            {
-                let mut state = buffers.borrow_mut();
-                debug_assert!(count <= room);
-                state.received.extend(&data[..count]);
-                debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
-            }
-            data.clear();
-            if notify_readable(events, event).await {
-                ReceiveStep::Continue
-            } else {
-                ReceiveStep::Stop
-            }
-        }
-        Some(Err(error)) => {
-            store_receive_error(buffers, error);
-            let _ = notify_readable(events, event).await;
-            ReceiveStep::Stop
-        }
+    let attempt = receive_before_ktls(owned_stream, buffers, room, data).await;
+    if let Some(Ok(count)) = attempt {
+        debug_assert!(count <= room);
     }
+    let step = buffers.borrow_mut().stage_receive(
+        attempt.map(|result| result.map(|count| &data[..count])),
+        None,
+    );
+    data.clear();
+    notify_staged(events, event, step).await
 }
 
 /// One kTLS receive round: one `recvmsg` completion with its record type.
@@ -856,63 +975,26 @@ async fn receive_ktls_step(
         .await;
     *data = returned_data;
     *control = returned_control;
-    match result {
-        Ok((0, _, _)) => {
-            buffers.borrow_mut().eof = true;
-            let _ = notify_readable(events, event).await;
-            ReceiveStep::Stop
-        }
-        Ok((count, control_len, flags)) => {
-            let ktls_active = buffers.borrow().ktls_active;
-            let record_type = if ktls_active {
-                match crate::egress::tls::ktls::record_type_from_control(
-                    &control[..control_len],
-                    flags.contains(ReturnFlags::CTRUNC),
-                ) {
-                    Ok(record_type) => Some(record_type),
-                    Err(error) => {
-                        store_receive_error(buffers, error);
-                        let _ = notify_readable(events, event).await;
-                        return ReceiveStep::Stop;
-                    }
-                }
-            } else if control_len != 0 || flags.contains(ReturnFlags::CTRUNC) {
-                store_receive_error(
-                    buffers,
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "unexpected RTMPS ancillary control data",
-                    ),
-                );
-                let _ = notify_readable(events, event).await;
-                return ReceiveStep::Stop;
-            } else {
-                None
-            };
-            {
-                let mut state = buffers.borrow_mut();
+    let step = {
+        let mut state = buffers.borrow_mut();
+        match result {
+            Ok((0, _, _)) => state.stage_receive(Some(Ok(&[])), None),
+            Ok((count, control_len, flags)) => {
                 debug_assert!(count <= room);
-                state.received.extend(&data[..count]);
-                debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
-                if let Some(record_type) = record_type {
-                    state.record_type = Some((count, record_type));
+                match state
+                    .ktls_record_type(&control[..control_len], flags.contains(ReturnFlags::CTRUNC))
+                {
+                    Ok(record_type) => state.stage_receive(Some(Ok(&data[..count])), record_type),
+                    Err(error) => state.stage_receive(Some(Err(error)), None),
                 }
             }
-            data.clear();
-            control.clear();
-            control.resize(24, 0);
-            if notify_readable(events, event).await {
-                ReceiveStep::Continue
-            } else {
-                ReceiveStep::Stop
-            }
+            Err(error) => state.stage_receive(Some(Err(error)), None),
         }
-        Err(error) => {
-            store_receive_error(buffers, error);
-            let _ = notify_readable(events, event).await;
-            ReceiveStep::Stop
-        }
-    }
+    };
+    data.clear();
+    control.clear();
+    control.resize(24, 0);
+    notify_staged(events, event, step).await
 }
 
 /// Drop the first `count` written bytes: whole segments leave the list, the
@@ -957,28 +1039,19 @@ pub(super) async fn transmit_worker(
             let compio::BufResult(result, returned) =
                 compio::runtime::submit(send).await.into_inner();
             data = returned;
-            match result {
-                Ok(0) => {
-                    {
-                        let mut state = buffers.borrow_mut();
-                        state.error = Some((
-                            io::ErrorKind::WriteZero,
-                            "RTMP socket write returned zero".into(),
-                        ));
-                    }
-                    let _ = events
-                        .send_async(TcpReadyLeaf {
-                            writable: true,
-                            ..event
-                        })
-                        .await;
-                    return;
+            let result = result.and_then(|count| {
+                if count == 0 {
+                    Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "RTMP socket write returned zero",
+                    ))
+                } else {
+                    Ok(count)
                 }
+            });
+            match result {
                 Ok(count) => {
-                    {
-                        let mut state = buffers.borrow_mut();
-                        state.pending_write_bytes = state.pending_write_bytes.saturating_sub(count);
-                    }
+                    buffers.borrow_mut().complete_transmit(count);
                     consume_segments(&mut data, count);
                     if events
                         .send_async(TcpReadyLeaf {
@@ -992,10 +1065,7 @@ pub(super) async fn transmit_worker(
                     }
                 }
                 Err(error) => {
-                    {
-                        let mut state = buffers.borrow_mut();
-                        state.error = Some((error.kind(), error.to_string()));
-                    }
+                    buffers.borrow_mut().fail(&error);
                     let _ = events
                         .send_async(TcpReadyLeaf {
                             writable: true,
