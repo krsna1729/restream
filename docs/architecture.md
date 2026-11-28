@@ -447,6 +447,11 @@ stage it reads. The last lease to drop stops the stage
 (`crates/restream-engine/src/stage_registry.rs`). Stage identity is owned by
 `crates/restream-domain/src/domain/stage.rs`; do not rebuild its keys in another layer.
 
+`StageRegistry` owns ring-stage admission and cleanup. It checks for reuse
+and publishes a replacement under one runtime write guard.
+`StageRuntimeManager` prepares the newly admitted output ring and starts
+the worker after that guard is released.
+
 ## Lifecycle and recovery
 
 Every mutation takes one path:

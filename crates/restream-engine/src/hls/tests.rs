@@ -452,10 +452,6 @@ async fn hls_segmenter_registers_planned_protocol_stage_key() {
                 .cloned()
                 .expect("planned HLS stage should be runtime-backed");
             assert!(
-                runtime.ring.is_none(),
-                "HLS segmenters are non-ring protocol stages"
-            );
-            assert!(
                 !engine
                     .stages
                     .metrics

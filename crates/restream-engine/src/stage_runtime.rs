@@ -21,24 +21,12 @@ use crate::ffmpeg::stage_plan::{
     VideoCodecKind, VideoStageOp,
 };
 use crate::ingest_registry::IngestRegistry;
-use crate::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
-use crate::stage_metrics::StageMetrics;
-use crate::stage_registry::{StageLease, StageRegistry, StageRuntime};
+use crate::stage_lifecycle::StageBackendKind;
+use crate::stage_registry::{StageHandle, StageLease, StageRegistry};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_sync::RingBuffer;
-
-/// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
-/// owns the lifecycle, metrics, and cancellation token.
-#[derive(Clone)]
-pub struct StageHandle {
-    pub key: StageKey,
-    pub ring: Arc<RingBuffer>,
-    pub cancel: CancellationToken,
-    pub lifecycle: Arc<StageLifecycle>,
-    pub metrics: Arc<StageMetrics>,
-}
 
 /// Runtime scheduler for media graph stages. The engine builds it
 /// (`stage_runtime()`) over its registries, event log and FFmpeg capacity.
@@ -86,89 +74,23 @@ impl StageRuntimeManager {
         let backend_kind = restream_domain::planner::select_backend(&key.kind);
         let mut lifecycle = self
             .stages
-            .get_or_create_stage_lifecycle_with_backend(
-                key.clone(),
-                StagePhase::Registered,
-                backend_kind,
-            )
+            .admit_ring_stage(key, backend, self.transcoder_ring_capacity)
             .await;
-        let mut metrics = self.stages.get_or_create_stage_metrics(key.clone()).await;
-
-        // Single write-lock acquisition to atomically check-and-insert, avoiding
-        // the TOCTOU race where two callers create duplicate stages. The
-        // guard is released before any await-heavy setup.
-        let (output_ring, cancel, lease) = {
-            let mut runtimes = self.stages.runtimes.write().await;
-            if let Some(runtime) = runtimes.get(&key)
-                && !runtime.cancel.is_cancelled()
-                && let Some(ring) = runtime.ring.as_ref()
-                && let Some(lease) = StageLease::upgrade(&runtime.lease)
-            {
-                return (
-                    StageHandle {
-                        key,
-                        ring: ring.clone(),
-                        cancel: runtime.cancel.clone(),
-                        lifecycle: runtime.lifecycle.clone(),
-                        metrics: runtime.metrics.clone(),
-                    },
-                    lease,
-                    false,
-                );
-            }
-
-            if runtimes.contains_key(&key) {
-                // Replacing a stage that ended (or lost its last lease): the
-                // helpers above returned its lifecycle and metrics, which must
-                // not carry over to the new backend.
-                lifecycle = Arc::new(StageLifecycle::new_with_backend(
-                    StagePhase::Registered,
-                    backend_kind,
-                ));
-                metrics = Arc::new(StageMetrics::new());
-            }
-            let output_ring = Arc::new(RingBuffer::new(self.transcoder_ring_capacity));
-            let cancel = CancellationToken::new();
-            let lease = StageLease::runtime(&self.stages, key.clone(), cancel.clone());
-            runtimes.insert(
-                key.clone(),
-                StageRuntime {
-                    ring: Some(output_ring.clone()),
-                    cancel: cancel.clone(),
-                    lifecycle: lifecycle.clone(),
-                    metrics: metrics.clone(),
-                    pipe_metrics: None,
-                    lease: lease.downgrade(),
-                    lease_id: lease.id(),
-                },
+        if created {
+            let key = &handle.key;
+            self.initialize_stage_metadata(key, &source_ring, input_codec_override, &handle.ring)
+                .await;
+            info!(
+                pipeline_id = %key.pipeline,
+                stage = %key,
+                "stage registered"
             );
-            (output_ring, cancel, lease)
-        };
-
-        self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
-            .await;
-
-        info!(
-            pipeline_id = %key.pipeline,
-            stage = %key,
-            "stage registered"
-        );
-        self.events.emit(crate::events::EventKind::StageRegistered {
-            pipeline_id: key.pipeline.to_string(),
-            encoding: key.kind.to_string(),
-        });
-
-        (
-            StageHandle {
-                key,
-                ring: output_ring,
-                cancel,
-                lifecycle,
-                metrics,
-            },
-            lease,
-            true,
-        )
+            self.events.emit(crate::events::EventKind::StageRegistered {
+                pipeline_id: key.pipeline.to_string(),
+                encoding: key.kind.to_string(),
+            });
+        }
+        (handle, lease, created)
     }
 
     /// Spawn the selected backend for a freshly-created stage. This consumes the

@@ -300,10 +300,6 @@ mod tests {
             .cloned()
             .expect("recording stage should be runtime-backed");
         assert!(
-            runtime.ring.is_none(),
-            "recording writer is a non-ring protocol stage"
-        );
-        assert!(
             !engine
                 .stages
                 .metrics

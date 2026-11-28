@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 use tokio::sync::RwLock as TokioRwLock;
@@ -39,6 +39,17 @@ use crate::stage_lifecycle::{
 };
 use crate::stage_metrics::StageMetrics;
 use crate::ts_chunk_ring::TsChunkRing;
+
+/// Handle to an admitted ring stage. The manager uses it to start the
+/// worker, and consumers read from its output ring.
+#[derive(Clone)]
+pub struct StageHandle {
+    pub key: StageKey,
+    pub ring: Arc<RingBuffer>,
+    pub cancel: CancellationToken,
+    pub lifecycle: Arc<StageLifecycle>,
+    pub metrics: Arc<StageMetrics>,
+}
 
 #[derive(Clone)]
 pub struct StageRuntime {
@@ -62,11 +73,11 @@ pub struct TsMuxerStage {
 }
 
 pub struct StageRegistry {
-    pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
-    pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
+    runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
+    metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, TsMuxerStage>>,
     pub srt_muxer_shards: TokioRwLock<HashMap<String, SrtMuxerShardPool>>,
-    pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
+    lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }
 
 impl Default for StageRegistry {

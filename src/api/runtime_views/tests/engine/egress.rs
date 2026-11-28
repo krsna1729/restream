@@ -61,7 +61,7 @@ async fn health_snapshot_drops_egress_registry_before_stage_blocked_lookup() {
         .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", Some(key))
         .await;
 
-    let stage_write = engine.stages.runtimes.write().await;
+    let stage_write = engine.stages.hold_runtime_write_for_test().await;
     let health = {
         let engine = engine.clone();
         tokio::spawn(async move {
