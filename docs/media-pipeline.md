@@ -905,7 +905,7 @@ The diagram shows both upload transports reading the shared segment store.
   acknowledged segments. At most five segments wait; the oldest is dropped.
   Restream never sends DELETE (`crates/restream-engine/src/hls/upload_policy.rs`).
 - **URL.** A `file=` query value is replaced per segment; otherwise segments
-  go next to the playlist path (`crates/restream-engine/src/hls/upload.rs`).
+  go next to the playlist path (`crates/restream-engine/src/hls/upload_policy.rs`).
 - **Retries.** A `2xx` acknowledges. `408`, `425`, `429`, other non-4xx
   answers and transport errors retry with 200 ms doubling to 5 s. Other `4xx`
   answers end the output. A segment retries for max(segment duration, 1 s);

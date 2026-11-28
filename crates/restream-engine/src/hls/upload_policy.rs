@@ -20,11 +20,16 @@
 //!   limit, always as its newest version.
 //! - An intentional stop sends one final playlist with `EXT-X-ENDLIST`
 //!   (Akamai).
+//!
+//! Both transports also take the per-attempt session token
+//! (`upload_session_token`, random) and segment URLs (`derive_hls_upload_url`)
+//! from here, so they name and address objects the same way.
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use reqwest::Url;
 
 use super::HlsStoreSnapshot;
 
@@ -529,6 +534,65 @@ fn retry_window(duration: f64) -> Duration {
     Duration::try_from_secs_f64(duration)
         .unwrap_or(MIN_SEGMENT_RETRY)
         .max(MIN_SEGMENT_RETRY)
+}
+
+/// A segment-name prefix unique to this output attempt, also across process
+/// restarts (YouTube and Akamai require segment names never to repeat).
+pub(crate) fn upload_session_token() -> String {
+    // 64 random bits: outputs started together (or after a clock rollback)
+    // must not share names, or two playlists in one origin directory would
+    // overwrite each other's segments.
+    format!("r{:016x}", rand::random::<u64>())
+}
+
+/// Where a segment goes, given the playlist URL. YouTube-style endpoints
+/// pass the object name as a `file=` query parameter; other HLS PUT origins
+/// expect segments beside the playlist path (its query, a signature for
+/// example, is kept).
+pub(crate) fn derive_hls_upload_url(playlist_url: &Url, file_name: &str) -> Url {
+    let mut url = playlist_url.clone();
+    let original_pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+
+    if original_pairs.iter().any(|(key, _)| key == "file") {
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.clear();
+            for (key, value) in original_pairs {
+                if key == "file" {
+                    pairs.append_pair(&key, file_name);
+                } else {
+                    pairs.append_pair(&key, &value);
+                }
+            }
+        }
+        return url;
+    }
+
+    let path = url.path();
+    let new_path = if path.ends_with('/') {
+        format!("{path}{file_name}")
+    } else if path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.contains('.'))
+    {
+        let prefix = path
+            .rsplit_once('/')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or("");
+        if prefix.is_empty() {
+            format!("/{file_name}")
+        } else {
+            format!("{prefix}/{file_name}")
+        }
+    } else {
+        format!("{}/{}", path.trim_end_matches('/'), file_name)
+    };
+    url.set_path(&new_path);
+    url
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! The production HLS segmenter task (`start_hls_segmenter`) on one live
+//! The production HLS segmenter task (`MediaEngine::start_hls_segmenter`) on one live
 //! pipeline: each iteration publishes the primary H.264 fixture to the ring
 //! and waits until the segmenter's reader has caught up. Covers the
 //! per-packet path of `run_hls_segmenter`: ring pull, keyframe segment cuts,
@@ -14,7 +14,7 @@ use restream_core::MediaPacket;
 use restream_core::MediaType;
 use restream_engine::engine::MediaEngine;
 use restream_engine::hls::{HlsConfig, HlsSegmenterStart, HlsStore};
-use restream_engine::hls_fmp4::{Fmp4HlsStore, start_hls_fmp4_segmenter};
+use restream_engine::hls_fmp4::Fmp4HlsStore;
 use restream_sync::RingBuffer;
 use tokio_util::sync::CancellationToken;
 
@@ -88,12 +88,11 @@ fn bench_hls_segmenter(c: &mut Criterion) {
             max_segments: 3,
             ..HlsConfig::default()
         }));
-        let segmenter = tokio::spawn(restream_engine::hls::start_hls_segmenter(
+        let segmenter = tokio::spawn(engine.start_hls_segmenter(
             PIPELINE.to_string(),
             store,
             ring.clone(),
             None,
-            engine.clone(),
             cancel.clone(),
             HlsSegmenterStart {
                 video_meta_override: Some(video_meta.clone()),
@@ -172,11 +171,11 @@ fn bench_hls_fmp4_segmenter(c: &mut Criterion) {
         ..HlsConfig::default()
     }));
     let cancel = CancellationToken::new();
-    let segmenter = runtime.spawn(start_hls_fmp4_segmenter(
+    let engine = MediaEngine::new();
+    let segmenter = runtime.spawn(engine.start_hls_fmp4_segmenter(
         "bench-hls-fmp4".to_string(),
         store.clone(),
         ring.clone(),
-        Arc::new(MediaEngine::new()),
         cancel.clone(),
         HlsSegmenterStart {
             video_meta_override: Some(video),

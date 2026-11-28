@@ -175,7 +175,7 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
     assert!(!graph_plan.contains("StageRuntimeManager"));
     assert!(!graph_plan.contains("tokio::time"));
 
-    let preview_graph = include_str!("../../crates/restream-engine/src/hls/preview_graph.rs");
+    let preview_graph = include_str!("../../crates/restream-engine/src/engine_hls_preview.rs");
     assert!(preview_graph.contains("stage_runtime()"));
     assert!(preview_graph.contains("resolve_hls_preview_graph"));
 }

@@ -4,12 +4,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::MediaEngine;
 use crate::engine_registries::{HlsConsumers, PersistentLease};
-use crate::hls::HlsStore;
+use crate::hls::{HlsSegmenterContext, HlsSegmenterStart, HlsStore};
 use crate::hls_fmp4::Fmp4HlsStore;
 use crate::preview_ids::{
     hls_preview_registry_key, input_id_from_hls_preview_resource_id,
     pipeline_id_from_hls_preview_registry_key, preview_pipeline, sibling_preview_id,
 };
+use restream_sync::RingBuffer;
 
 impl MediaEngine {
     pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
@@ -25,6 +26,59 @@ impl MediaEngine {
 
         let store = self.get_or_create_hls_store(pipeline_id).await;
         (store, already_running)
+    }
+
+    /// The MPEG-TS HLS segmenter task for `pipeline_id`: reads `ring_buffer`
+    /// (and alternate audio from `audio_ring_buffer`) into `store`, under a
+    /// stage runtime in this engine's stage registry, until `cancel_token`
+    /// fires.
+    pub fn start_hls_segmenter(
+        &self,
+        pipeline_id: String,
+        store: Arc<HlsStore>,
+        ring_buffer: Arc<RingBuffer>,
+        audio_ring_buffer: Option<Arc<RingBuffer>>,
+        cancel_token: CancellationToken,
+        start: HlsSegmenterStart,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        crate::hls::start_hls_segmenter(
+            pipeline_id,
+            store,
+            ring_buffer,
+            audio_ring_buffer,
+            self.hls_segmenter_context(),
+            cancel_token,
+            start,
+        )
+    }
+
+    /// The fMP4 preview segmenter task for `pipeline_id` (a pipeline or
+    /// preview resource id): reads `ring_buffer` into `store` until
+    /// `cancel_token` fires.
+    pub fn start_hls_fmp4_segmenter(
+        &self,
+        pipeline_id: String,
+        store: Arc<Fmp4HlsStore>,
+        ring_buffer: Arc<RingBuffer>,
+        cancel_token: CancellationToken,
+        start: HlsSegmenterStart,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        crate::hls_fmp4::start_hls_fmp4_segmenter(
+            pipeline_id,
+            store,
+            ring_buffer,
+            self.hls_segmenter_context(),
+            cancel_token,
+            start,
+        )
+    }
+
+    fn hls_segmenter_context(&self) -> HlsSegmenterContext {
+        HlsSegmenterContext::new(
+            self.ingests.clone(),
+            self.stages.clone(),
+            self.runtime.event_log.clone(),
+        )
     }
 
     /// Ensure a browser-preview HLS segmenter is running for this pipeline.

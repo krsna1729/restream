@@ -1,6 +1,6 @@
 //! HLS PUT fabric shard backend: every HLS PUT output of one HLS store on
 //! this shard is a slot that drives the shared upload policy
-//! (`media::hls::upload_policy`) over one persistent connection.
+//! (`crate::hls::upload_policy`) over one persistent connection.
 //!
 //! The shard owns the connections (Compio TCP through the same poller as
 //! RTMP, TLS through `egress::tls`, kernel TLS after the handshake) and the
@@ -230,7 +230,7 @@ impl<P: RtmpReadinessPoller> HlsPutShardBackend<P> {
             spec.progress.mark_terminated_unexpectedly();
             return;
         };
-        let mut policy = UploadPolicy::new(crate::hls::upload::upload_session_token());
+        let mut policy = UploadPolicy::new(upload_policy::upload_session_token());
         if let Some(snapshot) = self.store.snapshot() {
             policy.on_publish(&snapshot, Instant::now());
         }
@@ -772,7 +772,7 @@ fn peer_closed_idle(connection: &mut TlsTcpConnection, scratch: &mut [u8]) -> bo
 }
 
 /// Log a request's result and record it in the leaf's progress and upload
-/// status, in the terms the Tokio uploader reports (`hls::upload`).
+/// status, in the terms the Tokio uploader reports (`hls_upload`).
 fn report(
     slot: &mut Slot,
     request: &UploadRequest,

@@ -292,12 +292,11 @@ async fn run_matrix_iteration(
         let (store, _) = engine.ensure_hls_segmenter("pipe").await;
         store.clear(); // Reset HlsStore for this iteration
         let cancel = tokio_util::sync::CancellationToken::new();
-        let segmenter = tokio::spawn(restream_engine::hls::start_hls_segmenter(
+        let segmenter = tokio::spawn(engine.start_hls_segmenter(
             "pipe".to_string(),
             store.clone(),
             target_ring.clone(),
             None,
-            engine.clone(),
             cancel.clone(),
             HlsSegmenterStart {
                 video_meta_override: Some(video_meta.clone()),

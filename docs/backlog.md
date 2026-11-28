@@ -83,7 +83,8 @@ the [assurance roadmap](assurance-roadmap.md).
 
 ### Q-124 [architecture] [opus] Untangle the engine composition root and triage the remaining deslop findings
 - Goal: reduce the remaining tangle, the `MediaEngine`/`StageRegistry`
-  tangle (35 things across 17 modules, reported at `hls/preview.rs`), then
+  tangle (35 things across 17 modules, first reported at `hls/preview.rs`, now
+  `engine_hls_preview.rs`), then
   decide the remaining 18 `shallow-module` and 15 `wide-directory` findings by
   ownership rather than file moves. The `test_harness::resource_sweep` tangle
   is gone: a `PeerPorts` value owns the port-band arithmetic. The
