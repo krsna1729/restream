@@ -453,11 +453,8 @@ async fn capacity_workload(engine: &MediaEngine, rates: &HashMap<String, IngestR
         })
         .await;
     workload.stage_count = engine
-        .stages
-        .runtimes
-        .read()
+        .with_stage_runtimes(|runtimes| runtimes.len())
         .await
-        .len()
         .min(u32::MAX as usize) as u32;
     workload.shard_count = engine.egress_shard_count();
     workload

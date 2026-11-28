@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine_registries::SrtMuxerAssignment;
+use crate::stage_registry::SrtMuxerAssignment;
 use std::collections::{HashMap, HashSet};
 
 fn engine_with_srt_muxer_caps(max_outputs_per_shard: usize, max_shards: usize) -> MediaEngine {

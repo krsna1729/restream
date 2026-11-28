@@ -66,23 +66,24 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
     let (stages, active_transcoder_buffers, transcoder_ring_payload_bytes) = {
         // One map at a time, never nested. A stage counts once: by its
         // runtime, or by its side-map metrics when it has no runtime.
-        let (runtime_keys, ring_bytes) = {
-            let runtimes = engine.stages.runtimes.read().await;
-            let ring_bytes = runtimes
-                .values()
-                .filter_map(|runtime| runtime.ring.as_ref())
-                .map(|ring| ring.payload_stats().payload_bytes as u64)
-                .sum::<u64>();
-            (runtimes.keys().cloned().collect::<HashSet<_>>(), ring_bytes)
-        };
+        let (runtime_keys, ring_bytes) = engine
+            .with_stage_runtimes(|runtimes| {
+                let ring_bytes = runtimes
+                    .values()
+                    .filter_map(|runtime| runtime.ring.as_ref())
+                    .map(|ring| ring.payload_stats().payload_bytes as u64)
+                    .sum::<u64>();
+                (runtimes.keys().cloned().collect::<HashSet<_>>(), ring_bytes)
+            })
+            .await;
         let side_only = engine
-            .stages
-            .metrics
-            .read()
-            .await
-            .keys()
-            .filter(|key| !runtime_keys.contains(*key))
-            .count();
+            .with_stage_metrics(|metrics| {
+                metrics
+                    .keys()
+                    .filter(|key| !runtime_keys.contains(*key))
+                    .count()
+            })
+            .await;
         (
             runtime_keys.len() + side_only,
             runtime_keys.len(),
@@ -90,13 +91,13 @@ pub(crate) async fn measure_snapshot(engine: &MediaEngine, pipelines: usize) -> 
         )
     };
     let ts_muxer_ring_payload_bytes = engine
-        .stages
-        .ts_muxers
-        .read()
-        .await
-        .values()
-        .map(|stage| stage.muxer.ring.payload_stats().payload_bytes as u64)
-        .sum::<u64>();
+        .with_ts_muxer_stages(|ts_muxers| {
+            ts_muxers
+                .values()
+                .map(|stage| stage.muxer.ring.payload_stats().payload_bytes as u64)
+                .sum::<u64>()
+        })
+        .await;
     let (egresses, delivery) = engine
         .with_active_egresses(|active| {
             // Feeds are grouped per pipeline, as each pipeline's telemetry does.

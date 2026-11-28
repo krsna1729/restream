@@ -23,8 +23,12 @@ pub async fn start_audio_router(
     cancel: CancellationToken,
     stage_key: StageKey,
 ) {
-    let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
+    let stage_metrics = engine
+        .stages
+        .get_or_create_stage_metrics(stage_key.clone())
+        .await;
     let lifecycle = engine
+        .stages
         .get_or_create_stage_lifecycle(
             stage_key.clone(),
             crate::stage_lifecycle::StagePhase::Registered,

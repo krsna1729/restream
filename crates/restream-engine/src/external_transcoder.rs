@@ -130,6 +130,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
 
     let pipe_metrics = Arc::new(PipeMetrics::default());
     ctx.engine
+        .stages
         .register_pipe_metrics(ctx.stage_key.clone(), pipe_metrics.clone())
         .await;
     spawn_external_stderr_logger(

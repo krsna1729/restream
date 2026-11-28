@@ -93,6 +93,7 @@ async fn health_snapshot_includes_blocked_by_for_waiting_terminal_stage() {
         .unwrap();
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
     let lc = engine
+        .stages
         .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
         .await;
     lc.transition(StagePhase::WaitingForCapacity {

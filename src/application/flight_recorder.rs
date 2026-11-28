@@ -767,33 +767,37 @@ async fn decoder_probes(
     engine: &MediaEngine,
     source_rings: &HashMap<String, Arc<restream_sync::RingBuffer>>,
 ) -> HashMap<String, Vec<DecoderProbe>> {
-    let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
-    for (key, runtime) in engine.stages.runtimes.read().await.iter() {
-        let (Some(pipe), Some(ring)) = (
-            runtime.pipe_metrics.as_ref(),
-            source_rings.get(key.pipeline.as_str()),
-        ) else {
-            continue;
-        };
-        let name = key.to_string();
-        let Some(reader) = ring
-            .reader_snapshots()
-            .into_iter()
-            .find(|reader| reader.name == name)
-        else {
-            continue;
-        };
-        decoders
-            .entry(key.pipeline.as_str().to_string())
-            .or_default()
-            .push(DecoderProbe {
-                stage: key.kind.to_string(),
-                lag_slots: reader.lag_slots as u64,
-                packets_per_sec: ring.estimated_pkt_rate(),
-                stall_us: pipe.snapshot().stall_us,
-            });
-    }
-    decoders
+    engine
+        .with_stage_runtimes(|runtimes| {
+            let mut decoders: HashMap<String, Vec<DecoderProbe>> = HashMap::new();
+            for (key, runtime) in runtimes {
+                let (Some(pipe), Some(ring)) = (
+                    runtime.pipe_metrics.as_ref(),
+                    source_rings.get(key.pipeline.as_str()),
+                ) else {
+                    continue;
+                };
+                let name = key.to_string();
+                let Some(reader) = ring
+                    .reader_snapshots()
+                    .into_iter()
+                    .find(|reader| reader.name == name)
+                else {
+                    continue;
+                };
+                decoders
+                    .entry(key.pipeline.as_str().to_string())
+                    .or_default()
+                    .push(DecoderProbe {
+                        stage: key.kind.to_string(),
+                        lag_slots: reader.lag_slots as u64,
+                        packets_per_sec: ring.estimated_pkt_rate(),
+                        stall_us: pipe.snapshot().stall_us,
+                    });
+            }
+            decoders
+        })
+        .await
 }
 
 fn ring_health(ring: &restream_sync::RingBuffer) -> RingHealth {

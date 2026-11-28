@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::engine::MediaEngine;
-use crate::engine_registries::StageRuntime;
 use crate::ffmpeg::backend::StageRunContext;
 use crate::ffmpeg::stage_input::StageInputPump;
 use crate::ffmpeg::stage_output::StageOutputNormalizer;
@@ -20,9 +19,9 @@ use crate::ffmpeg::stage_plan::{
     AudioStageOp, CodecEdgeOp, FfmpegStagePlan, StageInputSpec, StageStartupPolicy, TimelinePolicy,
     VideoCodecKind, VideoStageOp,
 };
-use crate::stage_lease::StageLease;
 use crate::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::stage_metrics::StageMetrics;
+use crate::stage_registry::{StageLease, StageRuntime};
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_domain::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use restream_domain::domain::stage::{StageKey, StageKind};
@@ -68,13 +67,18 @@ impl StageRuntimeManager {
         let backend_kind = restream_domain::planner::select_backend(&key.kind);
         let mut lifecycle = self
             .engine
+            .stages
             .get_or_create_stage_lifecycle_with_backend(
                 key.clone(),
                 StagePhase::Registered,
                 backend_kind,
             )
             .await;
-        let mut metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+        let mut metrics = self
+            .engine
+            .stages
+            .get_or_create_stage_metrics(key.clone())
+            .await;
 
         // Single write-lock acquisition to atomically check-and-insert, avoiding
         // the TOCTOU race where two callers create duplicate stages. The
@@ -112,7 +116,7 @@ impl StageRuntimeManager {
             let output_ring =
                 Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
             let cancel = CancellationToken::new();
-            let lease = StageLease::runtime(&self.engine, key.clone(), cancel.clone());
+            let lease = StageLease::runtime(&self.engine.stages, key.clone(), cancel.clone());
             runtimes.insert(
                 key.clone(),
                 StageRuntime {

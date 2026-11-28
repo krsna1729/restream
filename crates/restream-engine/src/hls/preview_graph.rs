@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::MediaEngine;
-use crate::stage_lease::StageLease;
+use crate::stage_registry::StageLease;
 use crate::stage_runtime::StageRuntimeManager;
 use restream_core::metadata::VideoMeta;
 use restream_domain::domain::stage::{StageKey, StageKind};

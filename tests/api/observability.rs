@@ -267,7 +267,10 @@ async fn stage_telemetry_returns_structured_response() {
     let (app, _, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
     let stage_key = StageKey::new("telemetry-pipe", StageKind::video_preset("720p"));
-    let metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
+    let metrics = engine
+        .stages
+        .get_or_create_stage_metrics(stage_key.clone())
+        .await;
     metrics.record_in(123);
     metrics.record_out(45);
     metrics.record_processing(9);

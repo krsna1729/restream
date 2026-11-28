@@ -109,58 +109,61 @@ impl<'g> GraphReadings<'g> {
                     .collect()
             })
             .await;
-        let output_stage_metrics = {
-            let metrics = engine.stages.metrics.read().await;
-            nodes
-                .iter()
-                .filter_map(|node| match &node.source {
-                    NodeSource::Recording(key) | NodeSource::Hls(key) => metrics
-                        .get(key)
-                        .map(|m| (key, serde_json::to_value(m.snapshot()).unwrap_or_default())),
-                    _ => None,
-                })
-                .collect()
-        };
-        let packetizer_payloads = {
-            let ts_muxers = engine.stages.ts_muxers.read().await;
-            nodes
-                .iter()
-                .filter_map(|node| match &node.source {
-                    NodeSource::Packetizer { key, .. } => {
-                        ts_muxers.get(key.as_str()).map(|stage| {
-                            (
-                                key.as_str(),
-                                api_view_models::ring_payload_stats_json(&stage.muxer.ring),
-                            )
-                        })
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        let stage_views = {
-            let runtimes = engine.stages.runtimes.read().await;
-            nodes
-                .iter()
-                .filter_map(|node| match &node.source {
-                    NodeSource::Stage(key) => runtimes.get(key).map(|stage| {
-                        let view = StageView {
-                            metrics: serde_json::to_value(stage.metrics.snapshot())
-                                .unwrap_or_default(),
-                            pipe: stage.pipe_metrics.as_ref().map(|pipe| {
-                                serde_json::to_value(pipe.snapshot()).unwrap_or_default()
-                            }),
-                            payload: stage
-                                .ring
-                                .as_ref()
-                                .map(|ring| api_view_models::ring_payload_stats_json(ring)),
-                        };
-                        (key, view)
-                    }),
-                    _ => None,
-                })
-                .collect()
-        };
+        let output_stage_metrics = engine
+            .with_stage_metrics(|metrics| {
+                nodes
+                    .iter()
+                    .filter_map(|node| match &node.source {
+                        NodeSource::Recording(key) | NodeSource::Hls(key) => metrics
+                            .get(key)
+                            .map(|m| (key, serde_json::to_value(m.snapshot()).unwrap_or_default())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .await;
+        let packetizer_payloads = engine
+            .with_ts_muxer_stages(|ts_muxers| {
+                nodes
+                    .iter()
+                    .filter_map(|node| match &node.source {
+                        NodeSource::Packetizer { key, .. } => {
+                            ts_muxers.get(key.as_str()).map(|stage| {
+                                (
+                                    key.as_str(),
+                                    api_view_models::ring_payload_stats_json(&stage.muxer.ring),
+                                )
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .await;
+        let stage_views = engine
+            .with_stage_runtimes(|runtimes| {
+                nodes
+                    .iter()
+                    .filter_map(|node| match &node.source {
+                        NodeSource::Stage(key) => runtimes.get(key).map(|stage| {
+                            let view = StageView {
+                                metrics: serde_json::to_value(stage.metrics.snapshot())
+                                    .unwrap_or_default(),
+                                pipe: stage.pipe_metrics.as_ref().map(|pipe| {
+                                    serde_json::to_value(pipe.snapshot()).unwrap_or_default()
+                                }),
+                                payload: stage
+                                    .ring
+                                    .as_ref()
+                                    .map(|ring| api_view_models::ring_payload_stats_json(ring)),
+                            };
+                            (key, view)
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .await;
         let reader_overflows_by_stage = ring
             .as_ref()
             .map(|ring| ring.reader_snapshots())

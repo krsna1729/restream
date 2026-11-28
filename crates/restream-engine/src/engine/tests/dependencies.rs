@@ -175,6 +175,7 @@ async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
         StageKind::preview("720p", StageKind::video_preset("rogue")),
     );
     let rogue_lifecycle = engine
+        .stages
         .get_or_create_stage_lifecycle(rogue_key, StagePhase::Registered)
         .await;
     rogue_lifecycle.transition(StagePhase::WaitingForCapacity {
@@ -192,6 +193,7 @@ async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let planned_lifecycle = engine
+        .stages
         .get_or_create_stage_lifecycle(planned_key.clone(), StagePhase::Registered)
         .await;
     planned_lifecycle.transition(StagePhase::WaitingForCapacity {

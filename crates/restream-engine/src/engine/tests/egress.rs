@@ -286,6 +286,7 @@ async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
     }));
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
     let lc = engine
+        .stages
         .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
         .await;
     lc.transition(StagePhase::WaitingForCapacity {
@@ -351,8 +352,9 @@ async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
     assert_eq!(snapshot.phase, StagePhase::RunningNoOutputYet);
     assert_eq!(snapshot.bytes_in, 42);
 
-    let metrics = engine.get_or_create_stage_metrics(key.clone()).await;
+    let metrics = engine.stages.get_or_create_stage_metrics(key.clone()).await;
     let lifecycle = engine
+        .stages
         .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
         .await;
 

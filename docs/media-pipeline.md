@@ -222,7 +222,7 @@ share one ring.
 
 ### Stage lifetime
 
-A stage lives exactly as long as its consumers (`crates/restream-engine/src/stage_lease.rs`).
+A stage lives exactly as long as its consumers (`crates/restream-engine/src/stage_registry.rs`).
 
 - Each consumer holds a `StageLease` on every stage it reads: an egress
   attempt (`EgressTask`), an HLS preview, or an SRT play session.
