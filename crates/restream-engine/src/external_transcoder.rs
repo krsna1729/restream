@@ -129,8 +129,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     } = spawn_ffmpeg(&args, &ctx, &ids).await?;
 
     let pipe_metrics = Arc::new(PipeMetrics::default());
-    ctx.engine
-        .stages
+    ctx.stages
         .register_pipe_metrics(ctx.stage_key.clone(), pipe_metrics.clone())
         .await;
     spawn_external_stderr_logger(
@@ -219,7 +218,7 @@ async fn acquire_ffmpeg_capacity(
         backend: StageBackendKind::ExternalFfmpeg,
     });
     let permit = tokio::select! {
-        permit = ctx.engine.runtime.external_ffmpeg_semaphore.acquire() => match permit {
+        permit = ctx.ffmpeg_permits.acquire() => match permit {
             Ok(p) => p,
             Err(e) => {
                 error!(
@@ -395,13 +394,10 @@ async fn run_ffmpeg_io(
 }
 
 fn emit_stage_stopped(ctx: &StageRunContext, ids: &StageIds<'_>) {
-    ctx.engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id: ids.pipeline_id.to_string(),
-            encoding: ids.encoding.to_string(),
-        });
+    ctx.events.emit(crate::events::EventKind::StageStopped {
+        pipeline_id: ids.pipeline_id.to_string(),
+        encoding: ids.encoding.to_string(),
+    });
 }
 
 fn external_stage_arg_preset(plan: &FfmpegStagePlan, fallback: &str) -> String {

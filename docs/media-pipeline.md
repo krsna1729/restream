@@ -662,7 +662,7 @@ The diagram shows one SRT output from its ring to the remote receiver.
   `latency` is in milliseconds and proposes the session's TSBPD delay; invalid
   values are rejected at the API boundary (`crates/restream-srt/src/egress_connect.rs`).
   Restream is always the caller.
-- **Muxer.** `start_shared_ts_muxer` (`crates/restream-engine/src/srt/shared_muxer.rs`) runs on
+- **Muxer.** `start_shared_ts_muxer` (`crates/restream-engine/src/shared_ts_muxer.rs`) runs on
   the MEDIA executor. It is keyed by pipeline and stage. With
   `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` above 0 (max 10000),
   outputs split across up to `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` muxers

@@ -13,7 +13,6 @@ mod ingress_quality;
 #[path = "srt/ingress_test_support.rs"]
 pub(crate) mod ingress_test_support;
 mod ingress_types;
-mod shared_muxer;
 #[path = "srt_policy.rs"]
 mod srt_policy;
 #[cfg(test)]
@@ -21,7 +20,6 @@ mod tests;
 mod tokio_ingress;
 
 pub(crate) use ingress_media::ingest_packets::forward_ingest_packets;
-pub(crate) use shared_muxer::start_shared_ts_muxer;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 pub use tokio_ingress::*;
 

@@ -22,8 +22,8 @@ use tracing::warn;
 use super::loudness::LoudnessMeter;
 use super::picture::{THUMB_HEIGHT, THUMB_WIDTH};
 use super::{QaTracker, StreamQa};
-use crate::engine::MediaEngine;
 use crate::ffmpeg::stage_input::StageInputPump;
+use crate::ingest_registry::IngestRegistry;
 use crate::stage_metrics::StageMetrics;
 use restream_sync::RingBuffer;
 
@@ -170,7 +170,7 @@ impl Findings {
 pub fn read_pictures(mut pipe: impl Read, findings: &Findings) {
     let mut thumb = vec![0u8; (THUMB_WIDTH * THUMB_HEIGHT) as usize];
     while pipe.read_exact(&mut thumb).is_ok() {
-        let now = MediaEngine::now_epoch_ms();
+        let now = crate::timing::epoch_ms();
         findings.update(|tracker| tracker.picture(now, thumb.clone()));
     }
 }
@@ -214,7 +214,7 @@ pub fn read_sound(mut pipe: impl Read, findings: &Findings, tracks: std::ops::Ra
             let views: Vec<&[f32]> = track.iter().map(Vec::as_slice).collect();
             meter.push_planar(&views);
         }
-        let now = MediaEngine::now_epoch_ms();
+        let now = crate::timing::epoch_ms();
         if now.saturating_sub(last_reading) < SOUND_EVERY_MS {
             continue;
         }
@@ -290,8 +290,8 @@ impl Drop for SoundSocket {
 
 /// Runs the checks for `pipeline_id` until `cancel`: one child at a time,
 /// restarted with backoff when it exits.
-pub async fn run(
-    engine: Arc<MediaEngine>,
+pub(crate) async fn run(
+    ingests: Arc<IngestRegistry>,
     pipeline_id: String,
     ring: Arc<RingBuffer>,
     published: Arc<Mutex<StreamQa>>,
@@ -301,7 +301,7 @@ pub async fn run(
     let mut backoff = RESTART_MIN;
     while !cancel.is_cancelled() {
         let started = std::time::Instant::now();
-        if let Err(error) = run_child(&engine, &pipeline_id, &ring, &findings, &cancel).await {
+        if let Err(error) = run_child(&ingests, &pipeline_id, &ring, &findings, &cancel).await {
             warn!(pipeline_id = %pipeline_id, err = %error, "stream checks: ffmpeg ended");
         }
         if started.elapsed() >= RAN_LONG_ENOUGH {
@@ -318,15 +318,15 @@ pub async fn run(
 
 /// One child's life: feed it, read it, reap it.
 async fn run_child(
-    engine: &Arc<MediaEngine>,
+    ingests: &Arc<IngestRegistry>,
     pipeline_id: &str,
     ring: &Arc<RingBuffer>,
     findings: &Findings,
     cancel: &CancellationToken,
 ) -> Result<(), String> {
     let (video, audio) = {
-        let ingests = engine.ingests.active.read().await;
-        let Some(ingest) = ingests.get(pipeline_id) else {
+        let active = ingests.active.read().await;
+        let Some(ingest) = active.get(pipeline_id) else {
             return Err("no live source".to_string());
         };
         (
@@ -341,7 +341,7 @@ async fn run_child(
     if !has_video && !has_audio {
         return Err("the source has reported no track yet".to_string());
     }
-    let (sequence_header, _) = engine.ingests.get_sequence_headers(pipeline_id).await;
+    let (sequence_header, _) = ingests.get_sequence_headers(pipeline_id).await;
     let pump = StageInputPump::new(
         format!("qa:{pipeline_id}"),
         ring.clone(),
@@ -352,7 +352,7 @@ async fn run_child(
         Arc::new(StageMetrics::new()),
     )
     .with_video_sequence_header(sequence_header)
-    .with_engine(engine.clone(), pipeline_id.to_string());
+    .with_ingests(ingests.clone(), pipeline_id.to_string());
 
     let sockets = groups
         .iter()

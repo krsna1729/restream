@@ -5,21 +5,27 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::engine::MediaEngine;
+use crate::ingest_registry::IngestRegistry;
 use crate::ts_chunk_ring::TsChunkRing;
 use restream_core::metadata::{AudioMeta, VideoMeta};
 use restream_core::{MediaPacket, MediaType};
 use restream_sync::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 
+/// Starts the muxer task for `stage_key` on the media executor and returns
+/// its TS ring, sized from `ts_ring_capacity` (`EngineConfig::ts_ring_capacity`)
+/// and the source's probed packet rate. The task reads the pipeline's
+/// ingest metadata and sequence headers from `ingests` and ends when the
+/// ingest goes away or `cancel` fires.
 pub(crate) fn start_shared_ts_muxer(
     pipeline_id: &str,
     stage_key: &str,
     source_ring: Arc<RingBuffer>,
-    engine: Arc<MediaEngine>,
+    ingests: Arc<IngestRegistry>,
+    ts_ring_capacity: usize,
     cancel: CancellationToken,
 ) -> Arc<TsChunkRing> {
     let ts_ring = Arc::new(TsChunkRing::new(
-        srt_ts_ring_capacity(&source_ring, engine.config.ts_ring_capacity),
+        srt_ts_ring_capacity(&source_ring, ts_ring_capacity),
         cancel.clone(),
     ));
     let ts_ring_clone = ts_ring.clone();
@@ -35,12 +41,12 @@ pub(crate) fn start_shared_ts_muxer(
         cancel.clone(),
         async move {
             let Some((video_meta, audio_tracks)) =
-                wait_for_ingest_metadata(&engine, &pipeline_id_str, &source_ring, &cancel).await
+                wait_for_ingest_metadata(&ingests, &pipeline_id_str, &source_ring, &cancel).await
             else {
                 return;
             };
             let mut mux = BurstMux::new(
-                &engine,
+                &ingests,
                 &pipeline_id_str,
                 &source_ring,
                 video_meta.as_ref(),
@@ -70,13 +76,7 @@ pub(crate) fn start_shared_ts_muxer(
                 // One bounded pull burst per media turn; an always-ready source
                 // must not monopolize this worker or starve cancellation.
                 tokio::task::yield_now().await;
-                if !engine
-                    .ingests
-                    .active
-                    .read()
-                    .await
-                    .contains_key(&pipeline_id_str)
-                {
+                if !ingests.active.read().await.contains_key(&pipeline_id_str) {
                     break;
                 }
             }
@@ -91,7 +91,7 @@ pub(crate) fn start_shared_ts_muxer(
 /// routed tracks win, else the ingest's, else its one audio track). `None`
 /// when cancelled, or when the ingest went away (the stage is cancelled).
 async fn wait_for_ingest_metadata(
-    engine: &MediaEngine,
+    ingests: &IngestRegistry,
     pipeline_id: &str,
     source_ring: &RingBuffer,
     cancel: &CancellationToken,
@@ -100,8 +100,7 @@ async fn wait_for_ingest_metadata(
         if cancel.is_cancelled() {
             return None;
         }
-        let result = engine
-            .ingests
+        let result = ingests
             .with_active_ingest(pipeline_id, |ingest| {
                 let metadata = ingest.metadata();
                 let video = metadata.video;
@@ -128,7 +127,7 @@ async fn wait_for_ingest_metadata(
             return result;
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        if !engine.ingests.has_active_ingest(pipeline_id).await {
+        if !ingests.has_active_ingest(pipeline_id).await {
             error!(
                 "[srt-shared-muxer] Ingest gone while waiting for probe: {}",
                 pipeline_id
@@ -172,15 +171,15 @@ impl TsPayloadConverter {
     /// muxer, source_ring is the transcoder's output ring, which describes
     /// a different resolution/codec than the pipeline-level ingest
     /// sequence-header cache. That ingest cache is keyed only by
-    /// pipeline_id (see MediaEngine::cache_sequence_header), so it cannot
+    /// pipeline_id (see IngestRegistry::cache_sequence_header), so it cannot
     /// distinguish "source" from "preset" — only fall back to it when the
     /// ring itself has nothing cached yet.
-    async fn new(engine: &MediaEngine, pipeline_id: &str, source_ring: &RingBuffer) -> Self {
+    async fn new(ingests: &IngestRegistry, pipeline_id: &str, source_ring: &RingBuffer) -> Self {
         let mut nalu_len_size: usize = 4;
         let sps_pps_cache = if let Some(parameter_sets) = source_ring.video_parameter_sets() {
             parameter_sets
         } else {
-            match engine.ingests.get_sequence_headers(pipeline_id).await.0 {
+            match ingests.get_sequence_headers(pipeline_id).await.0 {
                 Some(flv_sh) if flv_sh.len() > 5 => {
                     let (nls, annexb) = restream_core::codec::parse_avcc_config(&flv_sh[5..]);
                     nalu_len_size = nls;
@@ -256,7 +255,7 @@ struct BurstMux {
 
 impl BurstMux {
     async fn new(
-        engine: &MediaEngine,
+        ingests: &IngestRegistry,
         pipeline_id: &str,
         source_ring: &RingBuffer,
         video_meta: Option<&VideoMeta>,
@@ -271,7 +270,7 @@ impl BurstMux {
         Self {
             muxer,
             dts_enforcer: restream_sync::DtsEnforcer::new(num_streams),
-            converter: TsPayloadConverter::new(engine, pipeline_id, source_ring).await,
+            converter: TsPayloadConverter::new(ingests, pipeline_id, source_ring).await,
             has_video,
             audio_tracks,
             chunk_ends: Vec::with_capacity(MEDIA_PULL_BURST_PACKETS),
@@ -349,7 +348,7 @@ impl BurstMux {
     }
 }
 
-pub(super) fn estimate_ts_accum_capacity(packets: &[Arc<MediaPacket>]) -> usize {
+fn estimate_ts_accum_capacity(packets: &[Arc<MediaPacket>]) -> usize {
     packets
         .iter()
         .map(|packet| packet.payload.len().saturating_add(188 * 4))
