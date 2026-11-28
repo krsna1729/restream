@@ -1,6 +1,6 @@
 //! HLS PUT fabric shard backend: every HLS PUT output of one HLS store on
 //! this shard is a slot that drives the shared upload policy
-//! (`media::hls::upload_policy`) over one persistent connection.
+//! (`crate::hls::upload_policy`) over one persistent connection.
 //!
 //! The shard owns the connections (Compio TCP through the same poller as
 //! RTMP, TLS through `egress::tls`, kernel TLS after the handshake) and the

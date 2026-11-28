@@ -1,6 +1,6 @@
 //! One HLS PUT output's HTTP work on an egress shard: the target it uploads
 //! to, and the request/response exchange over a connected transport. What to
-//! upload is `media::hls::upload_policy`; connecting is the shard's
+//! upload is `crate::hls::upload_policy`; connecting is the shard's
 //! (`hls_put_shard.rs`).
 //!
 //! The request head is copied into the transmit queue; the segment body is
