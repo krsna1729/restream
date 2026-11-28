@@ -54,7 +54,10 @@ async fn catalog(auth: PushAuth) -> (PipelineInputService, Arc<CatalogAuth>) {
     let catalog = CatalogAuth::new(db.clone());
     catalog.load().await.unwrap();
     let pipelines = PipelineService::new(db.clone(), catalog.clone());
-    (PipelineInputService::new(db, pipelines), catalog)
+    (
+        PipelineInputService::new(db, pipelines, catalog.clone()),
+        catalog,
+    )
 }
 
 struct Server {

@@ -13,7 +13,6 @@
 //! readiness instead of `.await`, with shard registration and application
 //! startup handoff supplied by the surrounding RTMP backend.
 
-use restream_rtmp::egress_payload_cache::RtmpPayloadCache;
 use restream_rtmp::egress_payload_cache::SharedRtmpPayloadCache;
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
@@ -198,8 +197,7 @@ impl MediaPublisher {
         startup: RtmpPublishStartup,
         payloads: SharedRtmpPayloadCache,
     ) -> Result<Self, String> {
-        let mut encoder = RtmpMediaEncoder::new(startup.enhanced_hevc_video);
-        encoder.share_payload_cache(payloads);
+        let mut startup_video_generation = 0;
         let mut current_batch = VecDeque::with_capacity(32);
 
         if let Some(metadata) = startup.publish_metadata.as_ref() {
@@ -213,7 +211,7 @@ impl MediaPublisher {
                 .publish_video_data(video_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
             current_batch.push_back(MediaWirePacket::Bytes(wire));
-            encoder.set_startup_video_generation(startup.startup_video_generation);
+            startup_video_generation = startup.startup_video_generation;
         }
         let mut audio_sequence_header_sent = false;
         if let Some(audio_sequence_header) = startup.startup_audio_sequence_header {
@@ -223,6 +221,11 @@ impl MediaPublisher {
             current_batch.push_back(MediaWirePacket::Bytes(wire));
             audio_sequence_header_sent = true;
         }
+        let encoder = RtmpMediaEncoder::new(
+            startup.enhanced_hevc_video,
+            payloads,
+            startup_video_generation,
+        );
 
         Ok(Self {
             core,
@@ -617,21 +620,19 @@ pub(crate) struct RtmpFabricEngine {
     chunk_size: u32,
     /// Send the E-RTMP connect (`RtmpPublishStartup::enhanced_rtmp`).
     enhanced: bool,
-    /// Raw → FLV conversions, handed to the media publisher; private unless
-    /// the shard shares its cache with `share_payload_cache`.
+    /// Raw → FLV conversions, handed to the media publisher: the shard's
+    /// shared cache.
     payloads: SharedRtmpPayloadCache,
 }
 
 impl RtmpFabricEngine {
-    /// Share Raw → FLV conversions with the other outputs on this shard.
-    pub(crate) fn share_payload_cache(&mut self, payloads: SharedRtmpPayloadCache) {
-        self.payloads = payloads;
-    }
-
+    /// `payloads` shares Raw → FLV conversions with the other outputs on
+    /// this shard.
     pub(crate) fn new_client(
         parts: RtmpUrlParts,
         chunk_size: u32,
         publish_startup: RtmpPublishStartup,
+        payloads: SharedRtmpPayloadCache,
     ) -> Result<Self, String> {
         Ok(Self {
             state: Some(RtmpFabricState::Handshaking(Box::new(
@@ -641,7 +642,7 @@ impl RtmpFabricEngine {
             enhanced: publish_startup.enhanced_rtmp,
             publish_startup: Some(publish_startup),
             chunk_size,
-            payloads: RtmpPayloadCache::shared(),
+            payloads,
         })
     }
 

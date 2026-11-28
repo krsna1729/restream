@@ -128,6 +128,19 @@ struct Timeline {
 }
 
 impl Timeline {
+    /// Ring timestamp `pts_us` on the broadcast timeline.
+    fn place(&self, pts_us: u64) -> u64 {
+        pts_us.saturating_add(self.offset_us)
+    }
+
+    /// The ring went back to `pts_us`: move the offset so it resumes just past
+    /// what either track presented, and return where it resumes.
+    fn resume_after_rewind(&mut self, pts_us: u64) -> u64 {
+        let resume = self.end();
+        self.offset_us = resume.saturating_sub(pts_us);
+        resume
+    }
+
     fn wrote(&mut self, track: usize, us: u64) {
         match self.last[track] {
             Some(last) if us <= last => {}
@@ -227,7 +240,7 @@ impl HangBroadcast {
         if !has_track {
             return Ok(false);
         }
-        let us = frame.pts_us.saturating_add(self.timeline.offset_us);
+        let us = self.timeline.place(frame.pts_us);
         let framed = frame
             .data
             .into_frame(us)
@@ -241,8 +254,7 @@ impl HangBroadcast {
         // just past what either presented. Copies this one frame to frame
         // it again.
         self.discontinuity()?;
-        let resume = self.timeline.end();
-        self.timeline.offset_us = resume.saturating_sub(frame.pts_us);
+        let resume = self.timeline.resume_after_rewind(frame.pts_us);
         let (_, payload) = parse_loc_frame(framed).map_err(|error| error.to_string())?;
         let framed = LocBuffer::from_payload(&payload)
             .into_frame(resume)
@@ -380,8 +392,9 @@ impl RingPublisher {
         self.skipped
     }
 
-    pub(crate) fn broadcast_mut(&mut self) -> &mut HangBroadcast {
-        &mut self.broadcast
+    /// End the broadcast for every subscriber ([`HangBroadcast::finish`]).
+    pub(crate) fn finish(&mut self) {
+        self.broadcast.finish();
     }
 
     /// Read up to `budget` units at `cursor` and publish them; `cursor`

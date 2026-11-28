@@ -482,8 +482,8 @@ async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
         .await;
     let (store, _, _) = engine.ensure_hls_preview_segmenter(&pid).await;
     engine.touch_hls_preview(&pid).await;
-    store.put_video_init_segment(bytes::Bytes::from_static(b"init"));
-    store.push_video_segment(0, 2.0, bytes::Bytes::from_static(b"segment"));
+    let init = bytes::Bytes::from_static(b"init");
+    store.publish_video_segment(0, 2.0, init, bytes::Bytes::from_static(b"segment"));
 
     let resp = app
         .clone()

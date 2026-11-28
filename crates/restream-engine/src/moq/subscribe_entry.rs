@@ -180,6 +180,13 @@ impl MediaCounters {
         push_recent(&mut self.recent_audio, timestamp_us, now);
     }
 
+    /// A copy for the report, with the 95th percentile skew filled in.
+    fn report(&self) -> Self {
+        let mut report = self.clone();
+        report.p95_abs_skew_us = self.p95();
+        report
+    }
+
     /// The stored samples' 95th percentile (0 without samples), nearest-rank
     /// like the harness's other percentile (`ceil(0.95*n)-1`).
     fn p95(&self) -> u64 {
@@ -620,9 +627,7 @@ async fn watch_tracks(
     let audio_end =
         audio_end.unwrap_or_else(|error| TrackEnd::Failed(format!("audio task: {error}")));
     let observation = shared.borrow();
-    let mut counters = observation.counters.clone();
-    counters.p95_abs_skew_us = counters.p95();
-    report.counters = counters;
+    report.counters = observation.counters.report();
     report.first_media_unix_ms = observation.first_media.map(epoch_millis);
     report.startup_delay_ms = observation.first_media.map(|first| {
         let first = epoch_millis(first) as f64;

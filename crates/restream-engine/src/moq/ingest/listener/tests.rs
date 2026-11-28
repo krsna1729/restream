@@ -86,7 +86,7 @@ async fn an_unreadable_certificate_fails_the_start_and_leaves_nothing_running() 
         engine.clone(),
         security(),
     ));
-    let error = MoqListener::configured(config, server)
+    let error = MoqListener::configured(config, engine.clone(), server)
         .start()
         .await
         .unwrap_err();
@@ -294,10 +294,14 @@ fn server(engine: &Arc<MediaEngine>) -> Arc<MoqIngestServer> {
 async fn listen(max_connections: usize, name: &str) -> (Arc<MediaEngine>, SocketAddr) {
     let certs = Certs::new(name);
     let engine = Arc::new(MediaEngine::new());
-    let (addr, _ended) = MoqListener::configured(certs.config(max_connections), server(&engine))
-        .start()
-        .await
-        .unwrap();
+    let (addr, _ended) = MoqListener::configured(
+        certs.config(max_connections),
+        engine.clone(),
+        server(&engine),
+    )
+    .start()
+    .await
+    .unwrap();
     (engine, addr)
 }
 
@@ -311,7 +315,7 @@ async fn one_client_cannot_take_every_moq_connection_slot() {
         ..certs.config(4)
     };
     let engine = Arc::new(MediaEngine::new());
-    let (addr, _ended) = MoqListener::configured(config, server(&engine))
+    let (addr, _ended) = MoqListener::configured(config, engine.clone(), server(&engine))
         .start()
         .await
         .unwrap();
@@ -487,6 +491,7 @@ async fn a_faulted_listener_returns_and_its_restart_on_the_same_port_serves() {
     let engine = Arc::new(MediaEngine::new());
     let faulted = MoqListener::configured(
         certs.config(INJECTED_PANIC_MAX_CONNECTIONS),
+        engine.clone(),
         server(&engine),
     );
     let (started, addr) = tokio::sync::oneshot::channel();
@@ -529,6 +534,7 @@ async fn a_faulted_listener_returns_and_its_restart_on_the_same_port_serves() {
             listen: addr,
             ..certs.config(4)
         },
+        engine.clone(),
         server(&engine),
     );
     let (started, restarted_addr) = tokio::sync::oneshot::channel();

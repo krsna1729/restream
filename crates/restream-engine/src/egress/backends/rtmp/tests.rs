@@ -10,8 +10,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use restream_rtmp::egress_payload_cache::RtmpPayloadCache;
+
 fn test_parts() -> RtmpUrlParts {
     restream_rtmp::parse_rtmp_url("rtmp://127.0.0.1:1935/live/stream-key").unwrap()
+}
+
+fn test_engine(startup: RtmpPublishStartup) -> RtmpFabricEngine {
+    RtmpFabricEngine::new_client(test_parts(), 4096, startup, RtmpPayloadCache::shared()).unwrap()
 }
 
 /// Real, synchronous `rml_rtmp` server-side peer that performs only the
@@ -375,8 +381,7 @@ fn engine_reaches_handshake_complete_through_the_visit_loop() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -406,8 +411,7 @@ fn engine_reaches_publish_accepted_through_the_visit_loop() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -440,8 +444,7 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_handshake() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -505,8 +508,7 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_negotiation() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -565,8 +567,7 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
     });
     let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let mut cursor = FeedCursor::new(0, 0);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -633,7 +634,7 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
         startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
         ..RtmpPublishStartup::default()
     };
-    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, startup).unwrap();
+    let mut engine = test_engine(startup);
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 
@@ -729,7 +730,7 @@ fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
         startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
         ..RtmpPublishStartup::default()
     };
-    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, startup).unwrap();
+    let mut engine = test_engine(startup);
     assert_eq!(
         engine.pending_application_bytes(),
         0,
@@ -815,8 +816,7 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let ring = Arc::new(restream_sync::RingBuffer::new(8));
     let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
     let mut cursor = FeedCursor::new(0, 0);
@@ -888,8 +888,7 @@ fn engine_detects_peer_close_during_steady_state_publishing() {
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = TlsTcpConnection::plain(client_stream);
 
-    let mut engine =
-        RtmpFabricEngine::new_client(test_parts(), 4096, RtmpPublishStartup::default()).unwrap();
+    let mut engine = test_engine(RtmpPublishStartup::default());
     let feed = dummy_feed();
     let mut cursor = FeedCursor::new(0, 0);
 

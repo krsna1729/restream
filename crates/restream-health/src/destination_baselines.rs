@@ -142,6 +142,18 @@ impl Baseline {
         }
         self.samples = self.samples.saturating_add(1);
     }
+
+    /// The anomaly this signal stands at now, if it is off its usual.
+    fn anomaly(&self, pipeline_id: &str, output_id: &str, signal: Signal) -> Option<Anomaly> {
+        self.anomalous_since_ms.map(|since_ms| Anomaly {
+            pipeline_id: pipeline_id.to_string(),
+            output_id: output_id.to_string(),
+            signal,
+            value: self.last_value,
+            usual: self.mean,
+            since_ms,
+        })
+    }
 }
 
 /// A destination off its usual for a signal.
@@ -200,14 +212,7 @@ impl DestinationBaselines {
             .iter()
             .flat_map(|(output_id, output)| {
                 output.signals.iter().filter_map(|(signal, baseline)| {
-                    baseline.anomalous_since_ms.map(|since_ms| Anomaly {
-                        pipeline_id: output.pipeline_id.clone(),
-                        output_id: output_id.clone(),
-                        signal: *signal,
-                        value: baseline.last_value,
-                        usual: baseline.mean,
-                        since_ms,
-                    })
+                    baseline.anomaly(&output.pipeline_id, output_id, *signal)
                 })
             })
             .collect();

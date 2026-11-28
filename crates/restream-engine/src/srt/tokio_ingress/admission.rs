@@ -127,6 +127,23 @@ impl Admissions {
             && self.tasks.len() < self.max_total
     }
 
+    /// Whether `peer` may start an admission: room for its IP, its stream
+    /// key (publishers only) and the listener. A refusal is logged.
+    fn admits(&self, peer: SocketAddr, publish_key: Option<&str>) -> bool {
+        let ip = peer.ip();
+        if self.has_room(&ip, publish_key) {
+            return true;
+        }
+        warn!(
+            peer = %peer,
+            in_flight_for_ip = self.for_ip(&ip),
+            in_flight_for_stream = publish_key.map(|key| self.for_publish_key(key)),
+            in_flight = self.tasks.len(),
+            "refusing SRT peer: too many admissions in flight"
+        );
+        false
+    }
+
     fn spawn(
         &mut self,
         peer: IngressPeer,
@@ -221,14 +238,7 @@ impl SrtServer {
         let parsed = parse_srt_stream_id(&stream_id);
         let ip = peer.ip();
         let publish_key = (parsed.mode == SrtConnectionMode::Publish).then_some(&parsed.stream_key);
-        if !admissions.has_room(&ip, publish_key.map(String::as_str)) {
-            warn!(
-                peer = %peer,
-                in_flight_for_ip = admissions.for_ip(&ip),
-                in_flight_for_stream = publish_key.map(|key| admissions.for_publish_key(key)),
-                in_flight = admissions.tasks.len(),
-                "refusing SRT peer: too many admissions in flight"
-            );
+        if !admissions.admits(peer, publish_key.map(String::as_str)) {
             return ingress.disconnect(logical_peer);
         }
         let publish_key = publish_key.cloned();

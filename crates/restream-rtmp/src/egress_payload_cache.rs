@@ -222,13 +222,16 @@ mod tests {
             }
             actions
         };
-        let private = encode_all(&mut RtmpMediaEncoder::new(false));
+        let private = encode_all(&mut RtmpMediaEncoder::new(
+            false,
+            RtmpPayloadCache::shared(),
+            0,
+        ));
 
         let shared = RtmpPayloadCache::shared();
         let mut outputs = Vec::new();
         for _ in 0..3 {
-            let mut encoder = RtmpMediaEncoder::new(false);
-            encoder.share_payload_cache(shared.clone());
+            let mut encoder = RtmpMediaEncoder::new(false, shared.clone(), 0);
             outputs.push(encode_all(&mut encoder));
         }
         for actions in &outputs {

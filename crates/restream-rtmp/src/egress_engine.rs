@@ -11,7 +11,7 @@ use rml_rtmp::time::RtmpTimestamp;
 use restream_core::{MediaPacket, MediaType, PayloadFormat, TrackConfig};
 
 use super::egress_packets::{rtmp_video_packet_can_be_dropped, video_sequence_header};
-use super::egress_payload_cache::{RtmpPayloadCache, SharedRtmpPayloadCache};
+use super::egress_payload_cache::SharedRtmpPayloadCache;
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
@@ -41,18 +41,22 @@ pub struct RtmpMediaEncoder {
 }
 
 impl RtmpMediaEncoder {
-    pub fn new(enhanced_hevc: bool) -> Self {
+    /// `payloads` is the shard's shared Raw → FLV cache (or a private one);
+    /// `startup_video_generation` is the generation of the configuration the
+    /// startup sequence header was built from (0 when it came from elsewhere
+    /// or none was sent).
+    pub fn new(
+        enhanced_hevc: bool,
+        payloads: SharedRtmpPayloadCache,
+        startup_video_generation: u32,
+    ) -> Self {
         Self {
             enhanced_hevc,
             video_ready: false,
-            announced_video_generation: 0,
+            announced_video_generation: startup_video_generation,
             timestamp_guard: RtmpTimestampGuard::new(),
-            payloads: RtmpPayloadCache::shared(),
+            payloads,
         }
-    }
-
-    pub fn share_payload_cache(&mut self, payloads: SharedRtmpPayloadCache) {
-        self.payloads = payloads;
     }
 
     /// Encode one ring packet. `video_config` is the ring's configuration for
@@ -69,12 +73,6 @@ impl RtmpMediaEncoder {
             MediaType::Video => self.encode_video(packet, video_config, actions),
             MediaType::Audio => self.encode_audio(packet, actions),
         }
-    }
-
-    /// The generation of the configuration the startup sequence header was
-    /// built from (0 when it came from elsewhere or none was sent).
-    pub fn set_startup_video_generation(&mut self, generation: u32) {
-        self.announced_video_generation = generation;
     }
 
     pub fn video_ready(&self) -> bool {
@@ -173,6 +171,7 @@ impl RtmpMediaEncoder {
 )]
 mod tests {
     use super::*;
+    use crate::egress_payload_cache::RtmpPayloadCache;
     use restream_sync::RingBuffer;
 
     const SPS: &[u8] = &[0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80];
@@ -234,7 +233,7 @@ mod tests {
 
     #[test]
     fn flv_interframe_waits_for_keyframe() {
-        let mut encoder = RtmpMediaEncoder::new(false);
+        let mut encoder = RtmpMediaEncoder::new(false, RtmpPayloadCache::shared(), 0);
         let mut actions = Vec::new();
 
         encoder.encode(
@@ -252,7 +251,7 @@ mod tests {
 
     #[test]
     fn raw_keyframe_emits_config_before_media() {
-        let mut encoder = RtmpMediaEncoder::new(false);
+        let mut encoder = RtmpMediaEncoder::new(false, RtmpPayloadCache::shared(), 0);
         let per_packet = encode_ring(&mut encoder, vec![raw_video(&[SPS, PPS_A, IDR], true, 0)]);
 
         assert!(matches!(
@@ -276,7 +275,7 @@ mod tests {
     /// relies on earlier parameter sets, but for a PPS-only change.
     #[test]
     fn sequence_headers_follow_ring_configuration_generations() {
-        let mut encoder = RtmpMediaEncoder::new(false);
+        let mut encoder = RtmpMediaEncoder::new(false, RtmpPayloadCache::shared(), 0);
         let per_packet = encode_ring(
             &mut encoder,
             vec![
@@ -310,8 +309,7 @@ mod tests {
 
     #[test]
     fn startup_generation_suppresses_a_repeated_header() {
-        let mut encoder = RtmpMediaEncoder::new(false);
-        encoder.set_startup_video_generation(1);
+        let mut encoder = RtmpMediaEncoder::new(false, RtmpPayloadCache::shared(), 1);
         let per_packet = encode_ring(
             &mut encoder,
             vec![

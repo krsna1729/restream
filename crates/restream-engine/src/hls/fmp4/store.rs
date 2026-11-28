@@ -32,8 +32,22 @@ impl RenditionPlaylistState {
         self.target_duration = None;
     }
 
-    fn put_init_segment(&mut self, data: Bytes) {
-        self.init_segment = Some(data);
+    /// Publish `data` with the init it was cut against, so a reader never
+    /// sees the segment without its init.
+    fn publish_segment(
+        &mut self,
+        config: HlsConfig,
+        index: u64,
+        duration: f64,
+        init: Bytes,
+        data: Bytes,
+    ) {
+        self.init_segment = Some(init);
+        self.push_segment(config, index, duration, data);
+    }
+
+    fn segment_count(&self) -> usize {
+        self.segments.len()
     }
 
     fn retained_segment_limit(config: HlsConfig) -> usize {
@@ -192,20 +206,6 @@ impl Fmp4HlsStore {
         (!codecs.is_empty()).then(|| codecs.join(","))
     }
 
-    pub fn put_video_init_segment(&self, data: Bytes) {
-        let mut inner = restream_sync::lock::lock(&self.inner);
-        inner.video.put_init_segment(data);
-    }
-
-    pub fn put_audio_init_segment(&self, track_index: u32, data: Bytes) {
-        let mut inner = restream_sync::lock::lock(&self.inner);
-        inner
-            .audio
-            .entry(track_index)
-            .or_default()
-            .put_init_segment(data);
-    }
-
     pub fn push_video_segment(&self, index: u64, duration: f64, data: Bytes) {
         let mut inner = restream_sync::lock::lock(&self.inner);
         inner.video.push_segment(self.config, index, duration, data);
@@ -213,8 +213,9 @@ impl Fmp4HlsStore {
 
     pub fn publish_video_segment(&self, index: u64, duration: f64, init: Bytes, data: Bytes) {
         let mut inner = restream_sync::lock::lock(&self.inner);
-        inner.video.put_init_segment(init);
-        inner.video.push_segment(self.config, index, duration, data);
+        inner
+            .video
+            .publish_segment(self.config, index, duration, init, data);
     }
 
     pub fn push_audio_segment(&self, track_index: u32, index: u64, duration: f64, data: Bytes) {
@@ -236,24 +237,28 @@ impl Fmp4HlsStore {
         data: Bytes,
     ) {
         let mut inner = restream_sync::lock::lock(&self.inner);
-        let rendition = inner.audio.entry(track_index).or_default();
-        rendition.put_init_segment(init);
-        rendition.push_segment(self.config, index, duration, data);
+        inner.audio.entry(track_index).or_default().publish_segment(
+            self.config,
+            index,
+            duration,
+            init,
+            data,
+        );
     }
 
     pub fn has_video_playlist(&self) -> bool {
         let inner = restream_sync::lock::lock(&self.inner);
-        !inner.video.segments.is_empty()
+        inner.video.segment_count() > 0
     }
 
     pub fn get_primary_playlist(&self) -> Option<String> {
         let inner = restream_sync::lock::lock(&self.inner);
-        if !inner.video.segments.is_empty() {
-            return inner.video.playlist(
-                self.config,
-                || "video/init.mp4".to_string(),
-                |index| format!("seg{index}.m4s"),
-            );
+        if let Some(playlist) = inner.video.playlist(
+            self.config,
+            || "video/init.mp4".to_string(),
+            |index| format!("seg{index}.m4s"),
+        ) {
+            return Some(playlist);
         }
         let first_track = inner.audio_tracks.first()?;
         inner.audio.get(&first_track.track_index)?.playlist(
@@ -303,14 +308,15 @@ impl Fmp4HlsStore {
 
     pub fn segment_count(&self) -> usize {
         let inner = restream_sync::lock::lock(&self.inner);
-        if !inner.video.segments.is_empty() {
-            inner.video.segments.len()
+        let video = inner.video.segment_count();
+        if video > 0 {
+            video
         } else {
             inner
                 .audio_tracks
                 .first()
                 .and_then(|track| inner.audio.get(&track.track_index))
-                .map(|rendition| rendition.segments.len())
+                .map(RenditionPlaylistState::segment_count)
                 .unwrap_or(0)
         }
     }

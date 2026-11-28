@@ -40,7 +40,7 @@ impl ControlPlane {
         let recording_metadata = spawn_recording_metadata_reporter(lifecycle);
         let pipeline_service = PipelineService::new(db.clone(), catalog_auth.clone());
         let pipeline_input_service =
-            PipelineInputService::new(db.clone(), pipeline_service.clone());
+            PipelineInputService::new(db.clone(), pipeline_service.clone(), catalog_auth.clone());
         let ingest_service = IngestService::new(db.clone());
         let services = AppServices {
             recirculation_service: RecirculationService::with_services(

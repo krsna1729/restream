@@ -251,6 +251,15 @@ impl MediaExecutorMetrics {
         &self.classes[class as usize]
     }
 
+    /// A new service's metrics, under the next service id.
+    fn new_service(&self, service: MediaService) -> Arc<ServiceMetrics> {
+        Arc::new(ServiceMetrics {
+            id: self.next_service_id.fetch_add(1, Ordering::Relaxed),
+            service,
+            timing: PollTiming::default(),
+        })
+    }
+
     fn record_start(&self, service: &Arc<ServiceMetrics>, queue_latency_us: u64) {
         self.spawned_total.fetch_add(1, Ordering::Relaxed);
         self.class(service.service.class)
@@ -554,11 +563,7 @@ where
     F::Output: Send + 'static,
 {
     let class = service.class;
-    let service = Arc::new(ServiceMetrics {
-        id: metrics().next_service_id.fetch_add(1, Ordering::Relaxed),
-        service,
-        timing: PollTiming::default(),
-    });
+    let service = metrics().new_service(service);
     let mut guard = CancelOnDrop {
         cancel: Some(cancel),
         class,

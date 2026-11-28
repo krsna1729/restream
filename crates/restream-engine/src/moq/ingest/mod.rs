@@ -146,10 +146,6 @@ impl MoqIngestServer {
         }
     }
 
-    pub(crate) fn engine(&self) -> &Arc<MediaEngine> {
-        &self.engine
-    }
-
     /// Authenticate `stream_key` for `peer` under `moq-publish`, register
     /// the input attempt and build the publisher's media state.
     pub(crate) async fn admit(

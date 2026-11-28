@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use crate::application::catalog_auth::CatalogAuth;
 use crate::application::service_error::{ServiceError, ServiceResult};
 use crate::application::services::PipelineService;
 use crate::db::{self, DeadlineDb};
@@ -7,15 +10,22 @@ use restream_domain::domain::pipeline_input::{
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
 
+/// Pipeline input CRUD. Each write commits through the admission index
+/// ([`CatalogAuth::commit`]), the same one `pipelines` writes through.
 #[derive(Clone)]
 pub struct PipelineInputService {
     db: DeadlineDb,
     pipelines: PipelineService,
+    catalog_auth: Arc<CatalogAuth>,
 }
 
 impl PipelineInputService {
-    pub fn new(db: DeadlineDb, pipelines: PipelineService) -> Self {
-        Self { db, pipelines }
+    pub fn new(db: DeadlineDb, pipelines: PipelineService, catalog_auth: Arc<CatalogAuth>) -> Self {
+        Self {
+            db,
+            pipelines,
+            catalog_auth,
+        }
     }
 
     pub async fn list(&self, pipeline_id: &str) -> ServiceResult<Vec<PipelineInput>> {
@@ -48,14 +58,14 @@ impl PipelineInputService {
                 "pipeline input limit is {MAX_PIPELINE_INPUTS}"
             )));
         }
-        let catalog_auth = self.pipelines.catalog_auth();
         for _ in 0..16 {
             let input_id = format!("input_{}", hex(&rand::random::<[u8; 8]>()));
             let stream_key = generated_stream_key();
             let db = self.db.clone();
             let (pipeline_id, label) = (pipeline_id.to_owned(), label.to_owned());
             let source = source.clone();
-            match catalog_auth
+            match self
+                .catalog_auth
                 .commit(async move {
                     db.write(move |pool| async move {
                         db::with_busy_retry(|| {
@@ -113,8 +123,7 @@ impl PipelineInputService {
             input_id.to_owned(),
             label.to_owned(),
         );
-        self.pipelines
-            .catalog_auth()
+        self.catalog_auth
             .commit(async move {
                 db.write(move |pool| async move {
                     let (pipeline_id, input_id, label) = owned;
@@ -146,8 +155,7 @@ impl PipelineInputService {
         }
         let db = self.db.clone();
         let owned = (pipeline_id.to_owned(), input_id.to_owned());
-        self.pipelines
-            .catalog_auth()
+        self.catalog_auth
             .commit(async move {
                 db.write(move |pool| async move {
                     db::with_busy_retry(|| db::delete_pipeline_input(&pool, &owned.0, &owned.1))
@@ -166,8 +174,7 @@ impl PipelineInputService {
         }
         let db = self.db.clone();
         let owned = (pipeline_id.to_owned(), input_id.to_owned());
-        self.pipelines
-            .catalog_auth()
+        self.catalog_auth
             .commit(async move {
                 db.write(move |pool| async move {
                     db::with_busy_retry(|| db::promote_pipeline_input(&pool, &owned.0, &owned.1))

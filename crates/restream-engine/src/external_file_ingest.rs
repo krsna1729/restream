@@ -148,6 +148,35 @@ impl CoordinatorCleanup {
             lease.finish(end).await;
         }
     }
+
+    /// Cover `child` and hand it to the attempt's file-ingest state; gives it
+    /// back when a replacement attempt owns the input. Returns its pid.
+    async fn register_child(
+        &mut self,
+        child: tokio::process::Child,
+    ) -> Result<Option<u32>, tokio::process::Child> {
+        self.child_pid = child.id();
+        self.runtime
+            .engine
+            .register_file_ingest_child_if_current(
+                &self.runtime.ingest_id,
+                &self.runtime.registration,
+                child,
+            )
+            .await?;
+        Ok(self.child_pid)
+    }
+
+    /// Reap the covered child, waiting up to `CHILD_EXIT_GRACE` for its exit
+    /// status; it is covered no longer.
+    async fn reap_child(&mut self) -> Option<std::process::ExitStatus> {
+        let mut exit_status = None;
+        if let Some(mut child) = take_owned_child(&self.runtime, self.child_pid).await {
+            exit_status = crate::child_process::reap(&mut child, CHILD_EXIT_GRACE).await;
+        }
+        self.child_pid = None;
+        exit_status
+    }
 }
 
 impl Drop for CoordinatorCleanup {
@@ -209,20 +238,13 @@ async fn run_external_file_ingest(
             .engine
             .set_file_ingest_position(&runtime.ingest_id, index)
             .await;
-        cleanup.child_pid = spawned.child.id();
-        let child_pid = cleanup.child_pid;
-        if let Err(child) = runtime
-            .engine
-            .register_file_ingest_child_if_current(
-                &runtime.ingest_id,
-                &runtime.registration,
-                spawned.child,
-            )
-            .await
-        {
-            spawned.child = child;
-            break;
-        }
+        let child_pid = match cleanup.register_child(spawned.child).await {
+            Ok(child_pid) => child_pid,
+            Err(child) => {
+                spawned.child = child;
+                break;
+            }
+        };
 
         let (stdout_result, stderr_result) = read_child_pipes(
             &runtime,
@@ -244,11 +266,7 @@ async fn run_external_file_ingest(
             }
         };
 
-        let mut exit_status = None;
-        if let Some(mut child) = take_owned_child(&runtime, child_pid).await {
-            exit_status = crate::child_process::reap(&mut child, CHILD_EXIT_GRACE).await;
-        }
-        cleanup.child_pid = None;
+        let exit_status = cleanup.reap_child().await;
 
         report_child_exit(&runtime, &cancel, stdout_result, stderr_result, exit_status).await;
         let clean = exit_status.is_some_and(|status| status.success());

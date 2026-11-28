@@ -54,8 +54,20 @@ impl Payload {
         }
     }
 
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    /// A hash of the bytes: tells one init from another.
+    fn content_hash(&self) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&self.bytes[..], &mut hasher);
+        std::hash::Hasher::finish(&hasher)
+    }
+
+    /// Another handle on the same bytes, not charged to the budget again.
+    fn share(&self) -> Self {
+        Self::new(self.bytes.clone(), None, None, None)
     }
 }
 
@@ -250,6 +262,79 @@ impl Track {
         self.maps.iter().any(|map| map.uri == uri)
     }
 
+    /// A playlist or a master named this rendition's playlist.
+    fn named(&self) -> bool {
+        self.path.is_some()
+    }
+
+    fn follows(&self, playlist_path: &str) -> bool {
+        self.path.as_deref() == Some(playlist_path)
+    }
+
+    /// Follow `path` in this rendition's place. A rendition only seeded so
+    /// far (no playlist named yet) keeps the maps it was seeded with; one
+    /// that followed another playlist switches.
+    fn follow(&mut self, path: String) {
+        if self.path.is_some() {
+            self.switch_to(path);
+        } else {
+            self.path = Some(path);
+        }
+    }
+
+    /// `None` until a media playlist was applied; then whether it named an
+    /// `EXT-X-MAP`.
+    fn names_map(&self) -> Option<bool> {
+        self.playlist_seen.then_some(self.current_map.is_some())
+    }
+
+    /// Whether the last playlist lists `path`.
+    fn lists(&self, path: &str) -> bool {
+        self.latest_listing.contains_key(path)
+    }
+
+    /// Take an upload of map `uri`'s init; the newest upload wins, like a
+    /// held segment's. Gives the payload back when no map of this playlist
+    /// is `uri`.
+    fn offer_init(&mut self, uri: &str, payload: Payload) -> Result<(), Payload> {
+        match self.maps.iter_mut().find(|map| map.uri == uri) {
+            Some(map) => {
+                map.pending = Some(payload);
+                Ok(())
+            }
+            None => Err(payload),
+        }
+    }
+
+    /// Attach `payload` to the listed sequence `path` names: `Attached`, or
+    /// `Duplicate` when that sequence already has bytes. Gives the payload
+    /// back when the last playlist does not list `path` at or after
+    /// `next_seq`.
+    fn offer_segment(&mut self, path: &str, payload: Payload) -> Result<SegmentOutcome, Payload> {
+        let Some(listed) = self
+            .latest_listing
+            .get(path)
+            .and_then(|sequence| self.listed.get_mut(sequence))
+            .filter(|listed| listed.path == path)
+        else {
+            return Err(payload);
+        };
+        if listed.payload.is_some() {
+            return Ok(SegmentOutcome::Duplicate);
+        }
+        listed.payload = Some(payload);
+        Ok(SegmentOutcome::Attached)
+    }
+
+    /// Forget the init map `uri` holds, if this playlist names it.
+    fn void_map(&mut self, uri: &str) {
+        if let Some(map) = self.maps.iter_mut().find(|map| map.uri == uri) {
+            map.pending = None;
+            map.delivered = None;
+            map.last = None;
+        }
+    }
+
     /// `EXT-X-ENDLIST` was seen and every listed segment has left.
     fn finished(&self) -> bool {
         self.ended && self.listed.is_empty()
@@ -382,22 +467,20 @@ impl Track {
         // Fresh bytes for this map win; otherwise the bytes it last delivered,
         // so a return to an earlier map re-delivers its init instead of
         // leaving the other map's tracks in the demuxer.
-        let (bytes, hash) = match map.pending.take() {
+        let (shared, hash) = match map.pending.take() {
             Some(payload) => {
-                let mut hasher = std::hash::DefaultHasher::new();
-                std::hash::Hash::hash(&payload.bytes[..], &mut hasher);
-                let hash = std::hash::Hasher::finish(&hasher);
-                let bytes = payload.bytes.clone();
+                let hash = payload.content_hash();
+                let shared = payload.share();
                 // The map keeps the charged payload; the delivered handle below
                 // shares its bytes without a second charge.
                 map.last = Some(payload);
-                (bytes, hash)
+                (shared, hash)
             }
             None => {
                 let (Some(hash), Some(kept)) = (map.delivered, map.last.as_ref()) else {
                     return (None, false);
                 };
-                (kept.bytes.clone(), hash)
+                (kept.share(), hash)
             }
         };
         // The map has an init now, whether or not it is delivered: record it
@@ -417,7 +500,7 @@ impl Track {
         (
             Some(Init {
                 uri: uri.to_string(),
-                payload: Payload::new(bytes, None, None, None),
+                payload: shared,
             }),
             replaces,
         )
@@ -632,7 +715,7 @@ impl Session {
     pub(super) fn renditions(&self) -> usize {
         self.tracks
             .iter()
-            .filter(|track| track.path.is_some())
+            .filter(|track| track.named())
             .count()
             .max(1)
     }
@@ -648,12 +731,8 @@ impl Session {
     /// Every followed playlist seen so far named no `EXT-X-MAP`, so an fMP4
     /// object can never be demuxed.
     pub(super) fn map_required(&self) -> bool {
-        let mut seen = self
-            .tracks
-            .iter()
-            .filter(|track| track.playlist_seen)
-            .peekable();
-        seen.peek().is_some() && seen.all(|track| track.current_map.is_none())
+        let mut seen = self.tracks.iter().filter_map(Track::names_map).peekable();
+        seen.peek().is_some() && seen.all(|named| !named)
     }
 
     /// Whether `path` (or `uri`) is an `EXT-X-MAP` init object of a followed
@@ -686,11 +765,7 @@ impl Session {
     /// variant switch, an evicted entry) must not take the stale init again.
     pub(super) fn void_map(&mut self, uri: &str) {
         for track in &mut self.tracks {
-            if let Some(map) = track.maps.iter_mut().find(|map| map.uri == uri) {
-                map.pending = None;
-                map.delivered = None;
-                map.last = None;
-            }
+            track.void_map(uri);
         }
         self.pool.seeded.retain(|(seeded, _)| seeded != uri);
     }
@@ -746,12 +821,12 @@ impl Session {
     }
 
     fn follows(&self, playlist_path: &str) -> Follows {
-        if self.tracks.first().is_none_or(|track| track.path.is_none()) {
+        if self.tracks.first().is_none_or(|track| !track.named()) {
             return Follows::Unlocked;
         }
         self.tracks
             .iter()
-            .position(|track| track.path.as_deref() == Some(playlist_path))
+            .position(|track| track.follows(playlist_path))
             .map_or(Follows::Other, Follows::Rendition)
     }
 
@@ -762,32 +837,25 @@ impl Session {
         now: Instant,
     ) -> SegmentOutcome {
         let pool = &mut self.pool;
-        if let Some(map) = self
-            .tracks
-            .iter_mut()
-            .find_map(|track| track.maps.iter_mut().find(|map| map.uri == path))
-        {
-            // The newest upload of the init wins, like a held segment's.
-            map.pending = Some(payload);
-            return SegmentOutcome::Init;
+        let mut payload = payload;
+        for track in &mut self.tracks {
+            payload = match track.offer_init(&path, payload) {
+                Ok(()) => return SegmentOutcome::Init,
+                Err(payload) => payload,
+            };
         }
         for track in &mut self.tracks {
-            if let Some(&sequence) = track.latest_listing.get(&path)
-                && let Some(listed) = track.listed.get_mut(&sequence)
-                && listed.path == path
-            {
-                if listed.payload.is_some() {
-                    pool.counters.duplicates = pool.counters.duplicates.saturating_add(1);
-                    return SegmentOutcome::Duplicate;
+            payload = match track.offer_segment(&path, payload) {
+                Ok(outcome) => {
+                    if outcome == SegmentOutcome::Duplicate {
+                        pool.counters.duplicates = pool.counters.duplicates.saturating_add(1);
+                    }
+                    return outcome;
                 }
-                listed.payload = Some(payload);
-                return SegmentOutcome::Attached;
-            }
+                Err(payload) => payload,
+            };
         }
-        if !self
-            .tracks
-            .iter()
-            .any(|track| track.latest_listing.contains_key(&path))
+        if !self.tracks.iter().any(|track| track.lists(&path))
             && self
                 .other_variants
                 .values()
@@ -833,7 +901,7 @@ impl Session {
                     }
                     Follows::Unlocked => {
                         if let Some(track) = self.tracks.first_mut() {
-                            track.path = Some(playlist_path.to_string());
+                            track.follow(playlist_path.to_string());
                         }
                         0
                     }
@@ -876,7 +944,7 @@ impl Session {
                 let index = old.iter().position(|track| {
                     track
                         .as_ref()
-                        .is_some_and(|track| track.path.as_deref() == Some(path.as_str()))
+                        .is_some_and(|track| track.follows(path.as_str()))
                 })?;
                 let mut track = old.get_mut(index)?.take()?;
                 if index != rendition {
@@ -894,13 +962,9 @@ impl Session {
             // rendition the master no longer selects is dropped with its
             // listing; its held segments age out.
             let track = match old.get_mut(rendition).and_then(Option::take) {
-                Some(mut track) if track.path.is_some() => {
-                    track.switch_to(path.clone());
+                Some(mut track) => {
+                    track.follow(path.clone());
                     track
-                }
-                Some(mut seeded) => {
-                    seeded.path = Some(path.clone());
-                    seeded
                 }
                 None => Track::new(Some(path.clone())),
             };

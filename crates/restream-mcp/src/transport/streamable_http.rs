@@ -63,6 +63,10 @@ impl Sessions {
         (id, session)
     }
 
+    fn get(&self, id: &str) -> Option<Arc<Session>> {
+        self.by_id.get(id).cloned()
+    }
+
     fn end(&mut self, id: &str) -> bool {
         let Some(session) = self.by_id.remove(id) else {
             return false;
@@ -88,6 +92,38 @@ impl<B: AgentBackend> HttpTransportState<B> {
 
     fn sessions(&self) -> std::sync::MutexGuard<'_, Sessions> {
         restream_sync::lock::lock(&self.sessions)
+    }
+
+    /// Answer a tool call as plain JSON, outside any session.
+    async fn answer_call(&self, id: Value, name: &str, arguments: Value) -> Response {
+        let ctx = CallContext::detached();
+        json_response(
+            StatusCode::OK,
+            run_tool_call(&self.handler, &ctx, id, name, arguments).await,
+        )
+    }
+}
+
+impl<B: AgentBackend + 'static> HttpTransportState<B> {
+    /// Answer a tool call as an SSE stream carrying its progress and the
+    /// server's requests before the result. The call runs to completion even
+    /// if the client drops the stream: an apply is not abandoned half way.
+    fn stream_call(
+        &self,
+        session: Option<Arc<Session>>,
+        progress_token: Option<Value>,
+        id: Value,
+        name: String,
+        arguments: Value,
+    ) -> Response {
+        let (out, outbox) = mpsc::channel(CALL_OUTBOX);
+        let handler = Arc::clone(&self.handler);
+        let ctx = CallContext::streaming(session, out.clone(), progress_token);
+        tokio::spawn(async move {
+            let response = run_tool_call(&handler, &ctx, id, &name, arguments).await;
+            let _ = out.send(response).await;
+        });
+        event_stream(outbox)
     }
 }
 
@@ -161,8 +197,8 @@ async fn post_handler<B: AgentBackend + 'static>(
     } else {
         match session_id(&headers) {
             None => (None, None),
-            Some(id) => match state.sessions().by_id.get(id) {
-                Some(session) => (Some(Arc::clone(session)), None),
+            Some(id) => match state.sessions().get(id) {
+                Some(session) => (Some(session), None),
                 None => return plain_response(StatusCode::NOT_FOUND, "unknown MCP session"),
             },
         }
@@ -177,29 +213,14 @@ async fn post_handler<B: AgentBackend + 'static>(
             arguments,
             progress_token,
         } if accepts_event_stream(&headers) => {
-            let (out, outbox) = mpsc::channel(CALL_OUTBOX);
-            let handler = Arc::clone(&state.handler);
-            let ctx = CallContext::streaming(session, out.clone(), progress_token);
-            // The call runs to completion even if the client drops the
-            // stream: an apply is not abandoned half way.
-            tokio::spawn(async move {
-                let response = run_tool_call(&handler, &ctx, id, &name, arguments).await;
-                let _ = out.send(response).await;
-            });
-            event_stream(outbox)
+            state.stream_call(session, progress_token, id, name, arguments)
         }
         Inbound::ToolCall {
             id,
             name,
             arguments,
             ..
-        } => {
-            let ctx = CallContext::detached();
-            json_response(
-                StatusCode::OK,
-                run_tool_call(&state.handler, &ctx, id, &name, arguments).await,
-            )
-        }
+        } => state.answer_call(id, &name, arguments).await,
     };
     if let Some(id) = opened
         && let Ok(value) = HeaderValue::from_str(&id)

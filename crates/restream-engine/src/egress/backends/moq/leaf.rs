@@ -361,7 +361,7 @@ impl ProtocolEngine for MoqEngine {
     }
 
     fn close(&mut self, link: &mut Rc<LeafLink>, _reason: CloseReason) {
-        self.publisher.broadcast_mut().finish();
+        self.publisher.finish();
         link.remove();
     }
 
