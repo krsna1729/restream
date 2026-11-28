@@ -413,13 +413,8 @@ async fn assert_detached_teardown_preserves_replacement(fmp4: bool) {
     .expect("old reader attaches");
     let old_lifecycle = engine
         .stages
-        .runtimes
-        .read()
-        .await
-        .get(&key)
-        .unwrap()
-        .lifecycle
-        .clone();
+        .with_runtimes(|runtimes| runtimes.get(&key).unwrap().lifecycle.clone())
+        .await;
     old_owner.abort();
     assert!(old_owner.await.unwrap_err().is_cancelled());
     assert!(old_cancel.is_cancelled());
@@ -436,13 +431,8 @@ async fn assert_detached_teardown_preserves_replacement(fmp4: bool) {
     .expect("replacement reader attaches before old teardown");
     let replacement = engine
         .stages
-        .runtimes
-        .read()
-        .await
-        .get(&key)
-        .unwrap()
-        .lifecycle
-        .clone();
+        .with_runtimes(|runtimes| runtimes.get(&key).unwrap().lifecycle.clone())
+        .await;
     assert!(!Arc::ptr_eq(&replacement, &old_lifecycle));
     drop(headers);
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -454,13 +444,14 @@ async fn assert_detached_teardown_preserves_replacement(fmp4: bool) {
     .expect("old media task finishes detached teardown");
     let current = engine
         .stages
-        .runtimes
-        .read()
-        .await
-        .get(&key)
-        .expect("replacement runtime survives old teardown")
-        .lifecycle
-        .clone();
+        .with_runtimes(|runtimes| {
+            runtimes
+                .get(&key)
+                .expect("replacement runtime survives old teardown")
+                .lifecycle
+                .clone()
+        })
+        .await;
     assert!(Arc::ptr_eq(&current, &replacement));
     assert!(matches!(
         current.snapshot().phase,

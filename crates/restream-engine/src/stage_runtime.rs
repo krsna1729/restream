@@ -71,8 +71,8 @@ impl StageRuntimeManager {
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (StageHandle, StageLease, bool) {
-        let backend_kind = restream_domain::planner::select_backend(&key.kind);
-        let mut lifecycle = self
+        let backend = restream_domain::planner::select_backend(&key.kind);
+        let (handle, lease, created) = self
             .stages
             .admit_ring_stage(key, backend, self.transcoder_ring_capacity)
             .await;

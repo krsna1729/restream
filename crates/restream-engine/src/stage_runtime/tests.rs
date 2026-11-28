@@ -54,17 +54,21 @@ async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
         .await;
     assert!(!created2);
     assert!(Arc::ptr_eq(&handle1.ring, &handle2.ring));
-    let runtimes = engine.stages.runtimes.read().await;
-    let runtime = runtimes.get(&key).expect("stage runtime registered");
-    let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
-    assert!(Arc::ptr_eq(runtime_ring, &handle1.ring));
-    handle1.cancel.cancel();
-    assert!(
-        runtime.cancel.is_cancelled(),
-        "runtime and handle must share one cancellation token"
-    );
-    assert!(Arc::ptr_eq(&runtime.lifecycle, &handle1.lifecycle));
-    assert!(Arc::ptr_eq(&runtime.metrics, &handle1.metrics));
+    engine
+        .stages
+        .with_runtimes(|runtimes| {
+            let runtime = runtimes.get(&key).expect("stage runtime registered");
+            let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
+            assert!(Arc::ptr_eq(runtime_ring, &handle1.ring));
+            handle1.cancel.cancel();
+            assert!(
+                runtime.cancel.is_cancelled(),
+                "runtime and handle must share one cancellation token"
+            );
+            assert!(Arc::ptr_eq(&runtime.lifecycle, &handle1.lifecycle));
+            assert!(Arc::ptr_eq(&runtime.metrics, &handle1.metrics));
+        })
+        .await;
 }
 
 #[tokio::test]
@@ -87,11 +91,15 @@ async fn ensure_stage_replaces_cancelled_runtime() {
     assert!(created2, "cancelled runtime should be replaced");
     assert!(!Arc::ptr_eq(&handle1.ring, &handle2.ring));
     assert!(!handle2.cancel.is_cancelled());
-    let runtimes = engine.stages.runtimes.read().await;
-    let runtime = runtimes.get(&key).expect("replacement runtime registered");
-    let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
-    assert!(Arc::ptr_eq(runtime_ring, &handle2.ring));
-    assert!(!runtime.cancel.is_cancelled());
+    engine
+        .stages
+        .with_runtimes(|runtimes| {
+            let runtime = runtimes.get(&key).expect("replacement runtime registered");
+            let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
+            assert!(Arc::ptr_eq(runtime_ring, &handle2.ring));
+            assert!(!runtime.cancel.is_cancelled());
+        })
+        .await;
 }
 
 #[tokio::test]
