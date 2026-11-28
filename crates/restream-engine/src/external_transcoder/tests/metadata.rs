@@ -71,7 +71,7 @@ async fn stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
 
     let cancel = CancellationToken::new();
     let (video, audio_tracks) = wait_for_stage_metadata(
-        &engine,
+        &engine.ingests,
         "pipe-stage-meta",
         &upstream_ring,
         true,
@@ -135,7 +135,7 @@ async fn stage_metadata_waits_for_complete_audio_tracks() {
     let cancel_for_wait = cancel.clone();
     let wait = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_for_wait,
+            &engine_for_wait.ingests,
             "pipe-stage-audio-ready",
             &ring_for_wait,
             true,
@@ -233,7 +233,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_srt_inputs() {
     let cancel_for_wait = cancel.clone();
     let wait = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_for_wait,
+            &engine_for_wait.ingests,
             "pipe-stage-params",
             &ring_for_wait,
             true,
@@ -313,7 +313,7 @@ async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
     let cancel_for_wait = cancel.clone();
     let wait = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_for_wait,
+            &engine_for_wait.ingests,
             "pipe-stage-file-params",
             &ring_for_wait,
             true,
@@ -393,7 +393,7 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
     let cancel_for_wait = cancel.clone();
     let wait = tokio::spawn(async move {
         wait_for_stage_metadata(
-            &engine_for_wait,
+            &engine_for_wait.ingests,
             "pipe-stage-codec-edge",
             &ring_for_wait,
             true,

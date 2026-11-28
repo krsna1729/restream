@@ -15,7 +15,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-hevc").await;
-        let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine.clone());
+        let manager = engine.stage_runtime();
         let stage_key = StageKey::new(
             "rtmp-hevc",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),

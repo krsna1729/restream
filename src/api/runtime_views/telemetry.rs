@@ -442,7 +442,6 @@ mod tests {
     use restream_domain::domain::stage::{StageKey, StageKind};
     use restream_engine::pipe_metrics::PipeMetrics;
     use restream_engine::stage_lifecycle::StagePhase;
-    use restream_engine::stage_runtime::StageRuntimeManager;
     use restream_sync::RingBuffer;
     use std::sync::Arc;
 
@@ -450,7 +449,7 @@ mod tests {
     async fn stage_telemetry_reads_pipe_metrics_from_stage_runtime() {
         let engine = Arc::new(MediaEngine::new());
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
-        let manager = StageRuntimeManager::new(engine.clone());
+        let manager = engine.stage_runtime();
         let _stage = manager
             .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
             .await;
@@ -473,7 +472,7 @@ mod tests {
     async fn telemetry_reads_runtime_stage_after_metrics_side_map_removed() {
         let engine = Arc::new(MediaEngine::new());
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
-        let manager = StageRuntimeManager::new(engine.clone());
+        let manager = engine.stage_runtime();
         let (handle, _lease2, _) = manager
             .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
             .await;

@@ -82,7 +82,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         "pipe-graph-life",
         StageKind::video_preset_with_codec("720p", "h264"),
     );
-    let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine);
+    let manager = engine.stage_runtime();
     let (handle, _lease206, _) = manager
         .ensure_stage(
             stage_key.clone(),

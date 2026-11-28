@@ -331,12 +331,11 @@ async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
 #[tokio::test]
 async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
     use crate::stage_lifecycle::StagePhase;
-    use crate::stage_runtime::StageRuntimeManager;
     use restream_sync::RingBuffer;
 
     let engine = Arc::new(MediaEngine::new());
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
-    let manager = StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let (handle, _lease27, _) = manager
         .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
         .await;

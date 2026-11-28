@@ -15,7 +15,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-h264").await;
-        let manager = restream_engine::stage_runtime::StageRuntimeManager::new(engine.clone());
+        let manager = engine.stage_runtime();
         let stage_key = StageKey::new("rtmp-h264", StageKind::source());
         let (handle, _lease203, is_new) = manager
             .ensure_stage(stage_key.clone(), source.clone(), None)

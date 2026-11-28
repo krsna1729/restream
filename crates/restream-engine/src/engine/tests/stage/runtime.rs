@@ -270,7 +270,7 @@ async fn shared_muxer_packages_media_while_control_thread_is_blocked() {
 #[tokio::test]
 async fn a_released_lease_never_removes_a_newer_stage_under_its_key() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
     let source = Arc::new(RingBuffer::new(16));
 
@@ -299,7 +299,7 @@ async fn a_released_lease_never_removes_a_newer_stage_under_its_key() {
 #[tokio::test]
 async fn the_last_lease_removes_a_runtime_stage_and_its_metrics() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
     let (handle, lease, _) = manager
         .ensure_stage(key.clone(), Arc::new(RingBuffer::new(16)), None)
@@ -352,7 +352,7 @@ async fn a_lease_dropped_off_tokio_still_releases_its_stage() {
 #[tokio::test]
 async fn a_release_after_its_entry_was_removed_spares_the_next_stage() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
     let source = Arc::new(RingBuffer::new(16));
 
@@ -379,7 +379,7 @@ async fn a_release_after_its_entry_was_removed_spares_the_next_stage() {
 #[tokio::test]
 async fn a_replacement_stage_starts_with_fresh_lifecycle_and_metrics() {
     let engine = Arc::new(MediaEngine::new());
-    let manager = crate::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let manager = engine.stage_runtime();
     let key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
     let source = Arc::new(RingBuffer::new(16));
 

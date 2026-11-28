@@ -26,8 +26,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use restream_domain::domain::stage::StageKey;
+use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 use tokio::sync::RwLock as TokioRwLock;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -417,6 +419,23 @@ impl StageRegistry {
         Some((lifecycle, metrics))
     }
 
+    /// A stage's runtime snapshot (see [`stage_runtime_snapshot`]).
+    pub(crate) async fn stage_runtime_snapshot(
+        &self,
+        key: &StageKey,
+        ffmpeg_permits: &Semaphore,
+        ffmpeg_permits_total: usize,
+    ) -> Option<StageRuntimeSnapshot> {
+        let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
+        Some(stage_runtime_snapshot(
+            key,
+            &lifecycle,
+            &metrics,
+            ffmpeg_permits,
+            ffmpeg_permits_total,
+        ))
+    }
+
     /// The keys of every stage of `pipeline_id` with a runtime or a side-map
     /// lifecycle, one map at a time.
     pub(crate) async fn pipeline_stage_keys(&self, pipeline_id: &str) -> HashSet<StageKey> {
@@ -440,6 +459,48 @@ impl StageRegistry {
             );
         }
         keys
+    }
+}
+
+/// A stage's runtime snapshot from its lifecycle and metrics. While the stage
+/// waits for or holds an external FFmpeg permit, it reports the permits
+/// (`ffmpeg_permits`, of `ffmpeg_permits_total`) and how long it has waited.
+pub(crate) fn stage_runtime_snapshot(
+    key: &StageKey,
+    lifecycle: &StageLifecycleSnapshot,
+    metrics: &StageMetrics,
+    ffmpeg_permits: &Semaphore,
+    ffmpeg_permits_total: usize,
+) -> StageRuntimeSnapshot {
+    let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
+        lifecycle.phase,
+        StagePhase::WaitingForCapacity { .. } | StagePhase::CapacityAcquired { .. }
+    ) {
+        let total = Some(ffmpeg_permits_total);
+        let available = Some(ffmpeg_permits.available_permits());
+        let wait_ms = lifecycle
+            .phase_started_at
+            .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
+        (total, available, wait_ms)
+    } else {
+        (None, None, None)
+    };
+
+    StageRuntimeSnapshot {
+        key: key.clone(),
+        backend: lifecycle.backend,
+        phase: lifecycle.phase.clone(),
+        backend_pid: lifecycle.backend_pid,
+        bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
+        bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
+        packets_in: metrics.packets_in.load(Ordering::Relaxed),
+        packets_out: metrics.packets_out.load(Ordering::Relaxed),
+        first_input_at: lifecycle.first_input_at,
+        first_output_at: lifecycle.first_output_at,
+        last_error: lifecycle.last_error.clone(),
+        capacity_permits_total,
+        capacity_permits_available,
+        capacity_wait_ms,
     }
 }
 
