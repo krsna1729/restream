@@ -12,6 +12,7 @@ check and to the CI job that enforces it (`.github/workflows/ci.yml`).
 - [Parallelism policy](#parallelism-policy)
 - [Scoped verification loop](#scoped-verification-loop)
 - [Evidence and generated inventories](#evidence-and-generated-inventories)
+- [Architecture lint baseline](#architecture-lint-baseline)
 - [Live integration tests](#live-integration-tests)
 - [Capability gates](#capability-gates)
 - [Container runtime smoke](#container-runtime-smoke)
@@ -360,6 +361,60 @@ This page does not copy counts or snapshots. Use the owner:
 - Rust tests: `cargo test -- --list`;
 - coverage: `npm run test:frontend:coverage` and the `coverage` job;
 - performance: the measured commit's message and CI artifacts.
+
+## Architecture lint baseline
+
+Run `deslop-please` v0.1.4 from the workspace root, on the host target with
+Cargo's default features:
+
+```sh
+deslop-please --allow deslop-allow.txt
+```
+
+The allow file lists exact diagnostic keys, not type or path wildcards. A new
+key fails the check. An additional access to a field that already has an entry
+does not change its key; review such accesses as part of the code change. When
+a finding is fixed, remove its entry. To enumerate keys for review use
+`--update-allow` with a temporary path, not the checked-in file. Do not add
+module cycles, tangles, or long files to the allow file.
+
+### Field boundaries
+
+Keep data fields at the interface when the caller consumes records, parsed
+configuration, or snapshots. Keep lifecycle transitions and synchronization
+with their owner. A getter, setter, or handle clone is not a substitute for
+moving the operation to that owner.
+
+| Type | Why the fields cross the boundary |
+|---|---|
+| `ShareLink`, `OperationCreateRequest`, `ApiOutputStatus` | Serialized records: share links use the ID as a stable sort tie-break; the agent and harness read their wire payloads. |
+| `ShardMetrics`, `EgressFabricShardStatus`, `GeneralizedSinkMetrics` | Backend observations fill the shard snapshot. Status records and live sink counters feed reports and harness assertions. Iteration accounting stays with `ShardMetrics`. |
+| `LeafCommon::output_id` | Immutable key for the RTMP connecting-leaf sweep. The leaf still owns progress and scheduling transitions. |
+| `Payload::bytes` | Immutable segment or init bytes for the demuxer and validator. `Payload` still owns the private budget permits until drop; moving codec actions into it would couple accounting to codecs. |
+| `TsDemuxer` | A push parser hands off probe and topology results through output drains. Consumers do not obtain parser state. |
+| `MixedScenarioPlan`, `PauseWatch`, `Checks`, `RunMetadata`, `HostProbeReport` | Harness scenario inputs and result records passed between runners, probes, and reports. |
+| `BranchMatrixEnv`, `ResourceSweepEnv`, `ResourceEgressScenario`, xtask `Scope`, `Service`, `Policy` | Parsed configuration and selectors. The callers use them to choose scenarios, deployment options, and audit rules. |
+| `RawSrtSink::paused` | Harness fault control, not a data field: the operation pauses application delivery but keeps transport alive. The sink owns the atomic flag and teardown. |
+
+### Deliberate layout
+
+| Shallow modules | Reason |
+|---|---|
+| `restream::{api::state, application::services, db, diag::checks}` | HTTP handlers share the state boundary; operations are grouped by service; queries and independent diagnostic checks have one entry surface each. |
+| `restream_agent_contract`, `restream_core`, `restream_core::codec`, `restream_moq`, `restream_rtmp`, `restream_sync` | Library façades expose shared types and operations. Another forwarding layer would hide no state. |
+| `restream_domain::domain` and `domain::output_spec` | Domain rules and their output configuration types belong together. |
+| `restream_engine::{config, hls::upload_policy, ingest_registry, srt::ingress_media}` | Keep engine policy separate from workers; share upload policy without a worker dependency; keep ingest state and SRT media operations at their respective owners. |
+| `restream_sync::ring_buffer` | Reader, migration, and publisher operations act on the same ring. |
+| `test_harness::{core, mixed_manifest}` | Common harness support and manifest types anchor scenario assembly. |
+
+| Wide directories | Reason |
+|---|---|
+| `crates/restream-engine/{benches,src}` | Workload-specific benches and independent engine components do not need extra owners. |
+| `crates/restream-engine/src/{egress,egress/backends,srt}` | Fabric primitives, backends, and SRT components stay under their runtime or protocol boundary. |
+| `crates/test_harness/src/test_harness{,/resource_sweep}` | Scenarios and sweep phases share a driver, not a production dependency. |
+| `crates/xtask/src` | Separate commands remain discoverable next to shared tooling. |
+| `src/{api,api/runtime_views,application,db,infrastructure/bootstrap}` | Keep routes and projections, services, queries, and startup composition at their current boundaries. |
+| `tests{,/api}` | Group integration binaries and API contract cases by the surface under test. |
 
 ## Live integration tests
 

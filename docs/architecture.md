@@ -12,6 +12,7 @@ MediaMTX is a peer in the live test harness only; Restream does not need it.
 - [Runtime ownership](#runtime-ownership)
 - [Input selection](#input-selection)
 - [Packets, rings and containers](#packets-rings-and-containers)
+- [Engine module layers](#engine-module-layers)
 - [Shared processing stages](#shared-processing-stages)
 - [Lifecycle and recovery](#lifecycle-and-recovery)
 - [State and authentication](#state-and-authentication)
@@ -415,6 +416,24 @@ Timestamp rules:
   continue through it.
 
 Protocol details are in [Media pipeline](media-pipeline.md).
+
+## Engine module layers
+
+The engine builds dependencies in this order:
+
+1. Protocol vocabulary, configuration, timing and executor utilities.
+2. Ingest and stage registries, and their attempt and stage leases.
+3. Media workers and protocol primitives: stage runtime, audio routing,
+   transcoders, the shared TS mux, HLS segmentation and egress backends.
+4. `MediaEngine` and its composition modules, then protocol servers.
+
+Dedicated stage and media workers receive the registry, event log, budget
+or ring they need at construction rather than looking it up on
+`MediaEngine`. The composition layer joins observations across owners.
+Its stage callbacks can read registry maps under a scoped read guard;
+the caller cannot retain the guard.
+See [Backend module layers](egress-architecture.md#backend-module-layers)
+and the [architecture lint baseline](testing.md#architecture-lint-baseline).
 
 ## Shared processing stages
 
