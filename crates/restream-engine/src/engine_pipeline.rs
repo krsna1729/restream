@@ -83,12 +83,7 @@ impl MediaEngine {
 
     /// Return the active processing stages for a pipeline as `(kind, is_alive)` pairs.
     pub async fn active_transcoder_stages(&self, pipeline_id: &str) -> Vec<(StageKind, bool)> {
-        let runtimes = self.stages.runtimes.read().await;
-        runtimes
-            .iter()
-            .filter(|(key, runtime)| key.pipeline.as_str() == pipeline_id && runtime.ring.is_some())
-            .map(|(key, runtime)| (key.kind.clone(), !runtime.cancel.is_cancelled()))
-            .collect()
+        self.stages.active_transcoder_stages(pipeline_id).await
     }
 
     /// Pipeline ids that hold runtime state: a source ring or a shared stage.
@@ -103,14 +98,7 @@ impl MediaEngine {
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
-        ids.extend(
-            self.stages
-                .runtimes
-                .read()
-                .await
-                .keys()
-                .map(|key| key.pipeline.as_str().to_string()),
-        );
+        self.stages.extend_runtime_pipeline_ids(&mut ids).await;
         ids.into_iter()
             .filter(|id| crate::preview_ids::input_id_from_hls_preview_resource_id(id).is_none())
             .map(|id| crate::preview_ids::preview_pipeline(&id).0.to_string())
@@ -134,36 +122,6 @@ impl MediaEngine {
 
     /// Eagerly remove every shared stage owned by a deleted pipeline.
     pub async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
-        let removed = {
-            let mut runtimes = self.stages.runtimes.write().await;
-            let mut removed = Vec::new();
-            runtimes.retain(|key, runtime| {
-                if key.pipeline.as_str() == pipeline_id {
-                    runtime.cancel.cancel();
-                    removed.push(key.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            removed
-        };
-        self.remove_stage_artifacts(&removed).await;
-    }
-
-    async fn remove_stage_artifacts(&self, keys: &[StageKey]) {
-        if keys.is_empty() {
-            return;
-        }
-        {
-            let mut metrics = self.stages.metrics.write().await;
-            for key in keys {
-                metrics.remove(key);
-            }
-        }
-        let mut lifecycles = self.stages.lifecycles.write().await;
-        for key in keys {
-            lifecycles.remove(key);
-        }
+        self.stages.cleanup_pipeline_stages(pipeline_id).await;
     }
 }

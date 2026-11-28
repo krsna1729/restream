@@ -291,34 +291,30 @@ mod tests {
             restream_domain::domain::stage::StageKind::recording(),
         );
         wait_for_recording_stage_snapshot(&engine, &planned_key).await;
-        let runtime = engine
+        engine
             .stages
-            .runtimes
-            .read()
-            .await
-            .get(&planned_key)
-            .cloned()
-            .expect("recording stage should be runtime-backed");
-        assert!(
-            runtime.ring.is_none(),
-            "recording writer is a non-ring protocol stage"
-        );
+            .with_runtimes(|runtimes| {
+                let runtime = runtimes
+                    .get(&planned_key)
+                    .expect("recording stage should be runtime-backed");
+                assert!(
+                    runtime.ring.is_none(),
+                    "recording writer is a non-ring protocol stage"
+                );
+            })
+            .await;
         assert!(
             !engine
                 .stages
-                .metrics
-                .read()
-                .await
-                .contains_key(&planned_key),
+                .with_metrics(|metrics| metrics.contains_key(&planned_key))
+                .await,
             "recording metrics should be owned by StageRuntime, not the side map"
         );
         assert!(
             !engine
                 .stages
-                .lifecycles
-                .read()
-                .await
-                .contains_key(&planned_key),
+                .has_side_lifecycle_for_test(&planned_key)
+                .await,
             "recording lifecycle should be owned by StageRuntime, not the side map"
         );
 
@@ -382,7 +378,11 @@ mod tests {
 
     async fn wait_for_recording_runtime_removed(engine: &Arc<MediaEngine>, key: &StageKey) {
         for _ in 0..50 {
-            if !engine.stages.runtimes.read().await.contains_key(key) {
+            if !engine
+                .stages
+                .with_runtimes(|runtimes| runtimes.contains_key(key))
+                .await
+            {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

@@ -288,11 +288,15 @@ async fn a_released_lease_never_removes_a_newer_stage_under_its_key() {
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
-    let runtimes = engine.stages.runtimes.read().await;
-    let current = runtimes
-        .get(&key)
-        .expect("the newer stage stays registered");
-    assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+    engine
+        .stages
+        .with_runtimes(|runtimes| {
+            let current = runtimes
+                .get(&key)
+                .expect("the newer stage stays registered");
+            assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+        })
+        .await;
     assert!(!new.cancel.is_cancelled());
 }
 
@@ -316,9 +320,15 @@ async fn the_last_lease_removes_a_runtime_stage_and_its_metrics() {
     assert!(handle.cancel.is_cancelled());
     assert!(
         eventually(async || {
-            !engine.stages.runtimes.read().await.contains_key(&key)
-                && !engine.stages.metrics.read().await.contains_key(&key)
-                && !engine.stages.lifecycles.read().await.contains_key(&key)
+            !engine
+                .stages
+                .with_runtimes(|runtimes| runtimes.contains_key(&key))
+                .await
+                && !engine
+                    .stages
+                    .with_metrics(|metrics| metrics.contains_key(&key))
+                    .await
+                && !engine.stages.has_side_lifecycle_for_test(&key).await
         })
         .await
     );
@@ -368,9 +378,13 @@ async fn a_release_after_its_entry_was_removed_spares_the_next_stage() {
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
-    let runtimes = engine.stages.runtimes.read().await;
-    let current = runtimes.get(&key).expect("the next stage stays registered");
-    assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+    engine
+        .stages
+        .with_runtimes(|runtimes| {
+            let current = runtimes.get(&key).expect("the next stage stays registered");
+            assert!(Arc::ptr_eq(&current.lifecycle, &new.lifecycle));
+        })
+        .await;
 }
 
 /// Review of #284: a stage that ended stays registered (cancelled) until

@@ -479,8 +479,8 @@ mod tests {
         handle.metrics.record_in(64);
         handle.metrics.record_out(32);
         handle.lifecycle.transition(StagePhase::RunningNoOutputYet);
-        engine.stages.metrics.write().await.remove(&key);
-        engine.stages.lifecycles.write().await.remove(&key);
+        engine.stages.remove_stage_metrics(&key).await;
+        engine.stages.remove_stage_lifecycle(&key).await;
 
         let engine_view = engine_telemetry(&engine).await;
         let stage = engine_view["stages"]
@@ -544,7 +544,7 @@ mod tests {
         };
         start_stage("pipe-1").await;
 
-        let metrics_writer = engine.stages.metrics.write().await;
+        let metrics_writer = engine.stages.hold_metrics_write_for_test().await;
         let view = tokio::spawn(view(engine.clone()));
         // Current-thread runtime: each yield runs the spawned tasks until
         // they park on a lock.

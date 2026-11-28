@@ -657,7 +657,12 @@ async fn recording_media_writer_failure_reports_failed_without_finalization() {
     );
     assert!(cancel.is_cancelled());
     assert_eq!(ring.active_reader_count(), 0);
-    assert!(!engine.stages.runtimes.read().await.contains_key(&stage_key));
+    assert!(
+        !engine
+            .stages
+            .with_runtimes(|runtimes| runtimes.contains_key(&stage_key))
+            .await
+    );
     std::fs::remove_file(media_dir).expect("remove invalid media directory");
 }
 
@@ -703,7 +708,12 @@ async fn a_writer_thread_that_cannot_start_reports_failed_and_removes_the_stage(
     };
     assert!(error.contains("could not start"), "{error}");
     assert!(cancel.is_cancelled());
-    assert!(!engine.stages.runtimes.read().await.contains_key(&stage_key));
+    assert!(
+        !engine
+            .stages
+            .with_runtimes(|runtimes| runtimes.contains_key(&stage_key))
+            .await
+    );
     let _ = std::fs::remove_dir_all(media_dir);
 }
 

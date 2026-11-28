@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use restream_domain::domain::stage::StageKey;
+use restream_domain::domain::stage::{StageKey, StageKind};
 use restream_domain::runtime::stage::StageRuntimeSnapshot;
 use restream_sync::RingBuffer;
 use tokio::sync::RwLock as TokioRwLock;
@@ -39,6 +39,17 @@ use crate::stage_lifecycle::{
 };
 use crate::stage_metrics::StageMetrics;
 use crate::ts_chunk_ring::TsChunkRing;
+
+/// Handle to an admitted ring stage. The manager uses it to start the
+/// worker, and consumers read from its output ring.
+#[derive(Clone)]
+pub struct StageHandle {
+    pub key: StageKey,
+    pub ring: Arc<RingBuffer>,
+    pub cancel: CancellationToken,
+    pub lifecycle: Arc<StageLifecycle>,
+    pub metrics: Arc<StageMetrics>,
+}
 
 #[derive(Clone)]
 pub struct StageRuntime {
@@ -62,11 +73,11 @@ pub struct TsMuxerStage {
 }
 
 pub struct StageRegistry {
-    pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
-    pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
+    runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
+    metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, TsMuxerStage>>,
     pub srt_muxer_shards: TokioRwLock<HashMap<String, SrtMuxerShardPool>>,
-    pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
+    lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }
 
 impl Default for StageRegistry {
@@ -123,6 +134,149 @@ impl StageRegistry {
         if let Some(runtime) = self.runtimes.write().await.get_mut(key) {
             runtime.pipe_metrics = None;
         }
+    }
+
+    /// Reuse a live ring stage, or install its replacement under the same
+    /// runtime write guard. The caller initializes and starts a new worker
+    /// after this guard is released.
+    pub(crate) async fn admit_ring_stage(
+        self: &Arc<Self>,
+        key: StageKey,
+        backend: StageBackendKind,
+        ring_capacity: usize,
+    ) -> (StageHandle, StageLease, bool) {
+        let mut lifecycle = self
+            .get_or_create_stage_lifecycle_with_backend(
+                key.clone(),
+                StagePhase::Registered,
+                backend,
+            )
+            .await;
+        let mut metrics = self.get_or_create_stage_metrics(key.clone()).await;
+        let mut runtimes = self.runtimes.write().await;
+        if let Some(runtime) = runtimes.get(&key) {
+            if !runtime.cancel.is_cancelled()
+                && let Some(ring) = runtime.ring.as_ref()
+                && let Some(lease) = StageLease::upgrade(&runtime.lease)
+            {
+                return (
+                    StageHandle {
+                        key,
+                        ring: ring.clone(),
+                        cancel: runtime.cancel.clone(),
+                        lifecycle: runtime.lifecycle.clone(),
+                        metrics: runtime.metrics.clone(),
+                    },
+                    lease,
+                    false,
+                );
+            }
+            // Neither the previous backend's lifecycle nor its metrics
+            // may carry over to a replacement runtime.
+            lifecycle = Arc::new(StageLifecycle::new_with_backend(
+                StagePhase::Registered,
+                backend,
+            ));
+            metrics = Arc::new(StageMetrics::new());
+        }
+
+        let ring = Arc::new(RingBuffer::new(ring_capacity));
+        let cancel = CancellationToken::new();
+        let lease = StageLease::runtime(self, key.clone(), cancel.clone());
+        runtimes.insert(
+            key.clone(),
+            StageRuntime {
+                ring: Some(ring.clone()),
+                cancel: cancel.clone(),
+                lifecycle: lifecycle.clone(),
+                metrics: metrics.clone(),
+                pipe_metrics: None,
+                lease: lease.downgrade(),
+                lease_id: lease.id(),
+            },
+        );
+        (
+            StageHandle {
+                key,
+                ring,
+                cancel,
+                lifecycle,
+                metrics,
+            },
+            lease,
+            true,
+        )
+    }
+
+    /// List processing stages and whether each runtime is still alive.
+    pub(crate) async fn active_transcoder_stages(
+        &self,
+        pipeline_id: &str,
+    ) -> Vec<(StageKind, bool)> {
+        self.runtimes
+            .read()
+            .await
+            .iter()
+            .filter(|(key, runtime)| key.pipeline.as_str() == pipeline_id && runtime.ring.is_some())
+            .map(|(key, runtime)| (key.kind.clone(), !runtime.cancel.is_cancelled()))
+            .collect()
+    }
+
+    /// Add the pipeline IDs that have a shared stage to an existing set.
+    pub(crate) async fn extend_runtime_pipeline_ids(&self, ids: &mut HashSet<String>) {
+        ids.extend(
+            self.runtimes
+                .read()
+                .await
+                .keys()
+                .map(|key| key.pipeline.as_str().to_string()),
+        );
+    }
+
+    /// Cancel and remove shared stages for a deleted pipeline, then clear
+    /// their metrics and lifecycles without holding the runtime guard.
+    pub(crate) async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
+        let removed = {
+            let mut runtimes = self.runtimes.write().await;
+            let mut removed = Vec::new();
+            runtimes.retain(|key, runtime| {
+                if key.pipeline.as_str() != pipeline_id {
+                    return true;
+                }
+                runtime.cancel.cancel();
+                removed.push(key.clone());
+                false
+            });
+            removed
+        };
+        if removed.is_empty() {
+            return;
+        }
+        {
+            let mut metrics = self.metrics.write().await;
+            for key in &removed {
+                metrics.remove(key);
+            }
+        }
+        let mut lifecycles = self.lifecycles.write().await;
+        for key in &removed {
+            lifecycles.remove(key);
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn hold_runtime_write_for_test(&self) -> impl Drop + '_ {
+        self.runtimes.write().await
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn hold_metrics_write_for_test(&self) -> impl Drop + '_ {
+        self.metrics.write().await
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn has_side_lifecycle_for_test(&self, key: &StageKey) -> bool {
+        self.lifecycles.read().await.contains_key(key)
     }
 
     pub async fn get_or_create_non_ring_stage_runtime(

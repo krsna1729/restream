@@ -177,17 +177,20 @@ async fn transcoder_stage_registry_uses_typed_stage_keys() {
         .get_or_create_transcoder("pipe-typed", StageKind::video_preset("720p"), source, None)
         .await;
 
-    let runtimes = engine.stages.runtimes.read().await;
-    let key = runtimes
-        .keys()
-        .find(|key| key.pipeline.as_str() == "pipe-typed")
-        .expect("typed registry should contain created stage");
-
-    assert_eq!(key.to_string(), "pipe-typed:video:720p");
-    assert!(matches!(
-        &key.kind,
-        StageKind::VideoPreset { preset, .. } if preset == "720p"
-    ));
+    engine
+        .stages
+        .with_runtimes(|runtimes| {
+            let key = runtimes
+                .keys()
+                .find(|key| key.pipeline.as_str() == "pipe-typed")
+                .expect("typed registry should contain created stage");
+            assert_eq!(key.to_string(), "pipe-typed:video:720p");
+            assert!(matches!(
+                &key.kind,
+                StageKind::VideoPreset { preset, .. } if preset == "720p"
+            ));
+        })
+        .await;
 }
 
 /// remove_pipeline must free the source ring buffer from the pipelines map.

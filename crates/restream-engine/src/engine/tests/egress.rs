@@ -341,8 +341,8 @@ async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
         .await;
     handle.metrics.record_in(42);
     handle.lifecycle.transition(StagePhase::RunningNoOutputYet);
-    engine.stages.metrics.write().await.remove(&key);
-    engine.stages.lifecycles.write().await.remove(&key);
+    engine.stages.remove_stage_metrics(&key).await;
+    engine.stages.remove_stage_lifecycle(&key).await;
 
     let snapshot = engine
         .stage_runtime_snapshot(&key)

@@ -443,34 +443,30 @@ async fn hls_segmenter_registers_planned_protocol_stage_key() {
                 snapshot.backend,
                 crate::stage_lifecycle::StageBackendKind::HlsSegmenter
             );
-            let runtime = engine
+            engine
                 .stages
-                .runtimes
-                .read()
-                .await
-                .get(&planned_key)
-                .cloned()
-                .expect("planned HLS stage should be runtime-backed");
-            assert!(
-                runtime.ring.is_none(),
-                "HLS segmenters are non-ring protocol stages"
-            );
+                .with_runtimes(|runtimes| {
+                    let runtime = runtimes
+                        .get(&planned_key)
+                        .expect("planned HLS stage should be runtime-backed");
+                    assert!(
+                        runtime.ring.is_none(),
+                        "HLS segmenters are non-ring protocol stages"
+                    );
+                })
+                .await;
             assert!(
                 !engine
                     .stages
-                    .metrics
-                    .read()
-                    .await
-                    .contains_key(&planned_key),
+                    .with_metrics(|metrics| metrics.contains_key(&planned_key))
+                    .await,
                 "HLS metrics should be owned by StageRuntime, not the side map"
             );
             assert!(
                 !engine
                     .stages
-                    .lifecycles
-                    .read()
-                    .await
-                    .contains_key(&planned_key),
+                    .has_side_lifecycle_for_test(&planned_key)
+                    .await,
                 "HLS lifecycle should be owned by StageRuntime, not the side map"
             );
             break;
@@ -487,10 +483,8 @@ async fn hls_segmenter_registers_planned_protocol_stage_key() {
     assert!(
         !engine
             .stages
-            .runtimes
-            .read()
-            .await
-            .contains_key(&planned_key),
+            .with_runtimes(|runtimes| runtimes.contains_key(&planned_key))
+            .await,
         "HLS runtime should be removed on shutdown"
     );
 }
