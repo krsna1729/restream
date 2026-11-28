@@ -96,3 +96,44 @@ fn consume_segments_drops_written_segments_and_advances_a_partial_one() {
     consume_segments(&mut segments, 4);
     assert!(segments.is_empty());
 }
+
+/// `stage_receive`'s four outcomes: a pre-kTLS poll that read nothing
+/// re-arms and retries without a protocol visit; bytes keep their kTLS
+/// record type; an error reaches the protocol once; zero bytes are EOF.
+#[test]
+fn stage_receive_retries_stages_fails_once_and_ends() {
+    let mut out = [0_u8; 8];
+    let mut buffers = IoBuffers::default();
+    assert!(!buffers.receive_armed);
+    assert!(buffers.stage_receive(None, None) == ReceiveStep::Retry);
+    assert!(buffers.receive_armed);
+    assert!(!buffers.has_buffered_receive());
+
+    buffers.ktls_active = true;
+    assert!(buffers.stage_receive(Some(Ok(b"abc")), Some(22)) == ReceiveStep::Continue);
+    assert_eq!(buffers.record_type, Some((3, 22)));
+    assert_eq!(buffers.read_record(&mut out).unwrap(), (3, 22));
+    assert_eq!(&out[..3], b"abc");
+    assert_eq!(buffers.record_type, None);
+
+    let reset = io::Error::new(io::ErrorKind::ConnectionReset, "reset");
+    assert!(buffers.stage_receive(Some(Err(reset)), None) == ReceiveStep::Stop);
+    assert!(buffers.receive_closed());
+    let error = buffers.read(&mut out).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    assert_eq!(error.to_string(), "reset");
+    assert_eq!(
+        buffers.read(&mut out).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock,
+        "the stored error is reported once"
+    );
+
+    let mut buffers = IoBuffers::default();
+    assert!(buffers.stage_receive(Some(Ok(&[])), None) == ReceiveStep::Stop);
+    assert!(buffers.receive_closed());
+    assert_eq!(
+        buffers.read(&mut out).unwrap(),
+        0,
+        "EOF reads as zero bytes"
+    );
+}

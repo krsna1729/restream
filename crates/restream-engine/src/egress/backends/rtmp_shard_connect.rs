@@ -391,9 +391,11 @@ where
             writable: true,
         }) {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf could not enter the ready queue");
-            if let Some(leaf) = self.leaves.get(key) {
-                leaf.common.mark_terminated_unexpectedly();
-            }
+            self.leaves
+                .get(key)
+                .expect("the leaf was filled into this key before its first write")
+                .common
+                .mark_terminated_unexpectedly();
             self.remove_leaf_by_output(output_id);
             return Err(());
         }

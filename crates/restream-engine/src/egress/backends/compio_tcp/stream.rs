@@ -209,9 +209,20 @@ impl IoBuffers {
     /// inside an open message (see `message_open`). Pending, with the waker
     /// kept, until something is staged.
     fn poll_take_transmit(&mut self, cx: &mut Context<'_>, output: &mut Vec<Bytes>) -> Poll<bool> {
+        match self.take_staged(output) {
+            Some(message_open) => Poll::Ready(message_open),
+            None => {
+                self.tx_waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+
+    /// Swap the staged segments into `output`: `None` when nothing is
+    /// staged, else whether they stop inside an open message.
+    fn take_staged(&mut self, output: &mut Vec<Bytes>) -> Option<bool> {
         if !self.has_outgoing() {
-            self.tx_waker = Some(cx.waker().clone());
-            return Poll::Pending;
+            return None;
         }
         // Hand the staged segments to the writer by swapping lists; both keep
         // their capacity, so payload is never copied and the list is not
@@ -219,7 +230,7 @@ impl IoBuffers {
         // per-flush allocations.)
         self.seal_copied();
         std::mem::swap(output, &mut self.outgoing);
-        Poll::Ready(self.message_open)
+        Some(self.message_open)
     }
 
     /// The transmit worker sent `count` staged bytes: their room in the TX
@@ -522,10 +533,7 @@ impl CompioTcpStream {
     pub(crate) fn take_staged_for_test(&self) -> Vec<u8> {
         let buffers = self.io_buffers().expect("a Compio stream");
         let mut segments = Vec::new();
-        let mut cx = Context::from_waker(std::task::Waker::noop());
-        let _ = buffers
-            .borrow_mut()
-            .poll_take_transmit(&mut cx, &mut segments);
+        let _ = buffers.borrow_mut().take_staged(&mut segments);
         segments
             .iter()
             .flat_map(|segment| segment.iter().copied())

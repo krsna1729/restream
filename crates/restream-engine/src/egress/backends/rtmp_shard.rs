@@ -339,7 +339,8 @@ where
     /// without I/O, so polling only on an empty queue could starve the very
     /// completion a requeued leaf is waiting for.
     visits_until_poll: usize,
-    feed_waiting: VecDeque<LeafKey>,
+    /// Leaves parked until the next feed publication, each at most once.
+    feed_waiting: ReadyQueue,
     stall_candidates: VecDeque<LeafKey>,
     queue_capacity: usize,
     poll_buffer: Vec<TcpReadyLeaf>,
@@ -399,7 +400,7 @@ where
             output_sockets: HashMap::new(),
             ready: ReadyQueue::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             visits_until_poll: 0,
-            feed_waiting: VecDeque::with_capacity(ready_capacity),
+            feed_waiting: ReadyQueue::with_capacity(DEFAULT_EGRESS_LEAF_CAPACITY),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
             queue_capacity: DEFAULT_EGRESS_LEAF_CAPACITY,
             poll_buffer: Vec::with_capacity(ready_capacity),
@@ -423,7 +424,7 @@ where
         self.leaves = LeafArena::with_capacity(capacity);
         self.queue_capacity = capacity;
         self.ready = ReadyQueue::with_capacity(capacity);
-        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.feed_waiting = ReadyQueue::with_capacity(capacity);
         self.stall_candidates = VecDeque::with_capacity(capacity);
         self
     }
@@ -464,7 +465,7 @@ where
 
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
-        self.feed_waiting.retain(|key| *key != socket_ref.key);
+        self.feed_waiting.remove(socket_ref.key);
         self.stall_candidates.retain(|key| *key != socket_ref.key);
         self.sweep_service.invalidate();
         self.service = Default::default();
@@ -502,11 +503,12 @@ where
     /// never touches them — they remain discoverable only via real
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
-        while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                continue;
-            };
-            if leaf.common.leave_feed_queue() {
+        while let Some(key) = self.feed_waiting.pop() {
+            let wants_feed = self
+                .leaves
+                .get(key)
+                .is_some_and(|leaf| leaf.common.schedule.wants_feed_wake);
+            if wants_feed {
                 self.push_ready(key);
             }
         }
@@ -571,11 +573,8 @@ where
         leaf.refresh_pending_application_bytes();
         // Progress can still end on an empty feed. Keep that leaf parked for
         // the next publication even though this visit returns `Continue`.
-        if leaf.common.join_feed_queue()
-            && !push_bounded(&mut self.feed_waiting, key, self.queue_capacity)
-        {
+        if leaf.common.schedule.wants_feed_wake && !self.feed_waiting.push(key).is_queued() {
             self.queue_overflows = self.queue_overflows.saturating_add(1);
-            leaf.common.leave_feed_queue();
         }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed

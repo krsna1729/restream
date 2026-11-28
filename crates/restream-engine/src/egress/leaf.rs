@@ -132,9 +132,6 @@ pub struct LeafCommon {
     pub progress: ProgressState,
     /// The output's policy; live leaves read its stall ceilings.
     pub policy: LeafPolicy,
-    /// Application bytes currently pending on this leaf (headers + payload
-    /// retained but not yet accepted by the transport).
-    pub pending_application_bytes: usize,
     /// Lock-free handles to the application's output status counters; the
     /// shard thread publishes progress here without locks or allocation.
     pub progress_sink: EgressProgressSink,
@@ -336,7 +333,6 @@ impl LeafCommon {
             schedule: ScheduleState::new(),
             progress: ProgressState::new(),
             policy,
-            pending_application_bytes: 0,
             progress_sink: EgressProgressSink::default(),
         }
     }
@@ -516,16 +512,6 @@ impl LeafCommon {
     /// See [`EgressProgressSink::mark_terminated_unexpectedly`].
     pub(crate) fn mark_terminated_unexpectedly(&self) {
         self.progress_sink.mark_terminated_unexpectedly();
-    }
-
-    /// See [`ScheduleState::join_feed_queue`].
-    pub(crate) fn join_feed_queue(&mut self) -> bool {
-        self.schedule.join_feed_queue()
-    }
-
-    /// See [`ScheduleState::leave_feed_queue`].
-    pub(crate) fn leave_feed_queue(&mut self) -> bool {
-        self.schedule.leave_feed_queue()
     }
 }
 

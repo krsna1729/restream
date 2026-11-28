@@ -57,7 +57,7 @@ fn parked_leaves_cause_no_follow_up_visits() {
     assert!(
         harness.feed_until(&unit, Duration::from_secs(5), |backend| backend
             .blocked
-            .contains(&key)),
+            .contains(key)),
         "a connecting caller parks"
     );
 

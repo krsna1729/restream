@@ -42,8 +42,6 @@ pub(crate) struct SrtFabricLeaf {
     pub(super) draining_since: Option<Instant>,
     /// The reason to report once a draining leaf actually closes.
     pub(super) draining_reason: Option<CloseReason>,
-    /// Parked in the backend's blocked queue (send window closed).
-    pub(super) blocked_queued: bool,
     /// Attributed peer-local/transient TX failures observed for this caller.
     pub(super) tx_failures: u32,
     /// The caller has reached `Connected` and the cursor was anchored at the
@@ -65,7 +63,6 @@ impl SrtFabricLeaf {
             delivery: Default::default(),
             draining_since: None,
             draining_reason: None,
-            blocked_queued: false,
             tx_failures: 0,
             connected: false,
         }
@@ -148,34 +145,6 @@ impl SrtFabricLeaf {
         self.common.mark_terminated_unexpectedly();
     }
 
-    /// See [`LeafCommon::join_feed_queue`].
-    pub(super) fn join_feed_queue(&mut self) -> bool {
-        self.common.join_feed_queue()
-    }
-
-    /// See [`LeafCommon::leave_feed_queue`].
-    pub(super) fn leave_feed_queue(&mut self) -> bool {
-        self.common.leave_feed_queue()
-    }
-
-    /// Claim this leaf's one entry in the backend's blocked queue: `true`
-    /// (the caller must push it) when it is not parked there yet.
-    pub(super) fn enter_blocked_queue(&mut self) -> bool {
-        let enter = !self.blocked_queued;
-        self.blocked_queued = true;
-        enter
-    }
-
-    /// Give up the blocked-queue entry (re-examined, or refused by the
-    /// queue).
-    pub(super) fn leave_blocked_queue(&mut self) {
-        debug_assert!(
-            self.blocked_queued,
-            "leaf left a blocked queue it was not in"
-        );
-        self.blocked_queued = false;
-    }
-
     /// An attributed peer-local or transient TX failure for this caller.
     pub(super) fn record_tx_failure(&mut self) {
         self.tx_failures = self.tx_failures.saturating_add(1);
@@ -188,8 +157,17 @@ impl SrtFabricLeaf {
         self.draining_reason = Some(reason);
     }
 
-    pub(super) fn is_draining(&self) -> bool {
-        self.draining_since.is_some()
+    /// A draining leaf whose Owner backlog flushed, or that has drained for
+    /// `timeout`, closes now: the reason it was asked to close. The caller's
+    /// statistics are read only while draining.
+    pub(super) fn finish_drain(
+        &self,
+        owners: &SrtOwners,
+        timeout: Duration,
+    ) -> Option<CloseReason> {
+        self.draining_since?;
+        let backlog = self.send_backlog(owners);
+        self.drain_finished(backlog, Instant::now(), timeout)
     }
 
     /// A draining leaf that flushed (no backpressure left) or has drained
@@ -209,14 +187,20 @@ impl SrtFabricLeaf {
     /// The stall sweep closes this leaf. One draining for a requested close
     /// (Remove, drain, shutdown) is expiring its drain window, not failing:
     /// only an undrained leaf that stalled terminated unexpectedly.
-    pub(super) fn report_stall_close(&self, output_id: &OutputId, head_sequence: u64) {
-        if self.is_draining() {
+    /// `blocked`: the leaf is parked in the backend's blocked queue.
+    pub(super) fn report_stall_close(
+        &self,
+        output_id: &OutputId,
+        head_sequence: u64,
+        blocked: bool,
+    ) {
+        if self.draining_since.is_some() {
             return;
         }
         tracing::warn!(
             output_id = %output_id,
             tx_failures = self.tx_failures,
-            blocked = self.blocked_queued,
+            blocked,
             lag = head_sequence.saturating_sub(self.common.cursor.next_sequence),
             "srt egress leaf closed unexpectedly: no progress (stalled)"
         );

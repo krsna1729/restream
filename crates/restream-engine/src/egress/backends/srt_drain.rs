@@ -113,7 +113,7 @@ impl SrtShardBackend {
                 continue;
             };
             if let Some(leaf) = self.leaves.get(key) {
-                leaf.report_stall_close(&output_id, head_sequence);
+                leaf.report_stall_close(&output_id, head_sequence, self.blocked.contains(key));
             }
             self.remove_leaf(key, crate::egress::backend::CloseReason::NoProgress);
         }
@@ -126,11 +126,12 @@ impl SrtShardBackend {
     /// publishes more media. The queue is populated at visit time, so a feed
     /// wake does not scan every output on the shard.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
-        while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key) else {
-                continue;
-            };
-            if !leaf.leave_feed_queue() || self.ready.contains(key) {
+        while let Some(key) = self.feed_waiting.pop() {
+            let wants_feed = self
+                .leaves
+                .get(key)
+                .is_some_and(|leaf| leaf.common.schedule.wants_feed_wake);
+            if !wants_feed || self.ready.contains(key) {
                 continue;
             }
             self.enqueue_ready_candidate(key);

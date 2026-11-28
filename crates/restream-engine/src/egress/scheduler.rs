@@ -28,13 +28,9 @@ pub struct ScheduleState {
     /// [`record_visit`](Self::record_visit); `false` for outcomes that
     /// don't carry a wait condition at all (`HandshakeComplete`,
     /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`). Advisory: a stale
-    /// value can never double-queue a leaf, because the ready queue
-    /// refuses a key it holds.
+    /// value can never double-queue a leaf, because the shard's queues
+    /// refuse a key they hold.
     pub wants_feed_wake: bool,
-    /// Whether this leaf currently has one entry in the shard's feed-waiting
-    /// queue; it prevents repeated readiness visits from growing the parked
-    /// queue without bound before the next feed wake.
-    pub feed_wake_queued: bool,
 }
 
 impl ScheduleState {
@@ -43,7 +39,6 @@ impl ScheduleState {
             deficit_bytes: 0,
             last_service_at: None,
             wants_feed_wake: false,
-            feed_wake_queued: false,
         }
     }
 
@@ -70,24 +65,6 @@ impl ScheduleState {
         if serviced {
             self.mark_serviced();
         }
-    }
-
-    /// Claim the leaf's one entry in the shard's feed-waiting queue: `true`
-    /// (the caller must push it) when its last visit waits on the feed and
-    /// it is not queued yet.
-    pub fn join_feed_queue(&mut self) -> bool {
-        let join = self.wants_feed_wake && !self.feed_wake_queued;
-        if join {
-            self.feed_wake_queued = true;
-        }
-        join
-    }
-
-    /// Give up the feed-waiting entry (the feed woke the leaf, or the queue
-    /// refused it); `true` when a feed wake should visit the leaf.
-    pub fn leave_feed_queue(&mut self) -> bool {
-        self.feed_wake_queued = false;
-        self.wants_feed_wake
     }
 }
 
